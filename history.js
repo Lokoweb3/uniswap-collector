@@ -1,5 +1,6 @@
 /**
- * Incremental Collect-event history for the owner's positions.
+ * Incremental Collect-event history for every wallet's positions: the main
+ * wallet plus the wallets listed in wallets.json.
  *
  * The RPC caps eth_getLogs at 2000 blocks per request and the chain moves at
  * ~10 blocks/s, so full history is unreachable; instead we scan forward from
@@ -32,6 +33,10 @@ function create({ provider, npmAddress }) {
 
   let scanning = false;
   const blockTimeCache = new Map();
+  // Wallets added after the forward scan started need their older blocks
+  // covered once; progress per wallet lives in state.catchup so it survives
+  // restarts and is spread over several ticks.
+  state.catchup = state.catchup || {};
 
   async function blockTime(bn) {
     if (!blockTimeCache.has(bn)) {
@@ -45,76 +50,122 @@ function create({ provider, npmAddress }) {
     fs.writeFileSync(FILE, JSON.stringify(state));
   }
 
-  /** Scan new blocks for Collect/DecreaseLiquidity on the given tokenIds. */
-  async function scan(tokenIds) {
-    if (scanning || !tokenIds || !tokenIds.length) return;
+  /** Fetch and fold one block range for the given ids; returns events (without wallet tags). */
+  async function scanRange(idTopics, from, to) {
+    // The RPC rate-limits bursts; retry each chunk with backoff, and if it
+    // keeps failing stop here — progress is persisted and the next tick
+    // resumes from where it was.
+    let logs = null;
+    for (let attempt = 0; attempt < 3 && logs === null; attempt++) {
+      try {
+        logs = await provider.getLogs({
+          address: npmAddress,
+          topics: [[COLLECT_TOPIC, DECREASE_TOPIC], idTopics],
+          fromBlock: from,
+          toBlock: to,
+        });
+      } catch (err) {
+        if (attempt === 2) throw err;
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+    // Group by tx+tokenId so a close's principal cancels out of its collect.
+    const byKey = new Map();
+    for (const l of logs) {
+      const tokenId = BigInt(l.topics[1]).toString();
+      const key = `${l.transactionHash}:${tokenId}`;
+      let e = byKey.get(key);
+      if (!e) {
+        e = { block: l.blockNumber, tx: l.transactionHash, tokenId, c0: 0n, c1: 0n, d0: 0n, d1: 0n };
+        byKey.set(key, e);
+      }
+      if (l.topics[0] === COLLECT_TOPIC) {
+        const [, a0, a1] = coder.decode(["address", "uint256", "uint256"], l.data);
+        e.c0 += a0;
+        e.c1 += a1;
+      } else {
+        const [, a0, a1] = coder.decode(["uint128", "uint256", "uint256"], l.data);
+        e.d0 += a0;
+        e.d1 += a1;
+      }
+    }
+    const out = [];
+    for (const e of byKey.values()) {
+      const f0 = e.c0 - e.d0 > 0n ? e.c0 - e.d0 : 0n;
+      const f1 = e.c1 - e.d1 > 0n ? e.c1 - e.d1 : 0n;
+      if (e.c0 === 0n && e.c1 === 0n) continue; // decrease with no collect yet
+      out.push({
+        block: e.block,
+        t: await blockTime(e.block),
+        tx: e.tx,
+        tokenId: e.tokenId,
+        fee0: f0.toString(),
+        fee1: f1.toString(),
+        principal: e.d0 > 0n || e.d1 > 0n,
+      });
+    }
+    return out;
+  }
+
+  /** Normalise the scan input: a flat id list (main wallet only) or [{ address, label, ids }]. */
+  function walletsFrom(input, mainAddress) {
+    if (!Array.isArray(input) || !input.length) return [];
+    if (typeof input[0] === "object" && input[0] && "ids" in input[0]) return input.filter((w) => w.ids && w.ids.length);
+    return [{ address: mainAddress || null, label: "Main", ids: input, main: true }];
+  }
+  const idTopic = (id) => ethers.zeroPadValue(ethers.toBeHex(BigInt(id)), 32);
+  const tagged = (events, w) => events.map((e) => ({ ...e, wallet: w.address ? w.address.toLowerCase() : null, walletLabel: w.label || null }));
+  const seen = () => new Set(state.events.map((e) => `${e.tx}:${e.tokenId}`));
+
+  /**
+   * Scan new blocks for Collect/DecreaseLiquidity for every wallet's ids
+   * (forward from lastScanned), then spend a bounded budget on the backward
+   * catch-up of wallets whose ids have not yet been covered from START_BLOCK.
+   */
+  async function scan(input, { mainAddress = null, catchupBudget = 200 } = {}) {
+    const wallets = walletsFrom(input, mainAddress);
+    if (scanning || !wallets.length) return;
     scanning = true;
     try {
       const head = await provider.getBlockNumber();
-      const idTopics = tokenIds.map((id) => ethers.zeroPadValue(ethers.toBeHex(id), 32));
+      const ownerOf = new Map(); // tokenId -> wallet
+      for (const w of wallets) for (const id of w.ids) ownerOf.set(String(id), w);
+      const idTopics = [...ownerOf.keys()].map(idTopic);
 
       let from = state.lastScanned + 1;
       while (from <= head) {
         const to = Math.min(from + CHUNK - 1, head);
-
-        // The RPC rate-limits bursts; retry each chunk with backoff, and if it
-        // keeps failing stop here — progress is persisted and the next tick
-        // resumes from lastScanned.
-        let logs = null;
-        for (let attempt = 0; attempt < 3 && logs === null; attempt++) {
-          try {
-            logs = await provider.getLogs({
-              address: npmAddress,
-              topics: [[COLLECT_TOPIC, DECREASE_TOPIC], idTopics],
-              fromBlock: from,
-              toBlock: to,
-            });
-          } catch (err) {
-            if (attempt === 2) throw err;
-            await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-          }
+        const found = await scanRange(idTopics, from, to);
+        for (const e of found) {
+          const w = ownerOf.get(e.tokenId) || wallets[0];
+          state.events.push(...tagged([e], w));
         }
-
-        // Group by tx+tokenId so a close's principal cancels out of its collect.
-        const byKey = new Map();
-        for (const l of logs) {
-          const tokenId = BigInt(l.topics[1]).toString();
-          const key = `${l.transactionHash}:${tokenId}`;
-          let e = byKey.get(key);
-          if (!e) {
-            e = { block: l.blockNumber, tx: l.transactionHash, tokenId, c0: 0n, c1: 0n, d0: 0n, d1: 0n };
-            byKey.set(key, e);
-          }
-          if (l.topics[0] === COLLECT_TOPIC) {
-            const [, a0, a1] = coder.decode(["address", "uint256", "uint256"], l.data);
-            e.c0 += a0;
-            e.c1 += a1;
-          } else {
-            const [, a0, a1] = coder.decode(["uint128", "uint256", "uint256"], l.data);
-            e.d0 += a0;
-            e.d1 += a1;
-          }
-        }
-
-        for (const e of byKey.values()) {
-          const f0 = e.c0 - e.d0 > 0n ? e.c0 - e.d0 : 0n;
-          const f1 = e.c1 - e.d1 > 0n ? e.c1 - e.d1 : 0n;
-          if (e.c0 === 0n && e.c1 === 0n) continue; // decrease with no collect yet
-          state.events.push({
-            block: e.block,
-            t: await blockTime(e.block),
-            tx: e.tx,
-            tokenId: e.tokenId,
-            fee0: f0.toString(),
-            fee1: f1.toString(),
-            principal: (e.d0 > 0n || e.d1 > 0n),
-          });
-        }
-
         state.lastScanned = to;
         from = to + 1;
         if ((to - START_BLOCK) % (CHUNK * 10) < CHUNK) persist(); // survive hard kills
         await new Promise((r) => setTimeout(r, 120)); // stay under the rate limit
+      }
+
+      // Backward catch-up, one wallet at a time, budgeted per call.
+      let budget = catchupBudget;
+      for (const w of wallets) {
+        if (w.main || !w.address) continue; // the main wallet was covered by the forward scan from the start
+        const key = w.address.toLowerCase();
+        const c = (state.catchup[key] = state.catchup[key] || { next: START_BLOCK, until: state.lastScanned, ids: [] });
+        // New ids for a known wallet (a later mint) need no catch-up: their events are after the mint, inside the forward scan.
+        if (c.next > c.until) continue;
+        const topics = w.ids.map(idTopic);
+        const known = seen();
+        while (c.next <= c.until && budget > 0) {
+          const to = Math.min(c.next + CHUNK - 1, c.until);
+          const found = await scanRange(topics, c.next, to);
+          for (const e of found) if (!known.has(`${e.tx}:${e.tokenId}`)) state.events.push(...tagged([e], w));
+          c.next = to + 1;
+          budget--;
+          if (budget % 20 === 0) persist();
+          await new Promise((r) => setTimeout(r, 120));
+        }
+        if (budget <= 0) break;
       }
     } finally {
       state.events.sort((a, b) => a.block - b.block);
@@ -123,8 +174,16 @@ function create({ provider, npmAddress }) {
     }
   }
 
+  /** Catch-up progress per wallet, for the UI. */
+  function catchupStatus() {
+    const out = {};
+    for (const [k, c] of Object.entries(state.catchup)) out[k] = { done: c.next > c.until, next: c.next, until: c.until };
+    return out;
+  }
+
   return {
     scan,
+    catchupStatus,
     get events() {
       return state.events;
     },

@@ -515,6 +515,21 @@ only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
 
+### 2026-09-07 (overnight)
+
+- Git repository with a hardened .gitignore; nightly ledger backup to the VPS (`backup-ledgers.sh`,
+  `nightly.sh`, 02:00); `start-all.sh` exports `./.env` to the server.
+- Telegram alerts (`alerts.js`): out of range / back in range, failed or locked-skipped collect, missing
+  09:00 run, locked collector before the run, missing keepalive session, outage on restart.
+- Wallet labels in `wallets.json`; picker, tiles and Positions panel use them.
+- Uniswap v4 fee collection (`collect-v4.js`, `approve-operator.js --v4`).
+- Shared Blockscout client with PRO key (`blockscout.js`, `BLOCKSCOUT_API_KEY`).
+- Phone layout at 375px; `/api/watch` serves the cache and rebuilds in the background.
+- Staking rewards ledger (`staking.js`) and Analytics page: Performance, Income for taxes with CSV,
+  Staking rewards.
+- v4 pool keys learned from a token's own swaps (Bucket, BULLIONS priced); more launchpad hooks.
+- Dark glassmorphism theme.
+
 ### 2026-09-07
 
 - Watched wallets: three wallets configured with labels (Wallet 1/2/3); each shows token holdings value,

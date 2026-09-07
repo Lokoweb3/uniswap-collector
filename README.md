@@ -374,6 +374,10 @@ chosen window (2 hours to 1 week; a WSL restart clears the cache regardless). No
 over loopback only and the public gate refuses them. Replacing the keystore changes the message, so setup
 must be repeated. "Forget saved passphrase" deletes the ciphertext.
 
+The intended arm window is also recorded on disk (`~/.lp-collector/arm-window.json`). When the RAM cache
+is gone before that window has expired (a WSL restart), the dashboard chip and the arm page say the
+window was lost rather than expired, and a Telegram alert asks for a re-arm.
+
 
 There is no DPAPI equivalent here, and no secrets service worth relying on in a
 default WSL install. Rather than leave a passphrase sitting in a dotfile, the

@@ -1673,7 +1673,9 @@ function renderUnlock(unlock){
     arm.innerHTML = 'Collector armed · <b>' + (dd ? dd + 'd ' : '') + (h ? h + 'h ' : '') + m + 'm</b> left';
   } else {
     arm.className = 'chip warn';
-    arm.textContent = 'Collector locked — scheduled and button collects will skip';
+    arm.textContent = unlock && unlock.lost
+      ? 'Collector lost its arm window at a restart (was armed until ' + new Date(unlock.until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) + ') — re-arm'
+      : 'Collector locked — scheduled and button collects will skip';
   }
   $('#armbtn').hidden = !!armed;
   $('#lockbtn').hidden = !armed;

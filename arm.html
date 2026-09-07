@@ -109,6 +109,8 @@ a{color:var(--cyan)}
       const d = Math.floor(st.unlock.minutesLeft / 1440), h = Math.floor((st.unlock.minutesLeft % 1440) / 60), m = st.unlock.minutesLeft % 60;
       const at = new Date(Date.now() + st.unlock.minutesLeft * 60000);
       $('#expiry').textContent = `${d ? d + 'd ' : ''}${h ? h + 'h ' : ''}${m}m from now · ${at.toLocaleString()}`;
+    } else if (st.unlock && st.unlock.lost) {
+      $('#expiry').innerHTML = `<span class="bad">lost at a restart</span> · was armed until ${new Date(st.unlock.until).toLocaleString()} · sign again to re-arm`;
     } else $('#expiry').textContent = 'not armed; the 09:00 run and the Collect button will skip';
     $('#owner').textContent = st.owner;
     $('#operator').textContent = st.operator || 'no keystore found';

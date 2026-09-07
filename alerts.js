@@ -145,6 +145,11 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
       if (!ranToday) await say(`missed:${dayKey(d)}`, `⚠️ No collect run seen today after ${COLLECT_HOUR}:00. Is the Windows scheduled task 'LP fee collector' still registered?`, 0);
     }
 
+    // Arm window lost to a restart (the RAM cache is gone but the window had not expired).
+    if (unlock && unlock.lost) {
+      await say(`lost:${unlock.until}`, `⚠️ The collector's arm window (until ${new Date(unlock.until).toLocaleString()}) was lost: the RAM cache was cleared, most likely by a WSL restart. Re-arm at http://127.0.0.1:8787/arm.`, 0);
+    }
+
     // Locked collector ahead of the run.
     if (unlock && !unlock.armed && hour >= WARN_HOUR && hour < COLLECT_HOUR) {
       await say(`locked:${dayKey(d)}`, `🔒 The collector is locked; the ${COLLECT_HOUR}:00 collect will skip. Arm it from the dashboard or run ./unlock.sh.`, 0);

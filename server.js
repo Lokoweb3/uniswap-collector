@@ -583,13 +583,23 @@ async function merklRewards() {
 
 /** Unlock window state, read from the same /dev/shm cache run-collector.sh uses. */
 function unlockState() {
+  const armer = require("./arm");
+  let ttl = null;
   try {
-    const ttl = Number(fs.readFileSync(`/dev/shm/.lp-collector-${process.getuid()}.ttl`, "utf8"));
-    const left = Math.floor((ttl - Date.now() / 1000) / 60);
-    return left > 0 ? { armed: true, minutesLeft: left } : { armed: false };
-  } catch {
-    return { armed: false };
+    ttl = Number(fs.readFileSync(`/dev/shm/.lp-collector-${process.getuid()}.ttl`, "utf8"));
+  } catch {}
+  const now = Date.now() / 1000;
+  if (ttl && ttl > now) {
+    // Armed (by any path, including unlock.sh): keep the on-disk record in step.
+    const w = armer.expectedWindow();
+    if (!w || Math.abs(w.until - ttl) > 5) armer.rememberWindow(ttl);
+    return { armed: true, minutesLeft: Math.floor((ttl - now) / 60), until: ttl * 1000 };
   }
+  // Not armed. If a window was still supposed to be running, the RAM cache was
+  // cleared underneath it (a WSL restart), not merely expired.
+  const w = armer.expectedWindow();
+  if (w && w.until > now) return { armed: false, lost: true, until: w.until * 1000 };
+  return { armed: false };
 }
 
 async function build() {
@@ -1051,6 +1061,7 @@ const server = http.createServer(async (req, res) => {
     }
     fs.rmSync(CACHE_FILE, { force: true });
     fs.rmSync(`${CACHE_FILE}.ttl`, { force: true });
+    armer.clearWindow();
     res.writeHead(200);
     return res.end(JSON.stringify({ ok: true, unlock: { armed: false } }));
   }

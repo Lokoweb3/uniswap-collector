@@ -127,4 +127,24 @@ function forget() {
   fs.rmSync(SECRET_FILE, { force: true });
 }
 
-module.exports = { message, verify, configured, setup, arm, forget, operatorAddress, SECRET_FILE };
+// The intended arm window, kept on disk. /dev/shm is wiped by a WSL restart,
+// so comparing this with the cache tells "expired" apart from "lost".
+const WINDOW_FILE = path.join(process.env.HOME || "", ".lp-collector", "arm-window.json");
+function rememberWindow(untilEpochSec) {
+  try {
+    fs.mkdirSync(path.dirname(WINDOW_FILE), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(WINDOW_FILE, JSON.stringify({ until: Number(untilEpochSec), at: Date.now() }), { mode: 0o600 });
+  } catch {}
+}
+function expectedWindow() {
+  try {
+    return JSON.parse(fs.readFileSync(WINDOW_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function clearWindow() {
+  fs.rmSync(WINDOW_FILE, { force: true });
+}
+
+module.exports = { message, verify, configured, setup, arm, forget, operatorAddress, SECRET_FILE, rememberWindow, expectedWindow, clearWindow };

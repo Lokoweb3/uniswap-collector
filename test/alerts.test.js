@@ -58,6 +58,12 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   out = await b.check({ payload: { positions: [] }, ops: run("2026-09-06T09:00:04", "collected 1 position"), unlock: { armed: true }, keepalive: true });
   assert.ok(out.some((m) => /Dashboard was down for about 120 min/.test(m)), "outage alert expected");
 
+  // 8b. arm window lost at a restart
+  out = await b.check({ payload: { positions: [] }, ops: run("2026-09-06T09:00:04", "collected 1 position"), unlock: { armed: false, lost: true, until: clock + 3 * 86400000 }, keepalive: true });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /arm window .* was lost/);
+  out = await b.check({ payload: { positions: [] }, ops: run("2026-09-06T09:00:04", "collected 1 position"), unlock: { armed: false, lost: true, until: clock + 3 * 86400000 }, keepalive: true });
+  assert.strictEqual(out.length, 0, "lost-window alert must not repeat");
+
   // 8. no transport, no token => disabled and silent
   const c = create({ token: undefined, chatId: undefined, stateFile: stateFile + ".c", now: () => clock });
   assert.strictEqual(c.enabled, false);

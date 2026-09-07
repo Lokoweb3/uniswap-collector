@@ -41,11 +41,16 @@ function create({ provider, cfg, log = console.log }) {
   const posm = new ethers.Contract(V4.positionManager, POSM_WRITE_ABI, provider);
   const stateView = new ethers.Contract(V4.stateView, v4.STATE_VIEW_ABI, provider);
 
-  /** Ids the dashboard has discovered for the owner (v4-positions.json), plus config extras. */
-  function knownIds() {
-    const ids = new Set((cfg.v4Collect && cfg.v4Collect.tokenIds) || []);
+  /**
+   * Ids the dashboard has discovered: v4-positions.json for the main owner,
+   * v4-positions-<address>.json for a watched wallet (watch.js writes those),
+   * plus config extras for the main owner.
+   */
+  function knownIds(ownerAddress = null) {
+    const ids = new Set(ownerAddress ? [] : (cfg.v4Collect && cfg.v4Collect.tokenIds) || []);
+    const file = ownerAddress ? `v4-positions-${String(ownerAddress).toLowerCase()}.json` : "v4-positions.json";
     try {
-      const j = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "v4-positions.json"), "utf8"));
+      const j = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, file), "utf8"));
       for (const id of j.ids || []) ids.add(String(id));
     } catch {}
     return [...ids];

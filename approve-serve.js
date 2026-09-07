@@ -50,9 +50,21 @@ http
         const mgr = v === 3 ? cfg.contracts.positionManager : cfg.contracts.v4 && cfg.contracts.v4.positionManager;
         const op = operatorAddress();
         const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
-        const approved = op ? await c.isApprovedForAll(cfg.ownerAddress, op) : null;
-        const others = (await approvedOperators(provider, mgr, cfg.ownerAddress)).filter((o) => o.approved && (!op || o.address.toLowerCase() !== op.toLowerCase()));
-        return res.end(JSON.stringify({ ok: true, version: v, owner: cfg.ownerAddress, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", approved, others }));
+        // Allowed owners: the main wallet plus wallets.json entries.
+        const allowed = [{ address: cfg.ownerAddress, label: "Main wallet", main: true }];
+        try {
+          const wj = JSON.parse(fs.readFileSync(path.join(__dirname, "wallets.json"), "utf8"));
+          if (wj.owner && wj.owner.label) allowed[0].label = wj.owner.label;
+          for (const w of wj.watched || []) if (w && ethers.isAddress(w.address)) allowed.push({ address: ethers.getAddress(w.address), label: w.label || w.address, main: false, collect: !!w.collect });
+        } catch {}
+        const want = url.searchParams.get("owner");
+        const ownerEntry = want ? allowed.find((a) => a.address.toLowerCase() === want.toLowerCase()) : allowed[0];
+        if (!ownerEntry) throw new Error("that wallet is not the main wallet or a wallet listed in wallets.json");
+        const approved = op ? await c.isApprovedForAll(ownerEntry.address, op) : null;
+        const others = (await approvedOperators(provider, mgr, ownerEntry.address)).filter((o) => o.approved && (!op || o.address.toLowerCase() !== op.toLowerCase()));
+        const wallets = [];
+        for (const a of allowed) wallets.push({ ...a, approved: op ? await c.isApprovedForAll(a.address, op).catch(() => null) : null });
+        return res.end(JSON.stringify({ ok: true, version: v, owner: ownerEntry.address, ownerLabel: ownerEntry.label, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets }));
       } catch (err) {
         res.writeHead(500);
         return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));

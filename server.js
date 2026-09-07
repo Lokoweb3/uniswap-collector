@@ -148,6 +148,7 @@ const watch = require("./watch").create({
   provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, pools,
   getPortfolio: () => portfolio, // created below; only used at refresh time
   getPrices: () => lastPrices,
+  getOperator: () => require("./arm").operatorAddress(), // keystore's public address, re-read each time
 });
 // Liquidity history from the RPC itself; the PnL basis prefers it over
 // Blockscout's, which has dropped transactions on this chain.
@@ -1195,6 +1196,13 @@ const server = http.createServer(async (req, res) => {
       const v = url.pathname === "/api/v4-approval" ? 4 : Number(url.searchParams.get("v")) === 3 ? 3 : 4;
       const mgr = v === 3 ? cfg.contracts.positionManager : cfg.contracts.v4 && cfg.contracts.v4.positionManager;
       if (!mgr) throw new Error(`no v${v} position manager in config.json`);
+      // Which owner wallet: the main one by default, or any wallets.json wallet the collector may collect for.
+      const allowed = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main wallet", main: true }];
+      for (const w of watch.readWallets()) allowed.push({ address: w.address, label: w.label || w.address, main: false, collect: !!w.collect });
+      const want = url.searchParams.get("owner");
+      const ownerEntry = want ? allowed.find((a) => a.address.toLowerCase() === want.toLowerCase()) : allowed[0];
+      if (!ownerEntry) throw new Error("that wallet is not the main wallet or a wallet listed in wallets.json");
+      const ownerAddr = ownerEntry.address;
       // Re-read the keystore's public address each time: the file can be replaced while the server runs.
       let operator = OPERATOR;
       try {
@@ -1202,15 +1210,18 @@ const server = http.createServer(async (req, res) => {
         operator = ethers.getAddress("0x" + JSON.parse(fs.readFileSync(ksPath, "utf8")).address.replace(/^0x/, ""));
       } catch {}
       const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
-      const approved = operator ? await c.isApprovedForAll(cfg.ownerAddress, operator) : null;
+      const approved = operator ? await c.isApprovedForAll(ownerAddr, operator) : null;
       // Other operators still approved (e.g. a replaced keystore's address), so the page can offer to revoke them.
-      const others = (await approvedOperators(provider, mgr, cfg.ownerAddress)).filter((o) => o.approved && (!operator || o.address.toLowerCase() !== operator.toLowerCase()));
+      const others = (await approvedOperators(provider, mgr, ownerAddr)).filter((o) => o.approved && (!operator || o.address.toLowerCase() !== operator.toLowerCase()));
+      // Overview of every wallet's approval on this manager, for the page's wallet table.
+      const wallets = [];
+      for (const a of allowed) wallets.push({ ...a, approved: operator ? await c.isApprovedForAll(a.address, operator).catch(() => null) : null });
       res.writeHead(200);
       return res.end(JSON.stringify({
         ok: true, version: v,
-        owner: cfg.ownerAddress, operator, posm: ethers.getAddress(mgr),
+        owner: ownerAddr, ownerLabel: ownerEntry.label, operator, posm: ethers.getAddress(mgr),
         chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl,
-        explorer: "https://robinhoodchain.blockscout.com", approved, others,
+        explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets,
       }));
     } catch (err) {
       res.writeHead(500);

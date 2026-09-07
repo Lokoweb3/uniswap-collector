@@ -242,6 +242,18 @@ backfill. The key never leaves the server process.
 
 ## Collector
 
+### Collecting for more than one wallet
+
+Any wallet in `wallets.json` with `"collect": true` gets its own pass in every collector run, after the
+main wallet: its v3 positions (owner enumeration) and v4 positions (the dashboard's discovery file for
+that address) are simulated, the eligible ones collected to the operator, swapped to the sweep target and
+delivered back to that wallet itself. Each pass only moves what it produced (balance deltas from the
+start of the pass), so wallets never receive each other's fees. The wallet has to approve the operator
+once on each position manager: open `/approve-v3` and `/approve-v4`, connect that wallet, approve; the
+pages accept any listed wallet and show every wallet's approval state. The dashboard's wallet header
+line shows "collector: v3 ✓ v4 ✓" for collect-enabled wallets.
+
+
 Uniswap v4 positions are collected too (`collect-v4.js`, `v4Collect.enabled` in config.json): a
 `modifyLiquidities` call that decreases 0 liquidity and takes both currencies to the recipient. It needs
 the operator approved on the v4 PositionManager once, from the owner wallet. Two ways: the browser pages

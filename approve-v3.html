@@ -53,6 +53,7 @@ a{color:var(--cyan)}
   <div class="card">
     <h2>What is being approved</h2>
     <div class="row"><span class="k">Owner (your wallet)</span><span class="mono" id="owner">—</span></div>
+    <div class="row"><span class="k">Wallet name</span><span id="ownerlabel">—</span></div>
     <div class="row"><span class="k">Operator (collector)</span><span class="mono" id="operator">—</span></div>
     <div class="row"><span class="k">Contract</span><span class="mono" id="posm">—</span></div>
     <div class="row"><span class="k">Network</span><span id="network">—</span></div>
@@ -77,6 +78,12 @@ a{color:var(--cyan)}
       <button id="revoke" hidden>Revoke approval</button>
     </div>
     <div id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>All wallets on this manager</h2>
+    <p style="margin:0 0 6px;font-size:14px" class="note">The collector collects for every wallet marked <span class="mono">collect</span> in wallets.json once that wallet has approved the operator. Connect a wallet to work on its row.</p>
+    <div id="wallets"></div>
   </div>
 
   <div class="card" id="otherscard" hidden>
@@ -110,6 +117,8 @@ a{color:var(--cyan)}
       ? `With this approval the operator is treated like an owner of every v3 position NFT this wallet holds now or later: it can call <span class="mono">collect</span> (what the collector does), and technically also <span class="mono">decreaseLiquidity</span>, <span class="mono">burn</span> or transfer the NFTs. It cannot touch tokens or ETH held in your wallet. Grant it only to an operator key you control, and revoke it any time with <span class="mono">setApprovalForAll(operator, false)</span>. (Per-position approval with <span class="mono">approve-operator.js &lt;tokenId&gt;</span> is the narrower alternative.)`
       : `With this approval the operator can call <span class="mono">modifyLiquidities</span> on v4 positions this wallet owns. The collector uses it only to take accrued fees (decrease 0 liquidity, then take both currencies to the sweep recipient); the same permission would also allow withdrawing liquidity, so grant it only to an operator key you control. It cannot move tokens or ETH held in your wallet, and you can revoke it any time with <span class="mono">setApprovalForAll(operator, false)</span>.`;
     $('#owner').textContent = cfg.owner;
+    $('#ownerlabel').textContent = cfg.ownerLabel || '—';
+    $('#wallets').innerHTML = (cfg.wallets || []).map((w) => `<div class="row"><span><span class="mono">${w.address}</span> <span class="note">${w.label}${w.main ? ' · main' : w.collect ? ' · collect on' : ' · watch only'}</span></span><span>${w.approved === true ? '<span class="pill ok">approved</span>' : w.approved === false ? '<span class="pill bad">not approved</span>' : '<span class="pill warn">unknown</span>'}${account && account.toLowerCase() === w.address.toLowerCase() ? ' <span class="pill ok">connected</span>' : ''}</span></div>`).join('');
     $('#operator').textContent = cfg.operator || 'unknown (no operator keystore on the server)';
     $('#posm').textContent = cfg.posm;
     $('#network').textContent = `${cfg.chainName} (chainId ${cfg.chainId})`;
@@ -156,7 +165,8 @@ a{color:var(--cyan)}
   }
 
   async function loadConfig() {
-    const r = await fetch('/api/approval?v=' + VERSION, { cache: 'no-store' });
+    // The owner whose approval this page manages: the connected wallet if it is one of the listed wallets, else the main wallet.
+    const r = await fetch('/api/approval?v=' + VERSION + (account ? '&owner=' + account : ''), { cache: 'no-store' });
     if (!r.ok) throw new Error(`server returned ${r.status}`);
     cfg = await r.json();
     if (!cfg.ok) throw new Error(cfg.error || 'bad config');
@@ -182,9 +192,10 @@ a{color:var(--cyan)}
       account = ethers.getAddress(accounts[0]);
       signer = await provider.getSigner();
       await checkChain();
+      try { await loadConfig(); } catch (e) { status(`${e.message}`, 'bad'); }
       const mine = account.toLowerCase() === cfg.owner.toLowerCase();
       $('#wallet').innerHTML = `<span class="mono">${short(account)}</span> ${mine ? '<span class="pill ok">owner</span>' : '<span class="pill bad">not the owner wallet</span>'}`;
-      if (!mine) status(`Connected account ${short(account)} is not the position owner ${short(cfg.owner)}. Switch accounts in your wallet.`, 'bad');
+      if (!mine) status(`Connected account ${short(account)} is not the main wallet or a wallet listed in wallets.json. Switch accounts in your wallet.`, 'bad');
       else if (!chainOk) status('Wrong network. Click "Switch to Robinhood Chain".', 'warn');
       else status('Connected. Tick the checkbox, then approve.', 'ok');
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());

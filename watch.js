@@ -22,7 +22,7 @@ const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
 const tierLabel = (fee) => (fee == null ? "?" : `${+(Number(fee) / 10000).toFixed(3)}%`);
 
-function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools }) {
+function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator }) {
   const discovery = new Map(); // address -> v4 discovery (own state file per wallet)
   let accrual = { last: {}, hours: {} }; // last[wallet:tokenId] = {t,f0,f1}; hours[wallet][hourMs] = usd
   try {
@@ -121,7 +121,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       const address = ethers.getAddress(o.address);
       if (address.toLowerCase() === String(cfg.ownerAddress).toLowerCase() || seen.has(address)) continue;
       seen.add(address);
-      out.push({ address, label: o.label ? String(o.label).slice(0, 40) : null });
+      out.push({ address, label: o.label ? String(o.label).slice(0, 40) : null, collect: !!o.collect });
     }
     return out;
   }
@@ -214,6 +214,16 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     recordAccrual(w.address, positions);
     const earned = earnedFor(w.address);
 
+    // Collector approval state for wallets the collector should collect for.
+    let collector = null;
+    const operator = getOperator ? getOperator() : null;
+    if (w.collect && operator) {
+      const abi = ["function isApprovedForAll(address,address) view returns (bool)"];
+      const v3ok = await new ethers.Contract(cfg.contracts.positionManager, abi, provider).isApprovedForAll(w.address, operator).catch(() => null);
+      const v4ok = V4 ? await new ethers.Contract(cfg.contracts.v4.positionManager, abi, provider).isApprovedForAll(w.address, operator).catch(() => null) : null;
+      collector = { enabled: true, v3: v3ok, v4: v4ok };
+    } else if (w.collect) collector = { enabled: true, v3: null, v4: null };
+
     // Tokens sitting in the wallet itself, valued like the owner's portfolio.
     let holdings = null;
     const pf = getPortfolio && getPortfolio();
@@ -229,7 +239,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const feesUsd = positions.reduce((s, p) => s + (p.feesUsd || 0), 0);
     const walletUsd = holdings ? holdings.walletUsd : null;
     return {
-      ...w, ok: true, positions, closed, errors, known, truncated, earned,
+      ...w, ok: true, positions, closed, errors, known, truncated, earned, collector,
       holdings: holdings
         ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, tokens: holdings.rows, tokenCount: holdings.rows.length }
         : null,

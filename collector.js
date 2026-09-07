@@ -310,18 +310,63 @@ async function main() {
   const quoter = new ethers.Contract(cfg.contracts.quoterV2, QUOTER_ABI, provider);
   const weth = cfg.contracts.weth;
 
+  const target = sweepTarget(cfg);
+  const ctx = { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target };
+
+  // Owners: the main wallet, then every wallets.json entry marked collect: true
+  // (their fees are delivered back to their own address).
+  const owners = [{ address: cfg.ownerAddress, label: "Main wallet", sweepTo: cfg.sweepDestination, main: true }];
+  try {
+    const wj = JSON.parse(fs.readFileSync(path.join(__dirname, "wallets.json"), "utf8"));
+    if (wj.owner && wj.owner.label) owners[0].label = wj.owner.label;
+    for (const w of wj.watched || []) {
+      if (!w || !w.collect || !ethers.isAddress(w.address)) continue;
+      const address = ethers.getAddress(w.address);
+      if (address.toLowerCase() === cfg.ownerAddress.toLowerCase()) continue;
+      owners.push({ address, label: w.label || address, sweepTo: address, main: false });
+    }
+  } catch {}
+  log(`Owners in this run: ${owners.map((o) => o.label).join(", ")}`);
+
+  for (const owner of owners) {
+    try {
+      await runOwner(ctx, owner);
+    } catch (err) {
+      log(`  ! ${owner.label}: ${err.shortMessage || err.message}`);
+    }
+    if (mode !== "simulate" && gasSpentLast24h(state) >= cap) {
+      log("24h gas cap reached; remaining owners skipped.");
+      break;
+    }
+  }
+  log("=== done ===");
+}
+
+/**
+ * One full pass for one owner wallet: discover its positions, simulate, collect
+ * to the operator, swap to the sweep target and deliver to owner.sweepTo.
+ * Extra owners (wallets.json `collect: true`) get their fees sent back to
+ * themselves; the main owner keeps the configured sweepDestination.
+ */
+async function runOwner(ctx, owner) {
+  const { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target } = ctx;
+  log(`--- ${owner.label} (${owner.address}) ---`);
   // Fees are collected to the operator so it can swap them. In collect-only
   // mode there is nothing to swap, so send straight to the owner instead and
   // skip the hot-wallet hop entirely.
-  const recipient = mode === "full" ? (wallet ? wallet.address : cfg.ownerAddress) : cfg.ownerAddress;
-
+  const recipient = mode === "full" ? (wallet ? wallet.address : owner.address) : owner.address;
   // eth_call sender for fee simulation: the operator once we have one,
   // otherwise the owner. Either satisfies isAuthorizedForToken.
-  const simSender = wallet ? wallet.address : cfg.ownerAddress;
-
+  const simSender = wallet ? wallet.address : owner.address;
+  const before = { weth: 0n, target: 0n, eth: 0n };
+  if (wallet) {
+    before.weth = await new ethers.Contract(weth, ERC20_ABI, provider).balanceOf(wallet.address);
+    before.eth = await provider.getBalance(wallet.address);
+    if (target.kind === "token") before.target = await new ethers.Contract(target.address, ERC20_ABI, provider).balanceOf(wallet.address);
+  }
   // -- Approval check --------------------------------------------------------
   if (mode !== "simulate") {
-    const blanket = await npmRead.isApprovedForAll(cfg.ownerAddress, wallet.address);
+    const blanket = await npmRead.isApprovedForAll(owner.address, wallet.address);
     log(`Operator approvalForAll on positions: ${blanket}`);
     if (!blanket) {
       log("  (per-token approvals will be checked individually)");
@@ -330,7 +375,7 @@ async function main() {
 
   // -- Discover and simulate -------------------------------------------------
   const denylist = new Set((cfg.denylist || []).map(String));
-  const ids = (await discoverTokenIds(npmRead, cfg.ownerAddress, cfg)).filter((id) => {
+  const ids = (await discoverTokenIds(npmRead, owner.address, owner.main ? cfg : { ...cfg, tokenIds: [] })).filter((id) => {
     if (denylist.has(id.toString())) {
       log(`Skipping #${id} (denylisted).`);
       return false;
@@ -376,11 +421,11 @@ async function main() {
   // -- Uniswap v4 positions (collect-v4.js) -----------------------------------
   // Fees are read the same way the dashboard does; collection needs the
   // operator approved on the v4 PositionManager (node approve-operator.js --v4).
-  const v4c = cfg.v4Collect && cfg.v4Collect.enabled ? require("./collect-v4").create({ provider, cfg, log }) : null;
+  const v4c = cfg.v4Collect && cfg.v4Collect.enabled ? require("./collect-v4").create({ provider, cfg: { ...cfg, ownerAddress: owner.address }, log }) : null;
   const eligibleV4 = [];
   let v4Open = 0, v4Closed = 0;
   if (v4c) {
-    for (const id of v4c.knownIds()) {
+    for (const id of v4c.knownIds(owner.main ? null : owner.address)) {
       if (denylist.has(String(id))) continue;
       let sim;
       try {
@@ -409,7 +454,6 @@ async function main() {
   log(`Total collectable across open positions: ≈ ${ethers.formatEther(totalWethValue)} WETH`);
   log(`Eligible for collection: ${eligible.length}/${openCount}${v4c ? ` (v3) + ${eligibleV4.length}/${v4Open} (v4)` : ""}`);
 
-  const target = sweepTarget(cfg);
   if (target.kind === "token") {
     const tinfo = await tokenInfo(target.address, provider);
     const eligibleWeth = [...eligible, ...eligibleV4].reduce((s, e) => s + e.wethValue, 0n);
@@ -544,13 +588,15 @@ async function main() {
     }
   }
 
-  for (const [tokenAddr] of collected) {
+  for (const [tokenAddr, collectedAmt] of collected) {
     if (tokenAddr.toLowerCase() === weth.toLowerCase()) continue;
     if (target.kind === "token" && tokenAddr.toLowerCase() === target.address.toLowerCase()) continue; // forwarded as-is below
 
     const info = await tokenInfo(tokenAddr, provider);
     const erc20 = new ethers.Contract(tokenAddr, ERC20_ABI, wallet);
-    const balance = await erc20.balanceOf(wallet.address);
+    const held = await erc20.balanceOf(wallet.address);
+    // Swap only what this owner's positions paid out in this pass.
+    const balance = held < collectedAmt ? held : collectedAmt;
     if (balance === 0n) continue;
 
     const feeTier = feeTierFor.get(tokenAddr);
@@ -612,7 +658,11 @@ async function main() {
   }
 
   const wethC = new ethers.Contract(weth, WETH_ABI, wallet);
-  let wethBal = await wethC.balanceOf(wallet.address);
+  // Only what this pass produced leaves the operator: balances above what it
+  // held when the pass started stay put (they belong to another owner's pass,
+  // or are leftovers to sort out by hand).
+  const wethNow = await wethC.balanceOf(wallet.address);
+  let wethBal = wethNow > before.weth ? wethNow - before.weth : 0n;
   const reserve = ethers.parseEther(cfg.sweep.keepGasReserveEth);
 
   if (target.kind === "token") {
@@ -657,13 +707,13 @@ async function main() {
             tokenIn: weth,
             tokenOut: target.address,
             fee: target.feeTier,
-            recipient: cfg.sweepDestination,
+            recipient: owner.sweepTo,
             amountIn: wethBal,
             amountOutMinimum: minOut,
             sqrtPriceLimitX96: 0,
           });
           log(
-            `swap ${ethers.formatEther(wethBal)} WETH -> ${tinfo.symbol} to ${cfg.sweepDestination} ` +
+            `swap ${ethers.formatEther(wethBal)} WETH -> ${tinfo.symbol} to ${owner.sweepTo} ` +
               `(quote ${fmt(quoted, tinfo.decimals, 2)}, min ${fmt(minOut, tinfo.decimals, 2)}) -> ${stx.hash}`
           );
           const srcpt = await stx.wait();
@@ -677,11 +727,12 @@ async function main() {
     }
 
     // 3. Target token that arrived as fees (or was left behind) goes to the owner as-is.
-    const tBal = await targetC.balanceOf(wallet.address);
+    const tNow = await targetC.balanceOf(wallet.address);
+    const tBal = tNow > before.target ? tNow - before.target : 0n;
     if (tBal > 0n) {
       try {
-        const ttx = await targetC.transfer(cfg.sweepDestination, tBal);
-        log(`send ${fmt(tBal, tinfo.decimals, 2)} ${tinfo.symbol} -> ${cfg.sweepDestination} -> ${ttx.hash}`);
+        const ttx = await targetC.transfer(owner.sweepTo, tBal);
+        log(`send ${fmt(tBal, tinfo.decimals, 2)} ${tinfo.symbol} -> ${owner.sweepTo} -> ${ttx.hash}`);
         const trcpt = await ttx.wait();
         recordGas(state, trcpt.gasUsed * trcpt.gasPrice);
       } catch (err) {
@@ -691,7 +742,7 @@ async function main() {
 
     log(`Operator gas float now ${ethers.formatEther(await provider.getBalance(wallet.address))} ETH (reserve ${cfg.sweep.keepGasReserveEth}).`);
     log(`24h gas spend now ${ethers.formatEther(gasSpentLast24h(state))} / ${cfg.thresholds.dailyGasCapEth} ETH`);
-    log("=== done ===");
+    log(`=== ${owner.label}: done ===`);
     return;
   }
 
@@ -706,7 +757,8 @@ async function main() {
     }
   }
 
-  const ethBal = await provider.getBalance(wallet.address);
+  const ethNow = await provider.getBalance(wallet.address);
+  const ethBal = owner.main ? ethNow : (ethNow > before.eth ? before.eth + (ethNow - before.eth) : 0n);
   if (ethBal <= reserve) {
     log(`Operator ETH (${ethers.formatEther(ethBal)}) at or below gas reserve. Nothing to sweep.`);
     return;
@@ -724,11 +776,11 @@ async function main() {
   try {
     // sweepDestination is read from config but should be treated as fixed.
     const tx = await wallet.sendTransaction({
-      to: cfg.sweepDestination,
+      to: owner.sweepTo,
       value: sendable,
       gasLimit: sweepGas,
     });
-    log(`sweep ${ethers.formatEther(sendable)} ETH -> ${cfg.sweepDestination} -> ${tx.hash}`);
+    log(`sweep ${ethers.formatEther(sendable)} ETH -> ${owner.sweepTo} -> ${tx.hash}`);
     const rcpt = await tx.wait();
     recordGas(state, rcpt.gasUsed * rcpt.gasPrice);
     log(`  confirmed in block ${rcpt.blockNumber}`);
@@ -737,7 +789,7 @@ async function main() {
   }
 
   log(`24h gas spend now ${ethers.formatEther(gasSpentLast24h(state))} / ${cfg.thresholds.dailyGasCapEth} ETH`);
-  log("=== done ===");
+  log(`=== ${owner.label}: done ===`);
 }
 
 main().catch((err) => {

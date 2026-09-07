@@ -700,6 +700,16 @@ select.scope option{background:#0b1017}
   by the close is not income and is already netted out. Unpriced tokens are listed by amount only. This is a record, not tax advice.</div>
 </section>
 
+<section class="earnings analytics" id="vaultsec" hidden>
+  <div class="ehead">
+    <h3>LOKOVault</h3>
+    <span><a class="ecsv" href="/treasury">Open vault</a> <span class="etotal" id="vaulttotal"></span></span>
+  </div>
+  <div class="agrid" id="vaultgrid"></div>
+  <div class="echart" id="vaultchart"></div>
+  <div class="enote" id="vaultnote"></div>
+</section>
+
 <section class="earnings analytics owneronly" id="earnings" hidden>
   <div class="ehead">
     <h3>Collected fees</h3>
@@ -1496,6 +1506,35 @@ function incomeEvents(){
   return ev.sort((a, b) => a.t - b.t);
 }
 
+let treasuryD = null;
+async function loadTreasury(){
+  try { const r = await fetch('/api/treasury'); const d = await r.json(); if (d.ok) { treasuryD = d; renderVault(); renderAnalytics(); } } catch(e){}
+}
+function renderVault(){
+  const d = treasuryD;
+  if (!d) return;
+  $('#vaultsec').hidden = false;
+  $('#vaulttotal').textContent = usd(d.totalSplitUsdg);
+  const tile = (n, l, cls = '') => `<div class="stat"><div class="n sm ${cls}">${n}</div><div class="l">${l}</div></div>`;
+  $('#vaultgrid').innerHTML =
+    tile(usd(d.totalSplitUsdg), 'Split to the vault, all time', 'fees') +
+    tile(d.balanceUsdg == null ? '—' : usd(d.balanceUsdg), 'Vault balance (USDG)') +
+    tile(d.enabled ? d.pct + '%' : 'off', d.enabled ? `Current split · max ${d.max}%` : 'Split is off (no treasury address yet)') +
+    tile(String(d.count), `Splits recorded${d.failed ? ` · ${d.failed} failed` : ''}`);
+  // Six-month bar chart of the split amounts.
+  const months = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) { const m = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push(`${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`); }
+  const vals = months.map(k => d.byMonth[k] || 0);
+  const max = Math.max(1, ...vals);
+  const W = 600, H = 130, pad = 8, bw = (W - pad * 2) / months.length;
+  const bars = vals.map((v, i) => { const h = Math.round((v / max) * (H - 40)); const x = pad + i * bw + bw * 0.2; return `<rect x="${x}" y="${H - 22 - h}" width="${bw * 0.6}" height="${h}" rx="3" fill="var(--neon-gold, #f5c542)" opacity="${v ? 0.9 : 0.25}"/><text class="axis" x="${x + bw * 0.3}" y="${H - 8}" text-anchor="middle">${new Date(months[i] + '-15T12:00:00').toLocaleDateString(undefined, { month: 'short' })}</text>${v ? `<text class="axis" x="${x + bw * 0.3}" y="${H - 26 - h}" text-anchor="middle">${usd(v)}</text>` : ''}`; }).join('');
+  $('#vaultchart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:130px">${bars}</svg>`;
+  $('#vaultnote').textContent = d.tba
+    ? `Treasury account ${d.tba}. ${d.pct}% of every wallet's swept USDG goes to the vault at collect time; the rest goes to the wallet. Ledger: /fee-split-ledger.json.`
+    : 'No treasury address configured yet (treasuryTBA in config.json). Deploy the vault, set the address, and splits start with the next collect.';
+}
+
 let watchForAnalytics = null;
 async function loadWatchForAnalytics(){
   try { const r = await fetch('/api/watch'); const d = await r.json(); if (d && d.ok) { watchForAnalytics = d; renderAnalytics(); } } catch(e){}
@@ -1533,22 +1572,26 @@ function renderAnalytics(){
     if (e.type === 'LP fees') { o.lpN++; if (e.usd == null) o.unpriced++; else { o.lp += e.usd; if (e.approx) o.approx++; } }
     else { o.stakeN++; o.stake += e.usd || 0; if (e.approx) o.approx++; }
   }
+  // Vault splits by month, from the split ledger: money that left the wallets for the treasury.
+  const vaultBy = (treasuryD && treasuryD.byMonth) || {};
+  for (const k of Object.keys(vaultBy)) if (!byMonth.has(k)) byMonth.set(k, { key: k, lp: 0, lpN: 0, stake: 0, stakeN: 0, approx: 0, unpriced: 0 });
+  for (const m of byMonth.values()) m.vault = vaultBy[m.key] || 0;
   const months = [...byMonth.values()].sort((a, b) => b.key.localeCompare(a.key));
   const years = new Map();
-  for (const m of months){ const y = m.key.slice(0,4); if (!years.has(y)) years.set(y, { y, lp: 0, stake: 0, lpN: 0, stakeN: 0 }); const o = years.get(y); o.lp += m.lp; o.stake += m.stake; o.lpN += m.lpN; o.stakeN += m.stakeN; }
+  for (const m of months){ const y = m.key.slice(0,4); if (!years.has(y)) years.set(y, { y, lp: 0, stake: 0, lpN: 0, stakeN: 0, vault: 0 }); const o = years.get(y); o.lp += m.lp; o.stake += m.stake; o.lpN += m.lpN; o.stakeN += m.stakeN; o.vault += m.vault; }
   const grand = ev.reduce((s, e) => s + (e.usd || 0), 0);
   $('#taxsec').hidden = false;
   $('#taxtotal').textContent = usd(grand);
   const mlabel = k => new Date(k + '-15T12:00:00').toLocaleDateString(undefined, { month: 'long' });
   let rows = '';
   for (const y of [...years.values()].sort((a, b) => b.y.localeCompare(a.y))){
-    rows += `<tr class="year"><td class="l">${y.y}</td><td>${y.lpN}</td><td class="u">${usd(y.lp)}</td><td>${y.stakeN}</td><td class="u">${usd(y.stake)}</td><td class="u">${usd(y.lp + y.stake)}</td></tr>`;
+    rows += `<tr class="year"><td class="l">${y.y}</td><td>${y.lpN}</td><td class="u">${usd(y.lp)}</td><td>${y.stakeN}</td><td class="u">${usd(y.stake)}</td><td class="u">${usd(y.lp + y.stake)}</td><td>${y.vault ? usd(y.vault) : '—'}</td></tr>`;
     for (const m of months.filter(m => m.key.startsWith(y.y))){
-      rows += `<tr><td class="l">&nbsp;&nbsp;${mlabel(m.key)}</td><td>${m.lpN}</td><td class="u">${m.approx ? '<span class="approx" title="Some collects valued at today\'s prices">≈</span>' : ''}${usd(m.lp)}${m.unpriced ? ` <span class="unpriced">${m.unpriced} unpriced</span>` : ''}</td><td>${m.stakeN || ''}</td><td class="u">${m.stakeN ? usd(m.stake) : '—'}</td><td class="u">${usd(m.lp + m.stake)}</td></tr>`;
+      rows += `<tr><td class="l">&nbsp;&nbsp;${mlabel(m.key)}</td><td>${m.lpN}</td><td class="u">${m.approx ? '<span class="approx" title="Some collects valued at today\'s prices">≈</span>' : ''}${usd(m.lp)}${m.unpriced ? ` <span class="unpriced">${m.unpriced} unpriced</span>` : ''}</td><td>${m.stakeN || ''}</td><td class="u">${m.stakeN ? usd(m.stake) : '—'}</td><td class="u">${usd(m.lp + m.stake)}</td><td>${m.vault ? usd(m.vault) : '—'}</td></tr>`;
     }
   }
   $('#taxtable').innerHTML = `<table class="etable">
-    <tr><th class="l">Period</th><th>Collects</th><th>LP fee income</th><th>Rebases</th><th>Staking income</th><th>Total income</th></tr>${rows}</table>`;
+    <tr><th class="l">Period</th><th>Collects</th><th>LP fee income</th><th>Rebases</th><th>Staking income</th><th>Total income</th><th title="Share of swept USDG sent to the LOKOVault treasury (already included in the income figures)">Vault split</th></tr>${rows}</table>`;
 
   // -- Performance: trading-oriented figures --
   const now = Date.now();
@@ -1583,12 +1626,16 @@ function renderAnalytics(){
 }
 
 // Tax CSV: one row per income event, USD at receipt.
-$('#taxcsv').addEventListener('click', e => {
+$('#taxcsv').addEventListener('click', async e => {
   e.preventDefault();
   const ev = incomeEvents();
+  let ledger = [];
+  try { ledger = await (await fetch('/fee-split-ledger.json')).json(); } catch(e){}
   const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const lines = [['date_utc','type','description','amounts','usd_at_receipt','price_basis','tx_hash'].join(',')];
-  for (const x of ev) lines.push([new Date(x.t).toISOString(), x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx].map(q).join(','));
+  const lines = [['date_utc','type','description','amounts','usd_at_receipt','price_basis','tx_hash','vault_split_usdg'].join(',')];
+  for (const x of ev) lines.push([new Date(x.t).toISOString(), x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx, ''].map(q).join(','));
+  // One row per recorded vault split (the treasury's share of a pass's swept USDG).
+  for (const r of ledger) if (r.status !== 'failed' && r.splitUsdg) lines.push([r.timestamp, 'Vault split', `${r.wallet} · ${r.pair || ''} · ${r.splitPct}% of ${r.totalCollectedUsdg} USDG`, `${r.splitUsdg} USDG`, Number(r.splitUsdg).toFixed(2), 'at receipt', r.splitTxHash || '', Number(r.splitUsdg).toFixed(2)].map(q).join(','));
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lp-income-' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
 });
@@ -2245,7 +2292,7 @@ fetch('/api/collect').then(r => r.json()).then(d => {
 const ANALYTICS = PAGE === 'analytics';
 function tick(fresh){
   load(fresh);
-  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); }
+  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); loadTreasury(); }
   else { loadRewards(); loadBalances(); loadAllSeries(); }
 }
 $('#reload').addEventListener('click', () => tick(true));

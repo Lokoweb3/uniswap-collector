@@ -426,6 +426,85 @@ function pricesFromSnapshot(m, t) {
   return { p0, p1, w: best.s.w, src: "snapshot" };
 }
 
+// -- Hourly price log ---------------------------------------------------------
+// USD price of every token worth holding (in a position, or ≥ $1 in any wallet
+// incl. watched ones) once an hour, kept for 400 days, so a collect or reward
+// can always be valued at the price of its own hour instead of today's.
+const PRICE_LOG_FILE = path.join(__dirname, "price-log.json");
+let priceLog = { hours: {} };
+try {
+  priceLog = JSON.parse(fs.readFileSync(PRICE_LOG_FILE, "utf8"));
+} catch {}
+function recordPriceLog() {
+  const hour = String(Math.floor(Date.now() / 3600000) * 3600000);
+  if (priceLog.hours[hour]) return;
+  const row = {};
+  const put = (addr, price) => {
+    if (addr && price != null && isFinite(price) && price > 0) row[String(addr).toLowerCase()] = +Number(price).toPrecision(6);
+  };
+  for (const [a, p] of Object.entries(lastPrices)) put(a, p); // position tokens
+  const pf = portfolio.latest;
+  if (pf) {
+    if (pf.wethUsd) row.eth = +Number(pf.wethUsd).toPrecision(6);
+    for (const r of pf.rows) if (r.address && r.price != null && (r.usd || 0) >= 1) put(r.address, r.price);
+  }
+  for (const w of (watch.latest && watch.latest.wallets) || []) {
+    for (const t of (w.holdings && w.holdings.tokens) || []) if (t.address && t.price != null && (t.usd || 0) >= 1) put(t.address, t.price);
+    for (const p of w.positions || []) {
+      if (p.token0 && p.token0 !== ethers.ZeroAddress) put(p.token0, p.usd0);
+      if (p.token1 && p.token1 !== ethers.ZeroAddress) put(p.token1, p.usd1);
+    }
+  }
+  if (!Object.keys(row).length) return;
+  priceLog.hours[hour] = row;
+  const cutoff = Date.now() - 400 * 86400000;
+  for (const h of Object.keys(priceLog.hours)) if (Number(h) < cutoff) delete priceLog.hours[h];
+  try {
+    fs.writeFileSync(PRICE_LOG_FILE, JSON.stringify(priceLog));
+  } catch {}
+}
+/** Prices for a position's pair from the hourly log, nearest hour within 3h of `t`. */
+function pricesFromLog(m, t) {
+  let best = null;
+  for (const h of Object.keys(priceLog.hours)) {
+    const d = Math.abs(Number(h) - t);
+    if (d <= 3 * 3600 * 1000 && (!best || d < best.d)) best = { h, d };
+  }
+  if (!best) return null;
+  const row = priceLog.hours[best.h];
+  const p0 = row[m.t0.address.toLowerCase()], p1 = row[m.t1.address.toLowerCase()];
+  if (p0 == null || p1 == null || row.eth == null) return null;
+  return { p0, p1, w: row.eth, src: "pricelog" };
+}
+
+// -- Combined portfolio history --------------------------------------------------
+// Hourly total value of the main wallet and each watched wallet, kept forever,
+// for the all-wallets and per-wallet value charts.
+const ALL_FILE = path.join(__dirname, "portfolio-all.json");
+let allSeries = { points: [] };
+try {
+  allSeries = JSON.parse(fs.readFileSync(ALL_FILE, "utf8"));
+} catch {}
+function recordAllWallets() {
+  const pf = portfolio.latest, wl = watch.latest;
+  if (!pf) return;
+  const last = allSeries.points[allSeries.points.length - 1];
+  if (last && Date.now() - last.t < 3600000) return;
+  const wallets = {};
+  for (const w of (wl && wl.wallets) || []) if (w.ok && w.totals) wallets[w.address.toLowerCase()] = +w.totals.totalUsd.toFixed(2);
+  const owner = +pf.totals.totalUsd.toFixed(2);
+  const total = +(owner + Object.values(wallets).reduce((a, b) => a + b, 0)).toFixed(2);
+  allSeries.points.push({ t: Date.now(), owner, wallets, total });
+  try {
+    fs.writeFileSync(ALL_FILE, JSON.stringify(allSeries));
+  } catch {}
+}
+function allWalletsView() {
+  const pts = allSeries.points;
+  const step = Math.max(1, Math.ceil(pts.length / 400));
+  return { ok: true, points: pts.filter((_, i) => i % step === 0 || i === pts.length - 1) };
+}
+
 async function priceEvents() {
   const head = await provider.getBlockNumber().catch(() => null);
   let changed = 0;
@@ -437,6 +516,7 @@ async function priceEvents() {
       const m = await positionMeta(e.tokenId);
       if (head != null && head - e.block <= STATE_DEPTH) px = await pricesAtBlock(m, e.block).catch(() => null);
       if (!px && e.t) px = pricesFromSnapshot(m, e.t);
+      if (!px && e.t) px = pricesFromLog(m, e.t);
     } catch {}
     if (px) {
       feePrices[k] = { p0: +px.p0.toPrecision(8), p1: +px.p1.toPrecision(8), w: +px.w.toFixed(2), src: px.src, t: e.t };
@@ -1149,6 +1229,12 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (url.pathname === "/api/portfolio-all") {
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(200);
+    return res.end(JSON.stringify(allWalletsView()));
+  }
+
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
@@ -1406,9 +1492,19 @@ async function backgroundTick() {
     }
   }
   try {
+    recordPriceLog();
+  } catch (err) {
+    console.error("price log:", err.shortMessage || err.message);
+  }
+  try {
     await watch.refresh();
   } catch (err) {
     console.error("watch:", err.shortMessage || err.message);
+  }
+  try {
+    recordAllWallets();
+  } catch (err) {
+    console.error("portfolio-all:", err.shortMessage || err.message);
   }
   try {
     await hist.scan(latestIds);

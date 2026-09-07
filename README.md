@@ -522,8 +522,16 @@ border, soft shadow, brighter on hover.
 ### Portfolio scope
 
 The Portfolio panel follows the picker: the watched wallets' tokens and position holdings are merged into
-the same per-token table client-side (amounts summed, price and 24h change per token). The hourly value
-chart is the main wallet's only.
+the same per-token table client-side (amounts summed, price and 24h change per token). The value chart
+shows the main wallet's hourly series, or, for All wallets and each watched wallet, the hourly totals the
+server records in `portfolio-all.json` (`/api/portfolio-all`).
+
+### Price log
+
+`price-log.json` keeps the USD price of every token that matters (in a position, or worth ≥ $1 in the
+main or a watched wallet) once an hour for 400 days. Collects and rewards are valued at their own hour
+from it when neither the chain state nor a fee snapshot covers that moment, so the ≈ (today's price)
+marks on the Analytics page stop appearing for new events.
 
 ## Analytics page
 
@@ -546,6 +554,15 @@ All of it is the collector wallet's own history, so the wallet picker is hidden 
 only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
+
+### 2026-09-07 (afternoon)
+
+- Browser approval pages for v3/v4 operators with revoke of old operators; operator keystore replaced,
+  new operator approved, old one revoked; first collect with the new operator.
+- Wallet-signature arming (`arm.html`, `arm.js`), windows up to a week, lost-window detection with a
+  Telegram alert.
+- Pool stats and sibling pools on position cards; fee accrual and "Earned by wallet" for watched
+  wallets; hourly price log; combined portfolio history and per-wallet value charts.
 
 ### 2026-09-07 (overnight)
 

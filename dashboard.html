@@ -996,6 +996,11 @@ function fillScopeSelect(){
   document.body.classList.add('haspick');
 }
 
+let allSeriesD = null;
+async function loadAllSeries(){
+  try { const r = await fetch('/api/portfolio-all'); const d = await r.json(); if (d.ok && d.points.length) { allSeriesD = d; if (lastPortfolio) renderPortfolio(); } } catch(e){}
+}
+
 async function loadBalances(){
   try{
     const r = await fetch('/api/portfolio');
@@ -1097,7 +1102,10 @@ function renderPortfolio(){
     `<span>uncollected fees <b>${usd(totals.feesUsd)}</b></span>` +
     `<span>in wallet <b>${usd(totals.walletUsd)}</b></span>` +
     (totals.unpricedCount ? `<span>${totals.unpricedCount} token${totals.unpricedCount === 1 ? '' : 's'} unpriced</span>` : '');
-  const series = scope === 'owner' ? (d.series || []).map(s => ({ t: s.t, v: s.total })) : [];
+  // Value chart: the owner's hourly series, or the combined / per-wallet series recorded by the server.
+  let series = [];
+  if (scope === 'owner') series = (d.series || []).map(s => ({ t: s.t, v: s.total }));
+  else if (allSeriesD) series = allSeriesD.points.map(p => ({ t: p.t, v: scope === 'all' ? p.total : (p.wallets && p.wallets[scope]) })).filter(p => p.v != null);
   $('#pchart').innerHTML = series.length >= 2 ? tvChart(series) : '';
   const chg = x => x.change24h == null ? '<td class="chg">—</td>'
     : `<td class="chg ${x.change24h >= 0 ? 'up' : 'down'}">${x.change24h >= 0 ? '+' : '−'}${Math.abs(x.change24h).toFixed(1)}%</td>`;
@@ -1122,7 +1130,7 @@ function renderPortfolio(){
       ? `<div class="enote"><a href="#" id="dusttoggle">${showDust ? 'hide' : 'show'} ${showDust ? 'dust and unpriced tokens' : dust + ' token' + (dust === 1 ? '' : 's') + ' under $1 or unpriced'}</a></div>` : '');
   const dt = $('#dusttoggle');
   if (dt) dt.addEventListener('click', e => { e.preventDefault(); setPref('portfolio:dust', showDust ? '0' : '1'); renderPortfolio(); });
-  const scopeNote = scope === 'owner' ? '' : ` Showing ${label}; the value chart, and the collectable, PnL and projection tiles, cover this wallet only.`;
+  const scopeNote = scope === 'owner' ? '' : ` Showing ${label}; the collectable, PnL and projection tiles cover the main wallet only.${series.length >= 2 ? ' The chart is the hourly total for this selection.' : ' The value chart appears after a few hours of history.'}`;
   $('#pnote').textContent = (series.length >= 2
     ? `Total = wallet + positions + uncollected fees, at current prices. Chart is hourly since ${new Date(series[0].t).toLocaleDateString(undefined,{month:'short',day:'numeric'})}. Prices come from the deepest WETH or USDG pool for each token; 24h change once a day of history exists.`
     : 'Total = wallet + positions + uncollected fees, at current prices. Prices come from the deepest WETH or USDG pool for each token; ≈ marks a value larger than that pool holds.' + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
@@ -2235,7 +2243,7 @@ const ANALYTICS = PAGE === 'analytics';
 function tick(fresh){
   load(fresh);
   if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); }
-  else { loadRewards(); loadBalances(); }
+  else { loadRewards(); loadBalances(); loadAllSeries(); }
 }
 $('#reload').addEventListener('click', () => tick(true));
 tick(false);

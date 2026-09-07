@@ -30,6 +30,8 @@ liquidity-ledger.json
 portfolio.json
 range-log.json
 snet-staking.json
+price-log.json
+portfolio-all.json
 alerts-state.json
 v4-positions*.json
 watch-*.json

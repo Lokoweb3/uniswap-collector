@@ -582,6 +582,14 @@ only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
 
+### 2026-09-07 (evening)
+
+- LOKOVault deployed; 10% fee split live for every wallet's collects.
+- Collect history, by-month totals and the tax CSV cover every wallet (per-wallet catch-up scan).
+- Out-of-range and collect-failure alerts for watched wallets (`ops.js` parses per-owner runs).
+- dashboard.html split into `dashboard.css` / `dashboard.js` (`tools/split-dashboard.js`); `npm test`
+  runs the alert tests and a headless smoke test of every page.
+
 ### 2026-09-07 (afternoon)
 
 - Browser approval pages for v3/v4 operators with revoke of old operators; operator keystore replaced,

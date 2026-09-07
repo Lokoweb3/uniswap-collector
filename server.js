@@ -1021,6 +1021,12 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (url.pathname === "/api/staking") {
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(200);
+    return res.end(JSON.stringify(staking.enabled ? staking.view() : { ok: true, at: Date.now(), tokens: [] }));
+  }
+
   if (url.pathname === "/api/watch") {
     // Serves the cached view only. A rebuild reads every watched wallet's
     // positions and holdings (minutes for a wallet with many tokens), so it
@@ -1220,6 +1226,17 @@ const server = http.createServer(async (req, res) => {
   res.end("Not found");
 });
 
+// Staking rewards ledger (staking.js): hourly samples of rebasing receipts,
+// priced like the Portfolio prices them (sNET as NET).
+const staking = require("./staking").create({
+  provider,
+  cfg,
+  getPrice: (addr) => {
+    const row = portfolio.latest && portfolio.latest.rows.find((r) => r.address && r.address.toLowerCase() === addr);
+    return row && row.price != null ? row.price : lastPrices[addr] ?? null;
+  },
+});
+
 // Telegram alerts (alerts.js): token and chat id come from the environment
 // (./.env via start-all.sh); without them the module stays silent.
 const alerts = require("./alerts").create();
@@ -1252,6 +1269,13 @@ async function backgroundTick() {
     await refreshPortfolio();
   } catch (err) {
     console.error("portfolio:", err.shortMessage || err.message);
+  }
+  if (staking.enabled) {
+    try {
+      await staking.sample();
+    } catch (err) {
+      console.error("staking:", err.shortMessage || err.message);
+    }
   }
   try {
     await watch.refresh();

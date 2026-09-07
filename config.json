@@ -76,5 +76,15 @@
     "_comment": "Uniswap v4 fee collection (collect-v4.js). Positions come from v4-positions.json (dashboard discovery) plus tokenIds here. Needs the operator approved on contracts.v4.positionManager: node approve-operator.js --v4 (owner key). Native ETH fees are wrapped to WETH above the gas reserve and swept like other fees.",
     "enabled": true,
     "tokenIds": []
+  },
+  "staking": {
+    "_comment": "Rebasing staking receipts to track as income (staking.js -> snet-staking.json, /api/staking, Analytics page). token = the receipt (must expose index()), underlying = what it redeems to 1:1.",
+    "tokens": [
+      {
+        "token": "0xb773ec2C326B7f98a5a83fc098825492F020a4c7",
+        "underlying": "0xCA9c78Dd337A67F6e0077F65F5E9218719d30eDf",
+        "label": "NET staking"
+      }
+    ]
   }
 }

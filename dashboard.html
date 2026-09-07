@@ -48,7 +48,14 @@ body{
 .pages a.here{color:var(--bright);border-color:var(--rule);background:var(--card)}
 /* Two pages from one file: the dashboard hides the fee-history panels, the analytics page shows only them. */
 body.page-dashboard #earnings,body.page-dashboard #dailysec{display:none !important}
-body.page-analytics > .wrap > :not(header):not(#earnings):not(#dailysec):not(script){display:none !important}
+body.page-analytics > .wrap > :not(header):not(.analytics):not(script){display:none !important}
+body.page-dashboard .analytics{display:none !important}
+.agrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px}
+.agrid .stat{padding:12px 14px}
+.agrid .stat .n{font-size:22px;font-weight:600}
+.taxnote{font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.6}
+.etable td.l,.etable th.l{text-align:left}
+.etable tr.year td{color:var(--bright);font-weight:600;border-top:1px solid var(--rule)}
 body.page-analytics #walletpick,body.page-analytics #collect{display:none !important}
 body.page-analytics #ownerline{display:inline !important}
 header{display:flex;flex-wrap:wrap;gap:16px;align-items:baseline;justify-content:space-between;
@@ -509,7 +516,26 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
   <div class="enote" id="pnote"></div>
 </section>
 
-<section class="earnings owneronly" id="earnings" hidden>
+<section class="earnings analytics" id="perfsec" hidden>
+  <div class="ehead">
+    <h3>Performance</h3>
+    <span class="enote" id="perfnote"></span>
+  </div>
+  <div class="agrid" id="perfgrid"></div>
+</section>
+
+<section class="earnings analytics" id="taxsec" hidden>
+  <div class="ehead">
+    <h3>Income for taxes</h3>
+    <span><a class="ecsv" id="taxcsv" href="#">Download tax CSV</a> <span class="etotal" id="taxtotal"></span></span>
+  </div>
+  <div class="etablewrap" id="taxtable"></div>
+  <div class="taxnote">Income is valued in USD at the moment it was received: LP fees when collected (rows marked ≈ have no
+  price record from that moment and use today's price), staking rewards at each rebase. Fees taken when a position was closed are included; the principal returned
+  by the close is not income and is already netted out. Unpriced tokens are listed by amount only. This is a record, not tax advice.</div>
+</section>
+
+<section class="earnings analytics owneronly" id="earnings" hidden>
   <div class="ehead">
     <h3>Collected fees</h3>
     <span><label class="ecsv-check"><input type="checkbox" id="hidecloses"> hide close events</label><select class="msel" id="mfilter" hidden><option value="">All time</option></select><a class="ecsv" id="ecsv" href="#" hidden>CSV</a> <span class="etotal" id="etotal"></span></span>
@@ -523,7 +549,7 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
   <div class="enote" id="enote"></div>
 </section>
 
-<section class="earnings owneronly" id="dailysec" hidden>
+<section class="earnings analytics owneronly" id="dailysec" hidden>
   <div class="ehead">
     <h3>Daily revenue</h3>
     <span class="dstats" id="dstats"></span>
@@ -532,6 +558,16 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
   <div class="dlegend" id="dlegend"></div>
   <div class="etablewrap" id="dtable"></div>
   <div class="enote" id="dnote"></div>
+</section>
+
+<section class="earnings analytics" id="stakesec" hidden>
+  <div class="ehead">
+    <h3>Staking rewards</h3>
+    <span class="etotal" id="staketotal"></span>
+  </div>
+  <div class="pstats" id="stakestats"></div>
+  <div class="etablewrap" id="staketable"></div>
+  <div class="enote" id="stakenote"></div>
 </section>
 
 
@@ -1105,6 +1141,7 @@ async function loadHistory(){
     $('#earnings').hidden = false;
     historyRows = d.rows;
     histD = d;
+    renderAnalytics();
     $('#ecsv').hidden = !d.rows.length;
     if (d.tvSeries && d.tvSeries.length >= 2){
       $('#tvhead').hidden = false;
@@ -1218,8 +1255,131 @@ async function loadDaily(){
     if (!d.ok || !d.hours.length) return;
     dailyD = d;
     renderDaily();
+    renderAnalytics();
   }catch(e){ /* panel stays hidden */ }
 }
+
+/* ---- analytics page: staking, performance, taxes ---- */
+let stakingD = null;
+async function loadStaking(){
+  try {
+    const r = await fetch('/api/staking');
+    const d = await r.json();
+    if (!d.ok) return;
+    stakingD = d;
+    renderStaking();
+    renderAnalytics();
+  } catch(e){}
+}
+
+function renderStaking(){
+  const d = stakingD;
+  if (!d || !d.tokens.length) return;
+  $('#stakesec').hidden = false;
+  const t = d.tokens[0];
+  const rw = t.rewards;
+  $('#staketotal').textContent = usd(t.usd);
+  $('#stakestats').innerHTML =
+    `<span>${t.label}</span>` +
+    `<span>staked <b>${amount(t.balance)} ${t.symbol}</b>${t.principal != null ? ` <span class="muted">(${amount(t.principal)} principal)</span>` : ''}</span>` +
+    `<span>price <b>${t.price == null ? '—' : '$' + price(t.price)}</b></span>` +
+    `<span>earned today <b>${amount(rw.today)}</b></span>` +
+    `<span>7d <b>${amount(rw.d7)}</b> ${usd(rw.d7Usd)}</span>` +
+    `<span>30d <b>${amount(rw.d30)}</b> ${usd(rw.d30Usd)}</span>` +
+    `<span>all time <b>${amount(rw.total)} ${t.symbol}</b> ${usd(rw.totalUsd)}</span>` +
+    (t.aprPct != null ? `<span>~<b>${t.aprPct.toFixed(0)}% APR</b> realised</span>` : '');
+  const days = [...t.daily].reverse().slice(0, 14);
+  $('#staketable').innerHTML = `<table class="etable">
+    <tr><th class="l">Day</th><th>Reward</th><th>≈ USD</th></tr>
+    ${days.map(x => `<tr><td class="l">${dayLabel(x.day)}</td><td>${amount(x.amount)} ${t.symbol}</td><td class="u">${x.approx ? '<span class="approx" title="No price record from the time of this rebase; valued at today\'s price">≈</span>' : ''}${usd(x.usd)}</td></tr>`).join('')}
+  </table>`;
+  $('#stakenote').textContent = `Rebasing receipt sampled hourly since ${new Date(t.since).toLocaleDateString(undefined,{month:'short',day:'numeric'})}; a balance change that matches the index change is a reward, anything else (a stake or unstake) is not counted. Rewards are valued at the price recorded at the sample.`;
+}
+
+/** Income events for the tax view: LP fee collects and staking rewards, USD at receipt. */
+function incomeEvents(){
+  const ev = [];
+  for (const r of historyRows){
+    if (!r.t) continue; // close events carry fees net of principal, so they count too
+    ev.push({ t: r.t, type: 'LP fees', what: r.pair + (r.principal ? ' (on close)' : ''), amounts: `${amount(r.f0)} ${r.sym0} + ${amount(r.f1)} ${r.sym1}`, usd: r.usd, approx: r.usd != null && !r.locked, tx: r.tx || '' });
+  }
+  for (const t of (stakingD && stakingD.tokens) || []){
+    for (const e of t.events || []) ev.push({ t: e.t, type: 'Staking reward', what: t.label, amounts: `${amount(e.amount)} ${t.symbol}`, usd: e.usd, approx: !!e.approx, tx: '' });
+  }
+  return ev.sort((a, b) => a.t - b.t);
+}
+
+function renderAnalytics(){
+  if (PAGE !== 'analytics' || !histD) return;
+  const ev = incomeEvents();
+  // -- Income for taxes: by year, then by month --
+  const byMonth = new Map();
+  for (const e of ev){
+    const k = monthKey(e.t);
+    if (!byMonth.has(k)) byMonth.set(k, { key: k, lp: 0, lpN: 0, stake: 0, stakeN: 0, approx: 0, unpriced: 0 });
+    const o = byMonth.get(k);
+    if (e.type === 'LP fees') { o.lpN++; if (e.usd == null) o.unpriced++; else { o.lp += e.usd; if (e.approx) o.approx++; } }
+    else { o.stakeN++; o.stake += e.usd || 0; if (e.approx) o.approx++; }
+  }
+  const months = [...byMonth.values()].sort((a, b) => b.key.localeCompare(a.key));
+  const years = new Map();
+  for (const m of months){ const y = m.key.slice(0,4); if (!years.has(y)) years.set(y, { y, lp: 0, stake: 0, lpN: 0, stakeN: 0 }); const o = years.get(y); o.lp += m.lp; o.stake += m.stake; o.lpN += m.lpN; o.stakeN += m.stakeN; }
+  const grand = ev.reduce((s, e) => s + (e.usd || 0), 0);
+  $('#taxsec').hidden = false;
+  $('#taxtotal').textContent = usd(grand);
+  const mlabel = k => new Date(k + '-15T12:00:00').toLocaleDateString(undefined, { month: 'long' });
+  let rows = '';
+  for (const y of [...years.values()].sort((a, b) => b.y.localeCompare(a.y))){
+    rows += `<tr class="year"><td class="l">${y.y}</td><td>${y.lpN}</td><td class="u">${usd(y.lp)}</td><td>${y.stakeN}</td><td class="u">${usd(y.stake)}</td><td class="u">${usd(y.lp + y.stake)}</td></tr>`;
+    for (const m of months.filter(m => m.key.startsWith(y.y))){
+      rows += `<tr><td class="l">&nbsp;&nbsp;${mlabel(m.key)}</td><td>${m.lpN}</td><td class="u">${m.approx ? '<span class="approx" title="Some collects valued at today\'s prices">≈</span>' : ''}${usd(m.lp)}${m.unpriced ? ` <span class="unpriced">${m.unpriced} unpriced</span>` : ''}</td><td>${m.stakeN || ''}</td><td class="u">${m.stakeN ? usd(m.stake) : '—'}</td><td class="u">${usd(m.lp + m.stake)}</td></tr>`;
+    }
+  }
+  $('#taxtable').innerHTML = `<table class="etable">
+    <tr><th class="l">Period</th><th>Collects</th><th>LP fee income</th><th>Rebases</th><th>Staking income</th><th>Total income</th></tr>${rows}</table>`;
+
+  // -- Performance: trading-oriented figures --
+  const now = Date.now();
+  const inWin = ms => ev.filter(e => now - e.t <= ms);
+  const sumUsd = arr => arr.reduce((s, e) => s + (e.usd || 0), 0);
+  const lp30 = sumUsd(inWin(30 * 86400000).filter(e => e.type === 'LP fees'));
+  const lp7 = sumUsd(inWin(7 * 86400000).filter(e => e.type === 'LP fees'));
+  const st30 = sumUsd(inWin(30 * 86400000).filter(e => e.type !== 'LP fees'));
+  const thisMonth = ev.filter(e => monthKey(e.t) === monthKey(now));
+  const ytd = ev.filter(e => new Date(e.t).getFullYear() === new Date(now).getFullYear());
+  // Earned (accrual) per day from the daily ledger: best day and 30-day average.
+  let best = null, avg30 = null, earnedDays = 0;
+  if (dailyD){
+    const m = dailyModel(dailyD);
+    const days = m.all.filter(x => now - new Date(x.key + 'T12:00:00').getTime() <= 30 * 86400000);
+    earnedDays = days.length;
+    if (days.length){ best = days.reduce((a, x) => (x.total > (a ? a.total : -1) ? x : a), null); avg30 = days.reduce((s, x) => s + x.total, 0) / days.length; }
+  }
+  const lpAll = sumUsd(ev.filter(e => e.type === 'LP fees'));
+  const tile = (n, l, cls = '') => `<div class="stat"><div class="n sm ${cls}">${n}</div><div class="l">${l}</div></div>`;
+  $('#perfsec').hidden = false;
+  $('#perfgrid').innerHTML =
+    tile(usd(lp30 + st30), 'Income, last 30 days', 'fees') +
+    tile(usd(lp7), 'LP fees collected, 7 days') +
+    tile(usd(sumUsd(thisMonth)), 'Income this month') +
+    tile(usd(sumUsd(ytd)), 'Income year to date') +
+    tile(avg30 == null ? '—' : usd(avg30) + '<span class="l">/day</span>', `Average earned per day${earnedDays ? ` · ${earnedDays}d` : ''}`) +
+    tile(best ? usd(best.total) : '—', best ? `Best day · ${dayLabel(best.key)}` : 'Best day') +
+    tile(usd(st30), 'Staking rewards, 30 days') +
+    tile(usd(lpAll), 'LP fees collected, all time');
+  $('#perfnote').textContent = `Collected = cash actually swept; earned = accrual between snapshots. ${ev.length} income events on record.`;
+}
+
+// Tax CSV: one row per income event, USD at receipt.
+$('#taxcsv').addEventListener('click', e => {
+  e.preventDefault();
+  const ev = incomeEvents();
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const lines = [['date_utc','type','description','amounts','usd_at_receipt','price_basis','tx_hash'].join(',')];
+  for (const x of ev) lines.push([new Date(x.t).toISOString(), x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx].map(q).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lp-income-' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
+});
 
 // Collected per local day, from the collects history (cash actually swept).
 function collectedByDay(){
@@ -1862,7 +2022,7 @@ fetch('/api/collect').then(r => r.json()).then(d => {
 const ANALYTICS = PAGE === 'analytics';
 function tick(fresh){
   load(fresh);
-  if (ANALYTICS) { loadHistory(); loadDaily(); }
+  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); }
   else { loadRewards(); loadBalances(); }
 }
 $('#reload').addEventListener('click', () => tick(true));

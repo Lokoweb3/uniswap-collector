@@ -496,10 +496,22 @@ chart is the main wallet's only.
 ## Analytics page
 
 `/analytics` (same `dashboard.html`, view picked from the path; the header has a Dashboard / Analytics
-switch) holds the Collected fees panel (chart, by-month table, position-value chart, collects table, CSV)
-and the Daily revenue panel. They no longer appear on the main page. Both panels are the collector's own
-history, so the wallet picker is hidden there. Each page fetches only what it shows. The public gate serves
-the page at the same path.
+switch) is the income and history page:
+
+- **Performance**: income over 30 days, LP fees over 7 days, this month, year to date, average earned per
+  day and best day (from the accrual ledger), staking rewards over 30 days, all-time fees.
+- **Income for taxes**: per year and month, LP fee collects (USD at the moment of receipt; ≈ marks rows
+  valued at today's price for lack of a record) and staking rewards (USD at each rebase), with a
+  "Download tax CSV" of every income event (date, type, description, amounts, USD, price basis, tx).
+  Fees taken on a close are included, the principal is netted out. A record, not tax advice.
+- **Collected fees** (chart, by-month table, position-value chart, collects table, CSV) and **Daily revenue**.
+- **Staking rewards**: `staking.js` samples each rebasing receipt listed under `staking.tokens` in
+  config.json (sNET from NET Staking) hourly into `snet-staking.json`; history is rebuilt once from the
+  token's LogRebase events. A balance change matching the index change is a reward, anything else is a
+  stake/unstake and is skipped. `/api/staking` serves the view.
+
+All of it is the collector wallet's own history, so the wallet picker is hidden there. Each page fetches
+only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
 

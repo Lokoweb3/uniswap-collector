@@ -5,6 +5,13 @@
  *
  *   node approve-operator.js 780078 780092 834424
  *   node approve-operator.js --check          # read-only, no key needed
+ *   node approve-operator.js --v4             # setApprovalForAll on the v4 PositionManager
+ *   node approve-operator.js --v4 --check     # read-only: is the v4 blanket approval in place?
+ *
+ * Uniswap v4 positions live on a different PositionManager (config
+ * contracts.v4.positionManager); the collector can only take their fees once
+ * the owner has granted the operator setApprovalForAll there. --v4 does that
+ * (one transaction, revocable with setApprovalForAll(operator, false)).
  *
  * The owner key is prompted with echo off, kept only in process memory, and
  * never written anywhere. This is still your main wallet's key passing through
@@ -21,6 +28,8 @@ const NPM_ABI = [
   "function ownerOf(uint256 tokenId) view returns (address)",
   "function getApproved(uint256 tokenId) view returns (address)",
   "function approve(address to, uint256 tokenId)",
+  "function isApprovedForAll(address owner, address operator) view returns (bool)",
+  "function setApprovalForAll(address operator, bool approved)",
 ];
 
 function promptHidden(question) {
@@ -48,6 +57,7 @@ function promptHidden(question) {
 async function main() {
   const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
   const checkOnly = process.argv.includes("--check");
+  const v4Mode = process.argv.includes("--v4");
   const ids = process.argv.slice(2).filter((a) => /^\d+$/.test(a));
 
   const provider = new ethers.JsonRpcProvider(cfg.rpcUrl);
@@ -72,6 +82,40 @@ async function main() {
   }
 
   const npm = new ethers.Contract(cfg.contracts.positionManager, NPM_ABI, provider);
+
+  if (v4Mode) {
+    const posmAddr = cfg.contracts.v4 && cfg.contracts.v4.positionManager;
+    if (!posmAddr) {
+      console.error("config.json has no contracts.v4.positionManager.");
+      process.exit(1);
+    }
+    const posm = new ethers.Contract(posmAddr, NPM_ABI, provider);
+    console.log(`chain          ${net.chainId}`);
+    console.log(`v4 positions   ${posmAddr}`);
+    console.log(`owner          ${cfg.ownerAddress}`);
+    console.log(`operator       ${operator}`);
+    const already = await posm.isApprovedForAll(cfg.ownerAddress, operator);
+    console.log(`approvalForAll ${already ? "operator ✓" : "none"}`);
+    if (checkOnly || already) return;
+    const key = await promptHidden("Owner wallet private key (echo off, memory only): ");
+    let wallet;
+    try {
+      wallet = new ethers.Wallet(key, provider);
+    } catch {
+      console.error("That does not parse as a private key.");
+      process.exit(1);
+    }
+    if (wallet.address.toLowerCase() !== cfg.ownerAddress.toLowerCase()) {
+      console.error(`Key is for ${wallet.address}, but ownerAddress is ${cfg.ownerAddress}. Stopping.`);
+      process.exit(1);
+    }
+    const tx = await posm.connect(wallet).setApprovalForAll(operator, true);
+    process.stdout.write(`setApprovalForAll(operator, true) -> ${tx.hash}`);
+    const rcpt = await tx.wait();
+    console.log(`  confirmed in block ${rcpt.blockNumber}`);
+    console.log("Done. Revoke any time with setApprovalForAll(operator, false) from the owner wallet.");
+    return;
+  }
 
   if (ids.length === 0 && !checkOnly) {
     console.error("Usage: node approve-operator.js <tokenId> [tokenId...]   (or --check)");

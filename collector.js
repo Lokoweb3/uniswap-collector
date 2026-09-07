@@ -53,7 +53,7 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ];
 
-const WETH_ABI = [...ERC20_ABI, "function withdraw(uint256 wad)"];
+const WETH_ABI = [...ERC20_ABI, "function withdraw(uint256 wad)", "function deposit() payable"];
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -373,15 +373,46 @@ async function main() {
     eligible.push(sim);
   }
 
+  // -- Uniswap v4 positions (collect-v4.js) -----------------------------------
+  // Fees are read the same way the dashboard does; collection needs the
+  // operator approved on the v4 PositionManager (node approve-operator.js --v4).
+  const v4c = cfg.v4Collect && cfg.v4Collect.enabled ? require("./collect-v4").create({ provider, cfg, log }) : null;
+  const eligibleV4 = [];
+  let v4Open = 0, v4Closed = 0;
+  if (v4c) {
+    for (const id of v4c.knownIds()) {
+      if (denylist.has(String(id))) continue;
+      let sim;
+      try {
+        sim = await v4c.simulate(id);
+      } catch (err) {
+        log(`  ! v4 #${id}: ${err.shortMessage || err.message}`);
+        continue;
+      }
+      if (!sim) continue;
+      if (sim.closed) { v4Closed++; continue; }
+      v4Open++;
+      // Value in WETH: native ETH counts 1:1, ERC-20s through the v3 quoter at the pool's own tier.
+      const val = async (t, amt) => (amt === 0n ? 0n : t.native || t.address.toLowerCase() === weth.toLowerCase() ? amt : await quoteToWeth(quoter, t.address, amt, sim.fee, weth));
+      const v0 = await val(sim.t0, sim.amount0), v1 = await val(sim.t1, sim.amount1);
+      sim.wethValue = v0 + v1;
+      totalWethValue += sim.wethValue;
+      log(`v4 #${id} ${sim.t0.symbol}/${sim.t1.symbol} ${sim.fee / 10000}%${sim.hooks ? " (hooks)" : ""}  ${fmt(sim.amount0, sim.t0.decimals)} ${sim.t0.symbol} + ${fmt(sim.amount1, sim.t1.decimals)} ${sim.t1.symbol}  ≈ ${ethers.formatEther(sim.wethValue)} WETH`);
+      if (sim.wethValue < minWeth) { log(`  below threshold (${cfg.thresholds.minWethPerPosition} WETH) — skipping`); continue; }
+      eligibleV4.push(sim);
+    }
+    if (v4Open + v4Closed) log(`v4: ${v4Open} open, ${v4Closed} closed, ${eligibleV4.length} eligible.`);
+  }
+
   const openCount = ids.length - closedCount;
   log(`Skipped ${closedCount} closed position(s); ${openCount} open.`);
   log(`Total collectable across open positions: ≈ ${ethers.formatEther(totalWethValue)} WETH`);
-  log(`Eligible for collection: ${eligible.length}/${openCount}`);
+  log(`Eligible for collection: ${eligible.length}/${openCount}${v4c ? ` (v3) + ${eligibleV4.length}/${v4Open} (v4)` : ""}`);
 
   const target = sweepTarget(cfg);
   if (target.kind === "token") {
     const tinfo = await tokenInfo(target.address, provider);
-    const eligibleWeth = eligible.reduce((s, e) => s + e.wethValue, 0n);
+    const eligibleWeth = [...eligible, ...eligibleV4].reduce((s, e) => s + e.wethValue, 0n);
     const out = await quoteSingle(quoter, weth, target.address, eligibleWeth, target.feeTier);
     log(`Sweep target ${tinfo.symbol}: the eligible ≈ ${ethers.formatEther(eligibleWeth)} WETH would convert to ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol} at current prices.`);
   }
@@ -390,7 +421,7 @@ async function main() {
     log("Simulate mode — nothing sent. Reconcile the above against Revert before going live.");
     return;
   }
-  if (eligible.length === 0) {
+  if (eligible.length === 0 && eligibleV4.length === 0) {
     log("Nothing above threshold. Done.");
     return;
   }
@@ -432,6 +463,47 @@ async function main() {
     }
   }
 
+  // -- Collect v4 ------------------------------------------------------------
+  if (v4c && eligibleV4.length) {
+    for (const sim of eligibleV4) {
+      if (gasSpentLast24h(state) >= cap) { log("24h gas cap hit. Stopping."); break; }
+      try {
+        if (!(await v4c.approved(sim.tokenId, wallet.address))) {
+          log(`  ! v4 #${sim.tokenId}: operator is not approved on the v4 PositionManager. Owner: node approve-operator.js --v4`);
+          continue;
+        }
+        const dry = await v4c.dryRun(sim, recipient, wallet.address);
+        if (!dry.ok) { log(`  ! v4 #${sim.tokenId}: simulation reverted (${dry.error}); not sending`); continue; }
+        const rcpt = await v4c.collect(sim, recipient, wallet);
+        const cost = rcpt.gasUsed * rcpt.gasPrice;
+        recordGas(state, cost);
+        log(`  confirmed in block ${rcpt.blockNumber}, gas ${ethers.formatEther(cost)} ETH`);
+        for (const [t, amt] of [[sim.t0, sim.amount0], [sim.t1, sim.amount1]]) {
+          if (amt > 0n && !t.native) collected.set(t.address, (collected.get(t.address) || 0n) + amt);
+        }
+      } catch (err) {
+        log(`  ! v4 collect failed for #${sim.tokenId}: ${err.shortMessage || err.message}`);
+      }
+    }
+    // Native ETH fees landed in the operator's ETH balance; wrap what sits
+    // above the gas reserve so the sweep below treats it as collected WETH.
+    if (mode === "full" && cfg.sweep && cfg.sweep.enabled) {
+      const reserveWei = ethers.parseEther(cfg.sweep.keepGasReserveEth);
+      const ethBal = await provider.getBalance(wallet.address);
+      const excess = ethBal - reserveWei - ethers.parseEther("0.0005");
+      if (excess > 0n) {
+        try {
+          const wtx = await new ethers.Contract(weth, WETH_ABI, wallet).deposit({ value: excess });
+          log(`wrap ${ethers.formatEther(excess)} ETH (v4 fees) -> WETH -> ${wtx.hash}`);
+          const wr = await wtx.wait();
+          recordGas(state, wr.gasUsed * wr.gasPrice);
+        } catch (err) {
+          log(`  ! wrap failed: ${err.shortMessage || err.message}`);
+        }
+      }
+    }
+  }
+
   if (mode === "collect") {
     log(`Collect-only mode. Fees sent to ${recipient}. Done.`);
     return;
@@ -457,9 +529,9 @@ async function main() {
     feeTierFor.set(ethers.getAddress(addr), Number(tier));
   }
 
-  for (const sim of eligible) {
+  for (const sim of [...eligible, ...eligibleV4]) {
     for (const t of [sim.t0.address, sim.t1.address]) {
-      if (t.toLowerCase() === weth.toLowerCase()) continue;
+      if (t === ethers.ZeroAddress || t.toLowerCase() === weth.toLowerCase()) continue;
       const known = feeTierFor.get(t);
       if (known === undefined) {
         feeTierFor.set(t, sim.fee);

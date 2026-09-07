@@ -234,6 +234,13 @@ strip stays current. Re-running the deploy script updates the code.
 
 ## Collector
 
+Uniswap v4 positions are collected too (`collect-v4.js`, `v4Collect.enabled` in config.json): a
+`modifyLiquidities` call that decreases 0 liquidity and takes both currencies to the recipient. It needs
+the operator approved on the v4 PositionManager once, from the owner wallet: `node approve-operator.js
+--v4` (`--v4 --check` reads the state). Native ETH fees are wrapped to WETH above the gas reserve so the
+normal swap-and-sweep handles them. Each collect is static-called first and skipped if it would revert.
+
+
 Collects fees, swaps the non-WETH side into WETH, unwraps it, and sweeps ETH to
 your main wallet.
 

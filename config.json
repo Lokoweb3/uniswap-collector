@@ -69,5 +69,10 @@
     "priceVia": {
       "0xb773ec2C326B7f98a5a83fc098825492F020a4c7": "0xCA9c78Dd337A67F6e0077F65F5E9218719d30eDf"
     }
+  },
+  "v4Collect": {
+    "_comment": "Uniswap v4 fee collection (collect-v4.js). Positions come from v4-positions.json (dashboard discovery) plus tokenIds here. Needs the operator approved on contracts.v4.positionManager: node approve-operator.js --v4 (owner key). Native ETH fees are wrapped to WETH above the gas reserve and swept like other fees.",
+    "enabled": true,
+    "tokenIds": []
   }
 }

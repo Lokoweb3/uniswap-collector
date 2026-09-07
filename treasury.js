@@ -15,6 +15,27 @@ const { ethers } = require("ethers");
 
 const LEDGER_FILE = path.join(__dirname, "fee-split-ledger.json");
 
+/**
+ * The split percentage actually in force: the NFT contract's feeSplitPct()
+ * (what the vault page's slider sets) when treasuryNFT is deployed, else
+ * config.json. Always capped by feeSplitMax.
+ */
+async function effectiveSettings(cfg, provider) {
+  const s = settings(cfg);
+  if (cfg.treasuryNFT && ethers.isAddress(cfg.treasuryNFT) && provider) {
+    try {
+      const nft = new ethers.Contract(cfg.treasuryNFT, ["function feeSplitPct() view returns (uint256)"], provider);
+      const onChain = Number(await nft.feeSplitPct());
+      s.pct = Math.max(0, Math.min(s.max, onChain));
+      s.enabled = !!s.tba && s.pct > 0;
+      s.pctSource = "on-chain";
+    } catch {
+      s.pctSource = "config";
+    }
+  } else s.pctSource = "config";
+  return s;
+}
+
 function settings(cfg) {
   const max = Math.max(0, Math.min(100, Number(cfg.feeSplitMax ?? 20)));
   const pct = Math.max(0, Math.min(max, Number(cfg.feeSplitPct ?? 10)));
@@ -68,4 +89,4 @@ function summary() {
   return { count: rows.length, failed, totalSplitUsdg: +total.toFixed(2), byMonth, recent: rows.slice(-20).reverse() };
 }
 
-module.exports = { settings, split, readLedger, appendLedger, consecutiveFailures, summary, LEDGER_FILE };
+module.exports = { settings, effectiveSettings, split, readLedger, appendLedger, consecutiveFailures, summary, LEDGER_FILE };

@@ -312,7 +312,9 @@ async function main() {
   const weth = cfg.contracts.weth;
 
   const target = sweepTarget(cfg);
-  const ctx = { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target };
+  const treasurySettings = await treasury.effectiveSettings(cfg, provider);
+  if (treasurySettings.tba) log(`LOKOVault: split ${treasurySettings.pct}% (${treasurySettings.pctSource}) -> ${treasurySettings.tba}`);
+  const ctx = { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target, treasurySettings };
 
   // Owners: the main wallet, then every wallets.json entry marked collect: true
   // (their fees are delivered back to their own address).
@@ -350,7 +352,7 @@ async function main() {
  * themselves; the main owner keeps the configured sweepDestination.
  */
 async function runOwner(ctx, owner) {
-  const { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target } = ctx;
+  const { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target, treasurySettings } = ctx;
   log(`--- ${owner.label} (${owner.address}) ---`);
   // Fees are collected to the operator so it can swap them. In collect-only
   // mode there is nothing to swap, so send straight to the owner instead and
@@ -460,7 +462,7 @@ async function runOwner(ctx, owner) {
     const eligibleWeth = [...eligible, ...eligibleV4].reduce((s, e) => s + e.wethValue, 0n);
     const out = await quoteSingle(quoter, weth, target.address, eligibleWeth, target.feeTier);
     log(`Sweep target ${tinfo.symbol}: the eligible ≈ ${ethers.formatEther(eligibleWeth)} WETH would convert to ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol} at current prices.`);
-    const ts = treasury.settings(cfg);
+    const ts = treasurySettings;
     if (ts.enabled) {
       const sp = treasury.split(out, ts.pct);
       log(`Treasury split: ${fmt(sp.toVault, tinfo.decimals, 2)} ${tinfo.symbol} (${ts.pct}%) → LOKOVault TBA ${ts.tba}`);
@@ -743,7 +745,7 @@ async function runOwner(ctx, owner) {
     const tNow = await targetC.balanceOf(wallet.address);
     const tBal = tNow > before.target ? tNow - before.target : 0n;
     if (tBal > 0n) {
-      const ts = treasury.settings(cfg);
+      const ts = treasurySettings;
       const sp = ts.enabled ? treasury.split(tBal, ts.pct) : { toVault: 0n, toOwner: tBal };
       let splitTx = null, ownerTx = null, status = ts.enabled ? "ok" : "off";
       if (sp.toVault > 0n) {

@@ -1258,6 +1258,15 @@ const server = http.createServer(async (req, res) => {
       return res.end("treasury.html is not installed yet: copy it into the project folder next to server.js");
     }
   }
+  if (url.pathname === "/config.json") {
+    // Only the public treasury / contract addresses; nothing operational.
+    const pick = ["chainId", "treasuryNFT", "treasuryTBA", "treasuryTokenId", "treasuryImplementation", "feeSplitPct", "feeSplitMax", "ownerAddress"];
+    const out = {};
+    for (const k of pick) if (cfg[k] !== undefined) out[k] = cfg[k];
+    out.usdg = cfg.usdReference && cfg.usdReference.stable;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(out));
+  }
   if (url.pathname === "/fee-split-ledger.json") {
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(JSON.stringify(treasuryLedger.readLedger()));
@@ -1504,16 +1513,8 @@ const staking = require("./staking").create({
 async function treasuryState() {
   const ts = treasuryLedger.settings(cfg);
   if (!ts.tba) return null;
-  let pct = ts.pct, pctSource = "config";
-  for (const fn of ["feeSplitPct()", "splitPct()", "feeSplitBps()", "splitBps()"]) {
-    try {
-      const c = new ethers.Contract(ts.tba, [`function ${fn} view returns (uint256)`], provider);
-      const v = Number(await c[fn.replace("()", "")]());
-      pct = /Bps/.test(fn) ? v / 100 : v;
-      pctSource = `on-chain ${fn}`;
-      break;
-    } catch {}
-  }
+  const eff = await treasuryLedger.effectiveSettings(cfg, provider);
+  const pct = eff.pct, pctSource = eff.pctSource;
   let balanceUsdg = null;
   try {
     const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);

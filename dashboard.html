@@ -407,6 +407,166 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
   .stat .n.sm,.stat.pair .n{font-size:20px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* =====================================================================
+   Theme v2: dark glass. Layered over the base rules above so layout and
+   behaviour are untouched; only tokens, surfaces, type and motion change.
+   ===================================================================== */
+:root{
+  --paper:#05070b;
+  --surface:#0b1017;
+  --card:#0d131b;
+  --ink:#c9d4de;
+  --bright:#ffffff;
+  --muted:#7b8a99;
+  --rule:#26313d;
+  --rule-soft:#161e27;
+  --live:#39ff88;          /* profit / in range */
+  --neon-green:#39ff88;
+  --neon-cyan:#22d3ee;     /* prices */
+  --neon-gold:#f5c542;     /* fees */
+  --edge:#ff4d6d;          /* loss / out of range */
+  --idle:#94a3b8;
+  --glass:rgba(255,255,255,.035);
+  --glass-strong:rgba(255,255,255,.06);
+  --glass-border:rgba(255,255,255,.10);
+  --glow-green:rgba(57,255,136,.28);
+  --glow-cyan:rgba(34,211,238,.22);
+  --glow-gold:rgba(245,197,66,.22);
+  --font-sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+}
+body{
+  font-family:var(--font-sans);
+  background:
+    radial-gradient(1200px 600px at 8% -10%, rgba(57,255,136,.10), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(34,211,238,.09), transparent 55%),
+    radial-gradient(800px 600px at 60% 110%, rgba(245,197,66,.06), transparent 60%),
+    linear-gradient(180deg,#070a10 0%,#05070b 60%,#03050a 100%);
+  background-attachment:fixed;
+  letter-spacing:.005em;
+}
+.mono,.n,.v,.f,.etotal,.etable td,.flag,.ends,.amts,.wh b,.pstats b,.stat .n,.chip b,.addr b,#blockinfo,.wtokens b,.colog pre,.armform input{font-family:var(--font-mono)}
+.wrap{max-width:1180px}
+@media (min-width:1440px){.wrap{max-width:1360px}}
+
+/* header as a glass bar */
+header{
+  position:sticky;top:0;z-index:20;margin:-8px -12px 0;padding:12px 12px 12px;
+  background:rgba(5,7,11,.72);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);
+  border-bottom:1px solid var(--glass-border);border-radius:0 0 12px 12px;
+}
+.pages a.here{background:var(--glass-strong);border-color:var(--glass-border);box-shadow:0 0 18px var(--glow-cyan) inset}
+.pulse{box-shadow:0 0 0 0 var(--glow-green);animation:pulse 2.2s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(57,255,136,.55)}70%{box-shadow:0 0 0 8px rgba(57,255,136,0)}100%{box-shadow:0 0 0 0 rgba(57,255,136,0)}}
+.pulse.stale{animation:none}
+#blockinfo{color:var(--neon-cyan)}
+
+/* buttons */
+button.reload{
+  background:var(--glass);border:1px solid var(--glass-border);color:var(--bright);border-radius:8px;
+  backdrop-filter:blur(8px);transition:transform .15s,box-shadow .2s,border-color .2s;
+}
+button.reload:hover{transform:translateY(-1px);border-color:rgba(255,255,255,.25);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+button.collect{
+  color:#04110a;border:0;font-weight:700;
+  background:linear-gradient(135deg,#39ff88 0%,#22d3ee 100%);
+  box-shadow:0 0 22px var(--glow-green),0 4px 14px rgba(0,0,0,.4);
+}
+button.collect:hover{filter:brightness(1.08);box-shadow:0 0 34px var(--glow-green),0 6px 18px rgba(0,0,0,.45)}
+select.scope{background:var(--glass);border:1px solid var(--glass-border);border-radius:8px;color:var(--bright)}
+select.scope option{background:#0b1017}
+
+/* glass surfaces: chips, panels, cards, tiles */
+.chip{background:var(--glass);border-color:var(--glass-border);border-radius:8px;backdrop-filter:blur(8px)}
+.chip.ok{color:var(--neon-green);border-color:rgba(57,255,136,.45);box-shadow:0 0 14px var(--glow-green)}
+.chip.warn{color:var(--edge);border-color:rgba(255,77,109,.5);box-shadow:0 0 14px rgba(255,77,109,.2)}
+.earnings,.colog{
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.02));
+  border:1px solid var(--glass-border);border-radius:14px;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:0 10px 40px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.02) inset;
+}
+.ehead h3{font-family:var(--font-sans);font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:#dfe7ee}
+
+/* gradient-border glass cards (summary tiles and position cards) */
+.stat,.pos,.wcards .pos,#ownergroup .pos{
+  position:relative;border:1px solid transparent;border-radius:14px;
+  background:
+    linear-gradient(180deg,rgba(15,21,30,.78),rgba(10,15,22,.86)) padding-box,
+    linear-gradient(135deg,rgba(57,255,136,.45),rgba(34,211,238,.28) 45%,rgba(245,197,66,.30)) border-box;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:0 8px 30px rgba(0,0,0,.45);
+  transition:transform .18s ease,box-shadow .25s ease,filter .25s ease;
+}
+.stat:hover,.pos:hover,.wcards .pos:hover,#ownergroup .pos:hover{
+  transform:translateY(-3px);
+  box-shadow:0 16px 40px rgba(0,0,0,.55),0 0 28px var(--glow-green);
+  border-color:transparent;
+}
+.pos.out,#ownergroup .pos.out,.wcards .pos.out{
+  background:
+    linear-gradient(180deg,rgba(24,12,18,.80),rgba(12,8,12,.88)) padding-box,
+    linear-gradient(135deg,rgba(255,77,109,.7),rgba(255,77,109,.2) 60%,rgba(255,255,255,.08)) border-box;
+  border-left-width:1px;padding-left:22px;
+}
+.pos.out:hover,#ownergroup .pos.out:hover,.wcards .pos.out:hover{box-shadow:0 16px 40px rgba(0,0,0,.55),0 0 28px rgba(255,77,109,.28)}
+.wcards .pos.out{padding-left:18px}
+
+/* the numbers: big, bold, gradient hero, gold fees, green profit */
+.stat .n{font-weight:700;letter-spacing:-.03em;text-shadow:0 0 24px rgba(255,255,255,.08)}
+.stat.hero .n{
+  font-size:54px;line-height:1.05;
+  background:linear-gradient(92deg,#ffffff 0%,#b8ffd6 35%,#39ff88 70%,#22d3ee 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 0 18px rgba(57,255,136,.25));
+}
+.stat > .l:not(.parts){color:#8fa0b0}
+.stat .n.fees,.vals .f,.etotal,#staketotal,#taxtotal,#watchtotal,#baltotal{color:var(--neon-gold);text-shadow:0 0 16px var(--glow-gold)}
+.vals .f.zero{color:var(--muted);text-shadow:none}
+.etable td.u{color:var(--neon-green)}
+.etable td.chg.up{color:var(--neon-green)} .etable td.chg.down{color:var(--edge)}
+.stat .n.loss{color:var(--edge);text-shadow:0 0 16px rgba(255,77,109,.25)}
+.flag{color:var(--neon-cyan);text-shadow:0 0 12px var(--glow-cyan)}
+.pos.out .flag,.pos.near .flag{color:var(--edge)}
+.wh .wtotal b{color:var(--neon-green)!important;text-shadow:0 0 12px var(--glow-green)}
+.pstats b,.wh b{color:#eef3f7}
+
+/* rail + status glow */
+.bar{background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(255,255,255,.14),rgba(255,255,255,.06));height:6px;border-radius:3px}
+.marker{background:var(--neon-green);border-radius:2px;box-shadow:0 0 10px var(--neon-green),0 0 22px var(--glow-green)}
+.pos.out .marker,.pos.near .marker{background:var(--edge);box-shadow:0 0 10px var(--edge),0 0 22px rgba(255,77,109,.35)}
+.state{display:inline-flex;align-items:center;gap:6px;font-weight:600;letter-spacing:.02em}
+.state:not(.out)::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--neon-green);box-shadow:0 0 8px var(--neon-green);animation:pulse 2.2s ease-out infinite}
+.state.near::before{background:var(--edge);box-shadow:0 0 8px var(--edge)}
+.state.out{background:rgba(255,77,109,.12);border-color:rgba(255,77,109,.6);box-shadow:0 0 14px rgba(255,77,109,.2)}
+.tag-elig{box-shadow:0 0 12px var(--glow-green)}
+.tier,.nft{border-radius:6px}
+
+/* tables: alternating rows, soft hover */
+.etable th{font-family:var(--font-sans);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8fa0b0;border-bottom:1px solid var(--glass-border)}
+.etable tr:nth-child(even) td{background:rgba(255,255,255,.025)}
+.etable tr:hover td{background:rgba(255,255,255,.05)}
+.etable td{border-bottom-color:rgba(255,255,255,.05)}
+.etable td:first-child{border-radius:6px 0 0 6px}
+.etable td:last-child{border-radius:0 6px 6px 0}
+.watchwallet{border-top-color:var(--glass-border)}
+.watchwallet .wh a{color:#eef3f7}
+.wtokens b{color:#dfe7ee}
+.agrid .stat .n{font-size:24px}
+.agrid .stat .n.fees{color:var(--neon-green);text-shadow:0 0 16px var(--glow-green)}
+
+/* charts */
+.echart .line,.dchart .line{filter:drop-shadow(0 0 6px var(--glow-green))}
+.fillarea{opacity:.35}
+
+/* hero shimmer, once on load */
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.summary .stat{animation:rise .5s ease-out both}
+.summary .stat:nth-child(2){animation-delay:.05s}.summary .stat:nth-child(3){animation-delay:.1s}.summary .stat:nth-child(4){animation-delay:.15s}
+.summary .stat:nth-child(5){animation-delay:.2s}.summary .stat:nth-child(6){animation-delay:.25s}.summary .stat:nth-child(7){animation-delay:.3s}
+@media (max-width:700px){.stat.hero .n{font-size:36px}header{margin:0;border-radius:0 0 10px 10px}}
+@media (prefers-reduced-motion:reduce){.summary .stat,.pulse,.state::before{animation:none}}
 </style>
 </head>
 <body>

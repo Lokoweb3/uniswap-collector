@@ -232,6 +232,21 @@ collector run, `sync-to-vm.sh` (configured in `.env.sync`, called from
 `run-collector.sh`) pushes `state.json` and `collector.log` so the VM's ops
 strip stays current. Re-running the deploy script updates the code.
 
+## LOKOVault treasury split
+
+`treasury.js` + config.json (`treasuryTBA`, `feeSplitPct` default 10, `feeSplitMax` 20): after each wallet's
+collected fees are swapped to USDG, `feeSplitPct` % is sent to the vault's token-bound account and the rest
+to the wallet; if the vault transfer fails the wallet receives everything and the failure is recorded.
+Every pass is appended to `fee-split-ledger.json` (served at `/fee-split-ledger.json`). Simulate mode
+prints "Treasury split: … → LOKOVault TBA" and "Owner receives: …". The split is off until `treasuryTBA`
+is set. `/treasury` serves `treasury.html` (the vault page, wallet-signed, no keys), `/api/treasury`
+returns settings, the TBA's USDG balance and totals by month; the Analytics page has a LOKOVault panel
+and the tax table/CSV carry the vault split. Alerts: three consecutive failed vault transfers, vault
+balance ≥ 100 USDG, split % changed (on-chain value when the TBA exposes `feeSplitPct()`), sent to
+`TELEGRAM_TREASURY_CHAT_ID` (default the group) with fallback to the main chat. The contracts
+(`TreasuryNFT.sol`, `TreasuryAccount.sol`), `deploy-treasury.js` and `treasury.html` are supplied
+separately; `solc` is installed for the deploy script.
+
 ## Blockscout API key
 
 Every Blockscout call goes through `blockscout.js`. Put a free PRO key (https://dev.blockscout.com, value

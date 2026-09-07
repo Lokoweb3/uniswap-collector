@@ -1219,6 +1219,11 @@ const server = http.createServer(async (req, res) => {
   res.end("Not found");
 });
 
+// Telegram alerts (alerts.js): token and chat id come from the environment
+// (./.env via start-all.sh); without them the module stays silent.
+const alerts = require("./alerts").create();
+console.log(`alerts: ${alerts.enabled ? "enabled" : "disabled (set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)"}`);
+
 // Background work: refresh the view (which also snapshots fees) and advance
 // the event scan every 10 minutes, so rates and history accrue even when no
 // browser tab is open.
@@ -1236,6 +1241,12 @@ async function backgroundTick() {
     }
     await buildInFlight;
   } catch {}
+  try {
+    const sent = await alerts.check({ payload: cache.payload, ops: opsInfo(), unlock: unlockState() });
+    for (const m of sent) console.log("alert sent:", m.split("\n")[0].slice(0, 80));
+  } catch (err) {
+    console.error("alerts:", err.shortMessage || err.message);
+  }
   try {
     await refreshPortfolio();
   } catch (err) {

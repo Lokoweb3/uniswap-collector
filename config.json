@@ -20,7 +20,7 @@
         "0x11aFe0130450df7127276e7AF474Eccdf4D420Cc",
         "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044"
       ],
-      "_pricingHooksComment": "Hook addresses whose v4 pools the portfolio pricer also checks (the hookless key is always tried). Launchpad hooks seen so far: Pools.trade (0xeb1E\u2026, SEAL/ETH), 0x11aF\u2026 (Bucket/ETH), 0xE5e7\u2026 (BULLIONS/ETH, fee 0). Unknown ones are learned automatically from the token's recent swaps."
+      "_pricingHooksComment": "Hook addresses whose v4 pools the portfolio pricer also checks (the hookless key is always tried). Launchpad hooks seen so far: Pools.trade (0xeb1E…, SEAL/ETH), 0x11aF… (Bucket/ETH), 0xE5e7… (BULLIONS/ETH, fee 0). Unknown ones are learned automatically from the token's recent swaps."
     },
     "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
     "_v2FactoryComment": "Uniswap v2 factory on Robinhood Chain (read from NET.uniswapV2Factory). Portfolio pricing falls back to a v2 pair when no v3 pool is deep enough."
@@ -88,7 +88,10 @@
     ]
   },
   "_treasuryComment": "LOKOVault fee split: after each wallet's fees are swapped to the sweep target, feeSplitPct % goes to treasuryTBA (the vault's token-bound account) and the rest to the wallet. treasuryTBA null = split off. feeSplitMax caps the percentage. Every split is logged to fee-split-ledger.json.",
-  "treasuryTBA": null,
+  "treasuryTBA": "0x0000000000000000000000000000000000000021",
   "feeSplitPct": 10,
-  "feeSplitMax": 20
+  "feeSplitMax": 20,
+  "treasuryNFT": "0x0000000000000000000000000000000000000022",
+  "treasuryTokenId": 1,
+  "treasuryImplementation": "0x0000000000000000000000000000000000000023"
 }

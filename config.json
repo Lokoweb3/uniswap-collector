@@ -86,5 +86,9 @@
         "label": "NET staking"
       }
     ]
-  }
+  },
+  "_treasuryComment": "LOKOVault fee split: after each wallet's fees are swapped to the sweep target, feeSplitPct % goes to treasuryTBA (the vault's token-bound account) and the rest to the wallet. treasuryTBA null = split off. feeSplitMax caps the percentage. Every split is logged to fee-split-ledger.json.",
+  "treasuryTBA": null,
+  "feeSplitPct": 10,
+  "feeSplitMax": 20
 }

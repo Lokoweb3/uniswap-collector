@@ -33,6 +33,7 @@ snet-staking.json
 price-log.json
 portfolio-all.json
 alerts-state.json
+fee-split-ledger.json
 v4-positions*.json
 watch-*.json
 backups/

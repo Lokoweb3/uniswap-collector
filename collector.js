@@ -22,6 +22,7 @@ const { ethers } = require("ethers");
 // ---------------------------------------------------------------------------
 
 const MAX_UINT128 = (1n << 128n) - 1n;
+const treasury = require("./treasury");
 const STATE_FILE = path.join(__dirname, "state.json");
 const LOG_FILE = path.join(__dirname, "collector.log");
 
@@ -459,6 +460,14 @@ async function runOwner(ctx, owner) {
     const eligibleWeth = [...eligible, ...eligibleV4].reduce((s, e) => s + e.wethValue, 0n);
     const out = await quoteSingle(quoter, weth, target.address, eligibleWeth, target.feeTier);
     log(`Sweep target ${tinfo.symbol}: the eligible ≈ ${ethers.formatEther(eligibleWeth)} WETH would convert to ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol} at current prices.`);
+    const ts = treasury.settings(cfg);
+    if (ts.enabled) {
+      const sp = treasury.split(out, ts.pct);
+      log(`Treasury split: ${fmt(sp.toVault, tinfo.decimals, 2)} ${tinfo.symbol} (${ts.pct}%) → LOKOVault TBA ${ts.tba}`);
+      log(`Owner receives: ${fmt(sp.toOwner, tinfo.decimals, 2)} ${tinfo.symbol} → ${owner.label}`);
+    } else {
+      log(`Treasury split: off (treasuryTBA not set in config.json); owner receives ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol}.`);
+    }
   }
 
   if (mode === "simulate") {
@@ -703,17 +712,18 @@ async function runOwner(ctx, owner) {
             const arcpt = await atx.wait();
             recordGas(state, arcpt.gasUsed * arcpt.gasPrice);
           }
+          // The swap pays out to the operator; the split below decides where it goes.
           const stx = await router.exactInputSingle({
             tokenIn: weth,
             tokenOut: target.address,
             fee: target.feeTier,
-            recipient: owner.sweepTo,
+            recipient: wallet.address,
             amountIn: wethBal,
             amountOutMinimum: minOut,
             sqrtPriceLimitX96: 0,
           });
           log(
-            `swap ${ethers.formatEther(wethBal)} WETH -> ${tinfo.symbol} to ${owner.sweepTo} ` +
+            `swap ${ethers.formatEther(wethBal)} WETH -> ${tinfo.symbol} ` +
               `(quote ${fmt(quoted, tinfo.decimals, 2)}, min ${fmt(minOut, tinfo.decimals, 2)}) -> ${stx.hash}`
           );
           const srcpt = await stx.wait();
@@ -726,17 +736,61 @@ async function runOwner(ctx, owner) {
       }
     }
 
-    // 3. Target token that arrived as fees (or was left behind) goes to the owner as-is.
+    // 3. Everything in the sweep token that this pass produced (swap output plus
+    //    fees that arrived as the target token) is split: feeSplitPct % to the
+    //    LOKOVault TBA, the rest to the owner. A failed vault transfer is logged
+    //    and the owner receives the whole amount, so nothing is stranded.
     const tNow = await targetC.balanceOf(wallet.address);
     const tBal = tNow > before.target ? tNow - before.target : 0n;
     if (tBal > 0n) {
+      const ts = treasury.settings(cfg);
+      const sp = ts.enabled ? treasury.split(tBal, ts.pct) : { toVault: 0n, toOwner: tBal };
+      let splitTx = null, ownerTx = null, status = ts.enabled ? "ok" : "off";
+      if (sp.toVault > 0n) {
+        try {
+          const vtx = await targetC.transfer(ts.tba, sp.toVault);
+          log(`treasury split ${fmt(sp.toVault, tinfo.decimals, 2)} ${tinfo.symbol} (${ts.pct}%) -> LOKOVault TBA ${ts.tba} -> ${vtx.hash}`);
+          const vr = await vtx.wait();
+          recordGas(state, vr.gasUsed * vr.gasPrice);
+          splitTx = vtx.hash;
+        } catch (err) {
+          log(`  ! treasury split failed: ${err.shortMessage || err.message} — owner receives the full amount this time`);
+          status = "failed";
+          sp.toOwner = tBal;
+          sp.toVault = 0n;
+        }
+      }
       try {
-        const ttx = await targetC.transfer(owner.sweepTo, tBal);
-        log(`send ${fmt(tBal, tinfo.decimals, 2)} ${tinfo.symbol} -> ${owner.sweepTo} -> ${ttx.hash}`);
+        const ttx = await targetC.transfer(owner.sweepTo, sp.toOwner);
+        log(`send ${fmt(sp.toOwner, tinfo.decimals, 2)} ${tinfo.symbol} -> ${owner.sweepTo} -> ${ttx.hash}`);
         const trcpt = await ttx.wait();
         recordGas(state, trcpt.gasUsed * trcpt.gasPrice);
+        ownerTx = ttx.hash;
       } catch (err) {
         log(`  ! ${tinfo.symbol} transfer failed: ${err.shortMessage || err.message}`);
+      }
+      if (ts.enabled || ts.tba) {
+        try {
+          const pos = [...eligible, ...eligibleV4];
+          treasury.appendLedger({
+            timestamp: new Date().toISOString(),
+            wallet: owner.label,
+            walletAddress: owner.address,
+            positionId: pos.length ? String(pos[0].tokenId) : null,
+            positionIds: pos.map((e) => String(e.tokenId)),
+            pair: pos.length ? `${pos[0].t0.symbol}/${pos[0].t1.symbol}` : null,
+            totalCollectedUsdg: Number(fmt(tBal, tinfo.decimals, 6)),
+            splitPct: ts.pct,
+            splitUsdg: Number(fmt(sp.toVault, tinfo.decimals, 6)),
+            ownerReceived: Number(fmt(sp.toOwner, tinfo.decimals, 6)),
+            tbaAddress: ts.tba,
+            splitTxHash: splitTx,
+            ownerTxHash: ownerTx,
+            status,
+          });
+        } catch (err) {
+          log(`  ! could not write fee-split-ledger.json: ${err.message}`);
+        }
       }
     }
 

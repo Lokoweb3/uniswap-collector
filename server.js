@@ -1017,7 +1017,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const body = JSON.parse(await readBody(req));
-      const minutes = Math.max(1, Math.min(1440, Number(body.minutes) || 120));
+      const minutes = Math.max(1, Math.min(10080, Number(body.minutes) || 120)); // up to 7 days
       const ksPath =
         process.env.LP_KEYSTORE_PATH ||
         path.join(process.env.HOME || "", ".lp-collector", "operator-keystore.json");

@@ -113,7 +113,7 @@ function decrypt(cfg, signature) {
 
 /** Arm: write the RAM cache the collector reads. Returns minutes. */
 async function arm(cfg, { signature, minutes }, cacheFile) {
-  const mins = Math.max(1, Math.min(1440, Number(minutes) || 120));
+  const mins = Math.max(1, Math.min(10080, Number(minutes) || 120)); // up to 7 days; /dev/shm clears on a WSL restart anyway
   const passphrase = decrypt(cfg, signature);
   await checkPassphrase(passphrase); // keystore may have been re-encrypted
   fs.writeFileSync(cacheFile, passphrase, { mode: 0o600 });

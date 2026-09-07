@@ -370,7 +370,7 @@ passphrase against the keystore, derives an AES-256-GCM key from the signature b
 a fixed message are deterministic) and stores only the ciphertext in `~/.lp-collector/arm-secret.json`.
 Arming afterwards: sign the same message (it names chain, owner and operator), the server re-derives the
 key, decrypts, checks the keystore still opens, and writes the same RAM cache `unlock.sh` writes, for the
-chosen window. Nothing on disk is decryptable without the owner wallet; the `/api/arm*` endpoints answer
+chosen window (2 hours to 1 week; a WSL restart clears the cache regardless). Nothing on disk is decryptable without the owner wallet; the `/api/arm*` endpoints answer
 over loopback only and the public gate refuses them. Replacing the keystore changes the message, so setup
 must be repeated. "Forget saved passphrase" deletes the ciphertext.
 

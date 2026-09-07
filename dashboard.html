@@ -600,6 +600,8 @@ select.scope option{background:#0b1017}
     <option value="120">2 hours</option>
     <option value="480">8 hours</option>
     <option value="1440" selected>24 hours</option>
+    <option value="4320">3 days</option>
+    <option value="10080">1 week</option>
   </select>
   <button type="submit" class="reload" id="armgo">Arm</button>
   <button type="button" class="reload" id="armcancel">Cancel</button>
@@ -1650,9 +1652,9 @@ function renderUnlock(unlock){
   const arm = $('#armchip');
   const armed = unlock && unlock.armed;
   if (armed){
-    const h = Math.floor(unlock.minutesLeft / 60), m = unlock.minutesLeft % 60;
+    const dd = Math.floor(unlock.minutesLeft / 1440), h = Math.floor((unlock.minutesLeft % 1440) / 60), m = unlock.minutesLeft % 60;
     arm.className = 'chip ok';
-    arm.innerHTML = 'Collector armed · <b>' + (h ? h + 'h ' : '') + m + 'm</b> left';
+    arm.innerHTML = 'Collector armed · <b>' + (dd ? dd + 'd ' : '') + (h ? h + 'h ' : '') + m + 'm</b> left';
   } else {
     arm.className = 'chip warn';
     arm.textContent = 'Collector locked — scheduled and button collects will skip';

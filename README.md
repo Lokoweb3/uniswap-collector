@@ -499,6 +499,12 @@ browser. The picker scopes the whole page:
 
 ### Positions panel
 
+Each card carries its pool's statistics from the Robinhood LP pool scanner (`pools.js`, scanner on :3847,
+`LP_SCANNER_URL` to override; cached 5 min): TVL, 24h volume and fees, 24h fee APR, and the sibling pools
+for the same pair ranked by APR (green when they beat the position's own pool). Absent when the scanner
+is down.
+
+
 Every wallet's positions live in one "Positions" panel under the tiles, grouped per wallet with a header
 line (total, tokens, in pools, uncollected, open count; top priced tokens beneath). The main wallet comes
 first with its full cards and the closed-positions toggle; watched positions render as compact two-column

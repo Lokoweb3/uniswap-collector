@@ -18,7 +18,7 @@ const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
 const tierLabel = (fee) => (fee == null ? "?" : `${+(Number(fee) / 10000).toFixed(3)}%`);
 
-function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices }) {
+function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools }) {
   const discovery = new Map(); // address -> v4 discovery (own state file per wallet)
   let latest = null;
   let inFlight = null;
@@ -122,6 +122,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
           hooks: p.hooks && p.hooks !== ethers.ZeroAddress ? p.hooks : null,
           inRange: p.inRange,
           poolAddress: p.poolAddress,
+          pool: pools ? pools.forPosition({ version, poolAddress: p.poolAddress, token0: p.token0.address, token1: p.token1.address }) : null,
           amount0: a0, amount1: a1, fee0: f0, fee1: f1, usd0, usd1,
           feesOk: p.fees.ok,
           valueUsd, feesUsd,
@@ -173,6 +174,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     if (inFlight) return inFlight;
     inFlight = (async () => {
       const wallets = readWallets();
+      if (pools) await pools.refresh().catch(() => {});
       const wethUsd = wallets.length ? await getWethUsd() : null;
       const out = [];
       for (const w of wallets) {

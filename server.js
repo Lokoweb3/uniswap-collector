@@ -140,9 +140,12 @@ function priceSides(p, wethUsd) {
 const hist = history.create({ provider, npmAddress: cfg.contracts.positionManager });
 const basis = require("./basis");
 const bf = basis.create({ npmAddress: cfg.contracts.positionManager });
+// Pool stats (TVL, fees, APR, siblings) from the scanner on :3847; see pools.js.
+const pools = require("./pools").create({ cfg });
+
 // Extra wallets to show read-only (config.watchWallets); see watch.js.
 const watch = require("./watch").create({
-  provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd,
+  provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, pools,
   getPortfolio: () => portfolio, // created below; only used at refresh time
   getPrices: () => lastPrices,
 });
@@ -590,6 +593,7 @@ function unlockState() {
 }
 
 async function build() {
+  await pools.refresh().catch(() => {});
   const [blockNumber, wethUsd, operatorWei] = await Promise.all([
     provider.getBlockNumber(),
     getWethUsd(),
@@ -755,6 +759,9 @@ async function build() {
         feeTierLabel: tierLabel(p.feeTier),
         inRange: p.inRange,
         poolAddress: p.poolAddress,
+        token0: p.token0.address,
+        token1: p.token1.address,
+        pool: pools.forPosition({ version, poolAddress: p.poolAddress, token0: p.token0.address, token1: p.token1.address }),
         amount0: a0,
         amount1: a1,
         fee0: f0,

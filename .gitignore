@@ -14,6 +14,7 @@ operator-keystore.json
 *.dpapi
 *-private.json
 wallet*.json
+!wallets.example.json
 mcp-auth.json
 .mcp-passphrase.txt
 .mcp-token-*.txt

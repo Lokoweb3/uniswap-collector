@@ -438,9 +438,10 @@ those endpoints trust loopback and everything behind a proxy is loopback. The sc
 
 ## Watching other wallets
 
-`watchWallets` in `config.json` lists extra addresses to show read-only, as `"0x..."` or
-`{"address": "0x...", "label": "name"}`. The list is re-read on every refresh, so editing it needs no
-restart. Watched wallets are observed only: no fee snapshots, PnL, range log or collects, and the
+`wallets.json` (copy `wallets.example.json`; gitignored) names the wallets: `owner.label` for the
+collector's wallet and `watched`, a list of `{"address": "0x...", "label": "name"}` entries shown
+read-only. `watchWallets` in `config.json` is the fallback when the file is absent. Both are re-read on
+every refresh, so editing needs no restart. Watched wallets are observed only: no fee snapshots, PnL, range log or collects, and the
 collector never touches them. The owner wallet is skipped if listed.
 
 For each watched wallet the server reads its open v3/v4 positions (pool, fee tier, in-range status,

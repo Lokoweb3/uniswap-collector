@@ -822,6 +822,7 @@ async function build() {
     blockNumber,
     chainId: Number(cfg.chainId),
     owner: cfg.ownerAddress,
+    ownerLabel: watch.ownerLabel(),
     operator: OPERATOR,
     operatorGas,
     unlock: unlockState(),

@@ -23,11 +23,24 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   let latest = null;
   let inFlight = null;
 
-  function readWallets() {
-    let list = [];
+  /** wallets.json (owner label + watched list) if present, else config.watchWallets. */
+  function readWalletFile() {
     try {
-      list = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8")).watchWallets || [];
+      const w = JSON.parse(fs.readFileSync(path.join(__dirname, "wallets.json"), "utf8"));
+      return { ownerLabel: (w.owner && w.owner.label) || null, list: Array.isArray(w.watched) ? w.watched : [] };
     } catch {}
+    try {
+      return { ownerLabel: null, list: JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8")).watchWallets || [] };
+    } catch {
+      return { ownerLabel: null, list: [] };
+    }
+  }
+  function ownerLabel() {
+    return readWalletFile().ownerLabel;
+  }
+
+  function readWallets() {
+    const list = readWalletFile().list;
     const out = [];
     const seen = new Set();
     for (const w of list) {
@@ -182,7 +195,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     return inFlight;
   }
 
-  return { refresh, readWallets, get latest() { return latest; } };
+  return { refresh, readWallets, ownerLabel, get latest() { return latest; } };
 }
 
 module.exports = { create };

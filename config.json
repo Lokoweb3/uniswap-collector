@@ -62,21 +62,8 @@
   "swapFeeTierOverrides": {
     "_comment": "Force a token to swap through a specific fee tier. Required when you hold the same pair in more than one tier. Key is the token address, value is the tier in hundredths of a bip (10000 = 1%, 3000 = 0.3%, 500 = 0.05%, 100 = 0.01%)."
   },
-  "_watchWalletsComment": "Extra wallets shown read-only in the dashboard (positions, value, uncollected fees). Entries: \"0x...\" or {\"address\": \"0x...\", \"label\": \"name\"}. Re-read on every refresh, no restart needed. Never collected from.",
-  "watchWallets": [
-    {
-      "address": "0x0000000000000000000000000000000000000011",
-      "label": "Wallet 1"
-    },
-    {
-      "address": "0x0000000000000000000000000000000000000012",
-      "label": "Wallet 2"
-    },
-    {
-      "address": "0x0000000000000000000000000000000000000013",
-      "label": "Wallet 3"
-    }
-  ],
+  "_watchWalletsComment": "Fallback only: wallets.json (owner label + watched list) is preferred when present. Entries: \"0x...\" or {\"address\": \"0x...\", \"label\": \"name\"}. Re-read on every refresh. Never collected from.",
+  "watchWallets": [],
   "portfolio": {
     "_priceViaComment": "Tokens valued as another token 1:1: staked/wrapped receipts. sNET (StakedNET, rebasing) is redeemable 1:1 for NET via the Staking contract 0xB078cc304A0B264C5F3680DC0488954ACcd02E87.",
     "priceVia": {

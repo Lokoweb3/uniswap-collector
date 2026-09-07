@@ -1,0 +1,16 @@
+{
+  "_comment": "Wallet labels for the dashboard. owner.label names the collector's wallet; watched lists extra read-only wallets (address + label). Re-read on every refresh, no restart needed. This file is gitignored; wallets.example.json is the template.",
+  "owner": {
+    "label": "Main"
+  },
+  "watched": [
+    {
+      "address": "0x0000000000000000000000000000000000000001",
+      "label": "Trading"
+    },
+    {
+      "address": "0x0000000000000000000000000000000000000002",
+      "label": "LP Rewards"
+    }
+  ]
+}

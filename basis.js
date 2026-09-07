@@ -18,9 +18,6 @@ const { ethers } = require("ethers");
 
 const FILE = path.join(__dirname, "backfill.json");
 const REFRESH_MS = 24 * 3600 * 1000;
-const BS = "https://robinhoodchain.blockscout.com/api";
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
 const COLLECT_TOPIC = ethers.id("Collect(uint256,address,uint256,uint256)");
 const DECREASE_TOPIC = ethers.id("DecreaseLiquidity(uint256,uint128,uint256,uint256)");
@@ -33,9 +30,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // exported as LP_BLOCKSCOUT_KEY) routes queries through api.blockscout.com
 // with Bearer auth — 100k credits/day, 5 RPS on the free tier. Without one,
 // fall back to the anonymous explorer API, which throttles hard.
-const PRO_KEY = (process.env.LP_BLOCKSCOUT_KEY || "").startsWith("proapi_")
-  ? process.env.LP_BLOCKSCOUT_KEY
-  : null;
+const bs = require("./blockscout");
+const PRO_KEY = bs.hasKey() ? "set" : null; // value stays inside blockscout.js
 const PACE_MS = PRO_KEY ? 300 : 2500;
 let blockedUntil = 0; // epoch ms until which the anonymous API has told us to wait
 
@@ -44,10 +40,8 @@ async function bsLogs(address, topic0, tokenId) {
   const query =
     `module=logs&action=getLogs&fromBlock=0&toBlock=latest` +
     `&address=${address}&topic0=${topic0}&topic1=${topic1}&topic0_1_opr=and`;
-  const chainId = require("./config.json").chainId;
-  const url = PRO_KEY ? `https://api.blockscout.com/${chainId}/api?${query}` : `${BS}?${query}`;
-  const headers = { "User-Agent": UA, Accept: "application/json" };
-  if (PRO_KEY) headers.Authorization = `Bearer ${PRO_KEY}`;
+  const url = `${bs.apiBase()}?${query}`;
+  const headers = bs.headers();
   // The anonymous API allows ten requests per window and says when the window
   // resets (x-ratelimit-reset, ms). Once it says no, stop asking until then:
   // retrying inside the window only wastes time, and the build is resumable.

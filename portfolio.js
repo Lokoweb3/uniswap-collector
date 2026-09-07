@@ -20,14 +20,13 @@ const path = require("path");
 const { ethers } = require("ethers");
 const u = require("./univ3");
 const v4 = require("./univ4");
+const { bsFetch } = require("./blockscout");
 
 const FILE = path.join(__dirname, "portfolio.json");
 const DISCOVER_MS = 6 * 3600 * 1000;
 const POOL_RECHECK_MS = 6 * 3600 * 1000;
 const SERIES_STEP_MS = 3600 * 1000;
 const FEE_TIERS = [100, 500, 3000, 10000];
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 const ERC20_BAL = ["function balanceOf(address) view returns (uint256)"];
 const V2_FACTORY_ABI = ["function getPair(address,address) view returns (address)"];
 // Uniswap v4 has no factory: a pool is found by hashing its key. These are
@@ -164,10 +163,7 @@ function create({ provider, factory, cfg, explorerApi }) {
     let params = new URLSearchParams({ type: "ERC-20" });
     const found = [];
     for (let page = 0; page < 20; page++) {
-      const r = await fetch(`${explorerApi}/v2/addresses/${address}/tokens?${params}`, {
-        headers: { "User-Agent": UA, Accept: "application/json" },
-        signal: AbortSignal.timeout(20000),
-      });
+      const r = await bsFetch(`/v2/addresses/${address}/tokens?${params}`);
       const j = await r.json();
       if (!Array.isArray(j.items)) throw new Error("unexpected holdings response");
       for (const it of j.items) {

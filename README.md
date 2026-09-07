@@ -54,7 +54,7 @@ because its index has dropped whole transactions on this chain; its basis
 is used only until the chain scan reaches a position's mint, and refetched
 if the chain changes meanwhile (its anonymous API allows ten requests an
 hour, three per position, so that is slow; a free key from dev.blockscout.com
-in `LP_BLOCKSCOUT_KEY` lifts the limit). Either way a basis is marked
+in `BLOCKSCOUT_API_KEY (or LP_BLOCKSCOUT_KEY)` lifts the limit). Either way a basis is marked
 approximate (≈) while it disagrees with the live liquidity, which on the
 chain ledger means only that the next tick has not run yet.
 A Daily revenue panel shows fees as they accrue per pool and per local day,
@@ -231,6 +231,14 @@ carry over; the script renames this machine to `lp-pc` first. After every
 collector run, `sync-to-vm.sh` (configured in `.env.sync`, called from
 `run-collector.sh`) pushes `state.json` and `collector.log` so the VM's ops
 strip stays current. Re-running the deploy script updates the code.
+
+## Blockscout API key
+
+Every Blockscout call goes through `blockscout.js`. Put a free PRO key (https://dev.blockscout.com, value
+starts with `proapi_`) in `.env` as `BLOCKSCOUT_API_KEY=…` and restart: requests then use
+api.blockscout.com with Bearer auth at 5 requests/second instead of the anonymous explorer's ~10 per 15
+minutes, which removes the throttling on holdings discovery for watched wallets and on the PnL basis
+backfill. The key never leaves the server process.
 
 ## Collector
 

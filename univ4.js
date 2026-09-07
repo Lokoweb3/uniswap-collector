@@ -36,8 +36,6 @@ const DYNAMIC_FEE_FLAG = 0x800000;
 const MASK256 = (1n << 256n) - 1n;
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 const CHUNK = 2000; // the RPC's getLogs range cap
-const BS_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
 const NATIVE = { address: ethers.ZeroAddress, symbol: "ETH", decimals: 18 };
 
@@ -185,10 +183,7 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile 
     try {
       let params = new URLSearchParams({ type: "ERC-721" });
       for (let page = 0; page < 20; page++) {
-        const r = await fetch(`${explorerApi}/v2/addresses/${owner}/nft?${params}`, {
-          headers: { "User-Agent": BS_UA, Accept: "application/json" },
-          signal: AbortSignal.timeout(20000),
-        });
+        const r = await require("./blockscout").bsFetch(`/v2/addresses/${owner}/nft?${params}`);
         const j = await r.json();
         if (!Array.isArray(j.items)) throw new Error("unexpected holdings response");
         for (const item of j.items) {

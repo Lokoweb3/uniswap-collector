@@ -27,7 +27,10 @@ const WARN_HOUR = 8; // remind about a locked collector from this hour
 
 const short = (a) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || "?");
 
-function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEGRAM_CHAT_ID || "<chat-id>", transport, stateFile = STATE_FILE, now = () => Date.now(), log = console } = {}) {
+const TREASURY_CHAT = process.env.TELEGRAM_TREASURY_CHAT_ID || "<group-chat-id>";
+const TREASURY_BALANCE_ALERT_USDG = 100;
+
+function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEGRAM_CHAT_ID || "<chat-id>", treasuryChatId = TREASURY_CHAT, transport, stateFile = STATE_FILE, now = () => Date.now(), log = console } = {}) {
   let state = { sent: {}, outSince: {}, lastTick: 0, lastRunSeen: null };
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(stateFile, "utf8")) };
@@ -40,14 +43,14 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
 
   const enabled = !!(token && chatId) || !!transport;
 
-  /** Deliver one message. Returns true when it was sent. */
-  async function send(text) {
-    if (transport) return transport(text);
-    if (!token || !chatId) return false;
+  /** Deliver one message to `to` (default chat). Returns true when it was sent. */
+  async function send(text, to = chatId) {
+    if (transport) return transport(text, to);
+    if (!token || !to) return false;
     const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+      body: JSON.stringify({ chat_id: to, text, disable_web_page_preview: true }),
       signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) {
@@ -57,11 +60,17 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     return true;
   }
 
+  /** Treasury messages go to the treasury chat; if that chat is unreachable they fall back to the main chat. */
+  async function sendTreasury(text) {
+    if (treasuryChatId && treasuryChatId !== chatId && (await send(text, treasuryChatId))) return true;
+    return send(text, chatId);
+  }
+
   /** Send `text` for `key` unless the same key was sent within `every` ms (0 = once, ever). */
-  async function once(key, text, every = ALERT_REPEAT_MS) {
+  async function once(key, text, every = ALERT_REPEAT_MS, deliver = send) {
     const last = state.sent[key] || 0;
     if (last && (every === 0 || now() - last < every)) return false;
-    const ok = await send(text);
+    const ok = await deliver(text);
     if (ok) {
       state.sent[key] = now();
       save();
@@ -86,10 +95,10 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
    * `ops` is opsInfo() (last run + gas), `unlock` is unlockState().
    * `keepalive` overrides the pgrep check (tests). Returns the messages sent.
    */
-  async function check({ payload, ops, unlock, keepalive } = {}) {
+  async function check({ payload, ops, unlock, keepalive, treasury } = {}) {
     const sent = [];
-    const say = async (key, text, every) => {
-      if (await once(key, text, every)) sent.push(text);
+    const say = async (key, text, every, deliver) => {
+      if (await once(key, text, every, deliver)) sent.push(text);
     };
     const t = now();
     const d = new Date(t);
@@ -148,6 +157,23 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     // Arm window lost to a restart (the RAM cache is gone but the window had not expired).
     if (unlock && unlock.lost) {
       await say(`lost:${unlock.until}`, `⚠️ The collector's arm window (until ${new Date(unlock.until).toLocaleString()}) was lost: the RAM cache was cleared, most likely by a WSL restart. Re-arm at http://127.0.0.1:8787/arm.`, 0);
+    }
+
+    // LOKOVault treasury: repeated failed splits, a balance worth withdrawing, a changed split percentage.
+    if (treasury) {
+      if (treasury.consecutiveFailures >= 3) {
+        await say(`vaultfail:${treasury.consecutiveFailures}`, `❌ LOKOVault: the treasury transfer failed ${treasury.consecutiveFailures} times in a row (the wallets received the full amounts). Check treasuryTBA in config.json and the TBA contract.`, 0, sendTreasury);
+      }
+      if (treasury.balanceUsdg != null && treasury.balanceUsdg >= TREASURY_BALANCE_ALERT_USDG) {
+        await say("vaultbalance", `💰 LOKOVault holds ${treasury.balanceUsdg.toFixed(2)} USDG (≥ ${TREASURY_BALANCE_ALERT_USDG}). Time to withdraw from the vault.`, ALERT_REPEAT_MS, sendTreasury);
+      }
+      if (treasury.pct != null) {
+        if (state.lastSplitPct != null && state.lastSplitPct !== treasury.pct) {
+          await say(`vaultpct:${treasury.pct}:${t}`, `⚙️ LOKOVault fee split changed: ${state.lastSplitPct}% → ${treasury.pct}% (${treasury.pctSource || "config"}).`, 0, sendTreasury);
+        }
+        state.lastSplitPct = treasury.pct;
+        save();
+      }
     }
 
     // Locked collector ahead of the run.

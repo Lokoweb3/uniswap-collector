@@ -64,6 +64,22 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   out = await b.check({ payload: { positions: [] }, ops: run("2026-09-06T09:00:04", "collected 1 position"), unlock: { armed: false, lost: true, until: clock + 3 * 86400000 }, keepalive: true });
   assert.strictEqual(out.length, 0, "lost-window alert must not repeat");
 
+  // 8c. treasury: 3 consecutive failures, balance over the threshold, split change; routed to the treasury chat
+  const routed = [];
+  const c2 = create({ transport: async (t, to) => { routed.push([to, t]); return true; }, stateFile: stateFile + ".t", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
+  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 10, balanceUsdg: 12, consecutiveFailures: 3 } });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /failed 3 times/); assert.strictEqual(routed[routed.length - 1][0], "vault");
+  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3 } });
+  assert.strictEqual(out.length, 2, "balance + pct change expected"); assert.ok(out.some(m => /150.00 USDG/.test(m))); assert.ok(out.some(m => /10% → 15%/.test(m)));
+  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3 } });
+  assert.strictEqual(out.length, 0, "no repeats within the window");
+  // fallback: treasury chat refuses, main chat gets it
+  const routed2 = [];
+  const c3 = create({ transport: async (t, to) => { routed2.push(to); return to !== "vault"; }, stateFile: stateFile + ".t2", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
+  out = await c3.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 10, balanceUsdg: 500, consecutiveFailures: 0 } });
+  assert.deepStrictEqual(routed2, ["vault", "main"]);
+  for (const f of [stateFile + ".t", stateFile + ".t2"]) { try { fs.unlinkSync(f); } catch {} }
+
   // 8. no transport, no token => disabled and silent
   const c = create({ token: undefined, chatId: undefined, stateFile: stateFile + ".c", now: () => clock });
   assert.strictEqual(c.enabled, false);

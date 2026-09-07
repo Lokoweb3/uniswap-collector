@@ -1496,6 +1496,33 @@ const staking = require("./staking").create({
   },
 });
 
+/**
+ * Treasury state for the alerts: effective split % (the TBA contract's own
+ * value when it exposes one, else config.json), TBA USDG balance, and the
+ * run of consecutive failed splits from the ledger.
+ */
+async function treasuryState() {
+  const ts = treasuryLedger.settings(cfg);
+  if (!ts.tba) return null;
+  let pct = ts.pct, pctSource = "config";
+  for (const fn of ["feeSplitPct()", "splitPct()", "feeSplitBps()", "splitBps()"]) {
+    try {
+      const c = new ethers.Contract(ts.tba, [`function ${fn} view returns (uint256)`], provider);
+      const v = Number(await c[fn.replace("()", "")]());
+      pct = /Bps/.test(fn) ? v / 100 : v;
+      pctSource = `on-chain ${fn}`;
+      break;
+    } catch {}
+  }
+  let balanceUsdg = null;
+  try {
+    const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
+    const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
+    balanceUsdg = Number(ethers.formatUnits(raw, dec));
+  } catch {}
+  return { enabled: ts.enabled, pct, pctSource, balanceUsdg, consecutiveFailures: treasuryLedger.consecutiveFailures() };
+}
+
 // Telegram alerts (alerts.js): token and chat id come from the environment
 // (./.env via start-all.sh); without them the module stays silent.
 const alerts = require("./alerts").create();
@@ -1519,7 +1546,7 @@ async function backgroundTick() {
     await buildInFlight;
   } catch {}
   try {
-    const sent = await alerts.check({ payload: cache.payload, ops: opsInfo(), unlock: unlockState() });
+    const sent = await alerts.check({ payload: cache.payload, ops: opsInfo(), unlock: unlockState(), treasury: await treasuryState().catch(() => null) });
     for (const m of sent) console.log("alert sent:", m.split("\n")[0].slice(0, 80));
   } catch (err) {
     console.error("alerts:", err.shortMessage || err.message);

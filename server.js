@@ -1474,6 +1474,20 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // The dashboard's stylesheet and script, split out of dashboard.html by
+  // tools/split-dashboard.js. Only these two files are served as assets.
+  if (url.pathname === "/dashboard.css" || url.pathname === "/dashboard.js") {
+    const isCss = url.pathname === "/dashboard.css";
+    try {
+      const body = fs.readFileSync(path.join(__dirname, isCss ? "dashboard.css" : "dashboard.js"));
+      res.writeHead(200, { "Content-Type": isCss ? "text/css; charset=utf-8" : "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(body);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end(`${isCss ? "dashboard.css" : "dashboard.js"} not found; run node tools/split-dashboard.js`);
+    }
+  }
+
   // One HTML file serves both pages; the browser picks the view from the path.
   if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/analytics") {
     const candidates = [

@@ -361,6 +361,20 @@ Then run `collect` for a while. Only move to `full` once you trust it.
 
 ## Unlocking
 
+### Arming with a wallet signature (arm.html)
+
+`http://127.0.0.1:8787/arm` (the dashboard's "Arm collector…" button opens it; shift-click keeps the old
+passphrase form) arms the collector with the owner wallet's signature instead of the passphrase. One-time
+setup: connect the owner wallet, enter the operator passphrase once and sign; `arm.js` verifies the
+passphrase against the keystore, derives an AES-256-GCM key from the signature bytes (EOA signatures over
+a fixed message are deterministic) and stores only the ciphertext in `~/.lp-collector/arm-secret.json`.
+Arming afterwards: sign the same message (it names chain, owner and operator), the server re-derives the
+key, decrypts, checks the keystore still opens, and writes the same RAM cache `unlock.sh` writes, for the
+chosen window. Nothing on disk is decryptable without the owner wallet; the `/api/arm*` endpoints answer
+over loopback only and the public gate refuses them. Replacing the keystore changes the message, so setup
+must be repeated. "Forget saved passphrase" deletes the ciphertext.
+
+
 There is no DPAPI equivalent here, and no secrets service worth relying on in a
 default WSL install. Rather than leave a passphrase sitting in a dotfile, the
 keystore is unlocked for a window:

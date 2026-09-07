@@ -2026,7 +2026,9 @@ async function startCollect(){
 $('#collect').addEventListener('click', startCollect);
 
 /* ---- arm / lock ---- */
-$('#armbtn').addEventListener('click', () => {
+// Arm collector opens the wallet-signature page (/arm); shift-click keeps the inline passphrase form.
+$('#armbtn').addEventListener('click', (e) => {
+  if (!e.shiftKey) { location.href = '/arm'; return; }
   $('#armform').hidden = false;
   $('#armmsg').textContent = '';
   $('#armpass').focus();

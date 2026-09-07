@@ -924,6 +924,7 @@ function readBody(req, limit = 4096) {
 }
 
 const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
+const armer = require("./arm");
 
 // One portfolio refresh at a time, fed from the latest position build.
 let portfolioInFlight = null;
@@ -954,9 +955,58 @@ const server = http.createServer(async (req, res) => {
   // keystore (same check as unlock.sh), then cache it in RAM with a TTL.
   // The passphrase travels over plain HTTP, so this is loopback-only
   // unconditionally — LP_ALLOW_REMOTE_COLLECT does not open it.
-  if (READONLY && (url.pathname === "/api/unlock" || url.pathname === "/api/lock" || (url.pathname === "/api/collect" && req.method === "POST"))) {
+  if (READONLY && (url.pathname === "/api/unlock" || url.pathname === "/api/lock" || url.pathname.startsWith("/api/arm") || (url.pathname === "/api/collect" && req.method === "POST"))) {
     res.writeHead(403, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ ok: false, error: "This dashboard is read-only; the collector runs on another machine." }));
+  }
+
+  // Wallet-signature arming (arm.js / arm.html). Loopback only, like unlock.
+  if (url.pathname === "/arm" || url.pathname === "/arm.html") {
+    try {
+      const html = fs.readFileSync(path.join(__dirname, "arm.html"));
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(html);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("arm.html not found");
+    }
+  }
+  if (url.pathname.startsWith("/api/arm")) {
+    res.setHeader("Content-Type", "application/json");
+    if (HOST !== "127.0.0.1") {
+      res.writeHead(403);
+      return res.end(JSON.stringify({ ok: false, error: "arming is localhost-only" }));
+    }
+    try {
+      if (url.pathname === "/api/arm/status") {
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, owner: cfg.ownerAddress, operator: armer.operatorAddress(), chainId: Number(cfg.chainId), message: armer.message(cfg), unlock: unlockState(), ...armer.configured() }));
+      }
+      if (req.method !== "POST") throw new Error("POST required");
+      const body = JSON.parse(await readBody(req));
+      if (url.pathname === "/api/arm/setup") {
+        await armer.setup(cfg, body);
+        const mins = await armer.arm(cfg, body, CACHE_FILE);
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins }, ...armer.configured() }));
+      }
+      if (url.pathname === "/api/arm") {
+        const mins = await armer.arm(cfg, body, CACHE_FILE);
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins } }));
+      }
+      if (url.pathname === "/api/arm/forget") {
+        armer.verify(cfg, body.signature);
+        armer.forget();
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, ...armer.configured() }));
+      }
+      throw new Error("unknown arm endpoint");
+    } catch (err) {
+      const msg = err.shortMessage || err.message || String(err);
+      res.writeHead(/signature|not set up|does not unlock|changed since|malformed|passphrase|password/i.test(msg) ? 403 : 500);
+      return res.end(JSON.stringify({ ok: false, error: /invalid password|incorrect password/i.test(msg) ? "wrong passphrase" : msg }));
+    }
   }
 
   if (url.pathname === "/api/unlock" && req.method === "POST") {

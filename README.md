@@ -244,9 +244,10 @@ backfill. The key never leaves the server process.
 
 Uniswap v4 positions are collected too (`collect-v4.js`, `v4Collect.enabled` in config.json): a
 `modifyLiquidities` call that decreases 0 liquidity and takes both currencies to the recipient. It needs
-the operator approved on the v4 PositionManager once, from the owner wallet. Two ways: the browser page
-`approve-v4.html` (open http://127.0.0.1:8787/approve-v4 while the dashboard runs, or `npm run approve`
-for a standalone server on :3333; connect the owner wallet in MetaMask, the page checks the network, the
+the operator approved on the v4 PositionManager once, from the owner wallet. Two ways: the browser pages
+`approve-v4.html` / `approve-v3.html` (open http://127.0.0.1:8787/approve-v4 or /approve-v3 while the dashboard
+runs, or `npm run approve` for a standalone server on :3333 serving both; the v3 page grants the same blanket
+approval on the v3 NonfungiblePositionManager; connect the owner wallet in MetaMask, the page checks the network, the
 account and the current approval, shows the exact calldata, and signs `setApprovalForAll` in the wallet so
 no key touches the server; addresses come from config.json and the operator keystore's public address via
 `/api/v4-approval`), or `node approve-operator.js --v4` on the command line (`--v4 --check` reads the state). Native ETH fees are wrapped to WETH above the gas reserve so the

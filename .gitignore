@@ -36,3 +36,4 @@ watch-*.json
 backups/
 backup.log
 .claude/
+approve-serve.log

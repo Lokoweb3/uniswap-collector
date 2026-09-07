@@ -1024,38 +1024,41 @@ const server = http.createServer(async (req, res) => {
   // Browser-based v4 operator approval (approve-v4.html): the page reads every
   // address from here (config.json + the operator keystore's public address)
   // and the current approval state from this server's RPC.
-  if (url.pathname === "/api/v4-approval") {
+  if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
     res.setHeader("Content-Type", "application/json");
     try {
-      const posmAddr = cfg.contracts.v4 && cfg.contracts.v4.positionManager;
-      if (!posmAddr) throw new Error("no contracts.v4.positionManager in config.json");
-      const posm = new ethers.Contract(posmAddr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
-      const approved = OPERATOR ? await posm.isApprovedForAll(cfg.ownerAddress, OPERATOR) : null;
+      const v = url.pathname === "/api/v4-approval" ? 4 : Number(url.searchParams.get("v")) === 3 ? 3 : 4;
+      const mgr = v === 3 ? cfg.contracts.positionManager : cfg.contracts.v4 && cfg.contracts.v4.positionManager;
+      if (!mgr) throw new Error(`no v${v} position manager in config.json`);
+      // Re-read the keystore's public address each time: the file can be replaced while the server runs.
+      let operator = OPERATOR;
+      try {
+        const ksPath = process.env.LP_KEYSTORE_PATH || path.join(process.env.HOME || "", ".lp-collector", "operator-keystore.json");
+        operator = ethers.getAddress("0x" + JSON.parse(fs.readFileSync(ksPath, "utf8")).address.replace(/^0x/, ""));
+      } catch {}
+      const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
+      const approved = operator ? await c.isApprovedForAll(cfg.ownerAddress, operator) : null;
       res.writeHead(200);
       return res.end(JSON.stringify({
-        ok: true,
-        owner: cfg.ownerAddress,
-        operator: OPERATOR,
-        posm: ethers.getAddress(posmAddr),
-        chainId: Number(cfg.chainId),
-        chainName: "Robinhood Chain",
-        rpc: cfg.rpcUrl,
-        explorer: "https://robinhoodchain.blockscout.com",
-        approved,
+        ok: true, version: v,
+        owner: cfg.ownerAddress, operator, posm: ethers.getAddress(mgr),
+        chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl,
+        explorer: "https://robinhoodchain.blockscout.com", approved,
       }));
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
     }
   }
-  if (url.pathname === "/approve-v4" || url.pathname === "/approve-v4.html") {
+  if (/^\/approve-v[34](\.html)?$/.test(url.pathname)) {
+    const file = url.pathname.includes("v3") ? "approve-v3.html" : "approve-v4.html";
     try {
-      const html = fs.readFileSync(path.join(__dirname, "approve-v4.html"));
+      const html = fs.readFileSync(path.join(__dirname, file));
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(html);
     } catch {
       res.writeHead(404, { "Content-Type": "text/plain" });
-      return res.end("approve-v4.html not found");
+      return res.end(`${file} not found`);
     }
   }
 

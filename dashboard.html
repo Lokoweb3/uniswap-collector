@@ -715,6 +715,7 @@ select.scope option{background:#0b1017}
     <h3>Collected fees</h3>
     <span><label class="ecsv-check"><input type="checkbox" id="hidecloses"> hide close events</label><select class="msel" id="mfilter" hidden><option value="">All time</option></select><a class="ecsv" id="ecsv" href="#" hidden>CSV</a> <span class="etotal" id="etotal"></span></span>
   </div>
+  <div class="pstats" id="ewallets"></div>
   <div class="echart" id="echart"></div>
   <div class="ehead" id="mhead" hidden><h3>By month</h3><span class="enote">valued at current prices; tokens no longer held are unpriced · click a month to filter</span></div>
   <div class="etablewrap" id="mtable"></div>
@@ -1201,6 +1202,23 @@ const monthLabel = k => new Date(k + '-01T12:00:00').toLocaleDateString(undefine
 // ?month=YYYY-MM preselects a month, so a month view can be bookmarked.
 let monthFilter = (new URLSearchParams(location.search).get('month') || '').match(/^\d{4}-\d{2}$/) ? new URLSearchParams(location.search).get('month') : '';
 
+// Wallets present in the history rows, main first, in server order.
+function walletsIn(rows){
+  const order = (histD && histD.byWallet || []).map(w => w.label);
+  const names = [...new Set(rows.map(r => r.wallet || 'Main'))];
+  return names.sort((a, b) => (order.indexOf(a) === -1 ? 99 : order.indexOf(a)) - (order.indexOf(b) === -1 ? 99 : order.indexOf(b)));
+}
+// "Main $12.30 · LP Rewards $24.90" for a set of rows (USD, priced rows only).
+function byWalletText(rows){
+  const parts = [];
+  for (const name of walletsIn(rows)){
+    const mine = rows.filter(r => (r.wallet || 'Main') === name);
+    const u = mine.reduce((s, r) => s + (r.usd || 0), 0);
+    if (mine.length) parts.push(`${name} <b>${usd(u)}</b>`);
+  }
+  return parts.join(' · ');
+}
+
 // Per-month totals: collects, exact token amounts by symbol, and USD at
 // current prices. Close events are included — fees taken on a close are still
 // fees earned — matching the headline total.
@@ -1209,9 +1227,10 @@ function monthSummary(rows){
   for (const r of rows){
     if (!r.t) continue;
     const k = monthKey(r.t);
-    if (!m.has(k)) m.set(k, { key: k, count: 0, usd: 0, weth: 0, unpriced: 0, approx: 0, tokens: new Map() });
+    if (!m.has(k)) m.set(k, { key: k, count: 0, usd: 0, weth: 0, unpriced: 0, approx: 0, tokens: new Map(), rows: [] });
     const o = m.get(k);
     o.count++;
+    o.rows.push(r);
     if (r.usd == null) o.unpriced++; else { o.usd += r.usd; o.weth += r.weth || 0; if (!r.locked) o.approx++; }
     if (r.f0 != null){
       o.tokens.set(r.sym0, (o.tokens.get(r.sym0) || 0) + r.f0);
@@ -1232,13 +1251,14 @@ function renderMonths(){
   $('#mhead').hidden = months.length < 1;
   const weth = histD.wethUsd;
   $('#mtable').innerHTML = months.length ? `<table class="etable">
-    <tr><th>Month</th><th>Collects</th><th>Fees</th><th>≈ USD</th>${weth ? '<th>≈ WETH</th>' : ''}</tr>
+    <tr><th>Month</th><th>Collects</th><th>Fees</th><th>≈ USD</th>${weth ? '<th>≈ WETH</th>' : ''}<th>By wallet</th></tr>
     ${months.map(m => `<tr class="mrow${m.key === monthFilter ? ' on' : ''}" data-m="${m.key}">
       <td>${monthLabel(m.key)}</td>
       <td>${m.count}</td>
       <td class="wrap">${[...m.tokens].filter(([,v]) => v > 0).map(([sym, v]) => amount(v) + ' ' + sym).join(' + ') || '—'}</td>
       <td class="u">${m.approx ? '<span class="approx">≈</span>' : ''}${usd(m.usd)}${m.unpriced ? ` <span class="unpriced" title="Collects in pairs no longer held have no current price and are not in the USD figure">${m.unpriced} unpriced</span>` : ''}${m.approx ? ` <span class="unpriced" title="No price record from the time of these collects; valued at today\'s prices">${m.approx} at today\'s prices</span>` : ''}</td>
       ${weth ? `<td>${m.weth.toFixed(4)}</td>` : ''}
+      <td class="wrap">${byWalletText(m.rows) || '—'}</td>
     </tr>`).join('')}</table>` : '';
   for (const tr of $('#mtable').querySelectorAll('tr.mrow')){
     tr.addEventListener('click', () => setMonthFilter(tr.dataset.m === monthFilter ? '' : tr.dataset.m));
@@ -1267,6 +1287,10 @@ function renderHistoryHead(){
   const wethSum = rows.reduce((s, r) => s + (r.weth || 0), 0);
   const weth = wethSum ? ' · ≈' + wethSum.toFixed(4) + ' WETH' : '';
   $('#etotal').textContent = usd(total) + weth + (monthFilter ? ' · ' + monthLabel(monthFilter) : '');
+  const wallets = walletsIn(rows);
+  $('#ewallets').innerHTML = wallets.length > 1 || (histD.byWallet || []).length > 1
+    ? `<span>all wallets <b>${usd(total)}</b></span>` + wallets.map(name => { const mine = rows.filter(r => (r.wallet || 'Main') === name); return `<span>${name} <b>${usd(mine.reduce((s, r) => s + (r.usd || 0), 0))}</b> <span class="muted">${mine.length} collect${mine.length === 1 ? '' : 's'}</span></span>`; }).join('')
+    : '';
   $('#echart').innerHTML = historyChart(rows, range);
 }
 $('#mfilter').addEventListener('change', (e) => setMonthFilter(e.target.value));
@@ -1288,9 +1312,10 @@ function renderHistoryTable(){
   const rows = filteredRows();
   const recent = (monthFilter ? rows : rows.slice(-12)).reverse();
   $('#etablewrap').innerHTML = recent.length ? `<table class="etable">
-    <tr><th>When</th><th>Position</th><th>Fees</th><th>≈ USD</th><th>Tx</th></tr>
+    <tr><th>When</th><th>Wallet</th><th>Position</th><th>Fees</th><th>≈ USD</th><th>Tx</th></tr>
     ${recent.map(r => `<tr>
       <td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
+      <td>${r.wallet || 'Main'}</td>
       <td>${r.pair || '?'} <span class="mono">#${r.tokenId}</span>${r.principal ? ' (close)' : ''}</td>
       <td>${r.f0 != null ? amount(r.f0) + ' ' + r.sym0 + ' + ' + amount(r.f1) + ' ' + r.sym1 : '—'}</td>
       <td class="u">${r.locked ? '' : '<span class="approx" title="No price record from the time of this collect; valued at today\'s prices">≈</span>'}${usd(r.usd)}</td>
@@ -1299,9 +1324,9 @@ function renderHistoryTable(){
 }
 
 function downloadCsv(){
-  const head = 'time,block,tokenId,pair,fee0,symbol0,fee1,symbol1,usd,price_basis,weth_equivalent,weth_usd_at_basis,includes_principal_withdrawal,tx';
+  const head = 'time,wallet,wallet_address,block,tokenId,pair,fee0,symbol0,fee1,symbol1,usd,price_basis,weth_equivalent,weth_usd_at_basis,includes_principal_withdrawal,tx';
   const lines = filteredRows().map(r => [
-    r.t ? new Date(r.t).toISOString() : '', r.block, r.tokenId, r.pair || '',
+    r.t ? new Date(r.t).toISOString() : '', r.wallet || 'Main', r.walletAddress || '', r.block, r.tokenId, r.pair || '',
     r.f0 != null ? r.f0 : '', r.sym0 || '', r.f1 != null ? r.f1 : '', r.sym1 || '',
     r.usd != null ? r.usd.toFixed(4) : '', r.usd == null ? '' : r.locked ? 'at collect time' : 'today',
     r.weth != null ? r.weth.toFixed(6) : '', r.locked ? r.wethAt : (histD && histD.wethUsd ? histD.wethUsd.toFixed(2) : ''),
@@ -1498,10 +1523,10 @@ function incomeEvents(){
   const ev = [];
   for (const r of historyRows){
     if (!r.t) continue; // close events carry fees net of principal, so they count too
-    ev.push({ t: r.t, type: 'LP fees', what: r.pair + (r.principal ? ' (on close)' : ''), amounts: `${amount(r.f0)} ${r.sym0} + ${amount(r.f1)} ${r.sym1}`, usd: r.usd, approx: r.usd != null && !r.locked, tx: r.tx || '' });
+    ev.push({ t: r.t, type: 'LP fees', wallet: r.wallet || 'Main', what: r.pair + (r.principal ? ' (on close)' : ''), amounts: `${amount(r.f0)} ${r.sym0} + ${amount(r.f1)} ${r.sym1}`, usd: r.usd, approx: r.usd != null && !r.locked, tx: r.tx || '' });
   }
   for (const t of (stakingD && stakingD.tokens) || []){
-    for (const e of t.events || []) ev.push({ t: e.t, type: 'Staking reward', what: t.label, amounts: `${amount(e.amount)} ${t.symbol}`, usd: e.usd, approx: !!e.approx, tx: '' });
+    for (const e of t.events || []) ev.push({ t: e.t, type: 'Staking reward', wallet: ownerLabel(), what: t.label, amounts: `${amount(e.amount)} ${t.symbol}`, usd: e.usd, approx: !!e.approx, tx: '' });
   }
   return ev.sort((a, b) => a.t - b.t);
 }
@@ -1567,14 +1592,14 @@ function renderAnalytics(){
   const byMonth = new Map();
   for (const e of ev){
     const k = monthKey(e.t);
-    if (!byMonth.has(k)) byMonth.set(k, { key: k, lp: 0, lpN: 0, stake: 0, stakeN: 0, approx: 0, unpriced: 0 });
+    if (!byMonth.has(k)) byMonth.set(k, { key: k, lp: 0, lpN: 0, stake: 0, stakeN: 0, approx: 0, unpriced: 0, wallets: {} });
     const o = byMonth.get(k);
-    if (e.type === 'LP fees') { o.lpN++; if (e.usd == null) o.unpriced++; else { o.lp += e.usd; if (e.approx) o.approx++; } }
+    if (e.type === 'LP fees') { o.lpN++; if (e.usd == null) o.unpriced++; else { o.lp += e.usd; if (e.approx) o.approx++; o.wallets[e.wallet] = (o.wallets[e.wallet] || 0) + e.usd; } }
     else { o.stakeN++; o.stake += e.usd || 0; if (e.approx) o.approx++; }
   }
   // Vault splits by month, from the split ledger: money that left the wallets for the treasury.
   const vaultBy = (treasuryD && treasuryD.byMonth) || {};
-  for (const k of Object.keys(vaultBy)) if (!byMonth.has(k)) byMonth.set(k, { key: k, lp: 0, lpN: 0, stake: 0, stakeN: 0, approx: 0, unpriced: 0 });
+  for (const k of Object.keys(vaultBy)) if (!byMonth.has(k)) byMonth.set(k, { key: k, lp: 0, lpN: 0, stake: 0, stakeN: 0, approx: 0, unpriced: 0, wallets: {} });
   for (const m of byMonth.values()) m.vault = vaultBy[m.key] || 0;
   const months = [...byMonth.values()].sort((a, b) => b.key.localeCompare(a.key));
   const years = new Map();
@@ -1585,13 +1610,15 @@ function renderAnalytics(){
   const mlabel = k => new Date(k + '-15T12:00:00').toLocaleDateString(undefined, { month: 'long' });
   let rows = '';
   for (const y of [...years.values()].sort((a, b) => b.y.localeCompare(a.y))){
-    rows += `<tr class="year"><td class="l">${y.y}</td><td>${y.lpN}</td><td class="u">${usd(y.lp)}</td><td>${y.stakeN}</td><td class="u">${usd(y.stake)}</td><td class="u">${usd(y.lp + y.stake)}</td><td>${y.vault ? usd(y.vault) : '—'}</td></tr>`;
+    const yw = {}; for (const m of months.filter(m => m.key.startsWith(y.y))) for (const [w, v] of Object.entries(m.wallets)) yw[w] = (yw[w] || 0) + v;
+    const wtext = o => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([w, v]) => `${w} <b>${usd(v)}</b>`).join(' · ') || '—';
+    rows += `<tr class="year"><td class="l">${y.y}</td><td>${y.lpN}</td><td class="u">${usd(y.lp)}</td><td class="l wrap">${wtext(yw)}</td><td>${y.stakeN}</td><td class="u">${usd(y.stake)}</td><td class="u">${usd(y.lp + y.stake)}</td><td>${y.vault ? usd(y.vault) : '—'}</td></tr>`;
     for (const m of months.filter(m => m.key.startsWith(y.y))){
-      rows += `<tr><td class="l">&nbsp;&nbsp;${mlabel(m.key)}</td><td>${m.lpN}</td><td class="u">${m.approx ? '<span class="approx" title="Some collects valued at today\'s prices">≈</span>' : ''}${usd(m.lp)}${m.unpriced ? ` <span class="unpriced">${m.unpriced} unpriced</span>` : ''}</td><td>${m.stakeN || ''}</td><td class="u">${m.stakeN ? usd(m.stake) : '—'}</td><td class="u">${usd(m.lp + m.stake)}</td><td>${m.vault ? usd(m.vault) : '—'}</td></tr>`;
+      rows += `<tr><td class="l">&nbsp;&nbsp;${mlabel(m.key)}</td><td>${m.lpN}</td><td class="u">${m.approx ? '<span class="approx" title="Some collects valued at today\'s prices">≈</span>' : ''}${usd(m.lp)}${m.unpriced ? ` <span class="unpriced">${m.unpriced} unpriced</span>` : ''}</td><td class="l wrap">${wtext(m.wallets)}</td><td>${m.stakeN || ''}</td><td class="u">${m.stakeN ? usd(m.stake) : '—'}</td><td class="u">${usd(m.lp + m.stake)}</td><td>${m.vault ? usd(m.vault) : '—'}</td></tr>`;
     }
   }
   $('#taxtable').innerHTML = `<table class="etable">
-    <tr><th class="l">Period</th><th>Collects</th><th>LP fee income</th><th>Rebases</th><th>Staking income</th><th>Total income</th><th title="Share of swept USDG sent to the LOKOVault treasury (already included in the income figures)">Vault split</th></tr>${rows}</table>`;
+    <tr><th class="l">Period</th><th>Collects</th><th>LP fee income</th><th class="l">By wallet</th><th>Rebases</th><th>Staking income</th><th>Total income</th><th title="Share of swept USDG sent to the LOKOVault treasury (already included in the income figures)">Vault split</th></tr>${rows}</table>`;
 
   // -- Performance: trading-oriented figures --
   const now = Date.now();
@@ -1632,10 +1659,10 @@ $('#taxcsv').addEventListener('click', async e => {
   let ledger = [];
   try { ledger = await (await fetch('/fee-split-ledger.json')).json(); } catch(e){}
   const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const lines = [['date_utc','type','description','amounts','usd_at_receipt','price_basis','tx_hash','vault_split_usdg'].join(',')];
-  for (const x of ev) lines.push([new Date(x.t).toISOString(), x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx, ''].map(q).join(','));
+  const lines = [['date_utc','wallet','type','description','amounts','usd_at_receipt','price_basis','tx_hash','vault_split_usdg'].join(',')];
+  for (const x of ev) lines.push([new Date(x.t).toISOString(), x.wallet || 'Main', x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx, ''].map(q).join(','));
   // One row per recorded vault split (the treasury's share of a pass's swept USDG).
-  for (const r of ledger) if (r.status !== 'failed' && r.splitUsdg) lines.push([r.timestamp, 'Vault split', `${r.wallet} · ${r.pair || ''} · ${r.splitPct}% of ${r.totalCollectedUsdg} USDG`, `${r.splitUsdg} USDG`, Number(r.splitUsdg).toFixed(2), 'at receipt', r.splitTxHash || '', Number(r.splitUsdg).toFixed(2)].map(q).join(','));
+  for (const r of ledger) if (r.status !== 'failed' && r.splitUsdg) lines.push([r.timestamp, r.wallet || 'Main', 'Vault split', `${r.wallet} · ${r.pair || ''} · ${r.splitPct}% of ${r.totalCollectedUsdg} USDG`, `${r.splitUsdg} USDG`, Number(r.splitUsdg).toFixed(2), 'at receipt', r.splitTxHash || '', Number(r.splitUsdg).toFixed(2)].map(q).join(','));
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lp-income-' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
 });
@@ -1643,7 +1670,7 @@ $('#taxcsv').addEventListener('click', async e => {
 // Collected per local day, from the collects history (cash actually swept).
 function collectedByDay(){
   const by = new Map();
-  for (const r of historyRows){ if (!r.t || r.usd == null) continue; const k = dayKey(r.t); by.set(k, (by.get(k) || 0) + r.usd); }
+  for (const r of historyRows){ if (!r.t || r.usd == null || r.mainWallet === false) continue; const k = dayKey(r.t); by.set(k, (by.get(k) || 0) + r.usd); }
   return by;
 }
 

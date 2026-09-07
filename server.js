@@ -579,6 +579,47 @@ function opsInfo() {
   return { lastRun, gas24h: { eth: gas24h, capEth: Number(cfg.thresholds && cfg.thresholds.dailyGasCapEth) || 0 } };
 }
 
+// Every wallet whose collects are recorded: the main wallet (ids from the
+// last build) and each wallets.json wallet (v3 ids enumerated on the NPM,
+// closed positions included so past collects are found). Cached briefly.
+let historyWalletsCache = { at: 0, list: [] };
+async function historyWallets() {
+  if (Date.now() - historyWalletsCache.at < 9 * 60 * 1000 && historyWalletsCache.list.length) return historyWalletsCache.list;
+  const list = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main", ids: latestIds.filter((id) => !isV4Key(id)), main: true }];
+  for (const w of watch.readWallets()) {
+    try {
+      const ids = (await u.listTokenIds(npm, w.address, [])).map((id) => id.toString());
+      list.push({ address: w.address, label: w.label || w.address, ids, main: false });
+    } catch (err) {
+      console.error("history wallets:", w.address.slice(0, 8), err.shortMessage || err.message);
+    }
+  }
+  historyWalletsCache = { at: Date.now(), list };
+  return list;
+}
+/** Today's USD price for a token from whatever the server already knows: position pools, the portfolio, watched holdings. */
+function currentPrice(addr) {
+  const a = String(addr).toLowerCase();
+  if (lastPrices[a] != null) return lastPrices[a];
+  const pf = portfolio.latest;
+  if (pf) {
+    const r = pf.rows.find((x) => x.address && x.address.toLowerCase() === a && x.price != null);
+    if (r) return r.price;
+  }
+  for (const w of (watch.latest && watch.latest.wallets) || []) {
+    const t = ((w.holdings && w.holdings.tokens) || []).find((x) => x.address && x.address.toLowerCase() === a && x.price != null);
+    if (t) return t.price;
+  }
+  return null;
+}
+/** Label for a history event's wallet (missing = the main wallet, from before wallets were tagged). */
+function walletLabelFor(e) {
+  const addr = (e.wallet || cfg.ownerAddress).toLowerCase();
+  if (addr === cfg.ownerAddress.toLowerCase()) return { address: cfg.ownerAddress, label: watch.ownerLabel() || "Main", main: true };
+  const w = watch.readWallets().find((x) => x.address.toLowerCase() === addr);
+  return { address: e.wallet, label: (w && w.label) || e.walletLabel || e.wallet, main: false };
+}
+
 // Token metadata per tokenId (works for closed positions too — the NFTs
 // still exist), cached for the life of the server.
 const tierLabel = (fee) => (fee / 10000).toFixed(fee % 10000 === 0 ? 0 : 2) + "%";
@@ -1344,6 +1385,7 @@ const server = http.createServer(async (req, res) => {
       const merged = [...bf.events, ...hist.events].sort((a, b) => a.block - b.block);
       for (const e of merged) {
         const m = await positionMeta(e.tokenId).catch(() => null);
+        const wl = walletLabelFor(e);
         let f0 = null, f1 = null, usd = null, weth = null, locked = false;
         const px = feePrices[priceKey(e)];
         if (m) {
@@ -1354,8 +1396,10 @@ const server = http.createServer(async (req, res) => {
             weth = px.w ? usd / px.w : null;
             locked = true;
           } else {
-            const p0 = lastPrices[m.t0.address.toLowerCase()];
-            const p1 = lastPrices[m.t1.address.toLowerCase()];
+            // Main-wallet rows keep the original rule (only tokens in its own positions have a
+            // current price); watched wallets' rows may also use their holdings' prices.
+            const p0 = wl.main ? lastPrices[m.t0.address.toLowerCase()] : currentPrice(m.t0.address);
+            const p1 = wl.main ? lastPrices[m.t1.address.toLowerCase()] : currentPrice(m.t1.address);
             if (p0 != null && p1 != null) {
               usd = f0 * p0 + f1 * p1;
               weth = lastWethUsdSeen ? usd / lastWethUsdSeen : null;
@@ -1364,6 +1408,7 @@ const server = http.createServer(async (req, res) => {
         }
         rows.push({
           t: e.t, block: e.block, tx: e.tx, tokenId: e.tokenId,
+          wallet: wl.label, walletAddress: wl.address, mainWallet: wl.main,
           pair: m ? `${m.t0.symbol}/${m.t1.symbol}` : null,
           sym0: m ? m.t0.symbol : null, sym1: m ? m.t1.symbol : null,
           f0, f1, usd, weth, locked, principal: !!e.principal,
@@ -1372,9 +1417,15 @@ const server = http.createServer(async (req, res) => {
       }
       const totalUsd = rows.reduce((s, r) => s + (r.usd || 0), 0);
       const lockedSince = rows.filter((r) => r.locked && r.t).reduce((a, r) => (a == null || r.t < a ? r.t : a), null);
+      // Per-wallet breakdown, main wallet first, then in wallets.json order.
+      const byWallet = [];
+      for (const w of [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main", main: true }, ...watch.readWallets()]) {
+        const mine = rows.filter((r) => r.walletAddress && r.walletAddress.toLowerCase() === w.address.toLowerCase());
+        byWallet.push({ address: w.address, label: w.label || w.address, main: !!w.main, count: mine.length, usd: mine.reduce((s, r) => s + (r.usd || 0), 0), unpriced: mine.filter((r) => r.usd == null).length });
+      }
       res.writeHead(200);
       return res.end(JSON.stringify({
-        ok: true, rows, totalUsd,
+        ok: true, rows, totalUsd, byWallet, catchup: hist.catchupStatus(),
         lockedCount: rows.filter((r) => r.locked).length,
         lockedSince,
         wethUsd: lastWethUsdSeen,
@@ -1551,14 +1602,14 @@ async function backgroundTick() {
     }
   }
   try {
-    recordPriceLog();
-  } catch (err) {
-    console.error("price log:", err.shortMessage || err.message);
-  }
-  try {
     await watch.refresh();
   } catch (err) {
     console.error("watch:", err.shortMessage || err.message);
+  }
+  try {
+    recordPriceLog(); // after the watched wallets, so their tokens are in the hour's row
+  } catch (err) {
+    console.error("price log:", err.shortMessage || err.message);
   }
   try {
     recordAllWallets();
@@ -1566,7 +1617,7 @@ async function backgroundTick() {
     console.error("portfolio-all:", err.shortMessage || err.message);
   }
   try {
-    await hist.scan(latestIds);
+    await hist.scan(await historyWallets(), { mainAddress: cfg.ownerAddress });
   } catch (err) {
     console.error("history scan:", err.shortMessage || err.message);
   }

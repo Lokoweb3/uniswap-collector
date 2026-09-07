@@ -31,7 +31,10 @@ const ERC20_BAL = ["function balanceOf(address) view returns (uint256)"];
 const V2_FACTORY_ABI = ["function getPair(address,address) view returns (address)"];
 // Uniswap v4 has no factory: a pool is found by hashing its key. These are
 // the (fee, tickSpacing) pairs seen on this chain; hooks come from config.
-const V4_TIERS = [[100, 1], [500, 10], [2500, 50], [3000, 60], [10000, 200], [15000, 300], [20000, 400], [30000, 600]];
+const V4_TIERS = [[0, 200], [100, 1], [500, 10], [2500, 50], [3000, 60], [10000, 200], [15000, 300], [20000, 400], [30000, 600]];
+const V4_INIT_IFACE = new ethers.Interface([
+  "event Initialize(bytes32 indexed id,address indexed currency0,address indexed currency1,uint24 fee,int24 tickSpacing,address hooks,uint160 sqrtPriceX96,int24 tick)",
+]);
 const V4_STATE_ABI = [
   "function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
   "function getLiquidity(bytes32) view returns (uint128)",
@@ -105,6 +108,45 @@ function create({ provider, factory, cfg, explorerApi }) {
       }
     : null;
   const multicall = new ethers.Contract(MULTICALL3, MULTICALL_ABI, provider);
+  const poolManager = cfg.contracts.v4 && cfg.contracts.v4.poolManager ? cfg.contracts.v4.poolManager.toLowerCase() : null;
+
+  /**
+   * Launchpad pools use hooks and tiers nobody can guess. When enumeration
+   * finds nothing, look at the token's recent transfers on Blockscout, find a
+   * PoolManager event in one of those transactions, and read that pool's key
+   * from its Initialize event (a topic1 query, which the RPC answers fast).
+   */
+  async function v4PoolFromTransfers(addr) {
+    if (!poolManager) return null;
+    let items = [];
+    try {
+      const r = await bsFetch(`/v2/tokens/${addr}/transfers`);
+      items = ((await r.json()).items || []).slice(0, 12);
+    } catch {
+      return null;
+    }
+    const seen = new Set();
+    for (const it of items) {
+      const h = it.transaction_hash || it.tx_hash;
+      if (!h || seen.has(h)) continue;
+      seen.add(h);
+      const rc = await provider.getTransactionReceipt(h).catch(() => null);
+      if (!rc) continue;
+      for (const l of rc.logs) {
+        if (l.address.toLowerCase() !== poolManager || l.topics.length < 2) continue;
+        const logs = await provider.getLogs({ address: poolManager, fromBlock: 0, toBlock: "latest", topics: [V4_INIT_IFACE.getEvent("Initialize").topicHash, l.topics[1]] }).catch(() => []);
+        for (const il of logs) {
+          const e = V4_INIT_IFACE.parseLog(il);
+          const c0 = e.args.currency0.toLowerCase(), c1 = e.args.currency1.toLowerCase();
+          if (c0 !== addr && c1 !== addr) continue;
+          const quote = c0 === addr ? c1 : c0;
+          if (![ethers.ZeroAddress, WETH, STABLE].includes(quote)) continue;
+          return { currency0: e.args.currency0, currency1: e.args.currency1, fee: Number(e.args.fee), tickSpacing: Number(e.args.tickSpacing), hooks: e.args.hooks, quote };
+        }
+      }
+    }
+    return null;
+  }
   const stateIface = new ethers.Interface(V4_STATE_ABI);
   let multicallOk = null; // null = untested
 
@@ -153,7 +195,21 @@ function create({ provider, factory, cfg, explorerApi }) {
     });
     let best = null;
     for (const c of found) if (c && (!best || c.depthUsd > best.depthUsd)) best = c;
-    return best;
+    if (best) return best;
+    // Nothing among the guessed keys: learn the key from the token's own swaps.
+    const k = await v4PoolFromTransfers(addr).catch(() => null);
+    if (!k) return null;
+    const id = v4.poolIdOf(k);
+    const L = await V4.stateView.getLiquidity(id);
+    if (L === 0n) return null;
+    const [sqrtP] = await V4.stateView.getSlot0(id);
+    const qMeta = k.quote === ethers.ZeroAddress ? v4.NATIVE : await u.getToken(k.quote, provider);
+    const tokenIs0 = k.currency0.toLowerCase() === addr;
+    const raw = tokenIs0 ? (L * sqrtP) / Q96 : (L * Q96) / sqrtP;
+    const depth = Number(ethers.formatUnits(raw, qMeta.decimals));
+    const quoteIsEth = k.quote === ethers.ZeroAddress || k.quote === WETH;
+    if (depth < (quoteIsEth ? MIN_QUOTE_WETH : MIN_QUOTE_STABLE)) return null;
+    return { pool: id, quote: k.quote, fee: k.fee, depth, depthUsd: depth * (quoteIsEth ? wethUsd || 0 : 1), v4: true, key: { currency0: k.currency0, currency1: k.currency1 }, learned: true };
   }
 
   let latest = null; // last computed view

@@ -16,9 +16,11 @@
       "stateView": "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b",
       "poolManager": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
       "pricingHooks": [
-        "0xeb1E05dF4b1E0e7eEd94CD06628900868EA3A0CC"
+        "0xeb1E05dF4b1E0e7eEd94CD06628900868EA3A0CC",
+        "0x11aFe0130450df7127276e7AF474Eccdf4D420Cc",
+        "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044"
       ],
-      "_pricingHooksComment": "Hook addresses whose v4 pools the portfolio pricer also checks (the hookless key is always tried). 0xeb1E05dF\u2026 is the Pools.trade launchpad hook (SEAL/ETH and similar)."
+      "_pricingHooksComment": "Hook addresses whose v4 pools the portfolio pricer also checks (the hookless key is always tried). Launchpad hooks seen so far: Pools.trade (0xeb1E\u2026, SEAL/ETH), 0x11aF\u2026 (Bucket/ETH), 0xE5e7\u2026 (BULLIONS/ETH, fee 0). Unknown ones are learned automatically from the token's recent swaps."
     },
     "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
     "_v2FactoryComment": "Uniswap v2 factory on Robinhood Chain (read from NET.uniswapV2Factory). Portfolio pricing falls back to a v2 pair when no v3 pool is deep enough."

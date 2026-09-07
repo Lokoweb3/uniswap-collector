@@ -1023,6 +1023,7 @@ function readBody(req, limit = 4096) {
 
 const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
 const armer = require("./arm");
+const treasuryLedger = require("./treasury");
 
 // One portfolio refresh at a time, fed from the latest position build.
 let portfolioInFlight = null;
@@ -1244,6 +1245,39 @@ const server = http.createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
     return res.end(JSON.stringify(allWalletsView()));
+  }
+
+  // LOKOVault: the treasury page, the split ledger, and a summary for the analytics tile.
+  if (url.pathname === "/treasury" || url.pathname === "/treasury.html") {
+    try {
+      const html = fs.readFileSync(path.join(__dirname, "treasury.html"));
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(html);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("treasury.html is not installed yet: copy it into the project folder next to server.js");
+    }
+  }
+  if (url.pathname === "/fee-split-ledger.json") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(treasuryLedger.readLedger()));
+  }
+  if (url.pathname === "/api/treasury") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const ts = treasuryLedger.settings(cfg);
+      let balanceUsdg = null;
+      if (ts.tba && cfg.usdReference && cfg.usdReference.stable) {
+        const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
+        const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
+        balanceUsdg = Number(ethers.formatUnits(raw, dec));
+      }
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, ...ts, balanceUsdg, ...treasuryLedger.summary(), explorer: "https://robinhoodchain.blockscout.com" }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
   }
 
   if (url.pathname === "/api/staking") {

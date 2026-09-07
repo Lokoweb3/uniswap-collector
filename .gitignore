@@ -33,3 +33,4 @@ alerts-state.json
 v4-positions*.json
 watch-*.json
 backups/
+backup.log

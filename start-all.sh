@@ -5,6 +5,9 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
+# Secrets for the dashboard (Telegram alerts, Blockscout key) live in ./.env as
+# KEY=value lines; exported into the server's environment only, never printed.
+if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
 if ! curl -sf http://127.0.0.1:8787/api/positions >/dev/null 2>&1 && ! pgrep -f "^node server.js --port=8787" >/dev/null; then
   nohup node server.js --port=8787 > dashboard.log 2>&1 &
   echo "dashboard: started"
@@ -32,3 +35,8 @@ if [ -f "$SCANNER_DIR/server.js" ]; then
     echo "scanner: started"
   else echo "scanner: running"; fi
 fi
+# Nightly ledger backup at 02:00 (see nightly.sh / backup-ledgers.sh).
+if ! pgrep -f "nightly.sh" >/dev/null; then
+  nohup ./nightly.sh > /dev/null 2>&1 < /dev/null &
+  echo "nightly: started"
+else echo "nightly: running"; fi

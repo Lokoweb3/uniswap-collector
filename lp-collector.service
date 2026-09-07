@@ -1,0 +1,21 @@
+# User service. Install to ~/.config/systemd/user/
+#
+# Requires systemd in WSL: put this in /etc/wsl.conf and run `wsl --shutdown`
+#   [boot]
+#   systemd=true
+#
+# Without systemd, use the Windows Task Scheduler bridge instead -- see README.
+
+[Unit]
+Description=Collect Uniswap v3 fees and sweep to ETH
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust both paths if your checkout is not at ~/uniswap-collector.
+WorkingDirectory=%h/uniswap-collector
+ExecStart=%h/uniswap-collector/run-collector.sh full --quiet
+# --quiet means a locked keystore logs and exits 0 rather than hanging on a
+# prompt no one is there to answer.
+StandardOutput=append:%h/uniswap-collector/collector.log
+StandardError=append:%h/uniswap-collector/collector.log

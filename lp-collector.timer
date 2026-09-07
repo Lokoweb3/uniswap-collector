@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily fee collection
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+# Catches up a run missed while WSL was shut down. Fees keep accruing either
+# way, so a late sweep costs nothing.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

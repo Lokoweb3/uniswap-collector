@@ -1,0 +1,19 @@
+[Unit]
+Description=LP dashboard remote MCP server (claude.ai connector)
+After=network-online.target lp-dashboard.service
+Wants=network-online.target
+
+[Service]
+User=lp
+WorkingDirectory=/home/lp/uniswap-collector
+EnvironmentFile=/home/lp/uniswap-collector/.env.mcp
+ExecStart=/usr/bin/node /home/lp/uniswap-collector/lp-mcp-remote.mjs
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/lp/uniswap-collector
+
+[Install]
+WantedBy=multi-user.target

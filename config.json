@@ -1,0 +1,86 @@
+{
+  "_comment": "Robinhood Chain mainnet (chain 4663). Contracts restored from the Downloads copy.",
+  "rpcUrl": "https://rpc.mainnet.chain.robinhood.com",
+  "chainId": 4663,
+  "ownerAddress": "0x0000000000000000000000000000000000000001",
+  "sweepDestination": "0x0000000000000000000000000000000000000001",
+  "contracts": {
+    "positionManager": "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3",
+    "swapRouter02": "0xCaf681a66D020601342297493863E78C959E5cb2",
+    "quoterV2": "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
+    "weth": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+    "factory": "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA",
+    "_v4Comment": "Uniswap v4 on Robinhood Chain, from developers.uniswap.org deployments. Read-only: the dashboard shows v4 positions; the collector does not touch them.",
+    "v4": {
+      "positionManager": "0x58daec3116aae6d93017baaea7749052e8a04fa7",
+      "stateView": "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b",
+      "poolManager": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+      "pricingHooks": [
+        "0xeb1E05dF4b1E0e7eEd94CD06628900868EA3A0CC"
+      ],
+      "_pricingHooksComment": "Hook addresses whose v4 pools the portfolio pricer also checks (the hookless key is always tried). 0xeb1E05dF\u2026 is the Pools.trade launchpad hook (SEAL/ETH and similar)."
+    },
+    "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
+    "_v2FactoryComment": "Uniswap v2 factory on Robinhood Chain (read from NET.uniswapV2Factory). Portfolio pricing falls back to a v2 pair when no v3 pool is deep enough."
+  },
+  "thresholds": {
+    "_minWethPerPosition": "Skip a position unless its collectable fees are worth at least this much WETH.",
+    "minWethPerPosition": "0.002",
+    "_maxGasPriceGwei": "Abort entirely if network gas exceeds this. Your recent range was 0.03-0.09 gwei.",
+    "maxGasPriceGwei": "3.0",
+    "_dailyGasCapEth": "Hard stop once this much ETH has been spent on gas in a rolling 24h.",
+    "dailyGasCapEth": "0.01",
+    "_slippageBps": "Swap slippage tolerance in basis points. 150 = 1.5%. Thin memecoin pairs need room.",
+    "slippageBps": 150,
+    "_maxSwapValueWeth": "Refuse to swap more than this in one transaction. Guards against a bad quote.",
+    "maxSwapValueWeth": "0.5",
+    "_minOperatorGasBalanceEth": "Warn when the operator wallet's gas float drops below this.",
+    "minOperatorGasBalanceEth": "0.003"
+  },
+  "sweep": {
+    "_comment": "After swapping fees to WETH: target ETH unwraps and sends ETH to sweepDestination; target USDG swaps the WETH to USDG through the WETH/USDG pool at targetFeeTier and sends that instead. Either way the operator keeps keepGasReserveEth of ETH for gas (topped up from WETH when low).",
+    "enabled": true,
+    "keepGasReserveEth": "0.005",
+    "target": "USDG",
+    "targetToken": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    "targetFeeTier": 100
+  },
+  "_tokenIdsComment": "Leave empty to auto-discover all positions owned by ownerAddress. Or list specific IDs.",
+  "tokenIds": [],
+  "_denylistComment": "Token IDs to never touch. Useful for positions you want to manage by hand.",
+  "denylist": [],
+  "usdReference": {
+    "_comment": "Pool used to price WETH in USD. USDG (Global Dollar) is the native stable on Robinhood Chain; the 0.01% WETH/USDG pool is the deepest. Address read from position #834424 and verified against the factory.",
+    "stable": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    "feeTier": 100
+  },
+  "dashboard": {
+    "port": 8787,
+    "_collectModeComment": "What the Collect button runs: collect (fees to the owner as-is) or full (collect, convert per sweep.target, send).",
+    "collectMode": "full"
+  },
+  "swapFeeTierOverrides": {
+    "_comment": "Force a token to swap through a specific fee tier. Required when you hold the same pair in more than one tier. Key is the token address, value is the tier in hundredths of a bip (10000 = 1%, 3000 = 0.3%, 500 = 0.05%, 100 = 0.01%)."
+  },
+  "_watchWalletsComment": "Extra wallets shown read-only in the dashboard (positions, value, uncollected fees). Entries: \"0x...\" or {\"address\": \"0x...\", \"label\": \"name\"}. Re-read on every refresh, no restart needed. Never collected from.",
+  "watchWallets": [
+    {
+      "address": "0x0000000000000000000000000000000000000011",
+      "label": "Wallet 1"
+    },
+    {
+      "address": "0x0000000000000000000000000000000000000012",
+      "label": "Wallet 2"
+    },
+    {
+      "address": "0x0000000000000000000000000000000000000013",
+      "label": "Wallet 3"
+    }
+  ],
+  "portfolio": {
+    "_priceViaComment": "Tokens valued as another token 1:1: staked/wrapped receipts. sNET (StakedNET, rebasing) is redeemable 1:1 for NET via the Staking contract 0xB078cc304A0B264C5F3680DC0488954ACcd02E87.",
+    "priceVia": {
+      "0xb773ec2C326B7f98a5a83fc098825492F020a4c7": "0xCA9c78Dd337A67F6e0077F65F5E9218719d30eDf"
+    }
+  }
+}

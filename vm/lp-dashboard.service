@@ -1,0 +1,19 @@
+[Unit]
+Description=LP dashboard (read-only copy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lp
+WorkingDirectory=/home/lp/uniswap-collector
+Environment=LP_READONLY=1
+ExecStart=/usr/bin/node /home/lp/uniswap-collector/server.js --port=8787
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/lp/uniswap-collector
+
+[Install]
+WantedBy=multi-user.target

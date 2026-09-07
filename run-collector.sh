@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Runs the collector, sourcing the passphrase from the RAM cache when one is
+# live, otherwise prompting. Clears it from the environment on exit.
+#
+#   ./run-collector.sh simulate
+#   ./run-collector.sh collect
+#   ./run-collector.sh full
+#   ./run-collector.sh full --quiet    # for timers: never prompt, skip if locked
+
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+MODE="${1:-simulate}"
+QUIET="${2:-}"
+case "$MODE" in simulate|collect|full) ;; *)
+  echo "Usage: $0 {simulate|collect|full} [--quiet]" >&2; exit 1 ;;
+esac
+
+if [ "$MODE" = "simulate" ]; then
+  exec node "$HERE/collector.js" "--mode=$MODE"
+fi
+
+KEYSTORE="$HOME/.lp-collector/operator-keystore.json"
+[ -f "$KEYSTORE" ] || { echo "No keystore. Run ./setup-key.sh first." >&2; exit 1; }
+
+CACHE="/dev/shm/.lp-collector-$(id -u)"
+PASS=""
+
+if [ -f "$CACHE" ] && [ -f "$CACHE.ttl" ]; then
+  if [ "$(date +%s)" -lt "$(cat "$CACHE.ttl")" ]; then
+    PASS="$(cat "$CACHE")"
+  else
+    rm -f "$CACHE" "$CACHE.ttl"
+    echo "Unlock window expired; the cached passphrase was discarded."
+  fi
+fi
+
+if [ -z "$PASS" ]; then
+  if [ "$QUIET" = "--quiet" ] || [ ! -t 0 ]; then
+    echo "$(date -Is) locked, skipping $MODE run. Run ./unlock.sh to arm it." \
+      | tee -a "$HERE/collector.log"
+    "$HERE/sync-to-vm.sh" || true
+    exit 0
+  fi
+  read -r -s -p "Operator passphrase: " PASS; echo
+fi
+
+cleanup(){ unset LP_KEYSTORE_PASS LP_KEYSTORE_PATH PASS; "$HERE/sync-to-vm.sh" || true; }
+trap cleanup EXIT INT TERM
+
+LP_KEYSTORE_PATH="$KEYSTORE" LP_KEYSTORE_PASS="$PASS" \
+  node "$HERE/collector.js" "--mode=$MODE"

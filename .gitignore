@@ -1,0 +1,35 @@
+# --- dependencies / logs ---
+node_modules/
+*.log
+state.json
+
+# --- secrets: never commit key material or env files ---
+.env
+.env.*
+*.key
+*.pem
+keystore/
+*.keystore.json
+operator-keystore.json
+*.dpapi
+*-private.json
+wallet*.json
+mcp-auth.json
+.mcp-passphrase.txt
+.mcp-token-*.txt
+gate-state.json
+
+# --- JSON ledgers: runtime data with wallet activity, backed up separately (see backup-ledgers.sh) ---
+fee-events.json
+fee-snapshots.json
+fee-daily.json
+fee-prices.json
+backfill.json
+liquidity-ledger.json
+portfolio.json
+range-log.json
+snet-staking.json
+alerts-state.json
+v4-positions*.json
+watch-*.json
+backups/

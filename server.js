@@ -457,6 +457,23 @@ let latestOpenIds = [];
 // Every token seen across positions, for the owner-balances panel.
 const tokenSet = new Map(); // addrLower -> { address, symbol, decimals }
 
+/** Every operator the owner has ever granted setApprovalForAll on `mgr`, with its current state (from events, re-checked on chain). */
+async function approvedOperators(provider, mgr, owner) {
+  const iface = new ethers.Interface(["event ApprovalForAll(address indexed owner,address indexed operator,bool approved)"]);
+  const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
+  let logs = [];
+  try {
+    logs = await provider.getLogs({ address: mgr, fromBlock: 0, toBlock: "latest", topics: [iface.getEvent("ApprovalForAll").topicHash, ethers.zeroPadValue(owner, 32)] });
+  } catch {
+    return [];
+  }
+  const seen = new Map();
+  for (const l of logs) seen.set(iface.parseLog(l).args.operator, true);
+  const out = [];
+  for (const op of seen.keys()) out.push({ address: op, approved: await c.isApprovedForAll(owner, op).catch(() => null) });
+  return out;
+}
+
 // -- Last run + gas budget, for the ops strip --------------------------------
 function opsInfo() {
   let gas24h = 0;
@@ -1038,12 +1055,14 @@ const server = http.createServer(async (req, res) => {
       } catch {}
       const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
       const approved = operator ? await c.isApprovedForAll(cfg.ownerAddress, operator) : null;
+      // Other operators still approved (e.g. a replaced keystore's address), so the page can offer to revoke them.
+      const others = (await approvedOperators(provider, mgr, cfg.ownerAddress)).filter((o) => o.approved && (!operator || o.address.toLowerCase() !== operator.toLowerCase()));
       res.writeHead(200);
       return res.end(JSON.stringify({
         ok: true, version: v,
         owner: cfg.ownerAddress, operator, posm: ethers.getAddress(mgr),
         chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl,
-        explorer: "https://robinhoodchain.blockscout.com", approved,
+        explorer: "https://robinhoodchain.blockscout.com", approved, others,
       }));
     } catch (err) {
       res.writeHead(500);

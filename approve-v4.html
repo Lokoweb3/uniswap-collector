@@ -79,6 +79,12 @@ a{color:var(--cyan)}
     <div id="status"></div>
   </div>
 
+  <div class="card" id="otherscard" hidden>
+    <h2>Other operators still approved</h2>
+    <p style="margin:0 0 6px;font-size:14px">These addresses were granted the same blanket approval by this wallet earlier and still hold it. A replaced or lost collector key should be revoked.</p>
+    <div id="others"></div>
+  </div>
+
   <p style="color:var(--muted);font-size:13px">After approving, the collector picks up the positions on its next run (<span class="mono">node collector.js --mode=simulate</span> shows them; the daily 09:00 run collects). Positions must be open and above the fee threshold to be collected.</p>
 </div>
 
@@ -118,7 +124,28 @@ a{color:var(--cyan)}
     else a.innerHTML = '<span class="pill warn">unknown</span>';
     $('#revoke').hidden = approved !== true;
     $('#verify').disabled = !cfg.operator;
+    const others = cfg.others || [];
+    $('#otherscard').hidden = !others.length;
+    $('#others').innerHTML = others.map((o) => `<div class="row"><span class="mono">${o.address}</span><span><span class="pill bad">approved</span> <button class="revoke-other" data-op="${o.address}" ${account && chainOk ? '' : 'disabled'}>Revoke</button></span></div>`).join('');
+    for (const b of document.querySelectorAll('.revoke-other')) b.addEventListener('click', () => { if (confirm(`Revoke approval for ${b.dataset.op}? The collector must not depend on this key any more.`)) revokeOther(b.dataset.op); });
     updateButtons();
+  }
+
+  async function revokeOther(op) {
+    if (!signer) { status('Connect the owner wallet first.', 'warn'); return; }
+    try {
+      const c = new ethers.Contract(cfg.posm, ABI, signer);
+      status(`Confirm in your wallet: setApprovalForAll(${short(op)}, false)…`, 'warn');
+      const tx = await c.setApprovalForAll(op, false);
+      status(`Sent <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting for confirmation…`, 'warn');
+      const rc = await tx.wait();
+      status(`Revoked ${short(op)} in block ${rc.blockNumber}. <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      await loadConfig();
+      await refreshApproval();
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status(/rejected|denied|4001/i.test(m) ? 'Transaction rejected in the wallet. Nothing was sent.' : `Failed: ${m}`, 'bad');
+    }
   }
 
   function updateButtons() {
@@ -163,6 +190,7 @@ a{color:var(--cyan)}
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
       window.ethereum.on && window.ethereum.on('chainChanged', () => location.reload());
       await refreshApproval();
+      render();
     } catch (e) {
       status(`Connection failed: ${e.shortMessage || e.message}`, 'bad');
     }

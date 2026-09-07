@@ -686,6 +686,7 @@ select.scope option{background:#0b1017}
     <span class="enote" id="perfnote"></span>
   </div>
   <div class="agrid" id="perfgrid"></div>
+  <div class="etablewrap" id="walletearn"></div>
 </section>
 
 <section class="earnings analytics" id="taxsec" hidden>
@@ -1487,7 +1488,32 @@ function incomeEvents(){
   return ev.sort((a, b) => a.t - b.t);
 }
 
+let watchForAnalytics = null;
+async function loadWatchForAnalytics(){
+  try { const r = await fetch('/api/watch'); const d = await r.json(); if (d && d.ok) { watchForAnalytics = d; renderAnalytics(); } } catch(e){}
+}
+function renderEarnedByWallet(){
+  const rows = [];
+  if (dailyD){
+    const m = dailyModel(dailyD);
+    const now = Date.now();
+    const sum = days => m.all.filter(x => now - new Date(x.key + 'T12:00:00').getTime() <= days * 86400000 + 43200000).reduce((s, x) => s + x.total, 0);
+    const today = (m.all.find(x => x.key === dayKey(now)) || {}).total || 0;
+    rows.push({ name: ownerName(), today, d7: sum(7), d30: sum(30), all: m.all.reduce((s, x) => s + x.total, 0), since: m.all.length ? dayLabel(m.all[0].key) : '' });
+  }
+  for (const w of (watchForAnalytics && watchForAnalytics.wallets) || []){
+    if (!w.ok || !w.earned) continue;
+    rows.push({ name: walletName(w), today: w.earned.today, d7: w.earned.d7, d30: w.earned.d30, all: w.earned.all, since: w.earned.since ? dayLabel(w.earned.since) : '' });
+  }
+  if (!rows.length) return;
+  $('#walletearn').innerHTML = `<table class="etable">
+    <tr><th class="l">Earned by wallet</th><th>Today</th><th>7 days</th><th>30 days</th><th>All tracked</th><th class="l">Tracking since</th></tr>
+    ${rows.map(r => `<tr><td class="l">${r.name}</td><td class="u">${usd(r.today)}</td><td class="u">${usd(r.d7)}</td><td class="u">${usd(r.d30)}</td><td class="u">${usd(r.all)}</td><td class="l muted">${r.since}</td></tr>`).join('')}
+  </table>`;
+}
+
 function renderAnalytics(){
+  renderEarnedByWallet();
   if (PAGE !== 'analytics' || !histD) return;
   const ev = incomeEvents();
   // -- Income for taxes: by year, then by month --
@@ -2115,7 +2141,9 @@ function renderWatch(d){
     const walletPart = h
       ? `<span>tokens <b>${usd(h.walletUsd)}</b>${h.unpricedCount ? ` <span class="muted" title="tokens with no pricing pool">+${h.unpricedCount} unpriced</span>` : ''}${h.ok ? '' : ' <span class="idle" title="Blockscout holdings list unavailable; only position tokens and ETH were checked">partial</span>'}</span>`
       : '';
-    const head = `<div class="wh">${link}<span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>in pools <b>${usd(t.liquidityUsd)}</b></span><span>uncollected <b>${usd(t.feesUsd)}</b></span><span><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>`;
+    const e = w.earned;
+    const earnedPart = e && (e.all > 0 || e.since) ? `<span title="Fee accrual from snapshots since ${e.since || 'today'}, at current prices">earned today <b>${usd(e.today)}</b> · 7d <b>${usd(e.d7)}</b></span>` : '';
+    const head = `<div class="wh">${link}<span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>in pools <b>${usd(t.liquidityUsd)}</b></span><span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}<span><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>`;
     // Top tokens sitting in the wallet, compact.
     const toks = h && h.tokens.length
       ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
@@ -2206,7 +2234,7 @@ fetch('/api/collect').then(r => r.json()).then(d => {
 const ANALYTICS = PAGE === 'analytics';
 function tick(fresh){
   load(fresh);
-  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); }
+  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); }
   else { loadRewards(); loadBalances(); }
 }
 $('#reload').addEventListener('click', () => tick(true));

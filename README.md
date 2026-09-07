@@ -479,8 +479,11 @@ those endpoints trust loopback and everything behind a proxy is loopback. The sc
 `wallets.json` (copy `wallets.example.json`; gitignored) names the wallets: `owner.label` for the
 collector's wallet and `watched`, a list of `{"address": "0x...", "label": "name"}` entries shown
 read-only. `watchWallets` in `config.json` is the fallback when the file is absent. Both are re-read on
-every refresh, so editing needs no restart. Watched wallets are observed only: no fee snapshots, PnL, range log or collects, and the
-collector never touches them. The owner wallet is skipped if listed.
+every refresh, so editing needs no restart. Watched wallets are observed only: no PnL, range log or collects, and the collector never touches
+them. The owner wallet is skipped if listed. Their fee accrual is tracked (`watch-accrual.json`: the
+change in each position's uncollected fees between refreshes, at current prices, in hourly buckets per
+wallet; an interval where fees dropped, i.e. a collect, is skipped): wallet header lines show earned
+today and 7 days, and the Analytics page has an "Earned by wallet" table for the main and watched wallets.
 
 For each watched wallet the server reads its open v3/v4 positions (pool, fee tier, in-range status,
 distance to the edges, price range, value, uncollected fees) and values the tokens sitting in the wallet

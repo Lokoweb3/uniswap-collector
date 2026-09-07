@@ -14,12 +14,84 @@ const path = require("path");
 const { ethers } = require("ethers");
 
 const EXPLORER = "https://robinhoodchain.blockscout.com";
+// Fee accrual ledger for watched positions: the last snapshot per position
+// (to diff against) and hourly USD buckets per wallet, kept forever.
+const ACCRUAL_FILE = path.join(__dirname, "watch-accrual.json");
+const HOUR = 3600 * 1000;
 const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
 const tierLabel = (fee) => (fee == null ? "?" : `${+(Number(fee) / 10000).toFixed(3)}%`);
 
 function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools }) {
   const discovery = new Map(); // address -> v4 discovery (own state file per wallet)
+  let accrual = { last: {}, hours: {} }; // last[wallet:tokenId] = {t,f0,f1}; hours[wallet][hourMs] = usd
+  try {
+    accrual = { ...accrual, ...JSON.parse(fs.readFileSync(ACCRUAL_FILE, "utf8")) };
+  } catch {}
+  const saveAccrual = () => {
+    try {
+      fs.writeFileSync(ACCRUAL_FILE, JSON.stringify(accrual));
+    } catch {}
+  };
+
+  /**
+   * Fees earned since the previous snapshot of each position, valued at the
+   * current prices, added to the wallet's hourly bucket. A drop in either fee
+   * amount means a collect happened in between; that interval is skipped
+   * rather than guessed.
+   */
+  function recordAccrual(address, positions) {
+    const now = Date.now();
+    const key = address.toLowerCase();
+    const hourKey = String(Math.floor(now / HOUR) * HOUR);
+    const seen = new Set();
+    for (const p of positions) {
+      const k = `${key}:${p.tokenId}`;
+      seen.add(k);
+      const prev = accrual.last[k];
+      if (prev && p.feesOk && p.fee0 >= prev.f0 && p.fee1 >= prev.f1 && p.usd0 != null && p.usd1 != null) {
+        const usd = (p.fee0 - prev.f0) * p.usd0 + (p.fee1 - prev.f1) * p.usd1;
+        if (usd > 0) {
+          accrual.hours[key] = accrual.hours[key] || {};
+          accrual.hours[key][hourKey] = +(((accrual.hours[key][hourKey] || 0) + usd).toFixed(4));
+          p.earnedSinceLast = usd;
+        }
+      }
+      if (p.feesOk) accrual.last[k] = { t: now, f0: p.fee0, f1: p.fee1 };
+    }
+    for (const k of Object.keys(accrual.last)) if (k.startsWith(key + ":") && !seen.has(k)) delete accrual.last[k];
+    saveAccrual();
+  }
+
+  const dayOf = (ms) => {
+    const d = new Date(Number(ms));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  /** Earned summary for a wallet from its hourly buckets. */
+  function earnedFor(address) {
+    const h = accrual.hours[address.toLowerCase()] || {};
+    const now = Date.now();
+    const daily = {};
+    let today = 0, d7 = 0, d30 = 0, all = 0, h24 = 0;
+    const todayKey = dayOf(now);
+    for (const [ms, usd] of Object.entries(h)) {
+      const t = Number(ms);
+      const day = dayOf(t);
+      daily[day] = (daily[day] || 0) + usd;
+      all += usd;
+      if (day === todayKey) today += usd;
+      if (now - t <= 24 * HOUR) h24 += usd;
+      if (now - t <= 7 * 24 * HOUR) d7 += usd;
+      if (now - t <= 30 * 24 * HOUR) d30 += usd;
+    }
+    const days = Object.keys(daily).sort();
+    return {
+      today, d7, d30, all, h24,
+      since: days.length ? days[0] : null,
+      daily: days.slice(-60).map((day) => ({ day, usd: +daily[day].toFixed(2) })),
+    };
+  }
   let latest = null;
   let inFlight = null;
 
@@ -139,6 +211,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, async () => { while (cursor < work.length) await one(work[cursor++]); }));
     positions.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
+    recordAccrual(w.address, positions);
+    const earned = earnedFor(w.address);
 
     // Tokens sitting in the wallet itself, valued like the owner's portfolio.
     let holdings = null;
@@ -155,7 +229,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const feesUsd = positions.reduce((s, p) => s + (p.feesUsd || 0), 0);
     const walletUsd = holdings ? holdings.walletUsd : null;
     return {
-      ...w, ok: true, positions, closed, errors, known, truncated,
+      ...w, ok: true, positions, closed, errors, known, truncated, earned,
       holdings: holdings
         ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, tokens: holdings.rows, tokenCount: holdings.rows.length }
         : null,

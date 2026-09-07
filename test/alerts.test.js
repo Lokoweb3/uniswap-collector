@@ -80,6 +80,52 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.deepStrictEqual(routed2, ["vault", "main"]);
   for (const f of [stateFile + ".t", stateFile + ".t2"]) { try { fs.unlinkSync(f); } catch {} }
 
+  // 9. watched wallets: a position leaves and re-enters range, prefixed with the wallet label, no repeats;
+  //    the main wallet's own alerts are unchanged (same keys as before) and carry the owner label.
+  const w = create({ transport: async (t) => { sent.push(t); return true; }, stateFile: stateFile + ".w", now: () => clock, log: { error() {} } });
+  const lpr = (inRange, rawPos = 0.5) => ({ label: "LP Rewards", address: "0x0000000000000000000000000000000000000013", ok: true, positions: [{ tokenId: "972362", nftId: "972362", pair: "WETH / Index", inRange, rawPos, valueUsd: 3262, feesUsd: 1.4 }] });
+  const trading = { label: "Trading", address: "0x0000000000000000000000000000000000000012", ok: true, positions: [] };
+  const mainPayload = (inRange) => ({ ownerLabel: "Main", positions: [pos(inRange)] });
+  out = await w.check({ payload: mainPayload(true), watched: [lpr(true), trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 0, "everything in range: silent");
+  clock += 10 * 60 * 1000;
+  out = await w.check({ payload: mainPayload(true), watched: [lpr(false, 0.1), trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /^🔴 LP Rewards · WETH \/ Index #972362 is out of range \(price below/);
+  clock += 10 * 60 * 1000;
+  out = await w.check({ payload: mainPayload(true), watched: [lpr(false, 0.1), trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 0, "still out: no repeat");
+  // a transient load failure of that wallet must not reset its state
+  out = await w.check({ payload: mainPayload(true), watched: [{ ...lpr(false, 0.1), ok: false, positions: [] }, trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 0);
+  clock += 10 * 60 * 1000;
+  out = await w.check({ payload: mainPayload(true), watched: [lpr(false, 0.1), trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 0);
+  clock += 10 * 60 * 1000;
+  out = await w.check({ payload: mainPayload(true), watched: [lpr(true), trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /^🟢 LP Rewards · WETH \/ Index #972362 is back in range after 0\.5 h/);
+  // main wallet out of range alongside a watched one: two messages, main prefixed with its label; ids never collide
+  clock += 10 * 60 * 1000;
+  out = await w.check({ payload: mainPayload(false), watched: [lpr(false, 1.3), trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 2);
+  assert.ok(out.some((m) => /^🔴 Main · WETH \/ USDG #1030190 is out of range/.test(m)), "main wallet alert with owner label");
+  assert.ok(out.some((m) => /^🔴 LP Rewards · WETH \/ Index #972362 is out of range \(price above/.test(m)));
+  assert.deepStrictEqual(Object.keys(w.state.outSince).sort(), ["0x0000000000000000000000000000000000000013:972362", "1030190"]);
+
+  // 10. a run with failures in two wallets: one message naming both
+  clock = new Date("2026-09-08T09:12:00").getTime();
+  out = await w.check({ payload: mainPayload(true), watched: [lpr(true), trading], unlock: { armed: true }, keepalive: true,
+    ops: { lastRun: { t: "2026-09-08T09:00:01.000Z", mode: "full", result: "collected 2 positions, 3 failed", failures: [{ wallet: "Trading", count: 1 }, { wallet: "LP Rewards", count: 2 }] } } });
+  const fail = out.filter((m) => /❌ Collect run/.test(m));
+  assert.strictEqual(fail.length, 1, "exactly one run-failure message");
+  assert.match(fail[0], /Wallets with failures: Trading \(1\), LP Rewards \(2\)\./);
+  // The rest are the two positions coming back in range and the outage notice from the clock jump.
+  assert.ok(out.filter((m) => !/❌ Collect run/.test(m)).every((m) => /back in range|Dashboard was down/.test(m)));
+  // same run seen again: no repeat
+  out = await w.check({ payload: mainPayload(true), watched: [lpr(true), trading], unlock: { armed: true }, keepalive: true,
+    ops: { lastRun: { t: "2026-09-08T09:00:01.000Z", mode: "full", result: "collected 2 positions, 3 failed", failures: [{ wallet: "Trading", count: 1 }, { wallet: "LP Rewards", count: 2 }] } } });
+  assert.strictEqual(out.length, 0);
+  try { fs.unlinkSync(stateFile + ".w"); } catch {}
+
   // 8. no transport, no token => disabled and silent
   const c = create({ token: undefined, chatId: undefined, stateFile: stateFile + ".c", now: () => clock });
   assert.strictEqual(c.enabled, false);

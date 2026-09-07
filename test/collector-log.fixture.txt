@@ -1,0 +1,19 @@
+[2026-09-07T09:00:01.000Z] === mode=full chainId=4663 ===
+[2026-09-07T09:00:01.100Z] Operator: 0x0000000000000000000000000000000000000002
+[2026-09-07T09:00:01.200Z] Owners in this run: Main, SEAL wallet, Trading, LP Rewards
+[2026-09-07T09:00:01.300Z] --- Main (0x0000000000000000000000000000000000000001) ---
+[2026-09-07T09:00:05.000Z] #1030190 WETH/USDG 0.01%  0.001992 WETH + 4.970916 USDG  ≈ 0.004 WETH
+[2026-09-07T09:00:06.000Z] collect #1030190 -> 0xaaaa
+[2026-09-07T09:00:10.000Z]   confirmed in block 1, gas 0.00005 ETH
+[2026-09-07T09:00:12.000Z]   ! treasury split failed: execution reverted — owner receives the full amount this time
+[2026-09-07T09:00:13.000Z] === Main: done ===
+[2026-09-07T09:00:13.100Z] --- SEAL wallet (0x0000000000000000000000000000000000000011) ---
+[2026-09-07T09:00:14.000Z] Nothing above threshold. Done.
+[2026-09-07T09:00:14.100Z] --- Trading (0x0000000000000000000000000000000000000012) ---
+[2026-09-07T09:00:15.000Z]   ! Trading: could not coalesce error (RPC timeout)
+[2026-09-07T09:00:15.100Z] --- LP Rewards (0x0000000000000000000000000000000000000013) ---
+[2026-09-07T09:00:16.000Z] collect #972362 -> 0xbbbb
+[2026-09-07T09:00:17.000Z]   ! collect failed for #972363: execution reverted: "Not approved"
+[2026-09-07T09:00:18.000Z]   ! v4 collect failed for #12345: simulation reverted
+[2026-09-07T09:00:19.000Z] === LP Rewards: done ===
+[2026-09-07T09:00:20.000Z] === done ===

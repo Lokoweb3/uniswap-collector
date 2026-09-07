@@ -569,31 +569,11 @@ function opsInfo() {
     }
   } catch {}
 
+  // Last run, with failures attributed per wallet pass (see ops.js).
   let lastRun = null;
   try {
-    const lines = fs.readFileSync(path.join(__dirname, "collector.log"), "utf8").split("\n").slice(-400);
-    let start = -1;
-    let locked = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (start < 0 && /=== mode=/.test(lines[i])) start = i;
-      if (locked < 0 && /locked, skipping/.test(lines[i])) locked = i;
-      if (start >= 0 && locked >= 0) break;
-    }
-    if (locked > start) {
-      lastRun = { t: (lines[locked].match(/^(\S+)/) || [])[1] || null, mode: "collect", result: "locked — skipped" };
-    } else if (start >= 0) {
-      const mm = lines[start].match(/^\[([^\]]+)\] === mode=(\w+)/);
-      const rest = lines.slice(start + 1);
-      const collects = rest.filter((l) => / collect #\d+ -> /.test(l)).length;
-      const fails = rest.filter((l) => /! collect failed/.test(l)).length;
-      let result;
-      if (collects) result = `collected ${collects} position${collects === 1 ? "" : "s"}`;
-      else if (rest.some((l) => /Nothing above threshold/.test(l))) result = "nothing above threshold";
-      else if (rest.some((l) => /Done\.|Simulate mode/.test(l))) result = "done";
-      else result = "in progress or aborted";
-      if (fails) result += `, ${fails} failed`;
-      lastRun = { t: mm ? mm[1] : null, mode: mm ? mm[2] : "?", result };
-    }
+    const lines = fs.readFileSync(path.join(__dirname, "collector.log"), "utf8").split("\n").slice(-600);
+    lastRun = require("./ops").parseLastRun(lines);
   } catch {}
 
   return { lastRun, gas24h: { eth: gas24h, capEth: Number(cfg.thresholds && cfg.thresholds.dailyGasCapEth) || 0 } };
@@ -1547,7 +1527,13 @@ async function backgroundTick() {
     await buildInFlight;
   } catch {}
   try {
-    const sent = await alerts.check({ payload: cache.payload, ops: opsInfo(), unlock: unlockState(), treasury: await treasuryState().catch(() => null) });
+    const sent = await alerts.check({
+      payload: cache.payload,
+      watched: watch.latest && watch.latest.wallets,
+      ops: opsInfo(),
+      unlock: unlockState(),
+      treasury: await treasuryState().catch(() => null),
+    });
     for (const m of sent) console.log("alert sent:", m.split("\n")[0].slice(0, 80));
   } catch (err) {
     console.error("alerts:", err.shortMessage || err.message);

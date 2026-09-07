@@ -95,7 +95,7 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
    * `ops` is opsInfo() (last run + gas), `unlock` is unlockState().
    * `keepalive` overrides the pgrep check (tests). Returns the messages sent.
    */
-  async function check({ payload, ops, unlock, keepalive, treasury } = {}) {
+  async function check({ payload, watched, ops, unlock, keepalive, treasury } = {}) {
     const sent = [];
     const say = async (key, text, every, deliver) => {
       if (await once(key, text, every, deliver)) sent.push(text);
@@ -116,28 +116,44 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     if (!alive) await say("keepalive", "⚠️ The Windows keepalive session is not running. WSL will stop (and the dashboard with it) when the last terminal closes. Re-register 'LP Dashboard Keepalive' from PowerShell.");
     else delete state.sent.keepalive;
 
-    // Positions leaving / re-entering range.
-    if (payload && Array.isArray(payload.positions)) {
+    // Positions leaving / re-entering range: the main wallet (state keys are
+    // the bare tokenId, as before) and every watched wallet (keys prefixed by
+    // the wallet address so two wallets' ids never collide).
+    const walletSets = [];
+    if (payload && Array.isArray(payload.positions)) walletSets.push({ prefix: "", label: payload.ownerLabel || null, positions: payload.positions });
+    for (const w of Array.isArray(watched) ? watched : []) {
+      if (!w || !w.ok || !Array.isArray(w.positions) || !w.address) continue;
+      walletSets.push({ prefix: `${w.address.toLowerCase()}:`, label: w.label || short(w.address), positions: w.positions });
+    }
+    if (walletSets.length) {
       const seen = new Set();
-      for (const p of payload.positions) {
-        const id = String(p.tokenId);
-        seen.add(id);
-        const name = `${p.pair || "?"} #${p.nftId || p.tokenId}`;
-        if (!p.inRange) {
-          if (!state.outSince[id]) {
-            state.outSince[id] = t;
+      for (const ws of walletSets) {
+        for (const p of ws.positions) {
+          const id = `${ws.prefix}${p.tokenId}`;
+          seen.add(id);
+          const name = `${ws.label ? ws.label + " · " : ""}${p.pair || "?"} #${p.nftId || p.tokenId}`;
+          if (!p.inRange) {
+            if (!state.outSince[id]) {
+              state.outSince[id] = t;
+              save();
+              const dir = p.rawPos > 1 ? "above" : "below";
+              await say(`out:${id}:${t}`, `🔴 ${name} is out of range (price ${dir} the range) — not earning. Value ${usd(p.valueUsd)}, uncollected ${usd(p.feesUsd)}.`, 0);
+            }
+          } else if (state.outSince[id]) {
+            const hrs = ((t - state.outSince[id]) / 3600000).toFixed(1);
+            delete state.outSince[id];
             save();
-            const dir = p.rawPos > 1 ? "above" : "below";
-            await say(`out:${id}:${t}`, `🔴 ${name} is out of range (price ${dir} the range) — not earning. Value ${usd(p.valueUsd)}, uncollected ${usd(p.feesUsd)}.`, 0);
+            await say(`in:${id}:${t}`, `🟢 ${name} is back in range after ${hrs} h.`, 0);
           }
-        } else if (state.outSince[id]) {
-          const hrs = ((t - state.outSince[id]) / 3600000).toFixed(1);
-          delete state.outSince[id];
-          save();
-          await say(`in:${id}:${t}`, `🟢 ${name} is back in range after ${hrs} h.`, 0);
         }
       }
-      for (const id of Object.keys(state.outSince)) if (!seen.has(id)) delete state.outSince[id]; // closed while out
+      // Forget positions that closed while out. A watched wallet that failed to
+      // load this tick keeps its entries so a transient error does not reset them.
+      const loadedPrefixes = new Set(walletSets.map((ws) => ws.prefix));
+      for (const id of Object.keys(state.outSince)) {
+        const prefix = id.includes(":") ? id.slice(0, id.indexOf(":") + 1) : "";
+        if (loadedPrefixes.has(prefix) && !seen.has(id)) delete state.outSince[id];
+      }
     }
 
     // Scheduled collect: failed, skipped as locked, or missing.
@@ -145,7 +161,12 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     if (run && run.t && run.t !== state.lastRunSeen) {
       state.lastRunSeen = run.t;
       save();
-      if (/failed|aborted/i.test(run.result || "")) await say(`runfail:${run.t}`, `❌ Collect run at ${run.t} (${run.mode}): ${run.result}. See collector.log.`, 0);
+      if (/failed|aborted/i.test(run.result || "")) {
+        const per = Array.isArray(run.failures) && run.failures.length
+          ? ` Wallets with failures: ${run.failures.map((f) => `${f.wallet} (${f.count})`).join(", ")}.`
+          : "";
+        await say(`runfail:${run.t}`, `❌ Collect run at ${run.t} (${run.mode}): ${run.result}.${per} See collector.log.`, 0);
+      }
       else if (/locked/i.test(run.result || "")) await say(`runlocked:${run.t}`, `🔒 Collect run at ${run.t} was skipped: the collector was locked. Arm it (Arm collector on the dashboard, or ./unlock.sh) before tomorrow's ${COLLECT_HOUR}:00 run.`, 0);
     }
     const hour = d.getHours();

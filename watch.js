@@ -195,7 +195,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     return inFlight;
   }
 
-  return { refresh, readWallets, ownerLabel, get latest() { return latest; } };
+  return { refresh, readWallets, ownerLabel, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
 }
 
 module.exports = { create };

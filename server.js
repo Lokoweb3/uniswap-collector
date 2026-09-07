@@ -1022,17 +1022,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/watch") {
+    // Serves the cached view only. A rebuild reads every watched wallet's
+    // positions and holdings (minutes for a wallet with many tokens), so it
+    // runs in the background: on the 10-minute tick, or kicked off here by
+    // fresh=1, which returns the current cache at once with `refreshing: true`.
     res.setHeader("Content-Type", "application/json");
-    try {
-      const fresh = url.searchParams.get("fresh") === "1";
-      let d = watch.latest;
-      if (!d || fresh || Date.now() - d.at > 5 * 60 * 1000) d = await watch.refresh();
-      res.writeHead(200);
-      return res.end(JSON.stringify(d));
-    } catch (err) {
-      res.writeHead(500);
-      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
-    }
+    const fresh = url.searchParams.get("fresh") === "1";
+    const d = watch.latest;
+    const stale = !d || Date.now() - d.at > 15 * 60 * 1000;
+    if (fresh || stale) watch.refresh().catch((err) => console.error("watch:", err.shortMessage || err.message));
+    res.writeHead(d ? 200 : 202);
+    return res.end(JSON.stringify(d ? { ...d, refreshing: watch.inFlight } : { ok: false, refreshing: true, error: "watched wallets still loading", wallets: [] }));
   }
 
   if (url.pathname === "/api/balances") {

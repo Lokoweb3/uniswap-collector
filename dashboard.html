@@ -1801,6 +1801,7 @@ async function loadWatch(){
   try {
     const r = await fetch('/api/watch');
     const d = await r.json();
+    if (r.status === 202 || (d && d.refreshing && !d.ok)) setTimeout(loadWatch, 20000); // first build still running
     renderWatch(d);
     lastWatchForPf = d && d.ok ? d : lastWatchForPf;
     if (lastPortfolio) renderPortfolio();

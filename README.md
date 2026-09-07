@@ -462,7 +462,8 @@ collector never touches them. The owner wallet is skipped if listed.
 For each watched wallet the server reads its open v3/v4 positions (pool, fee tier, in-range status,
 distance to the edges, price range, value, uncollected fees) and values the tokens sitting in the wallet
 itself (discovered and priced like the Portfolio panel, via `portfolio.holdingsOf`). `GET /api/watch`
-returns the JSON (`fresh=1` to rebuild), and the MCP server has a `watched_wallets` tool.
+returns the cached JSON at once (`fresh=1` starts a background rebuild and returns the current cache with
+`refreshing: true`; the tick rebuilds every 10 minutes anyway), and the MCP server has a `watched_wallets` tool.
 
 ### Wallet picker
 

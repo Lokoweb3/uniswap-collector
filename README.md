@@ -276,9 +276,12 @@ sends Telegram alerts, each once per episode: dump (−20% in 1h), out of range 
 dying (fees/h −70% in 30 min), LPs leaving (liquidity −50% from the 24h high), close-now (−40% from
 entry). With `autoClose: true` on an entry it closes the position (100% of the liquidity, both tokens to
 the wallet that owns it; `close-position.js`, static-called first) when the price is `maxDrawdownPct`
-below entry or it has been out of range longer than `outOfRangeCloseMinutes`. The card's "Close now"
-button does the same on demand (loopback-only, refused by the public gate). Entry prices come from
-config; check them against the mint transactions before enabling `autoClose`.
+below entry or it has been out of range longer than `outOfRangeCloseMinutes`, and only after the trigger
+has held on three consecutive 60-second cycles with the pool price stable within 10% between reads (one
+bad RPC answer or a one-block wick cannot close a position). A failed close restarts that confirmation
+and is retried after a 30-minute cool-down. The card's "Close now" button does the same on demand
+(loopback-only, refused by the public gate). Entry prices come from config; check them against the mint
+transactions before enabling `autoClose`.
 
 ### Exit rules (`exit-rules.js`)
 
@@ -286,8 +289,10 @@ Evaluated every 5 min by the dashboard server over every open position of every 
 `exitRules` in config.json: `priceDropPct1h`, `outOfRange` (duration) and `tvlDrop`, each with `pairs`
 (either order, `"*"` = all) and `action` `alert` or `close`. A close only runs when that position's
 `exitRuleOverrides` entry has `enabled: true` (set from the card's "Exit rules" toggle or
-`/api/exit-rules`), the close module is loaded and the collector is armed; otherwise it degrades to an
-alert. Closes are logged to `exit-log.json`. The guardian and the exit rules overlap on purpose for now;
+`/api/exit-rules`), the close module is loaded, the collector is armed, and the trigger has held on two
+consecutive 5-minute evaluations with the price stable within 10%; otherwise it degrades to an alert. A
+position is marked closed only after a successful transaction; a close that fails is retried after 15
+minutes while the trigger still holds. Closes are logged to `exit-log.json`. The guardian and the exit rules overlap on purpose for now;
 see the changelog for the planned merge.
 
 ### Fee auto-collect (`memecoin-collect.js`)
@@ -467,7 +472,7 @@ Then:
 ### Fresh machine, from the repo alone
 
 ```bash
-git clone <repo> ~/uniswap-collector && cd ~/uniswap-collector
+git clone https://github.com/Lokoweb3/uniswap-collector.git ~/uniswap-collector && cd ~/uniswap-collector
 chmod +x *.sh && npm install
 cp config.example.json config.json        # then set ownerAddress, sweepDestination, contracts, thresholds
 cp wallets.example.json wallets.json      # owner label + watched / collect wallets
@@ -708,6 +713,15 @@ All of it is the collector wallet's own history, so the wallet picker is hidden 
 only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
+
+### 2026-09-08
+
+- External audit (Theo) of the public repo: no leaks found; three issues fixed. Failed auto-closes no
+  longer mark a position as closed and are retried; both auto-close paths need the trigger to hold on
+  consecutive checks with a stable price before acting; `tmp` pinned under `solc` (`npm audit` clean).
+- Repository published at https://github.com/Lokoweb3/uniswap-collector with placeholders for every
+  wallet, vault, host and chat identifier; `config.json` is now local (`config.example.json` is the
+  template); `docs/` stays local.
 
 ### 2026-09-08 (night)
 

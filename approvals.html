@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Approval audit</title>
+<!--
+  Approval audit for every wallet: ERC-20 allowances, operator approvals on
+  the Uniswap position managers, and the LOKOVault's control status. All data
+  comes from the dashboard server (/api/approvals, read-only). Revoking is
+  signed by the connected wallet (Rabby / MetaMask); no key is ever typed here.
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+:root{color-scheme:dark;--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.12);--ink:#c9d4de;--bright:#fff;--muted:#7b8a99;--green:#39ff88;--cyan:#22d3ee;--gold:#f5c542;--red:#ff4d6d}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(900px 500px at 10% -10%,rgba(57,255,136,.10),transparent 60%),radial-gradient(800px 500px at 100% 0%,rgba(34,211,238,.08),transparent 55%),#05070b;color:var(--ink);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1060px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:22px;margin:0 0 6px;color:var(--bright)}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin-bottom:16px;backdrop-filter:blur(12px)}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 12px;display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.mono{font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;font-size:12.5px;word-break:break-all}
+.ok{color:var(--green)} .warn{color:var(--gold)} .bad{color:var(--red)} .muted{color:var(--muted)}
+button,select{font:inherit;font-size:13px;border-radius:9px;border:1px solid var(--border);background:rgba(255,255,255,.06);color:var(--bright);padding:7px 12px;cursor:pointer}
+button:hover:not([disabled]){border-color:rgba(255,255,255,.3)}
+button[disabled]{opacity:.45;cursor:not-allowed}
+button.primary{border:0;color:#04110a;background:linear-gradient(135deg,#39ff88,#22d3ee)}
+button.danger{border-color:rgba(255,77,109,.5);color:var(--red)}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;border:1px solid var(--border);font-size:12px;font-weight:600;white-space:nowrap}
+.pill.ok{border-color:rgba(57,255,136,.5);color:var(--green)} .pill.bad{border-color:rgba(255,77,109,.5);color:var(--red)} .pill.warn{border-color:rgba(245,197,66,.5);color:var(--gold)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:11px;letter-spacing:.05em;text-transform:uppercase;padding:6px 10px 6px 0;border-bottom:1px solid var(--border)}
+td{padding:7px 10px 7px 0;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.tablewrap{overflow-x:auto}
+#status{min-height:22px;margin-top:10px;font-size:14px}
+a{color:var(--cyan)}
+.note{font-size:12.5px;color:var(--muted)}
+.row{display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14px;flex-wrap:wrap}
+.row:last-child{border-bottom:0} .row .k{color:var(--muted)}
+.health{font-size:12px;cursor:help}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Approval audit</h1>
+  <p class="sub">Everything each wallet has granted that lets a contract or address move its assets. Revoke with the wallet itself; nothing is signed on the server.</p>
+
+  <div class="bar">
+    <label>Wallet <select id="wallet"></select></label>
+    <button id="connect">Connect wallet</button>
+    <span id="conn" class="note">not connected</span>
+    <button id="reload">Reload</button>
+    <a href="/" class="note">← dashboard</a>
+  </div>
+  <div id="status"></div>
+
+  <div class="card">
+    <h2><span>ERC-20 allowances</span><span id="alcount" class="note"></span></h2>
+    <div class="tablewrap"><table id="allow"><thead><tr><th>Token</th><th>Spender</th><th>Allowance</th><th>Granted</th><th>Flags</th><th></th></tr></thead><tbody></tbody></table></div>
+    <p class="note" id="alnote"></p>
+  </div>
+
+  <div class="card">
+    <h2><span>Position manager operators</span><span class="note">setApprovalForAll on the Uniswap v3 / v4 position managers</span></h2>
+    <div class="tablewrap"><table id="ops"><thead><tr><th>Manager</th><th>Operator</th><th>Role</th><th></th></tr></thead><tbody></tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2><span>LOKOVault</span></h2>
+    <div id="vault"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
+  const ERC20 = ['function approve(address spender, uint256 amount) returns (bool)'];
+  const NFT = ['function setApprovalForAll(address operator, bool approved)'];
+  let data = null, provider = null, signer = null, account = null;
+  const status = (m, cls = '') => { $('#status').innerHTML = `<span class="${cls}">${m}</span>`; };
+  const selected = () => $('#wallet').value;
+  const canSign = () => !!(signer && account && account.toLowerCase() === selected().toLowerCase());
+  const fmtAmt = (r) => r.unlimited ? '<span class="bad">unlimited</span>' : (r.amount == null ? '—' : r.amount.toLocaleString('en-US', { maximumFractionDigits: 4 }));
+  const when = (t) => t ? new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+
+  async function load(owner) {
+    status('Loading…', 'muted');
+    const r = await fetch('/api/approvals' + (owner ? '?owner=' + owner : ''), { cache: 'no-store' });
+    data = await r.json();
+    if (!data.ok) { status(data.error || 'failed', 'bad'); return; }
+    const sel = $('#wallet');
+    if (!sel.options.length) {
+      sel.innerHTML = data.wallets.map((w) => `<option value="${w.address}">${w.label} (${short(w.address)})</option>`).join('');
+    }
+    sel.value = data.owner;
+    render();
+    status('', '');
+  }
+
+  function healthBadge(addr) {
+    const h = data.health && data.health[addr.toLowerCase()];
+    if (!h) return '';
+    return ` <span class="health" title="${(h.notes || []).join(', ')}">${h.badge}</span>`;
+  }
+
+  function render() {
+    const d = data;
+    const tb = $('#allow tbody');
+    tb.innerHTML = d.allowances.map((r, i) => `<tr>
+      <td><b>${r.symbol || '?'}</b>${healthBadge(r.token)}<div class="mono muted"><a href="${d.explorer}/token/${r.token}" target="_blank" rel="noopener">${short(r.token)}</a></div></td>
+      <td>${r.spenderLabel ? `<b>${r.spenderLabel}</b><div class="mono muted">${short(r.spender)}</div>` : `<span class="mono">${r.spender}</span>`}</td>
+      <td>${fmtAmt(r)}</td>
+      <td>${when(r.grantedAt)}</td>
+      <td>${r.unlimited ? '<span class="pill bad">unlimited</span> ' : ''}${r.old ? '<span class="pill warn">older than 90 days</span>' : ''}${!r.spenderLabel ? ' <span class="pill warn" title="Not a known Uniswap / vault contract">unknown spender</span>' : ''}</td>
+      <td><button class="danger revoke-allow" data-i="${i}" ${canSign() ? '' : 'disabled'}>Revoke</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">No standing allowances.</td></tr>';
+    $('#alcount').textContent = d.allowancesOk ? `${d.allowances.length} standing · ${d.allowances.filter((r) => r.unlimited).length} unlimited` : 'allowance scan failed: ' + (d.allowancesError || '');
+    $('#alnote').textContent = 'From every Approval event this wallet ever emitted, filtered to allowances that are still non-zero on chain. Revoke sets the allowance to 0.';
+    const ob = $('#ops tbody');
+    ob.innerHTML = d.operators.map((o, i) => `<tr>
+      <td>Uniswap ${o.version} <span class="mono muted">${short(o.manager)}</span></td>
+      <td><span class="mono">${o.operator}</span></td>
+      <td>${o.isCollector ? '<span class="pill ok">the collector</span>' : '<span class="pill warn">not the current collector</span>'}</td>
+      <td><button class="danger revoke-op" data-i="${i}" ${canSign() ? '' : 'disabled'}>Revoke</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" class="muted">No operator approvals.</td></tr>';
+    const v = d.vault;
+    $('#vault').innerHTML = !v ? '<span class="muted">No vault configured.</span>' : v.error ? `<span class="bad">${v.error}</span>` : `
+      <div class="row"><span class="k">NFT #1 holder (controls the vault)</span><span class="mono">${v.holder} ${v.holder.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
+      <div class="row"><span class="k">NFT contract admin (fee split, pause)</span><span class="mono">${v.admin} ${v.admin.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
+      <div class="row"><span class="k">Collector operator power over the vault NFT</span><span>${v.operatorHasVaultPower ? '<span class="pill bad">approved — revoke this</span>' : '<span class="pill ok">none</span>'}</span></div>
+      <div class="row"><span class="k">Fee split</span><span>${v.feeSplitPct == null ? '—' : v.feeSplitPct + '%'}${v.paused ? ' · <span class="bad">paused</span>' : ''}</span></div>
+      <div class="row"><span class="k">Vault account</span><span class="mono">${v.tba || '—'}</span></div>`;
+  }
+
+  async function connect() {
+    if (!window.ethereum) { status('No wallet found. Install Rabby or MetaMask.', 'bad'); return; }
+    try {
+      provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send('eth_requestAccounts', []);
+      account = ethers.getAddress(accounts[0]);
+      signer = await provider.getSigner();
+      const net = await provider.getNetwork();
+      if (Number(net.chainId) !== Number(data.chainId)) {
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(data.chainId).toString(16) }] }); } catch (e) { status('Switch the wallet to Robinhood Chain (4663).', 'warn'); }
+      }
+      // Work on the connected wallet's row if it is one of ours.
+      if (data.wallets.some((w) => w.address.toLowerCase() === account.toLowerCase())) await load(account);
+      $('#conn').innerHTML = `<span class="mono">${short(account)}</span> ${canSign() ? '<span class="pill ok">matches selected wallet</span>' : '<span class="pill warn">select this wallet to revoke</span>'}`;
+      window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
+      render();
+    } catch (e) { status(`Connection failed: ${e.shortMessage || e.message}`, 'bad'); }
+  }
+
+  async function send(label, fn) {
+    if (!canSign()) { status('Connect the wallet that granted this approval.', 'warn'); return; }
+    try {
+      status(`Confirm in your wallet: ${label}…`, 'warn');
+      const tx = await fn();
+      status(`Sent <a href="${data.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+      const rc = await tx.wait();
+      status(`Done in block ${rc.blockNumber}. <a href="${data.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      setTimeout(() => load(selected()), 4000);
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status(/rejected|denied|4001/i.test(m) ? 'Rejected in the wallet. Nothing changed.' : `Failed: ${m}`, 'bad');
+    }
+  }
+
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('.revoke-allow');
+    if (a) { const r = data.allowances[+a.dataset.i]; if (confirm(`Set ${r.symbol || r.token}'s allowance for ${r.spenderLabel || r.spender} to 0?`)) send(`approve(${short(r.spender)}, 0)`, () => new ethers.Contract(r.token, ERC20, signer).approve(r.spender, 0)); }
+    const o = e.target.closest('.revoke-op');
+    if (o) { const r = data.operators[+o.dataset.i]; if (confirm(`Revoke operator ${r.operator} on Uniswap ${r.version}?${r.isCollector ? ' This is the collector: fees stop being collected for this wallet.' : ''}`)) send(`setApprovalForAll(${short(r.operator)}, false)`, () => new ethers.Contract(r.manager, NFT, signer).setApprovalForAll(r.operator, false)); }
+  });
+  $('#connect').addEventListener('click', connect);
+  $('#reload').addEventListener('click', () => load(selected()));
+  $('#wallet').addEventListener('change', () => load(selected()));
+  load().catch((e) => status(`Could not load: ${e.message}`, 'bad'));
+})();
+</script>
+</body>
+</html>

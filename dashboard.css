@@ -591,3 +591,7 @@ select.scope option{background:#0b1017}
 .comp .advisor b.down{color:var(--edge)}
 .comp .advisor.warnline{color:var(--edge)}
 /* === end pool-scout-and-IL === */
+/* === token-health-and-approvals === */
+.thbadge{margin-left:6px;font-size:11px;cursor:help;vertical-align:middle}
+.thbadge.th-risk{filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
+/* === end token-health-and-approvals === */

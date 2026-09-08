@@ -1834,8 +1834,7 @@ if (ANALYTICS) { loadAttribution(); setInterval(loadAttribution, 10 * 60 * 1000)
   const t = setInterval(() => { addLink(); if (document.querySelector('#digestlink') || ++tries > 60) clearInterval(t); }, 500);
 })();
 // === end weekly-digest-and-vault ===
-// === pool-scout-and-IL ========================================================
-// Range advisor + IL forecast lines on every position card (owner and watched),
+// === pool-scout-and-IL =================================================// Range advisor + IL forecast lines on every position card (owner and watched),
 // added after each render by looking the card up through its NFT number, so
 // the card templates themselves stay untouched. Data: /api/advisor.
 let advisorD = null;
@@ -1880,3 +1879,33 @@ function decorateAdvisor(){
 new MutationObserver(() => { if (advisorD) decorateAdvisor(); }).observe(document.body, { childList: true, subtree: true });
 if (PAGE !== 'analytics') { loadAdvisor(); setInterval(loadAdvisor, 10 * 60 * 1000); }
 // === end pool-scout-and-IL ===
+// === token-health-and-approvals ===
+// Risk badge per Portfolio row from /api/token-health. Decorates the rendered
+// table by DOM lookup (rows are matched by the token link's address), so the
+// Portfolio renderer itself stays untouched; re-applied on every re-render.
+let tokenHealthD = null;
+function decorateTokenHealth(){
+  if (!tokenHealthD || PAGE !== 'dashboard') return;
+  const by = tokenHealthD.byAddress || {};
+  for (const a of document.querySelectorAll('#baltable td:first-child a[href*="/token/"]')){
+    if (a.parentElement.querySelector('.thbadge')) continue;
+    const m = a.getAttribute('href').match(/\/token\/(0x[0-9a-fA-F]{40})/);
+    const h = m && by[m[1].toLowerCase()];
+    if (!h) continue;
+    const b = document.createElement('span');
+    b.className = 'thbadge th-' + h.level;
+    b.textContent = h.badge;
+    b.title = `${h.label}: ${(h.notes || []).join(', ')}` + (h.holders != null ? ` · ${h.holders.toLocaleString('en-US')} holders` : '') + (h.ageDays != null ? ` · ${Math.round(h.ageDays)} days old` : '') + (h.verified === false ? ' · unverified' : '');
+    a.parentElement.appendChild(b);
+  }
+}
+async function loadTokenHealth(){
+  try { const r = await fetch('/api/token-health'); const d = await r.json(); if (d.ok) { tokenHealthD = d; decorateTokenHealth(); } } catch(e){}
+}
+if (PAGE === 'dashboard'){
+  const bt = document.getElementById('baltable');
+  if (bt) new MutationObserver(() => decorateTokenHealth()).observe(bt, { childList: true });
+  loadTokenHealth();
+  setInterval(loadTokenHealth, 10 * 60 * 1000);
+}
+// === end token-health-and-approvals ===

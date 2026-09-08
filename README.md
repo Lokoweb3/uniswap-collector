@@ -366,6 +366,30 @@ Then:
 3. Send ~0.01 ETH to the operator address for gas.
 4. From your main wallet, approve the operator on the position manager.
 
+### Fresh machine, from the repo alone
+
+```bash
+git clone <repo> ~/uniswap-collector && cd ~/uniswap-collector
+chmod +x *.sh && npm install
+cp wallets.example.json wallets.json      # owner label + watched / collect wallets
+./setup-key.sh                             # operator keystore in ~/.lp-collector/ (never in the repo)
+cat > .env <<'EOF2'                        # secrets, gitignored; loaded by start-all.sh
+TELEGRAM_TOKEN=...
+TELEGRAM_CHAT_ID=...
+BLOCKSCOUT_API_KEY=proapi_...
+EOF2
+chmod 600 .env
+./start-all.sh                             # dashboard :8787, gate, remote MCP, tailscale, nightly backup loop
+npm test                                   # alert tests + headless smoke test of every page (needs Windows Chrome from WSL)
+```
+
+Then, from the browser with the owner wallet: `/approve-v3` and `/approve-v4` (operator approvals, one per
+wallet that should be collected), `/arm` (one-time passphrase seal, then sign to arm), and
+`node deploy-treasury.js` once for the LOKOVault (writes its addresses into config.json). The JSON
+ledgers (`fee-*.json`, `portfolio*.json`, `price-log.json`, …) are runtime data, created on first run
+and restored from `backups/` or the VPS copy if you are moving machines. `./run-collector.sh simulate`
+is the read-only check that everything lines up before the first armed run.
+
 `setup-key.sh` refuses to write keys under `/mnt/c` or any other Windows drive.
 Those mounts do not enforce Unix permissions by default, so `chmod 600` there is
 decoration — the file stays world-readable. Keys belong on the ext4 side.

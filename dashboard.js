@@ -1633,3 +1633,70 @@ document.addEventListener('click', async e => {
 });
 if (PAGE !== 'analytics') { loadMemecoins(); setInterval(loadMemecoins, 30000); }
 // === end memecoin-guardian ===
+// === exit-rules ===
+// Exit rules line on every position card (main and watched): the active rule
+// set, the last evaluation, an on/off toggle for auto-close and editable
+// thresholds. Cards are found by their NFT link text, so the card templates
+// above stay untouched; a MutationObserver re-decorates after every render.
+let exitRulesD = null;
+async function loadExitRules(){
+  if (PAGE !== 'dashboard') return;
+  try { const r = await fetch('/api/exit-rules', { cache: 'no-store' }); if (!r.ok) return; exitRulesD = await r.json(); decorateExitRules(); } catch(e){}
+}
+function exitRulesFor(nftId, pair){
+  const d = exitRulesD; if (!d) return null;
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '').split('/').sort().join('|');
+  const rules = (d.rules || []).filter(r => Array.isArray(r.pairs) && (r.pairs.includes('*') || r.pairs.some(p => norm(p) === norm(pair))));
+  if (!rules.length) return null;
+  const o = (d.overrides || {})[String(nftId)] || {};
+  return { rules, override: o, closeAvailable: d.closeAvailable, lastEval: d.lastEval, closed: d.closed };
+}
+function decorateExitRules(){
+  if (!exitRulesD) return;
+  for (const card of document.querySelectorAll('article.pos')){
+    const nftEl = card.querySelector('.nft'); const comp = card.querySelector('.comp');
+    if (!nftEl || !comp) continue;
+    const nftId = (nftEl.textContent.match(/#(\d+)/) || [])[1]; if (!nftId) continue;
+    const pair = (card.querySelector('h2') || {}).textContent || '';
+    const info = exitRulesFor(nftId, pair);
+    let line = comp.querySelector('.exitrules');
+    if (!info) { if (line) line.remove(); continue; }
+    if (!line) { line = document.createElement('span'); line.className = 'rate exitrules'; comp.appendChild(line); }
+    const o = info.override;
+    const ev = Object.entries(info.lastEval || {}).map(([k, v]) => ({ k, ...v })).find(e => e.k.endsWith(':' + nftId)) || null;
+    const closedAt = Object.entries(info.closed || {}).find(([k]) => k.endsWith(':' + nftId));
+    const th = { drop: o.priceDropPct1h != null ? o.priceDropPct1h : (info.rules.find(r => r.type === 'priceDropPct1h' && r.action === 'alert') || {}).threshold, out: o.outOfRangeMinutes != null ? o.outOfRangeMinutes : (info.rules.find(r => r.type === 'outOfRange') || {}).durationMinutes, tvl: o.tvlDropPct != null ? o.tvlDropPct : (info.rules.find(r => r.type === 'tvlDrop') || {}).threshold };
+    const closeRules = info.rules.filter(r => r.action === 'close').map(r => r.type === 'priceDropPct1h' ? `close at -${r.threshold}%/1h` : r.type === 'outOfRange' ? `close after ${th.out || r.durationMinutes} min out` : r.type).join(', ');
+    const evTxt = ev ? `last check ${new Date(ev.t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}: ${ev.drop1hPct == null ? '1h move n/a' : (ev.drop1hPct >= 0 ? '-' : '+') + Math.abs(ev.drop1hPct).toFixed(1) + '% 1h'}${ev.outMinutes ? ` · out ${ev.outMinutes} min` : ''}${ev.tvlDropPct != null ? ` · liquidity ${ev.tvlDropPct >= 0 ? '-' : '+'}${Math.abs(ev.tvlDropPct).toFixed(0)}% vs 24h high` : ''}` : 'not evaluated yet';
+    line.innerHTML = `exit rules: ${th.drop != null ? `alert at <b class="er-th" data-k="priceDropPct1h" title="click to change">-${th.drop}%/1h</b>` : 'no price rule'}${th.tvl != null ? ` · liquidity <b class="er-th" data-k="tvlDropPct" title="click to change">-${th.tvl}%</b>` : ''}${closeRules ? ` · ${closeRules}` : ''} · auto-close <button class="er-toggle ${o.enabled ? 'on' : ''}" title="${info.closeAvailable ? 'Toggle automatic closing for this position' : 'close module not installed; rules only alert'}">${o.enabled ? 'ON' : 'off'}</button>${closedAt ? ' <span class="idle">closed by rule ' + new Date(closedAt[1]).toLocaleString() + '</span>' : ''} <span class="muted">${evTxt}</span>`;
+    line.dataset.nft = nftId;
+  }
+}
+async function postExitRule(body){
+  const r = await fetch('/api/exit-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'failed');
+  await loadExitRules();
+}
+document.addEventListener('click', async e => {
+  const line = e.target.closest('.exitrules'); if (!line) return;
+  const nftId = line.dataset.nft;
+  if (e.target.classList.contains('er-toggle')){
+    const on = !e.target.classList.contains('on');
+    if (on && !confirm('Turn ON automatic closing for #' + nftId + '?\nWhen a close rule triggers, the operator will remove 100% of the liquidity and send the tokens to the position\'s owner wallet. It needs the collector to be armed.')) return;
+    try { await postExitRule({ tokenId: nftId, enabled: on }); } catch(err){ alert('Could not save: ' + err.message); }
+  } else if (e.target.classList.contains('er-th')){
+    const k = e.target.dataset.k;
+    const cur = e.target.textContent.replace(/[^0-9.]/g, '');
+    const v = prompt(k === 'priceDropPct1h' ? 'Alert when the token drops more than this % in 1 hour:' : 'Alert when the pool\'s active liquidity drops more than this % from its 24h high:', cur);
+    if (v == null) return;
+    try { await postExitRule({ tokenId: nftId, [k]: v === '' ? null : Number(v) }); } catch(err){ alert('Could not save: ' + err.message); }
+  }
+});
+if (PAGE === 'dashboard'){
+  const mo = new MutationObserver(() => decorateExitRules());
+  for (const id of ['list', 'watchlist']) { const el = document.getElementById(id); if (el) mo.observe(el, { childList: true }); }
+  loadExitRules();
+  setInterval(loadExitRules, 60000);
+}
+// === end exit-rules ===

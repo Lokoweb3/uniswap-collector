@@ -573,3 +573,9 @@ select.scope option{background:#0b1017}
 .meme .closebtn{margin-top:10px;border-color:rgba(255,77,109,.5);color:var(--edge,#ff4d6d)}
 .meme.stale{opacity:.6}
 /* === end memecoin-guardian === */
+/* === exit-rules === */
+.exitrules{width:100%;line-height:1.7}
+.exitrules .er-th{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.exitrules .er-toggle{font:inherit;font-size:11px;font-weight:700;padding:0 8px;border-radius:999px;border:1px solid var(--rule);background:transparent;color:var(--muted);cursor:pointer;vertical-align:1px}
+.exitrules .er-toggle.on{color:#04110a;background:var(--edge);border-color:var(--edge)}
+/* === end exit-rules === */

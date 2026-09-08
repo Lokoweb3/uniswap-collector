@@ -1350,6 +1350,30 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end memecoin-guardian ===
+  // === exit-rules ===
+  // Exit rules: config + last evaluation (GET), per-position overrides (POST, loopback-only).
+  if (url.pathname === "/api/exit-rules") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      if (req.method === "POST") {
+        if (HOST !== "127.0.0.1") {
+          res.writeHead(403);
+          return res.end(JSON.stringify({ ok: false, error: "exit rule changes are localhost-only" }));
+        }
+        const body = JSON.parse(await readBody(req));
+        if (!body || !/^\d+$/.test(String(body.tokenId))) throw new Error("tokenId required");
+        const next = exitRules.setOverride(path.join(__dirname, "config.json"), String(body.tokenId), body);
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, tokenId: String(body.tokenId), override: next }));
+      }
+      res.writeHead(200);
+      return res.end(JSON.stringify(exitRules.view()));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end exit-rules ===
 
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
@@ -1735,6 +1759,35 @@ async function backgroundTick() {
 }
 backgroundTick();
 setInterval(backgroundTick, 10 * 60 * 1000);
+
+// === exit-rules ===
+// Risk triggers over every wallet's open positions, every five minutes (exit-rules.js).
+const exitRules = require("./exit-rules").create({
+  provider,
+  cfg,
+  alerts,
+  getPositions: () => cache.payload,
+  getWatched: () => watch.latest && watch.latest.wallets,
+  readConfig: () => {
+    try {
+      const fresh = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+      return { ...cfg, exitRules: fresh.exitRules, exitRuleOverrides: fresh.exitRuleOverrides };
+    } catch {
+      return cfg;
+    }
+  },
+});
+async function exitRulesTick() {
+  try {
+    const sent = await exitRules.evaluate();
+    for (const m of sent) console.log("exit rule:", m.slice(0, 100));
+  } catch (err) {
+    console.error("exit-rules:", err.shortMessage || err.message);
+  }
+}
+setTimeout(exitRulesTick, 90 * 1000); // after the first build
+setInterval(exitRulesTick, 5 * 60 * 1000);
+// === end exit-rules ===
 
 server.listen(PORT, HOST, () => {
   console.log(`Dashboard running at http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`);

@@ -47,3 +47,5 @@ approve-serve.log
 test/.tmp/
 memecoin-collect-log.json
 memecoin-collect-state.json
+exit-state.json
+exit-log.json

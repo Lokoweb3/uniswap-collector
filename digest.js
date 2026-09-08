@@ -224,8 +224,8 @@ function due(now = new Date(), state = readState()) {
 
 /** Send the text to the treasury chat, falling back to the personal chat. `send(text, chatId)` comes from alerts.js. */
 async function deliver(text, alerts) {
-  const treasuryChat = process.env.TELEGRAM_TREASURY_CHAT_ID || "<group-chat-id>";
-  const personal = process.env.TELEGRAM_CHAT_ID || "<chat-id>";
+  const treasuryChat = process.env.TELEGRAM_TREASURY_CHAT_ID || "";
+  const personal = process.env.TELEGRAM_CHAT_ID || "";
   if (await alerts.send(text, treasuryChat)) return treasuryChat;
   if (await alerts.send(text, personal)) return personal;
   return null;

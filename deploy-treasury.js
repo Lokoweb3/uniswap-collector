@@ -30,7 +30,7 @@ const CONFIG = {
   owner:        '0x0000000000000000000000000000000000000001',
   explorerUrl:  'https://robinhoodchain.blockscout.com',
   telegramToken: process.env.TELEGRAM_TOKEN,
-  telegramChat:  process.env.TELEGRAM_CHAT || process.env.TELEGRAM_CHAT_ID || '<chat-id>',
+  telegramChat:  process.env.TELEGRAM_CHAT || process.env.TELEGRAM_CHAT_ID || "",
   configPath:   path.join(process.cwd(), 'config.json'),
 };
 

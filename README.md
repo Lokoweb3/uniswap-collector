@@ -469,11 +469,14 @@ Then:
 ```bash
 git clone <repo> ~/uniswap-collector && cd ~/uniswap-collector
 chmod +x *.sh && npm install
+cp config.example.json config.json        # then set ownerAddress, sweepDestination, contracts, thresholds
 cp wallets.example.json wallets.json      # owner label + watched / collect wallets
 ./setup-key.sh                             # operator keystore in ~/.lp-collector/ (never in the repo)
 cat > .env <<'EOF2'                        # secrets, gitignored; loaded by start-all.sh
 TELEGRAM_TOKEN=...
-TELEGRAM_CHAT_ID=...
+TELEGRAM_CHAT_ID=...                       # your personal chat id
+TELEGRAM_TREASURY_CHAT_ID=...              # optional group for vault alerts
+LP_BACKUP_HOST=user@host                   # VPS for nightly ledger backups
 BLOCKSCOUT_API_KEY=proapi_...
 EOF2
 chmod 600 .env

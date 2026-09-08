@@ -34,7 +34,9 @@ function poolLine(p){
   const q = p.pool;
   if (!q) return '';
   const own = q.missing ? '<span class="muted">pool not on the scanner</span>'
-    : `pool TVL <b>${usdK(q.tvl)}</b> · 24h vol <b>${usdK(q.vol24h)}</b> · fees <b>${usdK(q.fees24h)}</b>${q.aprPct != null ? ` · ~<b>${q.aprPct.toFixed(0)}%</b> fee APR` : ''}${q.stale ? ' <span class="muted" title="scanner data is stale">(stale)</span>' : ''}`;
+    : q.direct
+      ? `pool <span class="muted" title="Read straight from the v4 pool state: active liquidity at the current price, fees from fee-growth samples">(on-chain)</span> active liquidity <b>${usdK(q.tvl)}</b>${q.fees24h != null ? ` · fees <b>${usdK(q.fees24h)}</b>/24h <span class="muted">(from ${q.feesWindowH.toFixed(1)}h)</span>${q.aprPct != null ? ` · ~<b>${q.aprPct.toFixed(0)}%</b> fee APR` : ''}` : ' · fees: sampling, ready in ~30 min'}`
+      : `pool TVL <b>${usdK(q.tvl)}</b> · 24h vol <b>${usdK(q.vol24h)}</b> · fees <b>${usdK(q.fees24h)}</b>${q.aprPct != null ? ` · ~<b>${q.aprPct.toFixed(0)}%</b> fee APR` : ''}${q.stale ? ' <span class="muted" title="scanner data is stale">(stale)</span>' : ''}`;
   const sib = (q.siblings || []).length
     ? ` · <span class="sibs" title="Other pools for this pair, by 24h fee APR">others: ${q.siblings.map(x => `<span title="TVL ${usdK(x.tvl)} · 24h fees ${usdK(x.fees24h)}">${x.feePct != null ? x.feePct + '%' : x.name} ${x.version}${x.tag ? ' ' + x.tag : ''} <b class="${(x.aprPct || 0) > (q.aprPct || 0) ? '' : 'muted'}">${x.aprPct == null ? '—' : x.aprPct.toFixed(0) + '%'}</b></span>`).join(' · ')}</span>`
     : '';

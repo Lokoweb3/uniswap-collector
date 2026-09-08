@@ -50,6 +50,20 @@ function create({ provider, cfg, getPrice, log = console }) {
     return m;
   }
 
+  /** Net principal: sNET received minus sent (stakes are 1:1, verified in the Staking source). Cached per sample run. */
+  async function principalOf(m, owner) {
+    const t = m.c.interface.getEvent("Transfer").topicHash;
+    const head = await provider.getBlockNumber();
+    let inSum = 0n, outSum = 0n;
+    try {
+      for (const l of await provider.getLogs({ address: m.c.target, fromBlock: LOG_FLOOR, toBlock: head, topics: [t, null, ethers.zeroPadValue(owner, 32)] })) inSum += BigInt(l.data);
+      for (const l of await provider.getLogs({ address: m.c.target, fromBlock: LOG_FLOOR, toBlock: head, topics: [t, ethers.zeroPadValue(owner, 32)] })) outSum += BigInt(l.data);
+    } catch {
+      return null;
+    }
+    return Number(ethers.formatUnits(inSum - outSum, m.decimals));
+  }
+
   /** Owner's last stake/unstake block: the newest Transfer to or from the owner. */
   async function lastMoveBlock(m, owner) {
     const to = ethers.zeroPadValue(owner, 32);
@@ -114,6 +128,10 @@ function create({ provider, cfg, getPrice, log = console }) {
           if (entry.samples.length > 20000) entry.samples.splice(0, entry.samples.length - 20000);
         }
         entry.symbol = m.symbol;
+        if (!entry.principalAt || Date.now() - entry.principalAt > 6 * 3600 * 1000) {
+          const pr = await principalOf(m, owner);
+          if (pr != null) { entry.principal = pr; entry.principalAt = Date.now(); }
+        }
         entry.label = t.label || `${m.symbol} staking`;
         entry.underlying = t.underlying || null;
         save();
@@ -169,8 +187,10 @@ function create({ provider, cfg, getPrice, log = console }) {
       const d7 = sum(7 * 86400000);
       const first = e.samples.find((s) => !s.stake) || e.samples[0];
       const days = Math.max(1 / 24, (now - e.samples[0].t) / 86400000);
-      const total = rw.reduce((s, r) => s + r.amount, 0);
-      const base = last.bal - total; // principal still staked
+      const tracked = rw.reduce((s, r) => s + r.amount, 0); // rewards seen by the sampler
+      // Principal from the 1:1 stake transfers when known; everything above it is reward, including rebases before sampling began.
+      const base = e.principal != null ? e.principal : last.bal - tracked;
+      const total = e.principal != null ? Math.max(0, last.bal - e.principal) : tracked;
       tokens.push({
         token: addr,
         symbol: e.symbol,

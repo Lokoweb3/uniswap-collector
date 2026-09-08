@@ -141,7 +141,7 @@ const hist = history.create({ provider, npmAddress: cfg.contracts.positionManage
 const basis = require("./basis");
 const bf = basis.create({ npmAddress: cfg.contracts.positionManager });
 // Pool stats (TVL, fees, APR, siblings) from the scanner on :3847; see pools.js.
-const pools = require("./pools").create({ cfg });
+const pools = require("./pools").create({ cfg, provider });
 
 // Extra wallets to show read-only (config.watchWallets); see watch.js.
 const watch = require("./watch").create({
@@ -873,7 +873,7 @@ async function build() {
         poolAddress: p.poolAddress,
         token0: p.token0.address,
         token1: p.token1.address,
-        pool: pools.forPosition({ version, poolAddress: p.poolAddress, token0: p.token0.address, token1: p.token1.address }),
+        pool: await pools.forPosition({ version, poolAddress: p.poolAddress, token0: p.token0.address, token1: p.token1.address, usd0, usd1, decimals0: p.token0.decimals, decimals1: p.token1.decimals, feePct: p.feeTier != null ? Number(p.feeTier) / 10000 : null, symbol0: p.token0.symbol, symbol1: p.token1.symbol }),
         amount0: a0,
         amount1: a1,
         fee0: f0,

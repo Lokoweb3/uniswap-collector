@@ -194,7 +194,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
           hooks: p.hooks && p.hooks !== ethers.ZeroAddress ? p.hooks : null,
           inRange: p.inRange,
           poolAddress: p.poolAddress,
-          pool: pools ? pools.forPosition({ version, poolAddress: p.poolAddress, token0: p.token0.address, token1: p.token1.address }) : null,
+          pool: pools ? await pools.forPosition({ version, poolAddress: p.poolAddress, token0: p.token0.address, token1: p.token1.address, usd0, usd1, decimals0: p.token0.decimals, decimals1: p.token1.decimals, feePct: p.feeTier != null ? Number(p.feeTier) / 10000 : null, symbol0: p.token0.symbol, symbol1: p.token1.symbol }) : null,
           amount0: a0, amount1: a1, fee0: f0, fee1: f1, usd0, usd1,
           feesOk: p.fees.ok,
           valueUsd, feesUsd,

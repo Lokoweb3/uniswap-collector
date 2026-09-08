@@ -219,8 +219,14 @@ node lp-mcp-remote.mjs --issue-token my-agent --days 365   # prints the token on
 ```
 
 The agent then talks Streamable HTTP to `https://<that address>/mcp` with
-the header `Authorization: Bearer <token>`. It gets the same four read-only
-tools and nothing else. `--list-tokens` shows what is issued and
+the header `Authorization: Bearer <token>`. It gets the read-only tools and
+nothing else: `positions`, `watched_wallets`, `collects`, `daily_revenue`,
+`portfolio`, `wallet_balances`, `memecoin_watch` (guardian status),
+`exit_rules`, `vault` (LOKOVault balance and splits), `staking`,
+`attribution` (P&L breakdown and benchmarks), `weekly_digest` (the Monday
+report text) and `health` (armed state, last run, background loops). Nothing
+on the MCP can arm, collect, close or revoke; those stay on the dashboard
+machine. `--list-tokens` shows what is issued and
 `--revoke-token my-agent` cuts one off (restart after either change, since
 the running server keeps the state in memory). The token is stored hashed,
 so it cannot be recovered from the file; issue a new one if it is lost.
@@ -730,6 +736,8 @@ only what it shows. The public gate serves the page at the same path.
 - External audit (Theo) of the public repo: no leaks found; three issues fixed. Failed auto-closes no
   longer mark a position as closed and are retried; both auto-close paths need the trigger to hold on
   consecutive checks with a stable price before acting; `tmp` pinned under `solc` (`npm audit` clean).
+- Seven read-only MCP tools for agents: memecoin_watch, exit_rules, vault, staking, attribution,
+  weekly_digest, health.
 - Collector lock file (`flock` in `run-collector.sh`) so the 09:00 task, the Collect button and the
   auto-collect loop can never sign at once; background-loop watchdog (heartbeats, Telegram alert when
   the guardian or auto-collect stops reporting and when it is back, warning chip on the dashboard).

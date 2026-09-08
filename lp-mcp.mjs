@@ -264,6 +264,127 @@ server.registerTool(
   }
 );
 
+// -- Tools added 2026-09-08: risk, vault, staking, attribution, digest, health (all read-only) --
+
+server.registerTool(
+  "memecoin_watch",
+  {
+    title: "Memecoin guardian status",
+    description:
+      "Live status of the memecoin positions the guardian watches every 60 s: price vs entry, drawdown, in/out of range and for how long, fees per hour, pool active liquidity and its 1h change, price velocity, status colour with reasons, whether auto-close is enabled, and the last close attempts. Read-only: closing is only possible from the dashboard machine.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const d = await get("/api/memecoins");
+      return text({ at: d.at, stale: d.stale, positions: (d.positions || []).map((p) => ({ tokenId: p.tokenId, pair: p.pair, wallet: p.wallet, status: p.status, reasons: p.reasons, price: p.price, entryPrice: p.entryPrice, priceVsEntryPct: round(p.priceVsEntryPct, 1), drawdownPct: round(p.drawdownPct, 1), inRange: p.inRange, outMinutes: round(p.outMinutes, 0), feesPerHourUsd: round(p.feesPerHour), feeUsd: round(p.feeUsd), liquidityUsd: round(p.liquidityUsd, 0), liqChange1hPct: round(p.liqChange1hPct, 1), velocityPctPerHour: round(p.velocityPctPerHour, 1), autoClose: p.autoClose, closeConfirm: p.closeConfirm })), recentCloses: d.recent || [] });
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "exit_rules",
+  {
+    title: "Exit rules and their last evaluation",
+    description: "The configured exit rules (price drop in 1h, out of range duration, pool liquidity drop; alert or close), the per-position overrides (enabled, thresholds) and the last evaluation of every open position. Read-only.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return text(await get("/api/exit-rules"));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "vault",
+  {
+    title: "LOKOVault treasury",
+    description: "The treasury that receives a percentage of every wallet's collected fees: split percentage, vault (TBA) address and USDG balance, total split all time, split amounts by month, the most recent split ledger entries and any failed transfers.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const d = await get("/api/treasury");
+      return text({ enabled: d.enabled, splitPct: d.pct, maxPct: d.max, tba: d.tba, balanceUsdg: round(d.balanceUsdg), totalSplitUsdg: round(d.totalSplitUsdg), splitsRecorded: d.count, failed: d.failed, byMonth: d.byMonth, recent: d.recent });
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "staking",
+  {
+    title: "Staking rewards (sNET)",
+    description: "The rebasing staking position: balance, principal (from the 1:1 stake transfers), price, USD value, rewards today / 7d / 30d / all time in tokens and USD, realised APR, and rewards per day.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const d = await get("/api/staking");
+      return text({ tokens: (d.tokens || []).map((t) => ({ symbol: t.symbol, label: t.label, balance: round(t.balance, 6), principal: round(t.principal, 6), price: round(t.price), usd: round(t.usd), aprPct: round(t.aprPct, 1), rewards: t.rewards, daily: (t.daily || []).slice(-14) })) });
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "attribution",
+  {
+    title: "Performance attribution and benchmarks",
+    description: "Daily P&L decomposition per wallet and position (fees, price move, impermanent loss, staking, vault splits, gas, net) over the last N days, with totals and benchmarks vs holding ETH, USDG or staking NET.",
+    inputSchema: { days: z.number().int().min(1).max(365).optional().describe("Window in days (default 30)") },
+  },
+  async ({ days }) => {
+    try {
+      return text(await get(`/api/attribution?days=${days || 30}`));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "weekly_digest",
+  {
+    title: "Weekly report text",
+    description: "The Monday weekly LP report as it would be sent to Telegram (fees, best/worst position, vault, staking, memecoin plays, gas, portfolio vs benchmarks, watch list), built from the current ledgers.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const d = await get("/api/digest");
+      return { content: [{ type: "text", text: d.text || JSON.stringify(d) }] };
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "health",
+  {
+    title: "System health",
+    description: "Whether the collector is armed and until when, the last collect run and its result, background loop status (memecoin guardian, fee auto-collect), the vault split setting, and the chain block the dashboard last read.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const d = await get("/api/positions");
+      const c = await get("/api/collect").catch(() => null);
+      return text({ blockNumber: d.blockNumber, cached: !!d.cached, armed: d.unlock, lastRun: d.ops && d.ops.lastRun, loops: d.loops, collectRun: c && c.run ? { startedAt: c.run.startedAt, done: c.run.done, tail: String(c.run.output || "").slice(-400) } : null });
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
 return server;
 }
 

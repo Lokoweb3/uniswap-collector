@@ -1834,3 +1834,49 @@ if (ANALYTICS) { loadAttribution(); setInterval(loadAttribution, 10 * 60 * 1000)
   const t = setInterval(() => { addLink(); if (document.querySelector('#digestlink') || ++tries > 60) clearInterval(t); }, 500);
 })();
 // === end weekly-digest-and-vault ===
+// === pool-scout-and-IL ========================================================
+// Range advisor + IL forecast lines on every position card (owner and watched),
+// added after each render by looking the card up through its NFT number, so
+// the card templates themselves stay untouched. Data: /api/advisor.
+let advisorD = null;
+async function loadAdvisor(){
+  if (PAGE === 'analytics') return;
+  try { const r = await fetch('/api/advisor'); const d = await r.json(); if (d.ok) { advisorD = d; decorateAdvisor(); } } catch(e){}
+}
+function advisorLine(r){
+  if (!r || !r.ranges) return r && r.status ? `<span class="rate advisor muted" title="Range advisor">range advisor: ${r.status}</span>` : '';
+  const a = r.ranges.actual, t = r.ranges.tighter, w = r.ranges.wider;
+  const pct = x => x == null ? '' : ` (${x >= 0 ? '+' : ''}${x.toFixed(0)}%)`;
+  const cls = x => x != null && x >= 25 ? 'up' : x != null && x <= -25 ? 'down' : '';
+  let line = `<span class="rate advisor" title="Fees the same capital would have earned over the last ${r.windowHours}h of this pool's swaps, scaled to 7 days; hourly resolution, approximate">` +
+    `Your range: <b>${usd(a.fees7dUsd)}</b>/7d. Tighter: <b class="${cls(t.vsActualPct)}">${usd(t.fees7dUsd)}</b>${pct(t.vsActualPct)}. Wider: <b class="${cls(w.vsActualPct)}">${usd(w.fees7dUsd)}</b>${pct(w.vsActualPct)}` +
+    ` → <b>${r.recommendation}</b>${r.status && r.status !== 'ok' ? ` <span class="muted">(${r.status})</span>` : ''}</span>`;
+  const f = r.forecast;
+  if (f) {
+    const neg = f.net7dUsd < 0;
+    line += `<span class="rate advisor ${neg ? 'warnline' : ''}" title="Expected fees = replay of the actual range; expected IL from a lognormal price at the pool's realised 7d volatility (${f.sigma7dPct.toFixed(0)}%); the quote token's USD price is held fixed">` +
+      `Next 7d: <b>+${usd(f.fees7dUsd)}</b> fees, <b class="down">${usd(f.il7dUsd)}</b> IL = <b class="${neg ? 'down' : 'up'}">${f.net7dUsd >= 0 ? '+' : ''}${usd(f.net7dUsd)}</b> net${neg ? ' · ⚠️ IL > fees — not worth staying' : ''}${f.volCapped ? ` <span class="muted" title="Realised 7d volatility ${f.sigmaRaw7dPct.toFixed(0)}% is capped at 150% for the forecast">(vol capped)</span>` : ''}</span>`;
+  }
+  return line;
+}
+function decorateAdvisor(){
+  if (!advisorD || !advisorD.results) return;
+  const byNft = {};
+  for (const r of Object.values(advisorD.results)) byNft[String(r.tokenId)] = r;
+  for (const card of document.querySelectorAll('article.pos')) {
+    const nft = card.querySelector('.nft');
+    if (!nft) continue;
+    const id = (nft.textContent.match(/#(\d+)/) || [])[1];
+    const r = byNft[id];
+    const comp = card.querySelector('.comp');
+    if (!comp || !r) continue;
+    if (comp.dataset.advisorAt === String(advisorD.at)) continue; // already decorated with this data
+    for (const old of comp.querySelectorAll('.advisor')) old.remove();
+    comp.insertAdjacentHTML('beforeend', advisorLine(r));
+    comp.dataset.advisorAt = String(advisorD.at);
+  }
+}
+// Re-decorate after the main list and the watched wallets render (cards are rebuilt from scratch).
+new MutationObserver(() => { if (advisorD) decorateAdvisor(); }).observe(document.body, { childList: true, subtree: true });
+if (PAGE !== 'analytics') { loadAdvisor(); setInterval(loadAdvisor, 10 * 60 * 1000); }
+// === end pool-scout-and-IL ===

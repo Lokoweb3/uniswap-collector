@@ -50,3 +50,7 @@ memecoin-collect-log.json
 memecoin-collect-state.json
 exit-state.json
 exit-log.json
+advisor-cache.json
+pool-scout-state.json
+pool-scout-log.json
+compound-log.json

@@ -1461,6 +1461,13 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end weekly-digest-and-vault ===
+  // === pool-scout-and-IL: range advisor + IL forecast results ===
+  if (url.pathname === "/api/advisor") {
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(200);
+    return res.end(JSON.stringify({ ...advisor.view(), scout: scout.state }));
+  }
+  // === end pool-scout-and-IL ===
 
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
@@ -1735,6 +1742,63 @@ const attribution = require("./attribution").create({
 const alerts = require("./alerts").create();
 console.log(`alerts: ${alerts.enabled ? "enabled" : "disabled (set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)"}`);
 
+// === pool-scout-and-IL: range advisor / IL forecast (advisor.js) and pool scout (scout.js) ===
+const advisor = require("./advisor").create({ provider, cfg });
+const scout = require("./scout").create({ cfg, send: (text) => alerts.send(text) });
+let advisorAt = 0, scoutAt = 0, advisorBusy = false;
+/** Open positions of every wallet in the shape advisor.js and scout.js want. */
+async function advisorPositions() {
+  const out = [];
+  const decimals = new Map();
+  const dec = async (addr) => {
+    if (!addr || addr === ethers.ZeroAddress) return 18;
+    const k = addr.toLowerCase();
+    if (!decimals.has(k)) decimals.set(k, (await u.getToken(addr, provider)).decimals);
+    return decimals.get(k);
+  };
+  const push = async (p, wallet) => {
+    if (!p.poolAddress || p.tickLower == null) return;
+    let liquidity = p.liquidity;
+    if (liquidity == null) {
+      try {
+        liquidity = p.version === 4 && V4 ? (await V4.posm.getPositionLiquidity(BigInt(p.nftId || p.tokenId))).toString() : (await npm.positions(BigInt(p.nftId || p.tokenId))).liquidity.toString();
+      } catch {
+        return;
+      }
+    }
+    out.push({
+      key: `v${p.version === 4 ? 4 : 3}:${String(p.poolAddress).toLowerCase()}`, wallet, tokenId: String(p.nftId || p.tokenId), nftId: String(p.nftId || p.tokenId), pair: p.pair, version: p.version,
+      poolAddress: p.poolAddress, token0: p.token0, token1: p.token1, liquidity: String(liquidity), tickLower: p.tickLower, tickUpper: p.tickUpper, currentTick: p.currentTick,
+      tickSpacing: p.tickSpacing || (p.version === 4 ? 200 : Math.max(1, Math.round(Number(p.feeTier || 3000) / 50))), feeTier: p.feeTier, usd0: p.usd0, usd1: p.usd1,
+      decimals0: await dec(p.token0), decimals1: await dec(p.token1), valueUsd: p.valueUsd, inRange: p.inRange, pool: p.pool,
+    });
+  };
+  for (const p of (cache.payload && cache.payload.positions) || []) await push(p, watch.ownerLabel() || "Main");
+  for (const w of (watch.latest && watch.latest.wallets) || []) for (const p of w.positions || []) await push(p, w.label || w.address);
+  return out;
+}
+async function advisorTick() {
+  if (advisorBusy) return;
+  advisorBusy = true;
+  try {
+    const positions = await advisorPositions();
+    if (Date.now() - advisorAt >= 55 * 60 * 1000) {
+      await advisor.refresh(positions, { maxChunksPerPool: 120 });
+      advisorAt = Date.now();
+    }
+    if (Date.now() - scoutAt >= 55 * 60 * 1000) {
+      const sent = await scout.check(positions);
+      for (const m of sent) console.log("scout:", m.slice(0, 90));
+      scoutAt = Date.now();
+    }
+  } catch (err) {
+    console.error("advisor/scout:", err.shortMessage || err.message);
+  } finally {
+    advisorBusy = false;
+  }
+}
+// === end pool-scout-and-IL ===
+
 // Background work: refresh the view (which also snapshots fees) and advance
 // the event scan every 10 minutes, so rates and history accrue even when no
 // browser tab is open.
@@ -1791,6 +1855,7 @@ async function backgroundTick() {
   } catch (err) {
     console.error("portfolio-all:", err.shortMessage || err.message);
   }
+  advisorTick(); // === pool-scout-and-IL === (hourly work, runs in the background)
   try {
     await hist.scan(await historyWallets(), { mainAddress: cfg.ownerAddress });
   } catch (err) {

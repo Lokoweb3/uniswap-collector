@@ -585,3 +585,9 @@ select.scope option{background:#0b1017}
 #attribsec .etable td.u{color:var(--neon-green,#39ff88)}
 #attribsec .etable td.u.neg{color:var(--edge)}
 /* === /performance-attribution === */
+/* === pool-scout-and-IL: range advisor / IL forecast lines on cards === */
+.comp .advisor{width:100%;line-height:1.7}
+.comp .advisor b.up{color:var(--live)}
+.comp .advisor b.down{color:var(--edge)}
+.comp .advisor.warnline{color:var(--edge)}
+/* === end pool-scout-and-IL === */

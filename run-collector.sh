@@ -11,13 +11,24 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE="${1:-simulate}"
-QUIET="${2:-}"
+shift || true
+QUIET=""
+# === pool-scout-and-IL: --compound reinvests fees into the same position (see compound.js) ===
+COMPOUND=""
+for a in "$@"; do
+  case "$a" in
+    --quiet) QUIET="--quiet" ;;
+    --compound) COMPOUND="--compound" ;;
+    *) echo "Usage: $0 {simulate|collect|full} [--quiet] [--compound]" >&2; exit 1 ;;
+  esac
+done
+# === end pool-scout-and-IL ===
 case "$MODE" in simulate|collect|full) ;; *)
-  echo "Usage: $0 {simulate|collect|full} [--quiet]" >&2; exit 1 ;;
+  echo "Usage: $0 {simulate|collect|full} [--quiet] [--compound]" >&2; exit 1 ;;
 esac
 
 if [ "$MODE" = "simulate" ]; then
-  exec node "$HERE/collector.js" "--mode=$MODE"
+  exec node "$HERE/collector.js" "--mode=$MODE" $COMPOUND
 fi
 
 KEYSTORE="$HOME/.lp-collector/operator-keystore.json"
@@ -49,4 +60,4 @@ cleanup(){ unset LP_KEYSTORE_PASS LP_KEYSTORE_PATH PASS; "$HERE/sync-to-vm.sh" |
 trap cleanup EXIT INT TERM
 
 LP_KEYSTORE_PATH="$KEYSTORE" LP_KEYSTORE_PASS="$PASS" \
-  node "$HERE/collector.js" "--mode=$MODE"
+  node "$HERE/collector.js" "--mode=$MODE" $COMPOUND

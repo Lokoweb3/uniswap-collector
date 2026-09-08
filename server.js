@@ -1310,6 +1310,47 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // === memecoin-guardian ===
+  // Memecoin Watch: status written by memecoin-guardian.js (a separate process),
+  // and a loopback-only close that runs the guardian's --close (operator must be armed).
+  if (url.pathname === "/api/memecoins") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const st = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-status.json"), "utf8"));
+      st.stale = Date.now() - (st.at || 0) > 5 * 60 * 1000; // guardian not running?
+      st.watching = (cfg.memecoins || []).length;
+      res.writeHead(200);
+      return res.end(JSON.stringify(st));
+    } catch {
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, at: 0, positions: [], recent: [], stale: true, watching: (cfg.memecoins || []).length }));
+    }
+  }
+  if (url.pathname === "/api/memecoins/close" && req.method === "POST") {
+    res.setHeader("Content-Type", "application/json");
+    if (HOST !== "127.0.0.1" || READONLY) {
+      res.writeHead(403);
+      return res.end(JSON.stringify({ ok: false, error: "closing is localhost-only" }));
+    }
+    try {
+      const body = JSON.parse(await readBody(req));
+      const id = String(body.tokenId || "");
+      if (!(cfg.memecoins || []).some((m) => String(m.tokenId) === id)) throw new Error("that position is not listed under memecoins in config.json");
+      const child = spawn("node", [path.join(__dirname, "memecoin-guardian.js"), "--close", id, "manual close from the dashboard"], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+      let out = "";
+      child.stdout.on("data", (d) => { out += d.toString(); });
+      child.stderr.on("data", (d) => { out += d.toString(); });
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      const line = out.trim().split("\n").filter((l) => l.startsWith("{")).pop();
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: code === 0, result: line ? JSON.parse(line) : null, output: out.slice(-800) }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end memecoin-guardian ===
+
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
     res.writeHead(200);

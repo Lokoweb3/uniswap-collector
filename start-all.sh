@@ -60,3 +60,11 @@ if ! running '^(/usr/bin/env )?bash \./nightly\.sh'; then
   nohup ./nightly.sh > /dev/null 2>&1 < /dev/null &
   echo "nightly: started"
 else echo "nightly: running"; fi
+
+# === memecoin-guardian ===
+# Real-time watcher for the positions listed under `memecoins` in config.json.
+if ! running '^node memecoin-guardian\.js'; then
+  nohup node memecoin-guardian.js >> memecoin-guardian.log 2>&1 < /dev/null &
+  echo "memecoin guardian: started"
+else echo "memecoin guardian: running"; fi
+# === end memecoin-guardian ===

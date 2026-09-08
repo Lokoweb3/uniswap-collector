@@ -984,7 +984,7 @@ function pnlTip(p){
     ${row('Deposited' + (L.adds ? ' · ' + L.adds + ' add' + (L.adds === 1 ? '' : 's') : ''), L.deposited, true)}
     <tr class="sum"><td>Profit vs holding</td><td class="n${p.pnlUsd < 0 ? ' neg' : ''}">${sign(p.pnlUsd)}</td></tr>
   </table>
-  <div class="note">Fees earned ${usd(feesTotal)}; ${holdCost < 0 ? 'holding the deposit instead would be worth ' + usd(-holdCost) + ' more' : 'the pool balance is also ' + usd(holdCost) + ' ahead of holding'}. All legs at today\'s prices${p.pnlApprox ? '; deposit history is missing a recent change' : ''}${p.pnlSource === 'rpc' ? ' (history read from the chain)' : p.pnlSource === 'blockscout' ? ' (history from Blockscout until the chain scan reaches the mint)' : ''}.</div></span>`;
+  <div class="note">Fees earned ${usd(feesTotal)}; ${holdCost < 0 ? 'holding the deposit instead would be worth ' + usd(-holdCost) + ' more' : 'the pool balance is also ' + usd(holdCost) + ' ahead of holding'}. All legs at today\'s prices${p.pnlApprox ? '; deposit history is missing a recent change' : ''}${p.pnlSource === 'rpc' ? ' (history read from the chain)' : p.pnlSource === 'blockscout' ? ' (history from Blockscout until the chain scan reaches the mint)' : p.pnlSource === 'first-seen' ? ' (deposit = the amounts first seen by the dashboard, not the mint)' : ''}.</div></span>`;
 }
 
 // Projections need a track record: a position's age, from its first deposit.
@@ -1534,6 +1534,7 @@ function renderWatch(d){
           ${(p.fee0 || 0) > 0 || (p.fee1 || 0) > 0 ? `<span class="amts">fees <b>${amount(p.fee0)}</b> ${p.symbol0} · <b>${amount(p.fee1)}</b> ${p.symbol1}</span>` : ''}
           ${p.feesOk ? '' : '<span class="amts">fee read unavailable</span>'}
           ${poolLine(p)}
+          ${typeof pnlLine === 'function' ? pnlLine(p) : ''}
         </div>
       </article>`;
     }).join('');
@@ -1700,3 +1701,99 @@ if (PAGE === 'dashboard'){
   setInterval(loadExitRules, 60000);
 }
 // === end exit-rules ===
+
+// === performance-attribution ===
+// PnL vs HODL line for watched cards (same markup as the owner cards).
+function pnlLine(p){
+  if (p.pnlUsd == null) return '';
+  return `<span class="rate pnl" tabindex="0">PnL vs HODL <b class="${p.pnlUsd < 0 ? 'neg' : ''}">${p.pnlUsd >= 0 ? '+' : '−'}${usd(Math.abs(p.pnlUsd))}${p.pnlPct != null ? ' (' + (p.pnlPct >= 0 ? '+' : '−') + Math.abs(p.pnlPct).toFixed(1) + '%)' : ''}</b>${p.pnlApprox ? ' ≈' : ''}${p.pnlSince ? ' · since ' + new Date(p.pnlSince).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : ''}${pnlTip(p)}</span>`;
+}
+
+let attribD = null;
+const ATTRIB_PARTS = [
+  ['fees', 'Fees', 'var(--neon-green, #39ff88)'],
+  ['price', 'Price move', 'var(--neon-cyan, #22d3ee)'],
+  ['il', 'Impermanent loss', '#ff7a59'],
+  ['staking', 'Staking', '#a78bfa'],
+  ['vault', 'Vault split', 'var(--neon-gold, #f5c542)'],
+  ['gas', 'Gas', '#94a3b8'],
+];
+async function loadAttribution(){
+  try {
+    const days = Number(($('#attribdays') || {}).value) || 30;
+    const r = await fetch('/api/attribution?days=' + days);
+    const d = await r.json();
+    if (!d.ok) return;
+    attribD = d;
+    renderAttribution();
+  } catch(e){}
+}
+function attribScope(){
+  const sel = $('#attribscope');
+  const want = sel.value || 'book';
+  const opts = [['book', 'All wallets']].concat((attribD.wallets || []).map(w => [w.key, w.label]));
+  sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  sel.value = opts.some(o => o[0] === want) ? want : 'book';
+  return sel.value === 'book' ? attribD.book : attribD.wallets.find(w => w.key === sel.value);
+}
+function renderAttribution(){
+  const d = attribD;
+  if (!d || PAGE !== 'analytics') return;
+  $('#attribsec').hidden = false;
+  const scope = attribScope();
+  const T = scope.totals;
+  const sgn = v => v == null ? '—' : (v < 0 ? '−' : '+') + usd(Math.abs(v));
+  const cls = v => v == null ? '' : v < 0 ? 'neg' : '';
+  $('#attribtotal').innerHTML = `<span class="${T.net < 0 ? 'neg' : ''}">${sgn(T.net)} net</span>`;
+  $('#attribstats').innerHTML = ATTRIB_PARTS.map(([k, label]) => `<span><b class="${cls(T[k])}">${sgn(T[k])}</b> ${label.toLowerCase()}</span>`).join('') +
+    `<span>value change <b class="${cls(T.dv)}">${sgn(T.dv)}</b></span>` + (T.incomplete ? `<span class="muted">${T.incomplete} day${T.incomplete === 1 ? '' : 's'} without a full value sample</span>` : '');
+  // Stacked bars: positive parts up from zero, negative parts down.
+  const rows = scope.rows;
+  const W = 600, H = 170, padL = 6, padB = 18, top = 14;
+  const maxPos = Math.max(1e-9, ...rows.map(r => ATTRIB_PARTS.reduce((s, [k]) => s + Math.max(0, r[k] || 0), 0)));
+  const maxNeg = Math.max(0, ...rows.map(r => ATTRIB_PARTS.reduce((s, [k]) => s + Math.max(0, -(r[k] || 0)), 0)));
+  const span = maxPos + maxNeg;
+  const zeroY = top + (H - top - padB) * (maxPos / span);
+  const scale = (H - top - padB) / span;
+  const bw = (W - padL * 2) / rows.length;
+  let svg = `<line x1="${padL}" x2="${W - padL}" y1="${zeroY}" y2="${zeroY}" stroke="rgba(255,255,255,.25)" stroke-width="1"/>`;
+  rows.forEach((r, i) => {
+    const x = padL + i * bw + bw * 0.15, w = bw * 0.7;
+    let up = zeroY, down = zeroY;
+    for (const [k, , color] of ATTRIB_PARTS) {
+      const v = r[k] || 0;
+      if (!v) continue;
+      const h = Math.abs(v) * scale;
+      if (v > 0) { up -= h; svg += `<rect x="${x}" y="${up}" width="${w}" height="${h}" fill="${color}" opacity="${r.exact ? .9 : .45}"><title>${r.day} ${k} ${sgn(v)}</title></rect>`; }
+      else { svg += `<rect x="${x}" y="${down}" width="${w}" height="${h}" fill="${color}" opacity="${r.exact ? .9 : .45}"><title>${r.day} ${k} ${sgn(v)}</title></rect>`; down += h; }
+    }
+    if (rows.length <= 31 && (rows.length <= 10 || i % Math.ceil(rows.length / 10) === 0)) svg += `<text class="axis" x="${x + w / 2}" y="${H - 4}" text-anchor="middle">${dayLabel(r.day)}</text>`;
+  });
+  $('#attribchart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:170px">${svg}</svg>`;
+  $('#attriblegend').innerHTML = '<span class="lhead">Per day:</span>' + ATTRIB_PARTS.map(([, label, color]) => `<span><i style="background:${color}"></i>${label}</span>`).join('') + '<span class="muted">faded bars: no full value sample that day, so no IL figure</span>';
+  const recent = [...rows].reverse().filter(r => Math.abs(r.net) > 0.005 || r.exact).slice(0, 14);
+  $('#attribtable').innerHTML = `<table class="etable">
+    <tr><th class="l">Day</th>${ATTRIB_PARTS.map(([, l]) => `<th>${l}</th>`).join('')}<th>Value change</th><th>Net</th></tr>
+    ${recent.map(r => `<tr><td class="l">${dayLabel(r.day)}</td>${ATTRIB_PARTS.map(([k]) => `<td class="u ${cls(r[k])}">${r[k] == null ? '<span class="muted">—</span>' : sgn(r[k])}</td>`).join('')}<td class="u ${cls(r.dv)}">${r.dv == null ? '<span class="muted">—</span>' : sgn(r.dv)}</td><td class="u ${cls(r.net)}"><b>${sgn(r.net)}</b></td></tr>`).join('')}
+  </table>`;
+  // Benchmarks.
+  const B = ($('#attribscope').value === 'main' ? d.mainBenchmarks : d.benchmarks) || d.benchmarks;
+  const pct = v => v == null ? '<span class="muted">—</span>' : `<span class="${v < 0 ? 'neg' : ''}">${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}%</span>`;
+  $('#benchtable').innerHTML = `<table class="etable">
+    <tr><th class="l">Window</th><th>Portfolio</th><th>Holding ETH</th><th>Holding USDG</th><th>Staking NET</th><th>vs ETH</th><th>vs staking</th><th class="l">Note</th></tr>
+    ${B.map(b => `<tr><td class="l">${b.windowDays}d</td><td class="u">${pct(b.portfolioPct)}</td><td>${pct(b.ethPct)}</td><td>${pct(b.usdgPct)}</td><td>${pct(b.stakingPct)}</td><td>${b.portfolioPct != null && b.ethPct != null ? pct(b.portfolioPct - b.ethPct) : '—'}</td><td>${b.portfolioPct != null && b.stakingPct != null ? pct(b.portfolioPct - b.stakingPct) : '—'}</td><td class="l muted">${b.note || ''}</td></tr>`).join('')}
+  </table>`;
+  $('#benchnote').textContent = d.history && d.history.bookSince ? `Book history since ${new Date(d.history.bookSince).toLocaleString()}; main wallet since ${d.history.mainSince ? new Date(d.history.mainSince).toLocaleDateString() : '—'}. Deposits and withdrawals are not netted out of the return.` : 'No value history yet.';
+  // Per position.
+  const P = ($('#attribscope').value === 'book' ? d.positions : d.positions.filter(p => p.key === $('#attribscope').value));
+  const wl = k => k === 'main' ? (d.wallets.find(w => w.main) || {}).label || 'Main' : (d.wallets.find(w => w.key === k) || {}).label || shortA(k);
+  $('#attribpos').innerHTML = P.length ? `<table class="etable">
+    <tr><th class="l">Wallet</th><th class="l">Position</th><th>Value</th><th>Fees (collected + uncollected)</th><th>Fees today</th><th>Price + IL</th><th>PnL vs HODL</th><th class="l">Since</th></tr>
+    ${P.map(p => `<tr><td class="l">${wl(p.key)}</td><td class="l">${p.pair} <span class="muted">#${String(p.tokenId).replace('v4-', '')} v${p.version}</span></td><td class="u">${usd(p.valueUsd)}</td><td class="u">${usd(p.fees)}</td><td class="u">${p.feesToday == null ? '<span class="muted">—</span>' : usd(p.feesToday)}</td><td class="u ${cls(p.priceAndIl)}">${sgn(p.priceAndIl)}</td><td class="u ${cls(p.pnlUsd)}"><b>${sgn(p.pnlUsd)}</b>${p.approx ? ' ≈' : ''}</td><td class="l muted">${p.since ? new Date(p.since).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '—'}</td></tr>`).join('')}
+  </table>` : '<div class="enote">No open positions.</div>';
+  $('#attribnote').textContent = `Exact: ${d.notes.exact.join(', ')}. Approximate: ${d.notes.approximate.join('; ')}. ${d.notes.incompleteDays}.`;
+}
+$('#attribscope') && $('#attribscope').addEventListener('change', renderAttribution);
+$('#attribdays') && $('#attribdays').addEventListener('change', loadAttribution);
+if (ANALYTICS) { loadAttribution(); setInterval(loadAttribution, 10 * 60 * 1000); }
+// === /performance-attribution ===

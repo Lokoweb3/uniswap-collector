@@ -149,6 +149,9 @@ const watch = require("./watch").create({
   getPortfolio: () => portfolio, // created below; only used at refresh time
   getPrices: () => lastPrices,
   getOperator: () => require("./arm").operatorAddress(), // keystore's public address, re-read each time
+  // === performance-attribution === PnL vs HODL for watched positions: liquidity ledger basis + collect events
+  getBasis: (tokenId) => (typeof ledger !== "undefined" ? ledger.basis(tokenId) : null),
+  getCollectEvents: (tokenId) => (typeof hist !== "undefined" ? hist.events.filter((e) => e.tokenId === String(tokenId)) : []),
 });
 // Liquidity history from the RPC itself; the PnL basis prefers it over
 // Blockscout's, which has dropped transactions on this chain.
@@ -1375,6 +1378,19 @@ const server = http.createServer(async (req, res) => {
   }
   // === end exit-rules ===
 
+  // === performance-attribution === daily P&L decomposition and benchmarks
+  if (url.pathname === "/api/attribution") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const days = Math.max(1, Math.min(365, Number(url.searchParams.get("days")) || 30));
+      res.writeHead(200);
+      return res.end(JSON.stringify(attribution.load({ days })));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
@@ -1634,6 +1650,15 @@ async function treasuryState() {
   return { enabled: ts.enabled, pct, pctSource, balanceUsdg, consecutiveFailures: treasuryLedger.consecutiveFailures() };
 }
 
+// === performance-attribution === (attribution.js): reads the ledgers plus the live views on request
+const attribution = require("./attribution").create({
+  cfg,
+  getPortfolio: () => portfolio.latest,
+  getWatch: () => watch.latest,
+  getPositions: () => cache.payload,
+  getStaking: () => (staking.enabled ? staking.view() : null),
+});
+
 // Telegram alerts (alerts.js): token and chat id come from the environment
 // (./.env via start-all.sh); without them the module stays silent.
 const alerts = require("./alerts").create();
@@ -1713,13 +1738,21 @@ async function backgroundTick() {
   // scan is not awaited: it can run for most of a tick and must not hold up
   // the collect pricing below.
   if (cache.payload) {
+    // === performance-attribution === the watched wallets' v3 positions share the ledger (ids are chain-unique)
+    let allIds = latestIds, allOpenIds = latestOpenIds;
     try {
-      await ledger.scanForward(latestIds, cache.payload.blockNumber);
+      const watchedIds = (await historyWallets()).filter((w) => !w.main).flatMap((w) => w.ids);
+      const watchedOpen = ((watch.latest && watch.latest.wallets) || []).flatMap((w) => (w.positions || []).filter((p) => p.version !== 4).map((p) => String(p.tokenId)));
+      allIds = [...new Set([...latestIds, ...watchedIds])];
+      allOpenIds = [...new Set([...latestOpenIds, ...watchedOpen])];
+    } catch {}
+    try {
+      await ledger.scanForward(allIds, cache.payload.blockNumber);
     } catch (err) {
       console.error("ledger forward:", err.shortMessage || err.message);
     }
-    if (ledger.forwardCaughtUp && ledger.pendingBack(latestOpenIds).length) {
-      ledger.scanBack(latestOpenIds, 600).catch((err) => console.error("ledger back:", err.shortMessage || err.message));
+    if (ledger.forwardCaughtUp && ledger.pendingBack(allOpenIds).length) {
+      ledger.scanBack(allOpenIds, 600).catch((err) => console.error("ledger back:", err.shortMessage || err.message));
     }
   }
   // A position still on a Blockscout basis whose live liquidity disagrees

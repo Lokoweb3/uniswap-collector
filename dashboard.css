@@ -579,3 +579,9 @@ select.scope option{background:#0b1017}
 .exitrules .er-toggle{font:inherit;font-size:11px;font-weight:700;padding:0 8px;border-radius:999px;border:1px solid var(--rule);background:transparent;color:var(--muted);cursor:pointer;vertical-align:1px}
 .exitrules .er-toggle.on{color:#04110a;background:var(--edge);border-color:var(--edge)}
 /* === end exit-rules === */
+/* === performance-attribution === */
+#attribsec .msel{margin-right:6px}
+#attribsec .etable td.neg,#attribsec .etable td.u.neg,#attribsec .etable td.u .neg,#attribstats b.neg,#attribtotal .neg{color:var(--edge)}
+#attribsec .etable td.u{color:var(--neon-green,#39ff88)}
+#attribsec .etable td.u.neg{color:var(--edge)}
+/* === /performance-attribution === */

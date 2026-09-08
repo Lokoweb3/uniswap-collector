@@ -20,9 +20,9 @@ let list = memecoinPositions({ positions, watch, memecoins: null });
 assert.deepStrictEqual(list.map((p) => p.tokenId), ["2134854", "2151132"]);
 assert.strictEqual(list[0].wallet, "Trading");
 
-// 2. With config.memecoins: exactly those ids, whichever wallet.
+// 2. With config.memecoins: those ids (whichever wallet) plus the Trading wallet's v4 positions.
 list = memecoinPositions({ positions, watch, memecoins: [{ tokenId: "2134854" }, { tokenId: "972362" }] });
-assert.deepStrictEqual(list.map((p) => p.tokenId).sort(), ["2134854", "972362"]);
+assert.deepStrictEqual(list.map((p) => p.tokenId).sort(), ["2134854", "2151132", "972362"]);
 
 // 3. Trigger = richest above threshold; none below.
 list = memecoinPositions({ positions, watch, memecoins: null });

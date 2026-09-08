@@ -3,8 +3,8 @@
  * memecoin-collect.js — collect memecoin fees as soon as they are worth it.
  *
  * Every 15 minutes: read the dashboard's /api/positions and /api/watch, find
- * memecoin positions (config.json `memecoins`, else every v4 position in the
- * Trading wallet) whose uncollected fees exceed `memecoinCollect.minUsd`
+ * memecoin positions (every v4 position in the Trading wallet, plus config.json
+ * `memecoins` ids) whose uncollected fees exceed `memecoinCollect.minUsd`
  * (default $20), and run `./run-collector.sh full --quiet` — the normal
  * collector, which handles every wallet and the 10% LOKOVault split — instead
  * of waiting for the 09:00 run. At most one auto run per `minIntervalMinutes`.
@@ -79,17 +79,16 @@ function loadConfig() {
 
 /**
  * Memecoin positions with their uncollected fees, from the two dashboard
- * payloads. `memecoins` (config) selects by tokenId when present; otherwise
- * every v4 position in the Trading wallet counts.
+ * payloads: every v4 position in the Trading wallet, plus any tokenId listed
+ * in `memecoins` (config) whichever wallet holds it. The wallet rule means a
+ * position re-minted after a close is covered without a config edit.
  */
 function memecoinPositions({ positions, watch, memecoins, tradingLabel = "Trading" }) {
   const out = [];
-  const byId = memecoins ? new Map(memecoins.map((m) => [String(m.tokenId), m])) : null;
+  const byId = new Map((memecoins || []).map((m) => [String(m.tokenId), m]));
   const consider = (p, wallet, walletAddress) => {
     const id = String(p.tokenId ?? p.nftId).replace(/^v4-/, "");
-    if (byId) {
-      if (!byId.has(id)) return;
-    } else if (!(p.version === 4 && wallet === tradingLabel)) return;
+    if (!byId.has(id) && !(p.version === 4 && wallet === tradingLabel)) return;
     out.push({ tokenId: id, pair: p.pair, wallet, walletAddress, feesUsd: Number(p.feesUsd) || 0, version: p.version });
   };
   if (positions && positions.ok) for (const p of positions.positions || []) consider(p, positions.ownerLabel || "Main", positions.owner);

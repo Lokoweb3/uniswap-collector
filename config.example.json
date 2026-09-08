@@ -96,10 +96,10 @@
   "treasuryTokenId": 1,
   "treasuryImplementation": "0x0000000000000000000000000000000000000023",
   "memecoinCollect": {
-    "_comment": "memecoin-collect.js: every 15 min, when a memecoin position (config memecoins, else any v4 position in the Trading wallet) has more than minUsd of uncollected fees, run the normal collector (all wallets, vault split) instead of waiting for 09:00; at most one auto run per minIntervalMinutes.",
+    "_comment": "memecoin-collect.js: every 15 min, when a memecoin position (config memecoins, else any v4 position in the Trading wallet) has more than minUsd of uncollected fees, run the normal collector (all wallets, vault split) instead of waiting for 09:00; at most one auto run per minIntervalMinutes. Distribution is value-driven: the run happens once $minUsd has accrued, whether that takes 40 minutes or a day.",
     "enabled": true,
-    "minUsd": 20,
-    "minIntervalMinutes": 60
+    "minUsd": 50,
+    "minIntervalMinutes": 15
   },
   "_memecoinsComment": "Risky LP positions watched by memecoin-guardian.js every 60 s (memecoin-status.json, Memecoin Watch on the dashboard, Telegram alerts). entryPrice = token per ETH at entry. autoClose true lets the guardian close the position (operator signs while armed; proceeds go to walletAddress) when the price is maxDrawdownPct below entry or it has been out of range for outOfRangeCloseMinutes; alertOnly true keeps it to alerts.",
   "memecoins": [

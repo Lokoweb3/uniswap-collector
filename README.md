@@ -261,6 +261,80 @@ The desktop vault page shows both URLs as QR codes ("Open on your phone"; `qr.js
 encoder, verified against a real decoder). Without a wallet the page loads the balances, split and history
 read-only. `run-tailscale.sh` adds the tailnet-only :8444 serve; the public :8443 route passes through the gate.
 
+## Risk and automation (memecoin positions)
+
+Everything in this section that can move funds is **off by default** and only ever signs with the
+operator key while the collector is armed; proceeds always go to the position's own wallet.
+
+### Memecoin guardian (`memecoin-guardian.js`)
+
+A separate process (started by `start-all.sh`, `npm run guardian`) that every 60 s reads each position
+listed under `memecoins` in config.json straight from the v4 pool state: price vs entry (token value in
+ETH), in/out of range and for how long, fees per hour, active liquidity vs its 24h high, price velocity.
+It writes `memecoin-status.json` (the "Memecoin Watch" section on the dashboard, `/api/memecoins`) and
+sends Telegram alerts, each once per episode: dump (−20% in 1h), out of range / back in range, volume
+dying (fees/h −70% in 30 min), LPs leaving (liquidity −50% from the 24h high), close-now (−40% from
+entry). With `autoClose: true` on an entry it closes the position (100% of the liquidity, both tokens to
+the wallet that owns it; `close-position.js`, static-called first) when the price is `maxDrawdownPct`
+below entry or it has been out of range longer than `outOfRangeCloseMinutes`. The card's "Close now"
+button does the same on demand (loopback-only, refused by the public gate). Entry prices come from
+config; check them against the mint transactions before enabling `autoClose`.
+
+### Exit rules (`exit-rules.js`)
+
+Evaluated every 5 min by the dashboard server over every open position of every wallet, from
+`exitRules` in config.json: `priceDropPct1h`, `outOfRange` (duration) and `tvlDrop`, each with `pairs`
+(either order, `"*"` = all) and `action` `alert` or `close`. A close only runs when that position's
+`exitRuleOverrides` entry has `enabled: true` (set from the card's "Exit rules" toggle or
+`/api/exit-rules`), the close module is loaded and the collector is armed; otherwise it degrades to an
+alert. Closes are logged to `exit-log.json`. The guardian and the exit rules overlap on purpose for now;
+see the changelog for the planned merge.
+
+### Fee auto-collect (`memecoin-collect.js`)
+
+Every 15 min (`memecoinCollect` in config.json: `minUsd` 20, `minIntervalMinutes` 30) it checks the
+memecoin positions' uncollected fees and, when one exceeds the threshold and the collector is armed,
+runs the normal `./run-collector.sh full --quiet` (all wallets, vault split included), logs to
+`memecoin-collect-log.json` and reports "💰 Collected …" per position. While locked it nudges once per
+lock episode. It also verifies the first vault split (ledger entry, TBA balance, owner transfer) and
+reports it once. Only one collector should run at a time: the 09:00 task, the Collect button and this
+loop all start the same script.
+
+### Analytics additions
+
+- **Attribution & benchmarks** (`attribution.js`, `/api/attribution?days=N`): daily P&L per wallet and
+  position split into fees, price move, impermanent loss (a residual), staking rewards, vault splits and
+  gas, with a stacked-bar chart and a benchmark table (portfolio vs holding ETH, USDG, or staking NET
+  over 7/30/90 days; the note says when history is shorter). Watched positions also get "PnL vs HODL"
+  (v3 from the shared liquidity ledger, v4 from first-seen amounts, marked ≈).
+- **Range advisor and IL forecast** (`advisor.js`, `/api/advisor`): replays the pool's swaps for the
+  last 7 days (RPC, grows across ticks) and shows on each card what the same capital would have earned
+  in the actual, a 50% tighter and a 2× wider range, plus expected fees vs impermanent loss for the
+  next 7 days from realised volatility (capped at 150%).
+- **Pool scout** (`scout.js`): hourly; when a sibling pool's 24h fee APR beats the position's pool by
+  50% for two consecutive days, one Telegram suggestion per week; `pool-scout-log.json`.
+- **Auto-compound** (`compound.js`, `./run-collector.sh full --compound`): opt-in; after the vault's
+  share, v3 fees are reinvested into the same position instead of swept; v4 positions are skipped.
+  Not used by the scheduled run.
+
+### Token health and the approvals audit
+
+`token-health.js` scores every token held in any wallet (bytecode selectors for mint/pause/tax/admin,
+live `paused()`/`taxEnabled()`/`owner()` reads, Blockscout holders/age/verification; cached 6h in
+`token-health.json`, `/api/token-health`) and shows a 🟢/🟡/🔴 badge per Portfolio row. `/approvals`
+(`approvals.html`, `/api/approvals?owner=`) lists every ERC-20 allowance and operator approval of each
+wallet, flags unlimited or older-than-90-days ones, shows the LOKOVault holder/admin, and revokes with
+the connected wallet's signature. The header nav has an "Approvals" link.
+
+### Files added tonight
+
+`memecoin-guardian.js`, `guardian-logic.js`, `close-position.js`, `exit-rules.js`, `memecoin-collect.js`,
+`attribution.js`, `advisor.js`, `scout.js`, `compound.js`, `token-health.js`, `approvals.js`,
+`approvals.html`, `digest.js`, `qr.js`, `ops.js` (collector-log parsing for alerts), and their tests under
+`test/`. `npm test` runs every suite plus the headless smoke test. Runtime state files
+(`memecoin-*.json`, `exit-*.json`, `advisor-cache.json`, `pool-scout-*.json`, `token-health.json`,
+`digest-state.json`, `compound-log.json`) are gitignored.
+
 ## Weekly digest
 
 `digest.js` builds the Monday report (fees this week vs last across all wallets, best and worst position, vault
@@ -631,6 +705,15 @@ All of it is the collector wallet's own history, so the wallet picker is hidden 
 only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
+
+### 2026-09-08 (night)
+
+- Memecoin guardian, exit rules, fee auto-collect (all closes opt-in and off), attribution and
+  benchmarks, range advisor / IL forecast / pool scout / `--compound`, token health badges and the
+  `/approvals` audit page, weekly digest and `/vault` with QR codes; direct v4 pool reads for new pools;
+  sNET 1:1 verified; start-all.sh process checks fixed; README setup section.
+- Review in `docs/agent-review-2026-09-07.md`; fee tokens with no v3 pool are handed to the owner.
+- Known overlap: guardian and exit rules both alert on drops; a merge into one risk engine is planned.
 
 ### 2026-09-07 (evening)
 

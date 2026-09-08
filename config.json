@@ -99,5 +99,34 @@
     "enabled": true,
     "minUsd": 20,
     "minIntervalMinutes": 30
-  }
+  },
+  "_memecoinsComment": "Risky LP positions watched by memecoin-guardian.js every 60 s (memecoin-status.json, Memecoin Watch on the dashboard, Telegram alerts). entryPrice = token per ETH at entry. autoClose true lets the guardian close the position (operator signs while armed; proceeds go to walletAddress) when the price is maxDrawdownPct below entry or it has been out of range for outOfRangeCloseMinutes; alertOnly true keeps it to alerts.",
+  "memecoins": [
+    {
+      "tokenId": "2134854",
+      "version": 4,
+      "pair": "LAPTOP/ETH",
+      "wallet": "Trading",
+      "walletAddress": "0x0000000000000000000000000000000000000012",
+      "entryPrice": 1181520,
+      "entryValueUsd": 1736,
+      "maxDrawdownPct": 50,
+      "autoClose": false,
+      "alertOnly": true,
+      "outOfRangeCloseMinutes": 120
+    },
+    {
+      "tokenId": "2151132",
+      "version": 4,
+      "pair": "PINK/ETH",
+      "wallet": "Trading",
+      "walletAddress": "0x0000000000000000000000000000000000000012",
+      "entryPrice": 1276100,
+      "entryValueUsd": 190,
+      "maxDrawdownPct": 50,
+      "autoClose": false,
+      "alertOnly": true,
+      "outOfRangeCloseMinutes": 120
+    }
+  ]
 }

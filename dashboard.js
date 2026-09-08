@@ -1569,3 +1569,67 @@ function tick(fresh){
 $('#reload').addEventListener('click', () => tick(true));
 tick(false);
 setInterval(() => tick(false), 60000);
+
+// === memecoin-guardian ===
+// Memecoin Watch: status from memecoin-guardian.js via /api/memecoins, every 30 s.
+async function loadMemecoins(){
+  try {
+    const r = await fetch('/api/memecoins', { cache: 'no-store' });
+    const d = await r.json();
+    if (!d.ok) return;
+    const sec = $('#memesec');
+    if (!d.watching) { sec.hidden = true; return; }
+    sec.hidden = false;
+    const fmtN = n => n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    const pct = (n, d = 1) => n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(d) + '%';
+    const cls = n => n == null ? '' : n >= 0 ? 'up' : 'down';
+    const age = d.at ? Math.round((Date.now() - d.at) / 1000) : null;
+    $('#memenote').textContent = d.stale ? 'guardian not reporting (start it with ./start-all.sh)' : `updated ${age}s ago · every 60 s from the v4 pool state${d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : ''}`;
+    $('#memelist').innerHTML = (d.positions || []).map(p => {
+      if (p.closed) return `<article class="pos meme stale"><div class="top"><div class="name"><h2>${p.pair}</h2><span class="tier">#${p.tokenId}</span><span class="muted">${p.wallet}</span></div><div class="vals"><span class="muted">position closed</span></div></div></article>`;
+      const lc = p.lastClose;
+      return `<article class="pos meme ${p.status === 'red' ? 'out' : ''} ${d.stale ? 'stale' : ''}">
+        <div class="top">
+          <div class="name"><span class="dot ${p.status}"></span><h2>${p.pair}</h2><span class="tier">v4 #${p.tokenId}</span><span class="muted">${p.wallet}</span>
+            <span class="state ${p.inRange ? '' : 'out'}">${p.inRange ? 'In range' : 'Out of range · ' + Math.round(p.outMinutes) + ' min'}</span></div>
+          <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span></div>
+        </div>
+        <div class="grid">
+          <span>Price (${p.symbolToken || 'token'} per ETH)<b>${fmtN(p.price)}</b></span>
+          <span>Entry<b>${fmtN(p.entryPrice)}</b></span>
+          <span>vs entry (token value)<b class="${cls(p.priceVsEntryPct)}">${pct(p.priceVsEntryPct)}</b></span>
+          <span>Drawdown<b class="${(p.drawdownPct || 0) >= 20 ? 'down' : ''}">${p.drawdownPct == null ? '—' : '-' + p.drawdownPct.toFixed(1) + '%'}</b></span>
+          <span>Last hour<b class="${cls(p.change1hPct)}">${pct(p.change1hPct)}</b></span>
+          <span>Velocity<b class="${cls(p.velocityPctPerH)}">${p.velocityPctPerH == null ? '—' : pct(p.velocityPctPerH) + '/h'}</b></span>
+          <span>Fees / hour<b>${p.feesPerHour == null ? '—' : usd(p.feesPerHour)}${p.feeRateChangePct != null ? ' <span class="' + cls(p.feeRateChangePct) + '" style="font-size:11px">' + pct(p.feeRateChangePct, 0) + '</span>' : ''}</b></span>
+          <span>Pool active liquidity, 1h<b class="${cls(p.liqChange1hPct)}">${pct(p.liqChange1hPct)}</b></span>
+          <span>Liquidity vs recent max<b class="${(p.liqDropFromMaxPct || 0) >= 25 ? 'down' : ''}">${p.liqDropFromMaxPct == null ? '—' : '-' + p.liqDropFromMaxPct.toFixed(0) + '%'}</b></span>
+          <span>Holdings<b>${p.amountEth == null ? '—' : amount(p.amountEth) + ' ETH · ' + fmtN(p.amountToken) + ' ' + (p.symbolToken || '')}</b></span>
+          <span>Auto-close<b>${p.autoClose ? 'ON · -' + p.maxDrawdownPct + '% or ' + p.outOfRangeCloseMinutes + ' min out' : 'off (alerts only)'}</b></span>
+        </div>
+        ${p.reasons && p.reasons.length ? `<div class="reasons">${p.reasons.join(' · ')}</div>` : ''}
+        ${lc ? `<div class="reasons">last close attempt: ${lc.status}${lc.error ? ' — ' + lc.error : ''}</div>` : ''}
+        <button class="reload closebtn" data-close="${p.tokenId}" data-pair="${p.pair}" ${READ_ONLY ? 'disabled' : ''}>Close now</button>
+      </article>`;
+    }).join('');
+    $('#memerecent').innerHTML = (d.recent || []).length
+      ? 'Recent: ' + d.recent.slice(0, 5).map(r => `${new Date(r.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${r.pair} ${r.status}${r.tx ? ' <a href="' + (EXPLORER || '') + '/tx/' + r.tx + '" target="_blank" rel="noopener">tx</a>' : ''}${r.error ? ' (' + r.error + ')' : ''}`).join(' · ')
+      : 'Alerts: dump >20%/1h, out of range, fee rate -70%/30 min, active liquidity -50%, -40% from entry. Auto-close only when a position has autoClose: true in config.json; proceeds go to the position\'s own wallet.';
+  } catch (e) {}
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button[data-close]');
+  if (!b) return;
+  if (!confirm(`Close ${b.dataset.pair} #${b.dataset.close} now? All liquidity and fees are withdrawn to the position's wallet. The collector must be armed.`)) return;
+  b.disabled = true; b.textContent = 'Closing…';
+  try {
+    const r = await fetch('/api/memecoins/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokenId: b.dataset.close }) });
+    const j = await r.json();
+    const res = j.result || {};
+    alert(j.ok ? `Closed: ${res.recovered || ''} tx ${res.tx || ''}` : `Not closed: ${res.error || j.error || 'see memecoin-guardian-log.json'}`);
+  } catch (err) { alert('Close request failed: ' + err.message); }
+  b.disabled = false; b.textContent = 'Close now';
+  loadMemecoins();
+});
+if (PAGE !== 'analytics') { loadMemecoins(); setInterval(loadMemecoins, 30000); }
+// === end memecoin-guardian ===

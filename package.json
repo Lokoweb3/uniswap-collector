@@ -9,8 +9,9 @@
     "collect": "node collector.js --mode=collect",
     "full": "node collector.js --mode=full",
     "approve": "node approve-serve.js",
-    "test": "node test/alerts.test.js && node test/memecoin-collect.test.js && node test/smoke.js",
-    "smoke": "node test/smoke.js"
+    "test": "node test/alerts.test.js && node test/ops.test.js && node test/memecoin-collect.test.js && node test/guardian.test.js && node test/smoke.js",
+    "smoke": "node test/smoke.js",
+    "guardian": "node memecoin-guardian.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

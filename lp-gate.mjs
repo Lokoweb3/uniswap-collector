@@ -29,7 +29,7 @@ const COOKIE = "lpgate";
 const TTL_S = 30 * 86400;
 const SITES = [
   { name: "LP dashboard", port: Number(process.env.LP_GATE_DASHBOARD_PORT || 8790), upstream: 8787,
-    allow: (m, p) => (m === "GET" || m === "HEAD") && !/^\/api\/(collect|unlock|lock|arm)(\/|$)/.test(p) && !/^\/arm(\.html)?$/.test(p) },
+    allow: (m, p) => (m === "GET" || m === "HEAD") && !/^\/api\/(collect|unlock|lock|arm|memecoins\/close)(\/|$)/.test(p) && !/^\/arm(\.html)?$/.test(p) },
   { name: "Robinhood LP scanner", port: Number(process.env.LP_GATE_SCANNER_PORT || 8791), upstream: 3847,
     allow: (m, p) => m === "GET" || m === "HEAD" || (m === "POST" && /^\/api\/chat(\/reset)?$/.test(p)) },
 ];

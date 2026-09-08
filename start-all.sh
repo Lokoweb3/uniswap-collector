@@ -66,3 +66,11 @@ if ! running '^node memecoin-collect\.js'; then
   nohup node memecoin-collect.js >> memecoin-collect.log 2>&1 < /dev/null &
   echo "memecoin-collect: started"
 else echo "memecoin-collect: running"; fi
+
+# === memecoin-guardian ===
+# Real-time watcher for the positions listed under `memecoins` in config.json.
+if ! running '^node memecoin-guardian\.js'; then
+  nohup node memecoin-guardian.js >> memecoin-guardian.log 2>&1 < /dev/null &
+  echo "memecoin guardian: started"
+else echo "memecoin guardian: running"; fi
+# === end memecoin-guardian ===

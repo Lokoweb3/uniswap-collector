@@ -559,3 +559,17 @@ select.scope option{background:#0b1017}
 .summary .stat:nth-child(5){animation-delay:.2s}.summary .stat:nth-child(6){animation-delay:.25s}.summary .stat:nth-child(7){animation-delay:.3s}
 @media (max-width:700px){.stat.hero .n{font-size:36px}header{margin:0;border-radius:0 0 10px 10px}}
 @media (prefers-reduced-motion:reduce){.summary .stat,.pulse,.state::before{animation:none}}
+
+/* === memecoin-guardian === */
+.meme{position:relative}
+.meme .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.meme .dot.green{background:var(--neon-green,#39ff88);box-shadow:0 0 10px var(--neon-green,#39ff88)}
+.meme .dot.yellow{background:var(--neon-gold,#f5c542);box-shadow:0 0 10px var(--neon-gold,#f5c542)}
+.meme .dot.red{background:var(--edge,#ff4d6d);box-shadow:0 0 10px var(--edge,#ff4d6d);animation:pulse 1.6s ease-out infinite}
+.meme .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px 14px;margin-top:10px;font-size:12px;color:var(--muted)}
+.meme .grid b{display:block;font-size:15px;color:var(--bright);font-family:var(--font-mono,monospace)}
+.meme .grid b.up{color:var(--neon-green,#39ff88)} .meme .grid b.down{color:var(--edge,#ff4d6d)}
+.meme .reasons{margin-top:8px;font-size:12px;color:var(--neon-gold,#f5c542)}
+.meme .closebtn{margin-top:10px;border-color:rgba(255,77,109,.5);color:var(--edge,#ff4d6d)}
+.meme.stale{opacity:.6}
+/* === end memecoin-guardian === */

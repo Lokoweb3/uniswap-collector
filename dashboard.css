@@ -559,3 +559,10 @@ select.scope option{background:#0b1017}
 .summary .stat:nth-child(5){animation-delay:.2s}.summary .stat:nth-child(6){animation-delay:.25s}.summary .stat:nth-child(7){animation-delay:.3s}
 @media (max-width:700px){.stat.hero .n{font-size:36px}header{margin:0;border-radius:0 0 10px 10px}}
 @media (prefers-reduced-motion:reduce){.summary .stat,.pulse,.state::before{animation:none}}
+
+/* === performance-attribution === */
+#attribsec .msel{margin-right:6px}
+#attribsec .etable td.neg,#attribsec .etable td.u.neg,#attribsec .etable td.u .neg,#attribstats b.neg,#attribtotal .neg{color:var(--edge)}
+#attribsec .etable td.u{color:var(--neon-green,#39ff88)}
+#attribsec .etable td.u.neg{color:var(--edge)}
+/* === /performance-attribution === */

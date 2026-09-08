@@ -22,7 +22,54 @@ const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
 const tierLabel = (fee) => (fee == null ? "?" : `${+(Number(fee) / 10000).toFixed(3)}%`);
 
-function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator }) {
+function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator, getBasis, getCollectEvents }) {
+  // === performance-attribution === PnL vs HODL for watched positions.
+  // v3: the shared liquidity ledger (getBasis) + collect events (getCollectEvents),
+  // the same maths as the main wallet's cards. v4: no per-token liquidity events
+  // on the position manager, so the basis is the amounts first observed here
+  // (watch-pnl-basis.json), which is close to the mint for positions found
+  // within minutes and is marked approximate.
+  const PNL_BASIS_FILE = path.join(__dirname, "watch-pnl-basis.json");
+  let pnlBasis = {};
+  try {
+    pnlBasis = JSON.parse(fs.readFileSync(PNL_BASIS_FILE, "utf8"));
+  } catch {}
+  function pnlFor({ version, id, p, a0, a1, f0, f1, usd0, usd1, valueUsd, feesUsd }) {
+    const out = { pnlUsd: null, pnlPct: null, pnlSince: null, pnlApprox: false, pnlLegs: null, pnlSource: null };
+    if (usd0 == null || usd1 == null) return out;
+    const dec0 = p.token0.decimals, dec1 = p.token1.decimals;
+    let depositedUsd = null, withdrawnUsd = 0, since = null, adds = null, approx = false, source = null;
+    if (version !== 4 && getBasis) {
+      const b = getBasis(id.toString());
+      if (b) {
+        depositedUsd = toFloat(b.dep0, dec0) * usd0 + toFloat(b.dep1, dec1) * usd1;
+        withdrawnUsd = toFloat(b.wd0, dec0) * usd0 + toFloat(b.wd1, dec1) * usd1;
+        since = b.firstT; adds = b.increases || null; source = b.source || "rpc";
+        approx = b.liq !== p.liquidity;
+      }
+    }
+    if (depositedUsd == null) {
+      const key = `${version}-${id}`;
+      if (!pnlBasis[key]) {
+        pnlBasis[key] = { t: Date.now(), a0, a1 };
+        try { fs.writeFileSync(PNL_BASIS_FILE, JSON.stringify(pnlBasis)); } catch {}
+      }
+      const b = pnlBasis[key];
+      depositedUsd = b.a0 * usd0 + b.a1 * usd1;
+      since = b.t; approx = true; source = "first-seen";
+    }
+    let collectedUsd = 0, collects = 0;
+    for (const e of (getCollectEvents && version !== 4 ? getCollectEvents(id.toString()) : []) || []) {
+      collectedUsd += toFloat(e.fee0, dec0) * usd0 + toFloat(e.fee1, dec1) * usd1;
+      collects++;
+    }
+    if (!(depositedUsd > 0)) return out;
+    const pnlUsd = (valueUsd || 0) + (feesUsd || 0) + collectedUsd + withdrawnUsd - depositedUsd;
+    return {
+      pnlUsd, pnlPct: (pnlUsd / depositedUsd) * 100, pnlSince: since, pnlApprox: approx, pnlSource: source,
+      pnlLegs: { deposited: depositedUsd, adds, withdrawn: withdrawnUsd, collected: collectedUsd, collects, held: valueUsd || 0, uncollected: feesUsd || 0 },
+    };
+  }
   const discovery = new Map(); // address -> v4 discovery (own state file per wallet)
   let accrual = { last: {}, hours: {} }; // last[wallet:tokenId] = {t,f0,f1}; hours[wallet][hourMs] = usd
   try {
@@ -180,7 +227,9 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         const feesUsd = usd0 == null || usd1 == null ? null : f0 * usd0 + f1 * usd1;
         const span = p.tickUpper - p.tickLower;
         const raw = (p.currentTick - p.tickLower) / span;
+        const pnl = pnlFor({ version, id, p, a0, a1, f0, f1, usd0, usd1, valueUsd, feesUsd }); // === performance-attribution ===
         positions.push({
+          ...pnl,
           tokenId: version === 4 ? `v4-${id}` : id.toString(),
           nftId: id.toString(),
           version,

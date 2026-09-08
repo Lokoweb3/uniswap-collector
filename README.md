@@ -139,7 +139,7 @@ reach the operator key. The dashboard must be running.
 Claude Code (already registered on this machine, user scope):
 
 ```bash
-claude mcp add lp-dashboard -s user -- node /home/<user>/uniswap-collector/lp-mcp.mjs
+claude mcp add lp-dashboard -s user -- node ~/uniswap-collector/lp-mcp.mjs
 ```
 
 Claude Desktop on Windows, in `%APPDATA%\Claude\claude_desktop_config.json`
@@ -148,7 +148,7 @@ Claude Desktop on Windows, in `%APPDATA%\Claude\claude_desktop_config.json`
 ```json
 { "mcpServers": { "lp-dashboard": {
     "command": "wsl.exe",
-    "args": ["-e", "node", "/home/<user>/uniswap-collector/lp-mcp.mjs"] } } }
+    "args": ["-e", "node", "~/uniswap-collector/lp-mcp.mjs"] } } }
 ```
 
 `LP_DASHBOARD_URL` overrides the dashboard address and `LP_TZ` the timezone

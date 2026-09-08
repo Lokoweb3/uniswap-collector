@@ -19,9 +19,17 @@ which also exposes it to your local network, so prefer the default.
 Reads load no key. Your RPC endpoint stays in the Node process and is never
 handed to the browser, which also means no CORS to fight.
 
-The site has two pages: the dashboard at `/` (tiles, Positions panel for every wallet, Portfolio) and
-`/analytics` (collected fees and daily revenue). A wallet picker in the header switches the dashboard
-between the main wallet, all wallets, and each watched wallet; see "Watching other wallets" below.
+The site has these pages: the dashboard at `/` (tiles, Positions panel for every wallet, Memecoin
+Watch, Portfolio), `/analytics` (income, taxes, attribution, staking, vault), `/treasury` (alias
+`/vault`, the LOKOVault page), `/approvals` (allowance and operator audit), `/arm` (arm the collector
+with a wallet signature) and `/approve-v3`, `/approve-v4` (operator approvals). A wallet picker in the
+header switches the dashboard between the main wallet, all wallets, and each watched wallet; see
+"Watching other wallets" below.
+
+`./start-all.sh` runs everything: the dashboard server (which also hosts the 10-minute tick with
+alerts, exit rules, pool scout, price log, backups of state and the weekly digest), the memecoin
+guardian, the fee auto-collect loop, the nightly backup loop, the public gate, the remote MCP server
+and the Tailscale tunnel. `npm test` checks all of it.
 
 The page can also drive the collector: a Collect button runs
 `run-collector.sh collect` on this machine, and an Arm form caches the operator
@@ -722,6 +730,9 @@ only what it shows. The public gate serves the page at the same path.
 - External audit (Theo) of the public repo: no leaks found; three issues fixed. Failed auto-closes no
   longer mark a position as closed and are retried; both auto-close paths need the trigger to hold on
   consecutive checks with a stable price before acting; `tmp` pinned under `solc` (`npm audit` clean).
+- Collector lock file (`flock` in `run-collector.sh`) so the 09:00 task, the Collect button and the
+  auto-collect loop can never sign at once; background-loop watchdog (heartbeats, Telegram alert when
+  the guardian or auto-collect stops reporting and when it is back, warning chip on the dashboard).
 - Repository published at https://github.com/Lokoweb3/uniswap-collector with placeholders for every
   wallet, vault, host and chat identifier; `config.json` is now local (`config.example.json` is the
   template); `docs/` stays local.

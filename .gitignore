@@ -22,6 +22,7 @@ gate-state.json
 
 # --- JSON ledgers: runtime data with wallet activity, backed up separately (see backup-ledgers.sh) ---
 fee-events.json
+v4-collects.json
 fee-snapshots.json
 fee-daily.json
 fee-prices.json

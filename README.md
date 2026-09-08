@@ -757,6 +757,12 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-08
 
+- Uniswap v4 collects now appear in the collects history, Analytics (Earned by wallet, Income for
+  taxes, Collected fees, by month) and position PnL. v4 leaves no Collect event on the v3 manager,
+  so the collector records every v4 collect it sends in `v4-collects.json` (history.js merges it
+  with the scanned v3 events; the hourly price log values each row at collect time).
+  `tools/backfill-v4-collects.js` rebuilds the ledger from `collector.log` and the receipts,
+  dropping duplicates from overlapping runs; it recovered the Trading wallet's 17 LAPTOP/PINK collects.
 - Vault page restyled as a private bank on the site's dark glass palette: serif masthead, gold
   hairlines, vault-door hero around the NFT, account-balance card, statement-style deposit table.
 - Chat panel built into the site (`chat.js`, `chat-widget.js`, `POST /api/chat`): answers from the

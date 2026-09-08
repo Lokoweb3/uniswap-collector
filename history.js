@@ -16,6 +16,11 @@ const path = require("path");
 const { ethers } = require("ethers");
 
 const FILE = path.join(__dirname, "fee-events.json");
+// Uniswap v4 collects have no Collect event on the v3 manager, so the collector
+// appends each one it sends to this ledger (also rebuilt from collector.log by
+// tools/backfill-v4-collects.js). Rows share the event shape below, with
+// tokenId "v4-<id>" and the token metadata inline.
+const V4_FILE = path.join(__dirname, "v4-collects.json");
 const CHUNK = 2000;
 const START_BLOCK = 51940000; // just before the collector's first collect (2026-09-01)
 
@@ -181,10 +186,40 @@ function create({ provider, npmAddress }) {
     return out;
   }
 
+  // v4 ledger, re-read when the collector appends to it; merged view cached
+  // until either side changes (events is read inside per-position loops).
+  let v4 = { mtime: -1, rows: [] };
+  let merged = { key: "", rows: [] };
+  function v4Rows() {
+    let mtime = 0;
+    try { mtime = fs.statSync(V4_FILE).mtimeMs; } catch { mtime = 0; }
+    if (mtime !== v4.mtime) {
+      let rows = [];
+      try {
+        rows = JSON.parse(fs.readFileSync(V4_FILE, "utf8")).filter((r) => r && r.tx && r.tokenId);
+      } catch { rows = []; }
+      v4 = { mtime, rows: rows.map((r) => ({ ...r, tokenId: String(r.tokenId).startsWith("v4-") ? r.tokenId : `v4-${r.tokenId}`, wallet: r.wallet ? r.wallet.toLowerCase() : null, principal: !!r.principal })) };
+    }
+    return v4.rows;
+  }
+  function allEvents() {
+    const rows = v4Rows();
+    const key = `${state.events.length}:${v4.mtime}:${rows.length}`;
+    if (merged.key !== key) {
+      const seenKeys = new Set(state.events.map((e) => `${e.tx}:${e.tokenId}`));
+      const extra = rows.filter((r) => !seenKeys.has(`${r.tx}:${r.tokenId}`));
+      merged = { key, rows: [...state.events, ...extra].sort((a, b) => a.block - b.block) };
+    }
+    return merged.rows;
+  }
+
   return {
     scan,
     catchupStatus,
     get events() {
+      return allEvents();
+    },
+    get v3Events() {
       return state.events;
     },
     get lastScanned() {

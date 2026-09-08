@@ -96,6 +96,33 @@ function gasSpentLast24h(state) {
   return state.gasSpends.reduce((acc, s) => acc + BigInt(s.wei), 0n);
 }
 
+// v4 collects leave no Collect event on the v3 manager, so the dashboard's
+// history (history.js) reads them from this ledger instead. One row per sent
+// collect, in the fee-events shape; the block time is filled in best-effort.
+const V4_LEDGER = path.join(__dirname, "v4-collects.json");
+function recordV4Collect({ sim, rcpt, owner }) {
+  try {
+    let rows = [];
+    try { rows = JSON.parse(fs.readFileSync(V4_LEDGER, "utf8")); } catch { rows = []; }
+    if (!Array.isArray(rows)) rows = [];
+    if (rows.some((r) => r.tx === rcpt.hash)) return;
+    const tok = (t) => ({ address: t.native ? ethers.ZeroAddress : t.address, symbol: t.symbol, decimals: Number(t.decimals) });
+    rows.push({
+      block: Number(rcpt.blockNumber), t: Date.now(), tx: rcpt.hash,
+      tokenId: `v4-${sim.tokenId}`,
+      fee0: sim.amount0.toString(), fee1: sim.amount1.toString(), principal: false,
+      wallet: owner.address.toLowerCase(), walletLabel: owner.main ? null : owner.label || null,
+      t0: tok(sim.t0), t1: tok(sim.t1), src: "collector",
+    });
+    rows.sort((a, b) => a.block - b.block);
+    const tmp = V4_LEDGER + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(rows));
+    fs.renameSync(tmp, V4_LEDGER);
+  } catch (err) {
+    log(`  ! could not record v4 collect in v4-collects.json: ${err.message}`);
+  }
+}
+
 function recordGas(state, weiSpent) {
   state.gasSpends.push({ t: Date.now(), wei: weiSpent.toString() });
   saveState(state);
@@ -558,6 +585,7 @@ async function runOwner(ctx, owner) {
         for (const [t, amt] of [[sim.t0, sim.amount0], [sim.t1, sim.amount1]]) {
           if (amt > 0n && !t.native) collected.set(t.address, (collected.get(t.address) || 0n) + amt);
         }
+        recordV4Collect({ sim, rcpt, owner });
       } catch (err) {
         log(`  ! v4 collect failed for #${sim.tokenId}: ${err.shortMessage || err.message}`);
       }

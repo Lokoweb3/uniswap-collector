@@ -560,7 +560,7 @@ function renderHistoryTable(){
     ${recent.map(r => `<tr>
       <td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
       <td>${r.wallet || 'Main'}</td>
-      <td>${r.pair || '?'} <span class="mono">#${r.tokenId}</span>${r.principal ? ' (close)' : ''}</td>
+      <td>${r.pair || '?'} <span class="mono">#${r.nftId || r.tokenId}</span>${r.version === 4 ? ' <span class="tier v4" title="Uniswap v4 position; recorded by the collector">v4</span>' : ''}${r.principal ? ' (close)' : ''}</td>
       <td>${r.f0 != null ? amount(r.f0) + ' ' + r.sym0 + ' + ' + amount(r.f1) + ' ' + r.sym1 : '—'}</td>
       <td class="u">${r.locked ? '' : '<span class="approx" title="No price record from the time of this collect; valued at today\'s prices">≈</span>'}${usd(r.usd)}</td>
       <td><a href="${histD.explorer}/tx/${r.tx}" target="_blank" rel="noopener">${r.tx.slice(0,10)}…</a></td>
@@ -568,9 +568,9 @@ function renderHistoryTable(){
 }
 
 function downloadCsv(){
-  const head = 'time,wallet,wallet_address,block,tokenId,pair,fee0,symbol0,fee1,symbol1,usd,price_basis,weth_equivalent,weth_usd_at_basis,includes_principal_withdrawal,tx';
+  const head = 'time,wallet,wallet_address,block,tokenId,version,pair,fee0,symbol0,fee1,symbol1,usd,price_basis,weth_equivalent,weth_usd_at_basis,includes_principal_withdrawal,tx';
   const lines = filteredRows().map(r => [
-    r.t ? new Date(r.t).toISOString() : '', r.wallet || 'Main', r.walletAddress || '', r.block, r.tokenId, r.pair || '',
+    r.t ? new Date(r.t).toISOString() : '', r.wallet || 'Main', r.walletAddress || '', r.block, r.nftId || r.tokenId, r.version || 3, r.pair || '',
     r.f0 != null ? r.f0 : '', r.sym0 || '', r.f1 != null ? r.f1 : '', r.sym1 || '',
     r.usd != null ? r.usd.toFixed(4) : '', r.usd == null ? '' : r.locked ? 'at collect time' : 'today',
     r.weth != null ? r.weth.toFixed(6) : '', r.locked ? r.wethAt : (histD && histD.wethUsd ? histD.wethUsd.toFixed(2) : ''),

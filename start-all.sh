@@ -26,9 +26,8 @@ running() { # running <regex over the full command line>, excluding this shell a
 
 if listening 8787; then
   echo "dashboard: running (port 8787 in use$(running '^node server\.js --port=8787 ' || echo ', by a process not started by this script'))"
-elif running '^node server\.js'; then
-  echo "dashboard: a 'node server.js' is running but port 8787 is not listening; check dashboard.log"
 else
+  # (the scanner is also a `node server.js`, so only the port decides)
   nohup node server.js --port=8787 > dashboard.log 2>&1 &
   echo "dashboard: started"
 fi

@@ -302,8 +302,11 @@ memecoin positions' uncollected fees and, when one exceeds the threshold and the
 runs the normal `./run-collector.sh full --quiet` (all wallets, vault split included), logs to
 `memecoin-collect-log.json` and reports "💰 Collected …" per position. While locked it nudges once per
 lock episode. It also verifies the first vault split (ledger entry, TBA balance, owner transfer) and
-reports it once. Only one collector should run at a time: the 09:00 task, the Collect button and this
-loop all start the same script.
+reports it once. The 09:00 task, the Collect button and this loop all start the same script, which
+takes a lock file (`.collector.lock`, `flock`) so only one signing run happens at a time; a second
+starter logs "another collector run is in progress" and exits. The loop writes a heartbeat every cycle
+and the guardian rewrites its status every minute; the server's watchdog alerts once when either stops
+reporting (10 / 45 min) and once when it is back, and the dashboard shows a warning chip meanwhile.
 
 ### Analytics additions
 

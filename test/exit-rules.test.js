@@ -83,9 +83,13 @@ const trading = (positions) => [{ ok: true, label: "Trading", address: "0xTRADIN
     h.setWatched(trading([laptop(1000000)]));
     await h.er.evaluate();
     h.tick(H); h.setWatched(trading([laptop(2500000)])); // -60%
-    const out = await h.er.evaluate();
-    assert.strictEqual(calls, 1, "close executed once");
-    assert.ok(out.some((m) => /Auto-closed ETH \/ LAPTOP — dropped 60% in 1h/.test(m)), out.join(" | "));
+    let out = await h.er.evaluate();
+    assert.strictEqual(calls, 0, "first sighting of the trigger must not close (needs confirmation)");
+    assert.ok(!out.some((m) => /Auto-closed/.test(m)), "no close message on the unconfirmed first sighting (the alert rule may still fire)");
+    h.tick(5 * 60 * 1000); h.setWatched(trading([laptop(2450000)])); // still down, price agrees within 10%
+    out = await h.er.evaluate();
+    assert.strictEqual(calls, 1, "close executed once, on the confirmed second sighting");
+    assert.ok(out.some((m) => /Auto-closed ETH \/ LAPTOP — dropped 5[0-9]% in 1h/.test(m)), out.join(" | "));
     const log = JSON.parse(fs.readFileSync(h.logFile, "utf8"));
     assert.strictEqual(log.length, 1); assert.strictEqual(log[0].txHash, "0xabc123def456"); assert.strictEqual(log[0].rule, "priceDropPct1h");
     // out-of-range close rule later must not close again
@@ -95,6 +99,26 @@ const trading = (positions) => [{ ok: true, label: "Trading", address: "0xTRADIN
     const out2 = await h.er.evaluate();
     assert.strictEqual(calls, 1, "no second close");
     assert.ok(out2.some((m) => /already closed by a rule/.test(m)), out2.join(" | "));
+    h.cleanup();
+  }
+
+  // 2b. a close that throws is not marked closed: it retries after the cool-down and succeeds
+  {
+    let calls = 0;
+    const closeModule = { closeV4: async () => { calls++; if (calls === 1) throw new Error("nonce too low"); return { hash: "0xretry" }; } };
+    const h = harness({ closeModule, overrides: { "2134854": { enabled: true } } });
+    const M = 5 * 60 * 1000;
+    const step = async (price) => { h.setWatched(trading([laptop(price)])); const o = await h.er.evaluate(); h.tick(M); return o; };
+    for (let i = 0; i < 12; i++) await step(1000000);       // an hour of samples at the entry price
+    let out = await step(2500000);                           // crash: first sighting (alert only)
+    assert.strictEqual(calls, 0);
+    out = await step(2500000);                               // confirmed -> attempt 1 throws
+    assert.strictEqual(calls, 1); assert.ok(out.some((m) => /auto-close FAILED.*Will retry/.test(m)), out.join(" | "));
+    await step(2500000); await step(2500000);                // inside the 15-min cool-down: no retry
+    assert.strictEqual(calls, 1, "no retry inside the cool-down");
+    let closedMsg = false;
+    for (let i = 0; i < 4 && calls < 2; i++) { out = await step(2500000); if (out.some((m) => /Auto-closed/.test(m))) closedMsg = true; }
+    assert.strictEqual(calls, 2, "retried after the cool-down"); assert.ok(closedMsg, "close reported");
     h.cleanup();
   }
 

@@ -134,9 +134,33 @@ function create({ provider, cfg, alerts, getPositions, getWatched, log = console
     return arr.length ? Math.max(...arr.map((s) => s.v)) : null;
   }
 
+  const CLOSE_RETRY_MS = 15 * 60 * 1000;
+  const CONFIRM_EVALS = 2; // consecutive 5-minute evaluations the close trigger must hold
+
+  /**
+   * Second look before a close: the same trigger must have been true on the
+   * previous evaluation(s) too, and the position's price read must agree
+   * within 10% with the previous sample (a single wild RPC answer or a
+   * one-block wick does not qualify). Tracks per position+rule+trigger.
+   */
+  function confirmedFor(p, type, trigger) {
+    state.confirm = state.confirm || {};
+    const ck = `${key(p)}:${type}:${trigger}`;
+    const c = state.confirm[ck] || { n: 0, lastPrice: null };
+    const price = Number(p.priceCurrent);
+    const agrees = c.lastPrice == null || !(price > 0) || Math.abs(price - c.lastPrice) / c.lastPrice <= 0.10;
+    c.n = agrees ? c.n + 1 : 1;
+    c.lastPrice = price > 0 ? price : c.lastPrice;
+    c.at = now();
+    state.confirm[ck] = c;
+    save();
+    return c.n >= CONFIRM_EVALS;
+  }
+
   async function fire(p, rule, trigger, detail, msg) {
     const fk = `${key(p)}:${rule.type}:${rule.action}:${trigger}`;
     if (state.fired[fk]) return null; // once per episode
+    if (rule.action === "close" && state.closeFailedAt && state.closeFailedAt[key(p)] && now() - state.closeFailedAt[key(p)] < CLOSE_RETRY_MS) return null; // retry later
     state.fired[fk] = now();
     save();
     const wantClose = rule.action === "close";
@@ -153,20 +177,29 @@ function create({ provider, cfg, alerts, getPositions, getWatched, log = console
         delete state.fired[fk];
         save();
         text = `🚨 ${p.pair} ${detail} — exit rule wants to CLOSE but the collector is locked; arm it at /arm or close by hand.`;
-      } else {
-        state.closed[key(p)] = now();
+      } else if (!confirmedFor(p, rule.type, trigger)) {
+        // A close needs the trigger to hold on consecutive evaluations and the pool price to agree with the dashboard's own read (see confirm()).
+        delete state.fired[fk];
         save();
+        return null;
+      } else {
         try {
           const fn = Number(p.version) === 4 ? closer.closeV4 : closer.closeV3;
           if (typeof fn !== "function") throw new Error("close module has no close function for v" + p.version);
           const r = await fn({ provider, cfg: currentConfig(), tokenId: idOf(p), owner: p.walletAddress, wallet: signer });
           closed = { txHash: r && (r.hash || r.txHash) || null, recovered: r && r.recovered || null };
+          state.closed[key(p)] = now(); // only a confirmed, successful close ends the position
           appendLog({ timestamp: new Date(now()).toISOString(), wallet: p.wallet, tokenId: idOf(p), pair: p.pair, rule: rule.type, trigger, txHash: closed.txHash, recovered: closed.recovered });
           text = `🚨 Auto-closed ${p.pair} — ${detail}${closed.recovered ? ` — recovered ${closed.recovered}` : ""}${closed.txHash ? ` (${String(closed.txHash).slice(0, 12)}…)` : ""}`;
         } catch (err) {
-          text = `❌ ${p.pair} ${detail} — auto-close FAILED: ${err.shortMessage || err.message}. Close by hand.`;
+          // Not marked closed: the next evaluation retries (after CLOSE_RETRY_MS) while the trigger still holds.
+          delete state.fired[fk];
+          state.closeFailedAt = state.closeFailedAt || {};
+          state.closeFailedAt[key(p)] = now();
+          text = `❌ ${p.pair} ${detail} — auto-close FAILED: ${err.shortMessage || err.message}. Will retry in ${Math.round(CLOSE_RETRY_MS / 60000)} min; close by hand if it keeps failing.`;
           appendLog({ timestamp: new Date(now()).toISOString(), wallet: p.wallet, tokenId: idOf(p), pair: p.pair, rule: rule.type, trigger, error: err.shortMessage || err.message });
         }
+        save();
       }
     } else if (wantClose) {
       const why = !closer ? "close module unavailable" : !rs.enabled ? "auto-close is off for this position (enable it on the card)" : "already closed by a rule";
@@ -260,6 +293,7 @@ function create({ provider, cfg, alerts, getPositions, getWatched, log = console
         }
       }
       state.lastEval[k] = evalRec;
+      if (state.confirm) for (const ck of Object.keys(state.confirm)) if (ck.startsWith(k + ":") && !evalRec.fired.length && now() - (state.confirm[ck].at || 0) > 20 * 60000) delete state.confirm[ck]; // stale confirmations decay
     }
     // Positions that disappeared (closed) drop their state.
     for (const m of ["outSince", "lastEval"]) for (const k of Object.keys(state[m])) if (!seen.has(k)) delete state[m][k];

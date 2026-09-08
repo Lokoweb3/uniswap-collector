@@ -31,6 +31,7 @@ const STATE_FILE = path.join(HERE, "memecoin-guardian-state.json");
 const STATUS_FILE = path.join(HERE, "memecoin-status.json");
 const LOG_FILE = path.join(HERE, "memecoin-guardian-log.json");
 const INTERVAL_MS = 60 * 1000;
+const CONFIRM_CYCLES = 3; // consecutive cycles an auto-close trigger must hold
 const KEEP_MS = 24 * 3600 * 1000;
 const DASHBOARD = `http://127.0.0.1:${process.env.LP_DASHBOARD_PORT || 8787}`;
 
@@ -173,16 +174,25 @@ async function cycle() {
     const d = logic.derive(entry, st.samples, now);
     Object.assign(d, { symbolToken: s.tokenSymbol, amountEth: s.amountEth, amountToken: s.amountToken, wethUsd, tickLower: s.tickLower, tickUpper: s.tickUpper, currentTick: s.currentTick, samples: st.samples.length });
     for (const text of logic.alertsFor(d, state.sent, now)) await send(text);
+    // Auto-close needs the trigger to hold for CONFIRM_CYCLES consecutive
+    // 60-second cycles with the pool price stable within 10% between cycles,
+    // so one bad RPC read or a single-block wick cannot close a position.
     const reason = logic.shouldClose(d);
+    st.confirm = st.confirm || { n: 0, lastPrice: null };
     if (reason) {
+      const agrees = st.confirm.lastPrice == null || !(d.price > 0) || Math.abs(d.price - st.confirm.lastPrice) / st.confirm.lastPrice <= 0.10;
+      st.confirm.n = agrees ? st.confirm.n + 1 : 1;
+      st.confirm.lastPrice = d.price > 0 ? d.price : st.confirm.lastPrice;
+      d.closeConfirm = `${st.confirm.n}/${CONFIRM_CYCLES}`;
       const last = state.sent[`close:${id}`] || 0;
-      if (now - last > 30 * 60000) {
+      if (st.confirm.n >= CONFIRM_CYCLES && now - last > 30 * 60000) {
         state.sent[`close:${id}`] = now;
         const row = await closeNow(entry, reason, "auto");
         d.lastClose = row;
         if (row.status === "closed") st.closed = true;
+        else st.confirm.n = 0; // a failed attempt starts the confirmation over; retried after the 30-min cool-down
       }
-    }
+    } else st.confirm.n = 0;
     statuses.push(d);
     log(`#${id} ${entry.pair}: ${d.status} price ${d.price.toLocaleString("en-US", { maximumFractionDigits: 0 })} (${d.priceVsEntryPct == null ? "no entry" : (d.priceVsEntryPct >= 0 ? "+" : "") + d.priceVsEntryPct.toFixed(1) + "% vs entry"}) ${d.inRange ? "in range" : "OUT " + Math.round(d.outMinutes) + "m"} fees $${(d.feeUsd || 0).toFixed(2)}${d.feesPerHour != null ? " (" + d.feesPerHour.toFixed(2) + "/h)" : ""} liq ${d.liqChange1hPct == null ? "" : (d.liqChange1hPct >= 0 ? "+" : "") + d.liqChange1hPct.toFixed(0) + "%/1h"}`);
   }

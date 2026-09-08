@@ -41,7 +41,7 @@ const PORT = Number(process.env.LP_MCP_PORT || 8788);
 const SCOPES = ["read"];
 const ACCESS_TTL = 3600; // seconds
 const CODE_TTL = 10 * 60 * 1000; // ms
-const PENDING_TTL = 10 * 60 * 1000; // ms
+const PENDING_TTL = 30 * 60 * 1000; // ms: how long the sign-in page stays valid after Connect
 
 // -- State -------------------------------------------------------------------
 let state = { passphrase: null, clients: {}, codes: {}, tokens: {}, refresh: {}, hashed: false };

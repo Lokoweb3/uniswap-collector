@@ -311,7 +311,7 @@ see the changelog for the planned merge.
 
 ### Fee auto-collect (`memecoin-collect.js`)
 
-Every 15 min (`memecoinCollect` in config.json: `minUsd` 20, `minIntervalMinutes` 30) it checks the
+Every 15 min (`memecoinCollect` in config.json: `minUsd` 20, `minIntervalMinutes` 60; the loop re-reads config each cycle) it checks the
 memecoin positions' uncollected fees and, when one exceeds the threshold and the collector is armed,
 runs the normal `./run-collector.sh full --quiet` (all wallets, vault split included), logs to
 `memecoin-collect-log.json` and reports "💰 Collected …" per position. While locked it nudges once per

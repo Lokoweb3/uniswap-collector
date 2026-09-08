@@ -23,6 +23,10 @@ const { ethers } = require("ethers");
 
 const MAX_UINT128 = (1n << 128n) - 1n;
 const treasury = require("./treasury");
+// === pool-scout-and-IL: --compound (fees back into the position; compound.js) ===
+const compound = require("./compound");
+const COMPOUND = process.argv.includes("--compound");
+// === end pool-scout-and-IL ===
 const STATE_FILE = path.join(__dirname, "state.json");
 const LOG_FILE = path.join(__dirname, "collector.log");
 
@@ -473,6 +477,17 @@ async function runOwner(ctx, owner) {
   }
 
   if (mode === "simulate") {
+    // === pool-scout-and-IL: --compound plan in simulate mode ===
+    if (COMPOUND) {
+      const splitPct = treasurySettings.enabled ? treasurySettings.pct : 0;
+      const f = (a, t) => `${fmt(a, t.decimals)} ${t.symbol}`;
+      for (const sim of eligible) {
+        const pl = compound.plan(sim, splitPct);
+        log(`Compound plan #${sim.tokenId}: reinvest ${f(pl.reinvest0, sim.t0)} + ${f(pl.reinvest1, sim.t1)} into the position (if in range; otherwise sent to the owner); vault share ${f(pl.vault0, sim.t0)} + ${f(pl.vault1, sim.t1)} (${splitPct}%) via USDG`);
+      }
+      if (eligibleV4.length) log(`--compound: ${eligibleV4.length} v4 position(s) would be skipped (run without --compound to collect them).`);
+    }
+    // === end pool-scout-and-IL ===
     log("Simulate mode — nothing sent. Reconcile the above against Revert before going live.");
     return;
   }
@@ -499,6 +514,7 @@ async function runOwner(ctx, owner) {
       const cost = rcpt.gasUsed * rcpt.gasPrice;
       recordGas(state, cost);
       log(`  confirmed in block ${rcpt.blockNumber}, gas ${ethers.formatEther(cost)} ETH`);
+      sim.collectedOk = true;
 
       for (const [addr, amt] of [
         [sim.t0.address, sim.amount0],
@@ -518,6 +534,12 @@ async function runOwner(ctx, owner) {
     }
   }
 
+  // === pool-scout-and-IL: v4 positions are not compounded (Permit2 settlement); skip them in --compound runs ===
+  if (COMPOUND && eligibleV4.length) {
+    log(`--compound: ${eligibleV4.length} v4 position(s) skipped; run without --compound to collect them.`);
+    eligibleV4.length = 0;
+  }
+  // === end pool-scout-and-IL ===
   // -- Collect v4 ------------------------------------------------------------
   if (v4c && eligibleV4.length) {
     for (const sim of eligibleV4) {
@@ -558,6 +580,78 @@ async function runOwner(ctx, owner) {
       }
     }
   }
+
+  // === pool-scout-and-IL: --compound ==========================================
+  // Each collected v3 position: the vault's share of both fee tokens stays in
+  // the swap-and-sweep pipeline (whose whole USDG output then goes to the
+  // vault), the rest is reinvested into the same position when it is in
+  // range, or handed to the owner as-is when it is not. The owner therefore
+  // receives no USDG in a --compound pass.
+  let passSplitPct = null;
+  if (COMPOUND) {
+    const tsC = treasurySettings;
+    const splitPct = tsC.enabled ? tsC.pct : 0;
+    for (const sim of eligible) {
+      // In range right now? (single-sided increases are legal but the spec sweeps out-of-range fees instead)
+      let inRange = true;
+      try {
+        const factory = new ethers.Contract(cfg.contracts.factory, ["function getPool(address,address,uint24) view returns (address)"], provider);
+        const poolAddr = await factory.getPool(sim.t0.address, sim.t1.address, sim.fee);
+        const slot0 = await new ethers.Contract(poolAddr, ["function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)"], provider).slot0();
+        const tick = Number(slot0.tick);
+        inRange = tick >= Number(sim.pos.tickLower) && tick < Number(sim.pos.tickUpper);
+      } catch {}
+      const pl = compound.plan({ ...sim, inRange }, splitPct);
+      const f = (a, t) => `${fmt(a, t.decimals)} ${t.symbol}`;
+      if (mode === "simulate" || !wallet) {
+        log(`Compound plan #${sim.tokenId}${inRange ? "" : " (out of range → owner receives the tokens)"}: reinvest ${f(pl.reinvest0, sim.t0)} + ${f(pl.reinvest1, sim.t1)}; vault share ${f(pl.vault0, sim.t0)} + ${f(pl.vault1, sim.t1)} (${splitPct}%) via USDG`);
+        continue;
+      }
+      if (!sim.collectedOk) continue;
+      let result = null;
+      if (inRange) {
+        try {
+          result = await compound.compoundV3({ wallet, npmAddress: cfg.contracts.positionManager, plan: pl, owner: owner.address, log });
+          if (result.gasUsed) recordGas(state, result.gasUsed);
+        } catch (err) {
+          log(`  ! compound failed for #${sim.tokenId}: ${err.shortMessage || err.message} — tokens go to the owner instead`);
+          result = { ok: false, error: err.shortMessage || err.message };
+        }
+      }
+      if (!inRange || !result || !result.ok) {
+        // Not reinvested: the owner's share goes out as raw tokens.
+        for (const [t, amt] of [[sim.t0, pl.reinvest0], [sim.t1, pl.reinvest1]]) {
+          if (amt <= 0n) continue;
+          try {
+            const c = new ethers.Contract(t.address, ERC20_ABI, wallet);
+            const held = await c.balanceOf(wallet.address);
+            const send = held < amt ? held : amt;
+            if (send > 0n) {
+              const ttx = await c.transfer(owner.address, send);
+              log(`send ${f(send, t)} -> ${owner.address} (not compounded) -> ${ttx.hash}`);
+              const tr = await ttx.wait();
+              recordGas(state, tr.gasUsed * tr.gasPrice);
+            }
+          } catch (err) {
+            log(`  ! transfer of ${t.symbol} to the owner failed: ${err.shortMessage || err.message}`);
+          }
+        }
+      }
+      // Only the vault's share of these tokens remains for the pipeline.
+      for (const [t, r] of [[sim.t0, pl.reinvest0], [sim.t1, pl.reinvest1]]) {
+        const cur = collected.get(t.address) || 0n;
+        collected.set(t.address, cur > r ? cur - r : 0n);
+      }
+      passSplitPct = 100;
+      compound.appendLog({
+        timestamp: new Date().toISOString(), wallet: owner.label, tokenId: String(sim.tokenId), pair: `${sim.t0.symbol}/${sim.t1.symbol}`, inRange,
+        reinvest0: fmt(pl.reinvest0, sim.t0.decimals), reinvest1: fmt(pl.reinvest1, sim.t1.decimals), vault0: fmt(pl.vault0, sim.t0.decimals), vault1: fmt(pl.vault1, sim.t1.decimals), splitPct,
+        compounded: !!(result && result.ok), txHash: result && result.txHash, liquidityAdded: result && result.liquidity ? result.liquidity.toString() : null,
+        used0: result && result.used0 != null ? fmt(result.used0, sim.t0.decimals) : null, used1: result && result.used1 != null ? fmt(result.used1, sim.t1.decimals) : null, note: (result && (result.note || result.error)) || null,
+      });
+    }
+  }
+  // === end pool-scout-and-IL ===
 
   if (mode === "collect") {
     log(`Collect-only mode. Fees sent to ${recipient}. Done.`);
@@ -745,7 +839,7 @@ async function runOwner(ctx, owner) {
     const tNow = await targetC.balanceOf(wallet.address);
     const tBal = tNow > before.target ? tNow - before.target : 0n;
     if (tBal > 0n) {
-      const ts = treasurySettings;
+      const ts = passSplitPct != null ? { ...treasurySettings, pct: passSplitPct, enabled: true } : treasurySettings; // --compound: the pipeline holds the vault's share only
       const sp = ts.enabled ? treasury.split(tBal, ts.pct) : { toVault: 0n, toOwner: tBal };
       let splitTx = null, ownerTx = null, status = ts.enabled ? "ok" : "off";
       if (sp.toVault > 0n) {

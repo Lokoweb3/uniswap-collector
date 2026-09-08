@@ -42,3 +42,7 @@ backup.log
 .claude/
 approve-serve.log
 test/.tmp/
+advisor-cache.json
+pool-scout-state.json
+pool-scout-log.json
+compound-log.json

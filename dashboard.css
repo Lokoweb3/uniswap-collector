@@ -559,3 +559,10 @@ select.scope option{background:#0b1017}
 .summary .stat:nth-child(5){animation-delay:.2s}.summary .stat:nth-child(6){animation-delay:.25s}.summary .stat:nth-child(7){animation-delay:.3s}
 @media (max-width:700px){.stat.hero .n{font-size:36px}header{margin:0;border-radius:0 0 10px 10px}}
 @media (prefers-reduced-motion:reduce){.summary .stat,.pulse,.state::before{animation:none}}
+
+/* === pool-scout-and-IL: range advisor / IL forecast lines on cards === */
+.comp .advisor{width:100%;line-height:1.7}
+.comp .advisor b.up{color:var(--live)}
+.comp .advisor b.down{color:var(--edge)}
+.comp .advisor.warnline{color:var(--edge)}
+/* === end pool-scout-and-IL === */

@@ -9,7 +9,7 @@
     "collect": "node collector.js --mode=collect",
     "full": "node collector.js --mode=full",
     "approve": "node approve-serve.js",
-    "test": "node test/alerts.test.js && node test/smoke.js",
+    "test": "node test/alerts.test.js && node test/advisor.test.js && node test/smoke.js",
     "smoke": "node test/smoke.js"
   },
   "dependencies": {

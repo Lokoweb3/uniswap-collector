@@ -4,307 +4,268 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOKOVault Treasury</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
 <style>
+/* LOKOVault: private-bank theme on the site's dark glass palette.
+   Tokens mirror dashboard.css (Theme v2); the old --text/--bg names stay as
+   aliases because the page script still emits inline styles with them. */
 :root {
-  --bg: #0d0f14;
-  --bg2: #13161e;
-  --bg3: #1a1e28;
-  --border: rgba(255,255,255,0.07);
-  --text: #e8eaf0;
-  --text2: #7a8099;
-  --text3: #3d4257;
-  --green: #00e676;
-  --green-dim: rgba(0,230,118,0.12);
-  --red: #ff4f6a;
-  --red-dim: rgba(255,79,106,0.12);
-  --gold: #ffd54f;
-  --gold-dim: rgba(255,213,79,0.1);
-  --blue: #4fc3f7;
-  --blue-dim: rgba(79,195,247,0.1);
-  --mono: 'Courier New', monospace;
-  --sans: -apple-system, BlinkMacSystemFont, sans-serif;
+  --paper:#05070b; --surface:#0b1017; --card:#0d131b;
+  --ink:#c9d4de; --bright:#ffffff; --muted:#7b8a99; --faint:#4a5665;
+  --rule:#26313d; --rule-soft:#161e27;
+  --glass:rgba(255,255,255,.035); --glass-strong:rgba(255,255,255,.06); --glass-border:rgba(255,255,255,.10);
+  --gold:#f5c542; --gold-2:#d4a52a; --gold-soft:rgba(245,197,66,.14); --gold-line:rgba(245,197,66,.32); --glow-gold:rgba(245,197,66,.22);
+  --cyan:#22d3ee; --cyan-soft:rgba(34,211,238,.12); --cyan-line:rgba(34,211,238,.32);
+  --green:#39ff88; --green-soft:rgba(57,255,136,.12); --green-line:rgba(57,255,136,.28);
+  --red:#ff4d6d; --red-soft:rgba(255,77,109,.12); --red-line:rgba(255,77,109,.32);
+  --font-sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+  --font-serif:'Cormorant Garamond',Georgia,'Times New Roman',serif;
+  /* aliases used by the page script */
+  --bg:var(--paper); --bg2:var(--card); --bg3:var(--surface); --border:var(--glass-border);
+  --text:var(--ink); --text2:var(--muted); --text3:var(--faint);
+  --green-dim:var(--green-soft); --red-dim:var(--red-soft); --gold-dim:var(--gold-soft);
+  --blue:var(--cyan); --blue-dim:var(--cyan-soft);
+  --mono:var(--font-mono); --sans:var(--font-sans);
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; min-height: 100vh; }
-
-.header {
-  border-bottom: 1px solid var(--border);
-  padding: 16px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  position: sticky; top: 0;
-  background: var(--bg); z-index: 10;
+*{box-sizing:border-box;margin:0;padding:0}
+html{color-scheme:dark}
+body{
+  color:var(--ink);font-family:var(--font-sans);font-size:14px;min-height:100vh;letter-spacing:.005em;
+  background:
+    radial-gradient(1200px 600px at 8% -10%, rgba(245,197,66,.10), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(34,211,238,.08), transparent 55%),
+    radial-gradient(800px 600px at 60% 110%, rgba(57,255,136,.05), transparent 60%),
+    linear-gradient(180deg,#070a10 0%,#05070b 60%,#03050a 100%);
+  background-attachment:fixed;
 }
-
-.logo { font-family: var(--mono); font-size: 16px; font-weight: 700; }
-.logo span { color: var(--gold); }
-
-.nav-links { display: flex; gap: 16px; }
-.nav-links a { color: var(--text2); text-decoration: none; font-size: 13px; }
-.nav-links a:hover { color: var(--text); }
-
-.connect-btn {
-  background: var(--blue-dim);
-  border: 1px solid rgba(79,195,247,0.3);
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--blue);
-  cursor: pointer;
-  transition: all 0.15s;
+/* guilloché: the fine engraved lattice of a banknote, kept very faint */
+body::before{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.35;
+  background:
+    repeating-radial-gradient(circle at 50% 50%, transparent 0 22px, rgba(245,197,66,.045) 22px 23px),
+    repeating-radial-gradient(circle at 0% 0%, transparent 0 30px, rgba(34,211,238,.03) 30px 31px),
+    repeating-radial-gradient(circle at 100% 100%, transparent 0 30px, rgba(34,211,238,.03) 30px 31px);
+  mask-image:linear-gradient(180deg, rgba(0,0,0,.9), rgba(0,0,0,.25) 40%, rgba(0,0,0,.7));
+  -webkit-mask-image:linear-gradient(180deg, rgba(0,0,0,.9), rgba(0,0,0,.25) 40%, rgba(0,0,0,.7));
 }
-.connect-btn:hover { background: rgba(79,195,247,0.2); }
+a{color:var(--cyan)}
 
-.container { max-width: 900px; margin: 0 auto; padding: 24px; }
-
-/* Cards */
-.card {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 16px;
+/* ── Header: the same glass bar as the dashboard, with a crest ─────────── */
+.header{
+  position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:12px 22px;background:rgba(5,7,11,.72);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);
+  border-bottom:1px solid var(--glass-border);
 }
-
-.card-title {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text3);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-bottom: 14px;
+.header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:linear-gradient(90deg,transparent,var(--gold-line),transparent)}
+.logo{display:flex;align-items:center;gap:10px;font-family:var(--font-serif);font-size:22px;font-weight:600;letter-spacing:.06em;color:var(--bright)}
+.logo .word{color:var(--bright)}.logo .word span{color:var(--gold)}
+.crest{
+  width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-family:var(--font-serif);font-weight:700;font-size:15px;color:var(--gold);
+  border:1px solid var(--gold-line);background:radial-gradient(circle at 35% 30%, rgba(245,197,66,.28), rgba(245,197,66,.05) 60%, transparent);
+  box-shadow:0 0 16px var(--glow-gold), inset 0 0 0 3px var(--paper), inset 0 0 0 4px var(--gold-line);
 }
-
-/* Hero */
-.hero {
-  display: grid;
-  grid-template-columns: 200px 1fr;
-  gap: 24px;
-  align-items: start;
+.nav-links{display:flex;gap:4px;flex-wrap:wrap}
+.nav-links a{
+  color:var(--muted);text-decoration:none;font-size:12.5px;font-weight:500;letter-spacing:.02em;padding:6px 11px;border-radius:8px;border:1px solid transparent;transition:color .15s,border-color .15s,background .15s;
 }
-
-.nft-image {
-  width: 200px;
-  height: 200px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  overflow: hidden;
-  background: #0f172a;
+.nav-links a:hover{color:var(--bright);border-color:var(--glass-border);background:var(--glass)}
+.nav-links a.here{color:var(--gold)!important;background:var(--glass-strong);border-color:var(--gold-line);box-shadow:0 0 18px var(--glow-gold) inset}
+.connect-btn{
+  font-family:var(--font-sans);font-size:12.5px;font-weight:600;color:#1a1200;cursor:pointer;border:0;border-radius:8px;padding:8px 16px;
+  background:linear-gradient(135deg,#f5c542 0%,#d4a52a 100%);box-shadow:0 0 22px var(--glow-gold),0 4px 14px rgba(0,0,0,.4);
+  transition:filter .15s,transform .15s;white-space:nowrap;
 }
+.connect-btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
 
-.nft-image svg { width: 100%; height: 100%; }
+.container{max-width:960px;margin:0 auto;padding:26px 20px 60px}
 
-.nft-info { flex: 1; }
-.nft-name { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
-.nft-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 20px;
-  font-size: 12px;
-  margin-bottom: 16px;
+/* Page masthead, like the top of a bank statement */
+.masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:6px 6px 18px}
+.masthead h1{font-family:var(--font-serif);font-weight:600;font-size:34px;letter-spacing:.04em;color:var(--bright);line-height:1.05}
+.masthead h1 em{font-style:italic;color:var(--gold);font-weight:500}
+.masthead .est{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);margin-top:6px}
+.masthead .est b{color:var(--gold-2);font-weight:600}
+.seal{display:flex;gap:8px;flex-wrap:wrap}
+.seal span{
+  font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:5px 10px;border-radius:999px;border:1px solid var(--glass-border);background:var(--glass);
 }
-.badge-owner { background: var(--green-dim); color: var(--green); border: 1px solid rgba(0,230,118,0.2); }
-.badge-readonly { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,79,106,0.2); }
-.badge-connecting { background: var(--gold-dim); color: var(--gold); border: 1px solid rgba(255,213,79,0.2); }
+.seal span b{color:var(--ink);font-weight:600;font-family:var(--font-mono);letter-spacing:0;text-transform:none}
+.seal span.gold{color:var(--gold);border-color:var(--gold-line)}
 
-.address-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+/* ── Cards: glass with a gold hairline and engraved corners ───────────── */
+.card{
+  position:relative;background:linear-gradient(180deg,var(--glass-strong),var(--glass)),var(--card);
+  border:1px solid var(--glass-border);border-radius:14px;padding:22px 24px;margin-bottom:18px;
+  box-shadow:0 12px 40px rgba(0,0,0,.35);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
 }
-.address-label { font-size: 11px; color: var(--text3); width: 80px; }
-.address-val { font-family: var(--mono); font-size: 12px; color: var(--text2); }
-.copy-btn {
-  background: none;
-  border: none;
-  color: var(--text3);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 2px 6px;
+.card::before{content:"";position:absolute;left:18px;right:18px;top:0;height:1px;background:linear-gradient(90deg,transparent,var(--gold-line),transparent)}
+.card::after{
+  content:"";position:absolute;inset:6px;border-radius:10px;pointer-events:none;
+  border:1px solid rgba(245,197,66,.07);
 }
-.copy-btn:hover { color: var(--blue); }
-
-/* Balances */
-.balance-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 12px;
+.card-title{
+  display:flex;align-items:center;gap:10px;font-family:var(--font-sans);font-size:11px;font-weight:600;color:var(--gold-2);letter-spacing:.2em;text-transform:uppercase;margin-bottom:16px;
 }
+.card-title::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--gold-line),transparent)}
+.card-title span{margin-left:auto;font-family:var(--font-mono);font-weight:400;letter-spacing:0;text-transform:none;color:var(--faint)!important;float:none!important}
 
-.balance-item {
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+/* ── Hero: the NFT sits inside a vault door ───────────────────────────── */
+.hero{display:grid;grid-template-columns:236px 1fr;gap:28px;align-items:center}
+.door{position:relative;width:236px;height:236px;display:grid;place-items:center}
+.door::before{
+  content:"";position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 0deg, #2a2f38, #565d69 12%, #1a1f27 25%, #565d69 37%, #2a2f38 50%, #565d69 62%, #1a1f27 75%, #565d69 87%, #2a2f38);
+  box-shadow:0 18px 50px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.08);
 }
-
-.balance-symbol { font-family: var(--mono); font-size: 11px; color: var(--text3); margin-bottom: 4px; }
-.balance-amount { font-family: var(--mono); font-size: 18px; font-weight: 700; color: var(--text); }
-.balance-usd { font-size: 11px; color: var(--text2); margin-top: 2px; }
-
-.total-value {
-  font-family: var(--mono);
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--gold);
-  margin-bottom: 4px;
+.door::after{
+  content:"";position:absolute;inset:9px;border-radius:50%;
+  background:repeating-conic-gradient(from 0deg, transparent 0 28deg, rgba(245,197,66,.55) 28deg 30deg);
+  -webkit-mask:radial-gradient(circle, transparent 0 62%, #000 63% 68%, transparent 69%);mask:radial-gradient(circle, transparent 0 62%, #000 63% 68%, transparent 69%);
+  animation:dial 60s linear infinite;
 }
-
-/* Slider */
-.split-display { font-family: var(--mono); font-size: 36px; font-weight: 700; color: var(--blue); margin-bottom: 12px; }
-
-.slider-wrap { margin-bottom: 16px; }
-input[type="range"] {
-  width: 100%;
-  -webkit-appearance: none;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--bg3);
-  outline: none;
-  margin-bottom: 8px;
+@keyframes dial{to{transform:rotate(360deg)}}
+.nft-image{
+  position:relative;z-index:1;width:172px;height:172px;border-radius:50%;overflow:hidden;background:#0f172a;
+  border:3px solid var(--gold-2);box-shadow:0 0 0 6px var(--paper),0 0 0 7px var(--gold-line),0 0 30px var(--glow-gold);
 }
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  background: var(--blue);
-  cursor: pointer;
-  border: 2px solid var(--bg);
+.nft-image svg{width:100%;height:100%;transform:scale(1.06)}
+.nft-info{flex:1;min-width:0}
+.nft-name{font-family:var(--font-serif);font-size:32px;font-weight:600;letter-spacing:.03em;color:var(--bright);margin-bottom:8px;line-height:1.1}
+.nft-name span{color:var(--gold)!important;font-style:italic;font-weight:500}
+.nft-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;font-size:11.5px;font-weight:500;letter-spacing:.04em;margin-bottom:16px}
+.badge-owner{background:var(--green-soft);color:var(--green);border:1px solid var(--green-line)}
+.badge-readonly{background:var(--red-soft);color:var(--red);border:1px solid var(--red-line)}
+.badge-connecting{background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold-line)}
+.address-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--rule-soft)}
+.address-label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);width:96px;flex:none}
+.address-val{font-family:var(--font-mono);font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis}
+.copy-btn{background:none;border:1px solid transparent;border-radius:6px;color:var(--faint);cursor:pointer;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px}
+.copy-btn:hover{color:var(--gold);border-color:var(--gold-line)}
+
+/* ── Balances: an account balance ─────────────────────────────────────── */
+.total-value{
+  font-family:var(--font-mono);font-size:40px;font-weight:600;letter-spacing:-.01em;color:var(--gold);margin-bottom:2px;line-height:1.1;
+  text-shadow:0 0 24px var(--glow-gold);
 }
-.slider-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text3); font-family: var(--mono); }
-
-.warning-box {
-  background: rgba(255,213,79,0.08);
-  border: 1px solid rgba(255,213,79,0.2);
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--gold);
-  margin-bottom: 12px;
-  display: none;
+.balance-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.balance-item{
+  background:var(--glass);border:1px solid var(--glass-border);border-left:2px solid var(--gold-line);border-radius:10px;padding:12px 14px;
+  transition:border-color .2s,transform .2s;
 }
+.balance-item:hover{border-color:var(--gold-line);transform:translateY(-1px)}
+.balance-symbol{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+.balance-amount{font-family:var(--font-mono);font-size:18px;font-weight:600;color:var(--bright)}
+.balance-usd{font-size:11px;color:var(--muted);margin-top:2px}
 
-/* Withdraw */
-.form-row { margin-bottom: 12px; }
-.form-label { font-size: 11px; color: var(--text3); margin-bottom: 4px; font-family: var(--mono); }
-.form-input {
-  width: 100%;
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--text);
-  outline: none;
+/* ── Split control ────────────────────────────────────────────────────── */
+.split-display{font-family:var(--font-mono);font-size:40px;font-weight:600;color:var(--cyan);margin-bottom:12px;text-shadow:0 0 22px rgba(34,211,238,.25)}
+.slider-wrap{margin-bottom:16px}
+input[type="range"]{width:100%;-webkit-appearance:none;appearance:none;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--gold-line),var(--cyan-line));outline:none;margin-bottom:8px}
+input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:var(--gold);cursor:pointer;border:3px solid var(--paper);box-shadow:0 0 14px var(--glow-gold)}
+input[type="range"]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--gold);cursor:pointer;border:3px solid var(--paper);box-shadow:0 0 14px var(--glow-gold)}
+.slider-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-family:var(--font-mono)}
+.warning-box{background:var(--gold-soft);border:1px solid var(--gold-line);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--gold);margin-bottom:12px;display:none}
+
+/* ── Forms ────────────────────────────────────────────────────────────── */
+.form-row{margin-bottom:12px}
+.form-label{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+.form-input{
+  width:100%;background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:9px 12px;font-family:var(--font-mono);font-size:13px;color:var(--bright);outline:none;transition:border-color .15s,box-shadow .15s;
 }
-.form-input:focus { border-color: var(--blue); }
+.form-input:focus{border-color:var(--gold-line);box-shadow:0 0 0 3px var(--gold-soft)}
+.form-input::placeholder{color:var(--faint)}
+select.form-input{cursor:pointer}
+select.form-input option{background:#0b1017}
+.input-with-max{display:flex;gap:8px}
+.input-with-max .form-input{flex:1}
+.max-btn{background:var(--glass);border:1px solid var(--glass-border);border-radius:8px;padding:8px 12px;font-family:var(--font-mono);font-size:11px;color:var(--gold);cursor:pointer}
+.max-btn:hover{border-color:var(--gold-line)}
 
-.input-with-max { display: flex; gap: 8px; }
-.input-with-max .form-input { flex: 1; }
-.max-btn {
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--gold);
-  cursor: pointer;
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+.btn{width:100%;margin-top:4px;padding:11px 20px;border-radius:9px;border:0;font-family:var(--font-sans);font-size:13px;font-weight:600;letter-spacing:.02em;cursor:pointer;transition:filter .15s,transform .15s,box-shadow .2s}
+.btn:hover{transform:translateY(-1px)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-primary{color:#04121a;background:linear-gradient(135deg,#22d3ee 0%,#39ff88 100%);box-shadow:0 0 22px rgba(34,211,238,.25),0 4px 14px rgba(0,0,0,.4)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-gold{color:#1a1200;background:linear-gradient(135deg,#f5c542 0%,#d4a52a 100%);box-shadow:0 0 22px var(--glow-gold),0 4px 14px rgba(0,0,0,.4)}
+.btn-gold:hover{filter:brightness(1.08)}
+.btn-danger{color:var(--red);background:var(--red-soft);border:1px solid var(--red-line)}
+
+/* ── Status ───────────────────────────────────────────────────────────── */
+.status-msg{margin-top:10px;padding:8px 12px;border-radius:8px;font-size:12px;font-family:var(--font-mono);display:none}
+.status-success{background:var(--green-soft);color:var(--green);border:1px solid var(--green-line)}
+.status-error{background:var(--red-soft);color:var(--red);border:1px solid var(--red-line)}
+.status-pending{background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold-line)}
+
+/* ── Statement table (fee split history) ──────────────────────────────── */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px 12px;font-family:var(--font-sans);font-size:10px;font-weight:600;letter-spacing:.16em;color:var(--gold-2);border-bottom:1px solid var(--gold-line);text-transform:uppercase;white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid var(--rule-soft);font-family:var(--font-mono);color:var(--ink);white-space:nowrap}
+tbody tr:nth-child(even) td{background:rgba(255,255,255,.015)}
+tr:hover td{background:var(--gold-soft)}
+td a{color:var(--cyan);text-decoration:none}
+td a:hover{text-decoration:underline}
+.empty-state{text-align:center;padding:40px;color:var(--faint);font-family:var(--font-serif);font-style:italic;font-size:15px}
+
+/* ── Info grid, loading, locked ───────────────────────────────────────── */
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin-bottom:16px}
+.kv .k{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+.kv .v{font-family:var(--font-mono);font-size:13px;color:var(--ink)}
+.skeleton{background:linear-gradient(90deg,var(--surface) 25%,var(--card) 50%,var(--surface) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:20px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.locked-overlay{text-align:center;padding:26px;color:var(--muted);font-size:13px;border:1px dashed var(--rule);border-radius:10px;background:var(--glass)}
+.locked-overlay .lock-icon{font-size:30px;margin-bottom:8px;filter:drop-shadow(0 0 10px var(--glow-gold))}
+.fine{font-size:12px;color:var(--muted);line-height:1.6}
+.note{font-size:11px;color:var(--muted)}
+
+@media (max-width:640px){
+  .header{padding:10px 14px}
+  .nav-links a{padding:5px 8px;font-size:12px}
+  .hero{grid-template-columns:1fr;justify-items:center;text-align:center}
+  .address-row{justify-content:center}.address-label{width:auto}
+  .masthead h1{font-size:28px}
+  .total-value{font-size:32px}
+  .kv{grid-template-columns:1fr}
 }
-.max-btn:hover { border-color: var(--gold); }
-
-select.form-input { cursor: pointer; }
-
-/* Buttons */
-.btn {
-  padding: 10px 20px;
-  border-radius: 6px;
-  font-family: var(--mono);
-  font-size: 13px;
-  cursor: pointer;
-  border: none;
-  transition: all 0.15s;
-  width: 100%;
-  margin-top: 4px;
-}
-
-.btn-primary { background: var(--blue); color: #000; font-weight: 700; }
-.btn-primary:hover { opacity: 0.9; }
-.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.btn-gold { background: var(--gold-dim); border: 1px solid rgba(255,213,79,0.3); color: var(--gold); }
-.btn-gold:hover { background: rgba(255,213,79,0.2); }
-.btn-gold:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.btn-danger { background: var(--red-dim); border: 1px solid rgba(255,79,106,0.3); color: var(--red); }
-
-/* Status */
-.status-msg {
-  margin-top: 10px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-family: var(--mono);
-  display: none;
-}
-.status-success { background: var(--green-dim); color: var(--green); border: 1px solid rgba(0,230,118,0.2); }
-.status-error { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,79,106,0.2); }
-.status-pending { background: var(--gold-dim); color: var(--gold); border: 1px solid rgba(255,213,79,0.2); }
-
-/* Table */
-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-th { text-align: left; padding: 8px 12px; font-family: var(--mono); font-size: 10px; color: var(--text3); border-bottom: 1px solid var(--border); text-transform: uppercase; }
-td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); font-family: var(--mono); color: var(--text2); }
-td a { color: var(--blue); text-decoration: none; }
-td a:hover { text-decoration: underline; }
-tr:hover td { background: rgba(255,255,255,0.02); }
-
-.empty-state { text-align: center; padding: 40px; color: var(--text3); font-family: var(--mono); font-size: 12px; }
-
-/* Loading */
-.skeleton { background: linear-gradient(90deg, var(--bg3) 25%, var(--bg2) 50%, var(--bg3) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 4px; height: 20px; }
-@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
-
-/* Locked overlay */
-.locked-overlay {
-  text-align: center;
-  padding: 30px;
-  color: var(--text3);
-  font-size: 13px;
-}
-.locked-overlay .lock-icon { font-size: 32px; margin-bottom: 8px; }
-
-@media (max-width: 600px) {
-  .hero { grid-template-columns: 1fr; }
-  .nft-image { width: 160px; height: 160px; }
-}
+@media (prefers-reduced-motion:reduce){.door::after{animation:none}}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="logo">LOKO<span>Vault</span></div>
+  <div class="logo"><span class="crest">L</span><span class="word">LOKO<span>Vault</span></span></div>
   <div class="nav-links">
     <a href="/">Dashboard</a>
     <a href="/analytics">Analytics</a>
-    <a href="/treasury" style="color:var(--gold)">Vault</a>
+    <a href="/treasury" class="here">Vault</a>
+    <a href="/approvals">Approvals</a>
   </div>
   <button class="connect-btn" id="connect-btn" onclick="connectWallet()">Connect Wallet</button>
 </div>
 
 <div class="container">
 
+  <div class="masthead">
+    <div>
+      <h1>Private <em>Treasury</em></h1>
+      <div class="est">Token-bound account · <b>Robinhood Chain</b> · Est. 2026</div>
+    </div>
+    <div class="seal">
+      <span class="gold">Fee split <b id="seal-split">—</b></span>
+      <span>Account <b>#1</b></span>
+      <span>EIP-6551</span>
+    </div>
+  </div>
+
   <!-- Hero -->
   <div class="card">
     <div class="hero">
+      <div class="door">
       <div class="nft-image" id="nft-image">
         <!-- SVG loaded from contract -->
         <svg viewBox="0 0 680 680" xmlns="http://www.w3.org/2000/svg">
@@ -343,8 +304,9 @@ tr:hover td { background: rgba(255,255,255,0.02); }
           <line x1="200" y1="590" x2="480" y2="590" stroke="#1e3a5f" stroke-width="1"/>
         </svg>
       </div>
+      </div>
       <div class="nft-info">
-        <div class="nft-name">LOKOVault <span style="color:var(--text2)">#1</span></div>
+        <div class="nft-name">LOKOVault <span>№ 1</span></div>
         <div id="owner-badge" class="nft-badge badge-connecting">Connecting...</div>
         <div class="address-row">
           <span class="address-label">NFT</span>
@@ -361,9 +323,9 @@ tr:hover td { background: rgba(255,255,255,0.02); }
           <span class="address-val" id="nft-owner">Loading...</span>
         </div>
         <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-          <a id="blockscout-nft" href="#" target="_blank" style="font-size:11px;color:var(--blue)">View NFT on Blockscout ↗</a>
-          <span style="color:var(--text3)">·</span>
-          <a id="blockscout-tba" href="#" target="_blank" style="font-size:11px;color:var(--blue)">View TBA ↗</a>
+          <a id="blockscout-nft" href="#" target="_blank" style="font-size:11px">View NFT on Blockscout ↗</a>
+          <span style="color:var(--faint)">·</span>
+          <a id="blockscout-tba" href="#" target="_blank" style="font-size:11px">View TBA ↗</a>
         </div>
       </div>
     </div>
@@ -371,9 +333,9 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
   <!-- Balances -->
   <div class="card">
-    <div class="card-title">Vault Balances <span id="last-refresh" style="float:right;font-size:10px;color:var(--text3)"></span></div>
+    <div class="card-title">Account balance <span id="last-refresh"></span></div>
     <div class="total-value" id="total-usd">$—</div>
-    <div style="font-size:11px;color:var(--text2);margin-bottom:16px">Total vault value</div>
+    <div class="note" style="margin-bottom:16px">Available balance · USDG held by the vault</div>
     <div class="balance-grid" id="balance-grid">
       <div class="balance-item"><div class="balance-symbol">Loading...</div><div class="skeleton" style="margin-top:8px"></div></div>
     </div>
@@ -381,7 +343,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
   <!-- Fee Split Control -->
   <div class="card" id="split-card">
-    <div class="card-title">Fee Split Control</div>
+    <div class="card-title">Deposit rate · fee split</div>
     <div id="split-locked" class="locked-overlay">
       <div class="lock-icon">🔒</div>
       Connect the NFT holder wallet to adjust
@@ -401,7 +363,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
   <!-- Withdraw -->
   <div class="card">
-    <div class="card-title">Withdraw from Vault</div>
+    <div class="card-title">Withdrawal</div>
     <div id="withdraw-locked" class="locked-overlay">
       <div class="lock-icon">🔒</div>
       Connect the NFT holder wallet to withdraw
@@ -431,7 +393,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
   <!-- Fee Split History -->
   <div class="card">
-    <div class="card-title">Fee Split History</div>
+    <div class="card-title">Statement · deposits</div>
     <div id="history-content">
       <div class="empty-state">No splits recorded yet.<br>The collector will log splits here after each collect run.</div>
     </div>
@@ -439,27 +401,15 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
   <!-- NFT Info -->
   <div class="card">
-    <div class="card-title">NFT Info</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-      <div>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Name</div>
-        <div style="font-family:var(--mono);font-size:13px">LOKOVault</div>
-      </div>
-      <div>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Symbol</div>
-        <div style="font-family:var(--mono);font-size:13px">LKVAULT</div>
-      </div>
-      <div>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Token ID</div>
-        <div style="font-family:var(--mono);font-size:13px">#1</div>
-      </div>
-      <div>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Chain</div>
-        <div style="font-family:var(--mono);font-size:13px">Robinhood Chain (4663)</div>
-      </div>
+    <div class="card-title">Account details</div>
+    <div class="kv">
+      <div><div class="k">Name</div><div class="v">LOKOVault</div></div>
+      <div><div class="k">Symbol</div><div class="v">LKVAULT</div></div>
+      <div><div class="k">Token ID</div><div class="v">#1</div></div>
+      <div><div class="k">Chain</div><div class="v">Robinhood Chain (4663)</div></div>
     </div>
     <div id="transfer-section" style="display:none">
-      <div style="background:var(--red-dim);border:1px solid rgba(255,79,106,0.2);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--red)">
+      <div style="background:var(--red-soft);border:1px solid var(--red-line);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--red)">
         ⚠️ Transferring this NFT gives the recipient full control of the vault and all funds inside.
       </div>
       <button class="btn btn-danger" onclick="transferNFT()">Transfer NFT</button>
@@ -468,17 +418,17 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
   <!-- === weekly-digest-and-vault === Open on your phone -->
   <div class="card" id="qr-card">
-    <div class="card-title">Open on your phone</div>
+    <div class="card-title">Mobile access</div>
     <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
       <div style="text-align:center">
         <div id="qr-public" style="background:#fff;padding:6px;border-radius:8px;display:inline-block"></div>
-        <div style="font-size:11px;color:var(--text3);margin-top:6px;max-width:200px">Anywhere · passphrase gate · read-only<br><span style="font-family:var(--mono);font-size:10px" id="qr-public-url"></span></div>
+        <div class="note" style="margin-top:6px;max-width:200px">Anywhere · passphrase gate · read-only<br><span style="font-family:var(--mono);font-size:10px" id="qr-public-url"></span></div>
       </div>
       <div style="text-align:center">
         <div id="qr-tailnet" style="background:#fff;padding:6px;border-radius:8px;display:inline-block"></div>
-        <div style="font-size:11px;color:var(--text3);margin-top:6px;max-width:200px">Tailnet devices only · no gate<br><span style="font-family:var(--mono);font-size:10px" id="qr-tailnet-url"></span></div>
+        <div class="note" style="margin-top:6px;max-width:200px">Tailnet devices only · no gate<br><span style="font-family:var(--mono);font-size:10px" id="qr-tailnet-url"></span></div>
       </div>
-      <div style="font-size:12px;color:var(--text2);max-width:320px;line-height:1.6">
+      <div class="fine" style="max-width:320px">
         To withdraw or change the split from the phone, open the URL <b>inside Rabby's in-app browser</b> (Rabby → Discover → paste the URL) so the page can sign with the NFT holder wallet. In a normal mobile browser the page is read-only.
       </div>
     </div>
@@ -599,6 +549,7 @@ async function checkOwnership() {
     document.getElementById('split-val').textContent = currentSplitPct;
     document.getElementById('split-slider').value = currentSplitPct;
     document.getElementById('svg-pct').textContent = currentSplitPct + '%';
+    document.getElementById('seal-split').textContent = currentSplitPct + '%';
     onSlider(currentSplitPct);
 
     isOwner = nftOwner.toLowerCase() === connectedAddress.toLowerCase();
@@ -816,9 +767,9 @@ async function loadHistory() {
     const total = data.reduce((s, r) => s + (r.splitUsdg || 0), 0);
 
     document.getElementById('history-content').innerHTML = `
-      <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:11px;color:var(--text3)">Total received all time</span>
-        <span style="font-family:var(--mono);font-size:18px;color:var(--gold)">${total.toFixed(2)} USDG</span>
+      <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <span class="note" style="letter-spacing:.14em;text-transform:uppercase;font-size:10.5px">Closing balance · all deposits</span>
+        <span style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--gold);text-shadow:0 0 18px var(--glow-gold)">${total.toFixed(2)} USDG</span>
       </div>
       <div style="overflow-x:auto">
         <table>
@@ -900,6 +851,7 @@ async function loadPublicInfo() {
     document.getElementById('split-val').textContent = currentSplitPct;
     document.getElementById('split-slider').value = currentSplitPct;
     document.getElementById('svg-pct').textContent = currentSplitPct + '%';
+    document.getElementById('seal-split').textContent = currentSplitPct + '%';
     if (!connectedAddress) {
       const badge = document.getElementById('owner-badge');
       badge.className = 'nft-badge badge-readonly';

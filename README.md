@@ -757,6 +757,8 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-08
 
+- Vault page restyled as a private bank on the site's dark glass palette: serif masthead, gold
+  hairlines, vault-door hero around the NFT, account-balance card, statement-style deposit table.
 - Chat panel built into the site (`chat.js`, `chat-widget.js`, `POST /api/chat`): answers from the
   thirteen read-only MCP tools over an in-memory transport; Claude (Anthropic SDK) or Ollama Cloud
   picked from `.env`; allowed through the gate for the phone; `test/chat.test.js`.

@@ -42,3 +42,5 @@ backup.log
 .claude/
 approve-serve.log
 test/.tmp/
+memecoin-collect-log.json
+memecoin-collect-state.json

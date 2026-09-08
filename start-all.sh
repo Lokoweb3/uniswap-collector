@@ -60,3 +60,9 @@ if ! running '^(/usr/bin/env )?bash \./nightly\.sh'; then
   nohup ./nightly.sh > /dev/null 2>&1 < /dev/null &
   echo "nightly: started"
 else echo "nightly: running"; fi
+# === fee-auto-collect === memecoin fee auto-collect loop (memecoin-collect.js): runs the
+# collector when a memecoin position holds more than memecoinCollect.minUsd of fees.
+if ! running '^node memecoin-collect\.js'; then
+  nohup node memecoin-collect.js >> memecoin-collect.log 2>&1 < /dev/null &
+  echo "memecoin-collect: started"
+else echo "memecoin-collect: running"; fi

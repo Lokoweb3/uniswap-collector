@@ -93,5 +93,11 @@
   "feeSplitMax": 20,
   "treasuryNFT": "0x0000000000000000000000000000000000000022",
   "treasuryTokenId": 1,
-  "treasuryImplementation": "0x0000000000000000000000000000000000000023"
+  "treasuryImplementation": "0x0000000000000000000000000000000000000023",
+  "memecoinCollect": {
+    "_comment": "memecoin-collect.js: every 15 min, when a memecoin position (config memecoins, else any v4 position in the Trading wallet) has more than minUsd of uncollected fees, run the normal collector (all wallets, vault split) instead of waiting for 09:00; at most one auto run per minIntervalMinutes.",
+    "enabled": true,
+    "minUsd": 20,
+    "minIntervalMinutes": 30
+  }
 }

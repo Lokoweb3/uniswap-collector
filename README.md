@@ -165,8 +165,8 @@ used for day and month grouping (default America/New_York).
 ### From claude.ai and the Claude mobile app
 
 Those run on Anthropic's servers, so the tools have to be reachable over the
-internet. `lp-mcp-remote.mjs` serves the same four tools over HTTP behind its
-own OAuth login (claude.ai registers itself, you type a passphrase once, it
+internet. `lp-mcp-remote.mjs` serves the same read-only tools (thirteen, see
+"From an agent on a server") over HTTP behind its own OAuth login (claude.ai registers itself, you type a passphrase once, it
 gets a token that refreshes on its own). It binds to loopback; a tunnel gives
 it a public HTTPS address. Steps:
 
@@ -177,12 +177,12 @@ echo 'LP_MCP_PUBLIC_URL=https://<machine>.<tailnet>.ts.net' > .env.mcp
 ./run-mcp-remote.sh
 ```
 
-The dashboard itself has a private URL on the same node,
-`https://<your-node>.<your-tailnet>.ts.net:8443`, served to tailnet devices
-only (not Funnel): install Tailscale on a phone or laptop, sign in with the
-same account, and open it. Requests arrive from loopback, so the Collect
-button and Arm form work there too; that is why it must never be put on
-Funnel.
+The dashboard itself is reachable from anywhere at
+`https://<your-node>.<your-tailnet>.ts.net:8443` behind the passphrase gate
+(see "Public URLs with a passphrase"); through the gate it is read-only, so
+arming, collecting, closing and revoking stay on the dashboard machine.
+claude.ai caches a connector's tool list: after new tools are added,
+reconnect the connector in its settings to pick them up.
 
 This machine is set up already: Tailscale's static build lives in
 `~/.local/tailscale` (no root needed, user-space networking), the node is

@@ -1310,6 +1310,42 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // === token-health-and-approvals ===
+  if (url.pathname === "/api/token-health") {
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(200);
+    return res.end(JSON.stringify(tokenHealth.view()));
+  }
+  if (url.pathname === "/approvals" || url.pathname === "/approvals.html") {
+    try {
+      const html = fs.readFileSync(path.join(__dirname, "approvals.html"));
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(html);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("approvals.html not found");
+    }
+  }
+  if (url.pathname === "/api/approvals") {
+    // Read-only audit of one wallet's allowances, operator approvals and vault
+    // status. `owner` must be the main wallet or a wallets.json wallet.
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const allowed = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main wallet", main: true }];
+      for (const w of watch.readWallets()) allowed.push({ address: w.address, label: w.label || w.address, main: false, collect: !!w.collect });
+      const want = url.searchParams.get("owner");
+      const entry = want ? allowed.find((a) => a.address.toLowerCase() === want.toLowerCase()) : allowed[0];
+      if (!entry) throw new Error("that wallet is not the main wallet or a wallet listed in wallets.json");
+      const data = await approvalsAudit.audit(entry.address, require("./arm").operatorAddress());
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ...data, ownerLabel: entry.label, wallets: allowed, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", health: tokenHealth.view().byAddress }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end token-health-and-approvals ===
+
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
@@ -1569,6 +1605,27 @@ async function treasuryState() {
   return { enabled: ts.enabled, pct, pctSource, balanceUsdg, consecutiveFailures: treasuryLedger.consecutiveFailures() };
 }
 
+// === token-health-and-approvals ===
+// Risk read on every held token (token-health.json, refreshed in the tick) and
+// the approval audit behind /approvals.
+const tokenHealth = require("./token-health").create({ provider, cfg });
+const approvalsAudit = require("./approvals").create({
+  provider,
+  cfg,
+  approvedOperators,
+  tokenMeta: (addr) => u.getToken(addr, provider),
+});
+/** Every token held in any wallet, for the health refresh. */
+function heldTokens() {
+  const out = [];
+  const pf = portfolio.latest;
+  if (pf) for (const r of pf.rows) if (r.address) out.push({ address: r.address, symbol: r.symbol });
+  for (const w of (watch.latest && watch.latest.wallets) || []) for (const t of (w.holdings && w.holdings.tokens) || []) if (t.address) out.push({ address: t.address, symbol: t.symbol });
+  for (const [a, m] of tokenSet) out.push({ address: m.address || a, symbol: m.symbol });
+  return out;
+}
+// === end token-health-and-approvals ===
+
 // Telegram alerts (alerts.js): token and chat id come from the environment
 // (./.env via start-all.sh); without them the module stays silent.
 const alerts = require("./alerts").create();
@@ -1691,6 +1748,10 @@ async function backgroundTick() {
   } catch (err) {
     console.error("collect pricing:", err.shortMessage || err.message);
   }
+  // === token-health-and-approvals ===
+  // Not awaited: Blockscout reads are paced, a batch may take minutes.
+  tokenHealth.refresh(heldTokens(), 15).then((n) => { if (n) console.log(`token health: refreshed ${n} token(s)`); }).catch((err) => console.error("token health:", err.shortMessage || err.message));
+  // === end token-health-and-approvals ===
 }
 backgroundTick();
 setInterval(backgroundTick, 10 * 60 * 1000);

@@ -33,6 +33,7 @@ snet-staking.json
 price-log.json
 portfolio-all.json
 pool-samples.json
+token-health.json
 alerts-state.json
 fee-split-ledger.json
 v4-positions*.json
@@ -42,3 +43,4 @@ backup.log
 .claude/
 approve-serve.log
 test/.tmp/
+*:Zone.Identifier

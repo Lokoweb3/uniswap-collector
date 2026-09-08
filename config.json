@@ -20,7 +20,7 @@
         "0x11aFe0130450df7127276e7AF474Eccdf4D420Cc",
         "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044"
       ],
-      "_pricingHooksComment": "Hook addresses whose v4 pools the portfolio pricer also checks (the hookless key is always tried). Launchpad hooks seen so far: Pools.trade (0xeb1E…, SEAL/ETH), 0x11aF… (Bucket/ETH), 0xE5e7… (BULLIONS/ETH, fee 0). Unknown ones are learned automatically from the token's recent swaps."
+      "_pricingHooksComment": "Hook addresses whose v4 pools the portfolio pricer also checks (the hookless key is always tried). Launchpad hooks seen so far: Pools.trade (0xeb1E\u2026, SEAL/ETH), 0x11aF\u2026 (Bucket/ETH), 0xE5e7\u2026 (BULLIONS/ETH, fee 0). Unknown ones are learned automatically from the token's recent swaps."
     },
     "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
     "_v2FactoryComment": "Uniswap v2 factory on Robinhood Chain (read from NET.uniswapV2Factory). Portfolio pricing falls back to a v2 pair when no v3 pool is deep enough."
@@ -83,7 +83,8 @@
       {
         "token": "0xb773ec2C326B7f98a5a83fc098825492F020a4c7",
         "underlying": "0xCA9c78Dd337A67F6e0077F65F5E9218719d30eDf",
-        "label": "NET staking"
+        "label": "NET staking",
+        "stakingContract": "0xB078cc304A0B264C5F3680DC0488954ACcd02E87"
       }
     ]
   },

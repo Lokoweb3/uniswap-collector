@@ -559,3 +559,8 @@ select.scope option{background:#0b1017}
 .summary .stat:nth-child(5){animation-delay:.2s}.summary .stat:nth-child(6){animation-delay:.25s}.summary .stat:nth-child(7){animation-delay:.3s}
 @media (max-width:700px){.stat.hero .n{font-size:36px}header{margin:0;border-radius:0 0 10px 10px}}
 @media (prefers-reduced-motion:reduce){.summary .stat,.pulse,.state::before{animation:none}}
+
+/* === token-health-and-approvals === */
+.thbadge{margin-left:6px;font-size:11px;cursor:help;vertical-align:middle}
+.thbadge.th-risk{filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
+/* === end token-health-and-approvals === */

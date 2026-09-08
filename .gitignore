@@ -37,6 +37,7 @@ alerts-state.json
 memecoin-guardian-state.json
 memecoin-guardian-log.json
 memecoin-status.json
+digest-state.json
 fee-split-ledger.json
 v4-positions*.json
 watch-*.json

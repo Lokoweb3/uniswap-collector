@@ -466,8 +466,27 @@ tr:hover td { background: rgba(255,255,255,0.02); }
     </div>
   </div>
 
+  <!-- === weekly-digest-and-vault === Open on your phone -->
+  <div class="card" id="qr-card">
+    <div class="card-title">Open on your phone</div>
+    <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+      <div style="text-align:center">
+        <div id="qr-public" style="background:#fff;padding:6px;border-radius:8px;display:inline-block"></div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px;max-width:200px">Anywhere · passphrase gate · read-only<br><span style="font-family:var(--mono);font-size:10px" id="qr-public-url"></span></div>
+      </div>
+      <div style="text-align:center">
+        <div id="qr-tailnet" style="background:#fff;padding:6px;border-radius:8px;display:inline-block"></div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px;max-width:200px">Tailnet devices only · no gate<br><span style="font-family:var(--mono);font-size:10px" id="qr-tailnet-url"></span></div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);max-width:320px;line-height:1.6">
+        To withdraw or change the split from the phone, open the URL <b>inside Rabby's in-app browser</b> (Rabby → Discover → paste the URL) so the page can sign with the NFT holder wallet. In a normal mobile browser the page is read-only.
+      </div>
+    </div>
+  </div>
+
 </div>
 
+<script src="/qr.js"></script>
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
@@ -499,7 +518,7 @@ const ERC20_ABI = [
 const KNOWN_TOKENS = {
   '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168': { symbol: 'USDG', decimals: 6 },
   '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73': { symbol: 'WETH', decimals: 18 },
-  '0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d': { symbol: 'CASHCAT', decimals: 18 },
+  '0x020bfc650a365f8bb26819deaabf3e21291018b4': { symbol: 'CASHCAT', decimals: 18 }, // weekly-digest-and-vault: corrected address (the previous one is not a contract on this chain)
 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -616,12 +635,16 @@ async function loadBalances() {
     const ethBal = await rpc.getBalance(tbaAddress);
     balances['ETH'] = { amount: ethers.formatEther(ethBal), symbol: 'ETH', address: null, usd: 0 };
 
-    // Known ERC-20 tokens
+    // Known ERC-20 tokens (a token that fails to answer is skipped, not fatal — weekly-digest-and-vault)
     for (const [addr, info] of Object.entries(KNOWN_TOKENS)) {
-      const token = new ethers.Contract(addr, ERC20_ABI, rpc);
-      const bal = await token.balanceOf(tbaAddress);
-      const formatted = ethers.formatUnits(bal, info.decimals);
-      balances[info.symbol] = { amount: formatted, symbol: info.symbol, address: addr, usd: 0 };
+      try {
+        const token = new ethers.Contract(addr, ERC20_ABI, rpc);
+        const bal = await token.balanceOf(tbaAddress);
+        const formatted = ethers.formatUnits(bal, info.decimals);
+        balances[info.symbol] = { amount: formatted, symbol: info.symbol, address: addr, usd: 0 };
+      } catch(e) {
+        console.warn('Balance skipped for', info.symbol, e.message);
+      }
     }
 
     renderBalances();
@@ -856,10 +879,65 @@ function startAutoRefresh() {
   setInterval(loadBalances, 30000);
 }
 
+// === weekly-digest-and-vault ===
+// Read-only view without a wallet: owner and split from the public RPC, balances and history as usual.
+let autoRefreshStarted = false;
+async function loadPublicInfo() {
+  if (!nftAddress) return;
+  try {
+    // Served by the dashboard (server-side RPC): works without a wallet and without CORS on the RPC.
+    const r = await fetch('/api/vault-info');
+    const info = await r.json();
+    if (!info.ok) throw new Error(info.error || 'vault-info failed');
+    if (info.owner) nftOwner = info.owner;
+    if (info.pct != null) currentSplitPct = Number(info.pct);
+    if (!connectedAddress && info.balances && info.balances.length) {
+      for (const b of info.balances) balances[b.symbol] = { amount: b.amount, symbol: b.symbol, address: b.address, usd: 0 };
+      renderBalances();
+      document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    }
+    document.getElementById('nft-owner').textContent = nftOwner ? short(nftOwner) : '—';
+    document.getElementById('split-val').textContent = currentSplitPct;
+    document.getElementById('split-slider').value = currentSplitPct;
+    document.getElementById('svg-pct').textContent = currentSplitPct + '%';
+    if (!connectedAddress) {
+      const badge = document.getElementById('owner-badge');
+      badge.className = 'nft-badge badge-readonly';
+      badge.textContent = '👁 Read only — connect the NFT holder wallet to manage';
+    }
+  } catch(e) {
+    console.error('Public info failed:', e.message);
+  }
+}
+function renderQr() {
+  if (typeof QR === 'undefined') return;
+  const host = '<your-node>.<your-tailnet>.ts.net';
+  const pub = `https://${host}:8443/vault`;
+  const tail = `https://${host}:8444/vault`;
+  try {
+    document.getElementById('qr-public').innerHTML = QR.qrSvg(pub, 150);
+    document.getElementById('qr-tailnet').innerHTML = QR.qrSvg(tail, 150);
+    document.getElementById('qr-public-url').textContent = pub;
+    document.getElementById('qr-tailnet-url').textContent = tail;
+  } catch(e) {
+    document.getElementById('qr-card').style.display = 'none';
+  }
+  // A phone does not need to scan itself.
+  if (window.innerWidth < 640) document.getElementById('qr-card').style.display = 'none';
+}
+const _startAutoRefresh = startAutoRefresh;
+startAutoRefresh = function () { if (autoRefreshStarted) return; autoRefreshStarted = true; _startAutoRefresh(); };
+
 // ── Init ──────────────────────────────────────────────────────────────────────
-loadConfig().then(() => {
+loadConfig().then(async () => {
+  renderQr();
+  await loadPublicInfo();
+  await loadBalances();
+  await loadHistory();
+  startAutoRefresh();
   if (window.ethereum?.selectedAddress) connectWallet();
 });
+// === end weekly-digest-and-vault ===
 </script>
 </body>
 </html>

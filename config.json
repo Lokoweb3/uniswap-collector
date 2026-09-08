@@ -93,5 +93,55 @@
   "feeSplitMax": 20,
   "treasuryNFT": "0x0000000000000000000000000000000000000022",
   "treasuryTokenId": 1,
-  "treasuryImplementation": "0x0000000000000000000000000000000000000023"
+  "treasuryImplementation": "0x0000000000000000000000000000000000000023",
+  "_exitRulesComment": "Exit rules (exit-rules.js): evaluated every 5 min over every open position of every wallet. pairs match either order (\"LAPTOP/ETH\" = \"ETH / LAPTOP\"); \"*\" = all. action alert = Telegram; action close = decrease 100% liquidity to the OWNER wallet (operator signs, only while armed) and only for positions whose exitRuleOverrides entry has enabled: true. Overrides also set per-position thresholds: priceDropPct1h (alert threshold), outOfRangeMinutes, tvlDropPct.",
+  "exitRules": [
+    {
+      "type": "priceDropPct1h",
+      "threshold": 30,
+      "pairs": [
+        "LAPTOP/ETH",
+        "PINK/ETH"
+      ],
+      "action": "alert"
+    },
+    {
+      "type": "priceDropPct1h",
+      "threshold": 50,
+      "pairs": [
+        "LAPTOP/ETH",
+        "PINK/ETH"
+      ],
+      "action": "close"
+    },
+    {
+      "type": "outOfRange",
+      "durationMinutes": 120,
+      "pairs": [
+        "LAPTOP/ETH",
+        "PINK/ETH"
+      ],
+      "action": "close"
+    },
+    {
+      "type": "tvlDrop",
+      "threshold": 50,
+      "pairs": [
+        "*"
+      ],
+      "action": "alert"
+    }
+  ],
+  "exitRuleOverrides": {
+    "2134854": {
+      "enabled": false,
+      "priceDropPct1h": 30,
+      "outOfRangeMinutes": 120
+    },
+    "2151132": {
+      "enabled": false,
+      "priceDropPct1h": 30,
+      "outOfRangeMinutes": 120
+    }
+  }
 }

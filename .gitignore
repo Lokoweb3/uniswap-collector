@@ -42,3 +42,5 @@ backup.log
 .claude/
 approve-serve.log
 test/.tmp/
+exit-state.json
+exit-log.json

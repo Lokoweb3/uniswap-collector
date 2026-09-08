@@ -138,8 +138,32 @@ The pool chosen per token is cached six hours in `portfolio.json`.
 
 ## Asking questions about the data
 
+### Chat panel on the site (`chat.js`, `chat-widget.js`)
+
+Every page has a 💬 button (bottom right; `/#chat` opens it) that answers questions
+from the same thirteen read-only tools the MCP server exposes, driven in-process, so
+the panel and the claude.ai connector always see the same numbers. It is read-only:
+it cannot arm, collect, close, or change settings. Through the passphrase gate it
+works on the phone too (`POST /api/chat` is the one write the gate lets through).
+
+Credentials live in `.env` and pick the provider:
+
+| Variable | Effect |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude through the official SDK (default model `claude-opus-5`, effort `CHAT_EFFORT`, default medium) |
+| `OLLAMA_API_KEY` | Ollama Cloud at https://ollama.com (default model `gpt-oss:120b`) |
+| `OLLAMA_HOST` | a local or remote Ollama instead of the cloud |
+| `CHAT_PROVIDER`, `CHAT_MODEL` | force a provider / pick another model |
+
+When `.env` has neither key, `start-all.sh` reuses the scanner's chat settings from
+`$SCANNER_DIR/.env` or `~/.config/robinhood-lp.env`, so one key serves both chat panels.
+Sessions are kept in RAM per browser (two hours, last 40 turns); `↺` starts over.
+`GET /api/chat` reports the provider and whether it is configured.
+
+### MCP server (`lp-mcp.mjs`)
+
 `lp-mcp.mjs` is an MCP server that exposes the dashboard's read-only data as
-five tools — `positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio` — so
+thirteen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio` and the eight added since) so
 Claude Code or Claude Desktop can answer questions from the live numbers. It
 fetches from the running dashboard over loopback and cannot sign, collect, or
 reach the operator key. The dashboard must be running.
@@ -733,6 +757,9 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-08
 
+- Chat panel built into the site (`chat.js`, `chat-widget.js`, `POST /api/chat`): answers from the
+  thirteen read-only MCP tools over an in-memory transport; Claude (Anthropic SDK) or Ollama Cloud
+  picked from `.env`; allowed through the gate for the phone; `test/chat.test.js`.
 - External audit (Theo) of the public repo: no leaks found; three issues fixed. Failed auto-closes no
   longer mark a position as closed and are retried; both auto-close paths need the trigger to hold on
   consecutive checks with a stable price before acting; `tmp` pinned under `solc` (`npm audit` clean).

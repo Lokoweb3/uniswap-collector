@@ -8,6 +8,15 @@ cd "$HERE"
 # Secrets for the dashboard (Telegram alerts, Blockscout key) live in ./.env as
 # KEY=value lines; exported into the server's environment only, never printed.
 if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
+# In-site chat (chat.js) needs ANTHROPIC_API_KEY or OLLAMA_API_KEY. When ./.env
+# has neither, reuse the scanner's chat settings (same variable names) so one
+# key serves both chat panels. Only the chat variables are imported, never printed.
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OLLAMA_API_KEY:-}" ]; then
+  for f in "$HOME/.config/robinhood-lp.env" "${SCANNER_DIR:-/nonexistent}/.env"; do
+    [ -f "$f" ] || continue
+    set -a; . <(grep -E '^(ANTHROPIC_API_KEY|OLLAMA_API_KEY|OLLAMA_HOST|CHAT_MODEL|CHAT_PROVIDER|CHAT_EFFORT)=' "$f"); set +a
+  done
+fi
 
 # Process checks. `pgrep -f` would match this script's own command line (and
 # any shell that mentions the pattern), so processes are found by their exact

@@ -1049,6 +1049,7 @@ function readBody(req, limit = 4096) {
 const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
 const armer = require("./arm");
 const treasuryLedger = require("./treasury");
+const chatbot = require("./chat").create({ port: PORT });
 
 // One portfolio refresh at a time, fed from the latest position build.
 let portfolioInFlight = null;
@@ -1505,6 +1506,43 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end token-health-and-approvals ===
+
+  // === in-site chat ===
+  // Chat panel (chat.js): answers from the same read-only tools as lp-mcp.mjs.
+  // POST /api/chat {sessionId, message}; POST /api/chat/reset; GET /api/chat = status.
+  if (url.pathname === "/chat-widget.js") {
+    try {
+      const body = fs.readFileSync(path.join(__dirname, "chat-widget.js"));
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(body);
+    } catch {
+      res.writeHead(404);
+      return res.end("chat-widget.js missing");
+    }
+  }
+  if (url.pathname === "/api/chat" || url.pathname === "/api/chat/reset") {
+    res.setHeader("Content-Type", "application/json");
+    if (req.method !== "POST") {
+      res.writeHead(200);
+      return res.end(JSON.stringify(chatbot.status()));
+    }
+    try {
+      const body = JSON.parse((await readBody(req, 16384)) || "{}");
+      if (url.pathname === "/api/chat/reset") {
+        res.writeHead(200);
+        return res.end(JSON.stringify(chatbot.reset(String(body.sessionId || ""))));
+      }
+      const out = await chatbot.chat({ sessionId: String(body.sessionId || ""), message: body.message });
+      res.writeHead(200);
+      return res.end(JSON.stringify(out));
+    } catch (err) {
+      const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
+      const msg = err.status ? (err.message || "chat failed") : `chat failed: ${(err.message || String(err)).slice(0, 200)}`;
+      res.writeHead(status);
+      return res.end(JSON.stringify({ ok: false, error: msg }));
+    }
+  }
+  // === end in-site chat ===
 
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");

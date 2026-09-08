@@ -14,7 +14,7 @@
  * - Only read requests reach the dashboard; /api/collect, /api/unlock and
  *   /api/lock are refused whatever the method. Those endpoints trust loopback,
  *   and through a proxy every request is loopback, so they must never pass.
- * - The scanner additionally accepts POST /api/chat and /api/chat/reset.
+ * - Both sites additionally accept POST /api/chat and /api/chat/reset (read-only chat).
  * - Five wrong passphrases from one address lock that address for 15 minutes.
  */
 import http from "node:http";
@@ -29,7 +29,8 @@ const COOKIE = "lpgate";
 const TTL_S = 30 * 86400;
 const SITES = [
   { name: "LP dashboard", port: Number(process.env.LP_GATE_DASHBOARD_PORT || 8790), upstream: 8787,
-    allow: (m, p) => (m === "GET" || m === "HEAD") && !/^\/api\/(arm|collect|exit-rules|lock|memecoins\/close|unlock)(\/|$)/.test(p) && !/^\/arm(\.html)?$/.test(p) },
+    allow: (m, p) => ((m === "GET" || m === "HEAD") && !/^\/api\/(arm|collect|exit-rules|lock|memecoins\/close|unlock)(\/|$)/.test(p) && !/^\/arm(\.html)?$/.test(p))
+      || (m === "POST" && /^\/api\/chat(\/reset)?$/.test(p)) }, // in-site chat is read-only
     // /vault, /treasury, /qr.js and /api/digest are plain GETs and pass (weekly-digest-and-vault).
   { name: "Robinhood LP scanner", port: Number(process.env.LP_GATE_SCANNER_PORT || 8791), upstream: 3847,
     allow: (m, p) => m === "GET" || m === "HEAD" || (m === "POST" && /^\/api\/chat(\/reset)?$/.test(p)) },

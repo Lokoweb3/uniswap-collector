@@ -1668,7 +1668,7 @@ const server = http.createServer(async (req, res) => {
     // Fresh enough: serve it.
     if (!fresh && cache.payload && age < CACHE_MS) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ ...cache.payload, cached: true }));
+      return res.end(JSON.stringify({ ...cache.payload, cached: true, loops: loopHealth() }));
     }
 
     // Stale (or fresh=1): kick off one rebuild, shared by all callers.
@@ -1689,7 +1689,7 @@ const server = http.createServer(async (req, res) => {
     // Refresh button (fresh=1) and the very first request ever wait.
     if (cache.payload && !fresh) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ ...cache.payload, cached: true, refreshing: true }));
+      return res.end(JSON.stringify({ ...cache.payload, cached: true, refreshing: true, loops: loopHealth() }));
     }
     try {
       const payload = await buildInFlight;

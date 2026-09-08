@@ -31,6 +31,17 @@ if [ "$MODE" = "simulate" ]; then
   exec node "$HERE/collector.js" "--mode=$MODE" $COMPOUND
 fi
 
+# One signing run at a time. The 09:00 task, the dashboard button and the
+# memecoin auto-collect loop all start this script; a second run while one is
+# in flight would race the operator's nonce. The lock is released when the
+# holder exits (the fd closes), so a crash cannot leave it stuck.
+LOCK="$HERE/.collector.lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "$(date -Is) another collector run is in progress; skipping this $MODE run." | tee -a "$HERE/collector.log"
+  exit 0
+fi
+
 KEYSTORE="$HOME/.lp-collector/operator-keystore.json"
 [ -f "$KEYSTORE" ] || { echo "No keystore. Run ./setup-key.sh first." >&2; exit 1; }
 

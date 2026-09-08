@@ -126,6 +126,17 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.strictEqual(out.length, 0);
   try { fs.unlinkSync(stateFile + ".w"); } catch {}
 
+  // 8d. background loop watchdog: stale once, recovered once
+  const c4 = create({ transport: async (t) => { sent.push(t); return true; }, stateFile: stateFile + ".l", now: () => clock, log: { error() {} } });
+  out = await c4.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, loops: { guardian: { label: "memecoin guardian", ageMin: 25, staleAfterMin: 10, stale: true } } });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /memecoin guardian has not reported for 25 min/);
+  out = await c4.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, loops: { guardian: { label: "memecoin guardian", ageMin: 35, staleAfterMin: 10, stale: true } } });
+  assert.strictEqual(out.length, 0, "stale loop must not repeat");
+  clock += 60000;
+  out = await c4.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, loops: { guardian: { label: "memecoin guardian", ageMin: 1, staleAfterMin: 10, stale: false } } });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /reporting again/);
+  try { fs.unlinkSync(stateFile + ".l"); } catch {}
+
   // 8. no transport, no token => disabled and silent
   const c = create({ token: undefined, chatId: undefined, stateFile: stateFile + ".c", now: () => clock });
   assert.strictEqual(c.enabled, false);

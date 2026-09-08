@@ -49,6 +49,7 @@ approve-serve.log
 test/.tmp/
 memecoin-collect-log.json
 memecoin-collect-state.json
+memecoin-collect-heartbeat.json
 exit-state.json
 exit-log.json
 advisor-cache.json
@@ -61,3 +62,4 @@ compound-log.json
 config.json
 # local notes and reviews
 docs/
+.collector.lock

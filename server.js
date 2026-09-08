@@ -962,6 +962,7 @@ async function build() {
     chainId: Number(cfg.chainId),
     owner: cfg.ownerAddress,
     ownerLabel: watch.ownerLabel(),
+    loops: loopHealth(),
     operator: OPERATOR,
     operatorGas,
     unlock: unlockState(),
@@ -1746,6 +1747,28 @@ const staking = require("./staking").create({
 });
 
 /**
+ * Background loop health for the watchdog: age of each loop's last write.
+ * The guardian rewrites memecoin-status.json every 60 s, the auto-collect
+ * loop touches its heartbeat every 15 min. Only loops that are expected
+ * (config present and enabled) are reported.
+ */
+function loopHealth() {
+  const ageOf = (file) => {
+    try {
+      const st = fs.statSync(path.join(__dirname, file));
+      return (Date.now() - st.mtimeMs) / 60000;
+    } catch {
+      return null; // never written
+    }
+  };
+  const loops = {};
+  if (Array.isArray(cfg.memecoins) && cfg.memecoins.length) loops.guardian = { ageMin: ageOf("memecoin-status.json"), staleAfterMin: 10, label: "memecoin guardian" };
+  if (cfg.memecoinCollect && cfg.memecoinCollect.enabled !== false) loops.autoCollect = { ageMin: ageOf("memecoin-collect-heartbeat.json"), staleAfterMin: 45, label: "fee auto-collect" };
+  for (const l of Object.values(loops)) l.stale = l.ageMin == null || l.ageMin > l.staleAfterMin;
+  return loops;
+}
+
+/**
  * Treasury state for the alerts: effective split % (the TBA contract's own
  * value when it exposes one, else config.json), TBA USDG balance, and the
  * run of consecutive failed splits from the ledger.
@@ -1879,6 +1902,7 @@ async function backgroundTick() {
       ops: opsInfo(),
       unlock: unlockState(),
       treasury: await treasuryState().catch(() => null),
+      loops: loopHealth(),
     });
     for (const m of sent) console.log("alert sent:", m.split("\n")[0].slice(0, 80));
   } catch (err) {

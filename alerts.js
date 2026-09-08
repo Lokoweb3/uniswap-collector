@@ -95,7 +95,7 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
    * `ops` is opsInfo() (last run + gas), `unlock` is unlockState().
    * `keepalive` overrides the pgrep check (tests). Returns the messages sent.
    */
-  async function check({ payload, watched, ops, unlock, keepalive, treasury } = {}) {
+  async function check({ payload, watched, ops, unlock, keepalive, treasury, loops } = {}) {
     const sent = [];
     const say = async (key, text, every, deliver) => {
       if (await once(key, text, every, deliver)) sent.push(text);
@@ -178,6 +178,20 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     // Arm window lost to a restart (the RAM cache is gone but the window had not expired).
     if (unlock && unlock.lost) {
       await say(`lost:${unlock.until}`, `⚠️ The collector's arm window (until ${new Date(unlock.until).toLocaleString()}) was lost: the RAM cache was cleared, most likely by a WSL restart. Re-arm at http://127.0.0.1:8787/arm.`, 0);
+    }
+
+    // Background loops (guardian, auto-collect): alert when a loop stops writing, and once when it is back.
+    if (loops) {
+      for (const [name, l] of Object.entries(loops)) {
+        const k = `loop:${name}`;
+        if (l.stale) {
+          if (!state.sent[k]) await say(k, `⚠️ The ${l.label} has not reported for ${l.ageMin == null ? "ever (never started?)" : Math.round(l.ageMin) + " min"}. It should write every ${l.staleAfterMin >= 45 ? "15" : "1"} min. Check start-all.sh / its log.`, 0);
+        } else if (state.sent[k]) {
+          delete state.sent[k];
+          save();
+          await say(`${k}:back:${t}`, `✅ The ${l.label} is reporting again.`, 0);
+        }
+      }
     }
 
     // LOKOVault treasury: repeated failed splits, a balance worth withdrawing, a changed split percentage.

@@ -1029,6 +1029,12 @@ function renderUnlock(unlock){
       ? 'Collector lost its arm window at a restart (was armed until ' + new Date(unlock.until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) + ') — re-arm'
       : 'Collector locked — scheduled and button collects will skip';
   }
+  // Watchdog: a background loop that stopped reporting shows as a warning chip.
+  let lc = document.getElementById('loopchip');
+  if (!lc) { lc = document.createElement('span'); lc.id = 'loopchip'; lc.className = 'chip warn'; lc.hidden = true; arm.parentNode.insertBefore(lc, arm.nextSibling); }
+  const stale = Object.values((lastRender && lastRender.loops) || {}).filter(l => l.stale);
+  lc.hidden = !stale.length;
+  if (stale.length) lc.textContent = stale.map(l => `${l.label} not reporting${l.ageMin == null ? '' : ' for ' + Math.round(l.ageMin) + ' min'}`).join(' · ');
   $('#armbtn').hidden = !!armed;
   $('#lockbtn').hidden = !armed;
   if (armed) $('#armform').hidden = true;

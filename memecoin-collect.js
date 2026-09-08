@@ -336,12 +336,17 @@ async function verifyFirstSplit({ dryRun }) {
   }
 }
 
+const HEARTBEAT_FILE = path.join(HERE, "memecoin-collect-heartbeat.json");
 async function cycle(opts) {
   try {
     await evaluate(opts);
   } catch (err) {
     stamp(`evaluate: ${err.message}`);
   }
+  // Heartbeat for the dashboard's watchdog: written every cycle whatever happened.
+  try {
+    fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ at: Date.now(), pid: process.pid, dryRun: !!(opts && opts.dryRun) }));
+  } catch {}
   try {
     await verifyFirstSplit(opts);
   } catch (err) {

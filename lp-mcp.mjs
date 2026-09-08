@@ -271,13 +271,29 @@ server.registerTool(
   {
     title: "Memecoin guardian status",
     description:
-      "Live status of the memecoin positions the guardian watches every 60 s: price vs entry, drawdown, in/out of range and for how long, fees per hour, pool active liquidity and its 1h change, price velocity, status colour with reasons, whether auto-close is enabled, and the last close attempts. Read-only: closing is only possible from the dashboard machine.",
+      "Live status of the memecoin positions the guardian watches every 60 s. Prices are TOKENS PER ETH (higher = token worth less); use tokenValueVsEntryPct for gain/loss vs entry. Includes drawdown, in/out of range and for how long, fees per hour, pool active liquidity and its 1h change, price velocity, status colour with reasons, whether auto-close is enabled, and the last close attempts. Read-only: closing is only possible from the dashboard machine.",
     inputSchema: {},
   },
   async () => {
     try {
       const d = await get("/api/memecoins");
-      return text({ at: d.at, stale: d.stale, positions: (d.positions || []).map((p) => ({ tokenId: p.tokenId, pair: p.pair, wallet: p.wallet, status: p.status, reasons: p.reasons, price: p.price, entryPrice: p.entryPrice, priceVsEntryPct: round(p.priceVsEntryPct, 1), drawdownPct: round(p.drawdownPct, 1), inRange: p.inRange, outMinutes: round(p.outMinutes, 0), feesPerHourUsd: round(p.feesPerHour), feeUsd: round(p.feeUsd), liquidityUsd: round(p.liquidityUsd, 0), liqChange1hPct: round(p.liqChange1hPct, 1), velocityPctPerHour: round(p.velocityPctPerHour, 1), autoClose: p.autoClose, closeConfirm: p.closeConfirm })), recentCloses: d.recent || [] });
+      return text({
+        at: d.at,
+        stale: d.stale,
+        howToRead: "Prices are quoted as TOKENS PER ETH. A higher number means the token is worth LESS ETH. tokenValueVsEntryPct is the change in the token's ETH value since entry (negative = the token fell = loss for the LP); it is the figure to report.",
+        positions: (d.positions || []).map((p) => ({
+          tokenId: p.tokenId, pair: p.pair, wallet: p.wallet, status: p.status, reasons: p.reasons,
+          tokensPerEthNow: p.price, tokensPerEthAtEntry: p.entryPrice,
+          tokenValueVsEntryPct: round(p.priceVsEntryPct, 1),
+          drawdownFromEntryPct: round(p.drawdownPct, 1),
+          inRange: p.inRange, outMinutes: round(p.outMinutes, 0),
+          feesPerHourUsd: round(p.feesPerHour), uncollectedFeesUsd: round(p.feeUsd),
+          poolActiveLiquidityUsd: round(p.liquidityUsd, 0), poolLiquidityChange1hPct: round(p.liqChange1hPct, 1),
+          tokenValueVelocityPctPerHour: round(p.velocityPctPerHour, 1),
+          autoClose: p.autoClose, closeConfirm: p.closeConfirm,
+        })),
+        recentCloses: d.recent || [],
+      });
     } catch (err) {
       return fail(err);
     }

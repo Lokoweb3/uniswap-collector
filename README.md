@@ -247,6 +247,30 @@ balance ≥ 100 USDG, split % changed (on-chain value when the TBA exposes `feeS
 (`TreasuryNFT.sol`, `TreasuryAccount.sol`), `deploy-treasury.js` and `treasury.html` are supplied
 separately; `solc` is installed for the deploy script.
 
+### Vault from your phone
+
+Three URLs serve the same page (`treasury.html`, also at `/vault`):
+
+| URL | Works from | What you can do |
+|---|---|---|
+| `http://127.0.0.1:8787/vault` | the PC only | everything, with Rabby/MetaMask in the browser |
+| `https://<your-node>.<your-tailnet>.ts.net:8443/vault` | anywhere (Funnel, passphrase gate) | read-only in a normal browser; withdraw / change the split when opened **inside Rabby mobile's in-app browser** (Rabby → Discover → paste the URL), which is what gives the page a wallet to sign with |
+| `https://<your-node>.<your-tailnet>.ts.net:8444/vault` | devices logged into the tailnet (no gate) | same as above; the phone needs the Tailscale app for this one |
+
+The desktop vault page shows both URLs as QR codes ("Open on your phone"; `qr.js` is a small self-contained
+encoder, verified against a real decoder). Without a wallet the page loads the balances, split and history
+read-only. `run-tailscale.sh` adds the tailnet-only :8444 serve; the public :8443 route passes through the gate.
+
+## Weekly digest
+
+`digest.js` builds the Monday report (fees this week vs last across all wallets, best and worst position, vault
+total and weekly inflow, sNET rewards, memecoin plays vs entry, operator gas, portfolio change with ETH and
+USDG benchmarks from the price log, and a watch list of positions near an edge or out of range). The server
+tick sends it once per ISO week, the first tick at or after Monday 09:00 local, to `TELEGRAM_TREASURY_CHAT_ID`
+(default the group), falling back to the personal chat; `digest-state.json` remembers the week. `node digest.js
+--print` (or `npm run digest`) prints it, `--send` sends now, `/api/digest` returns the text and the Analytics
+page has a "Preview the weekly Telegram digest" link under the Performance panel.
+
 ## Blockscout API key
 
 Every Blockscout call goes through `blockscout.js`. Put a free PRO key (https://dev.blockscout.com, value

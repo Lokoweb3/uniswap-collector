@@ -1569,3 +1569,41 @@ function tick(fresh){
 $('#reload').addEventListener('click', () => tick(true));
 tick(false);
 setInterval(() => tick(false), 60000);
+
+// === weekly-digest-and-vault ===
+// "Preview the weekly digest" link under the Performance note on the Analytics page.
+(function () {
+  if (typeof PAGE === 'undefined' || PAGE !== 'analytics') return;
+  function addLink() {
+    const note = document.querySelector('#perfnote');
+    if (!note || document.querySelector('#digestlink')) return;
+    const a = document.createElement('a');
+    a.id = 'digestlink';
+    a.href = '#';
+    a.textContent = 'Preview the weekly Telegram digest';
+    a.style.marginLeft = '10px';
+    a.addEventListener('click', async (e) => {
+      e.preventDefault();
+      let box = document.querySelector('#digestbox');
+      if (!box) {
+        box = document.createElement('pre');
+        box.id = 'digestbox';
+        box.style.cssText = 'white-space:pre-wrap;font-size:12px;margin-top:10px;padding:12px;border-radius:10px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.1)';
+        note.parentElement.appendChild(box);
+      }
+      box.textContent = 'Building…';
+      try {
+        const r = await fetch('/api/digest');
+        const d = await r.json();
+        box.textContent = d.ok ? `${d.text}\n\n(sent every Monday 09:00 · this week ${d.week}${d.lastSentWeek ? ` · last sent ${d.lastSentWeek}` : ' · not sent yet'})` : 'Could not build the digest: ' + d.error;
+      } catch (err) {
+        box.textContent = 'Could not build the digest: ' + err.message;
+      }
+    });
+    note.appendChild(a);
+  }
+  // The note is filled by renderAnalytics(); poll briefly until it exists.
+  let tries = 0;
+  const t = setInterval(() => { addLink(); if (document.querySelector('#digestlink') || ++tries > 60) clearInterval(t); }, 500);
+})();
+// === end weekly-digest-and-vault ===

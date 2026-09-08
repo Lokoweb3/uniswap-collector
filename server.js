@@ -1310,6 +1310,77 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // === weekly-digest-and-vault ===
+  // Weekly Telegram digest (digest.js): preview text; /vault is an alias of the
+  // treasury page for phones; /qr.js is the QR encoder the treasury page uses.
+  if (url.pathname === "/api/digest") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const digest = require("./digest");
+      const text = digest.build(await digest.gather(`http://127.0.0.1:${PORT}`));
+      let state = {};
+      try { state = JSON.parse(fs.readFileSync(path.join(__dirname, "digest-state.json"), "utf8")); } catch {}
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, text, week: digest.isoWeek(new Date()), lastSentWeek: state.lastSentWeek || null, lastSentAt: state.lastSentAt || null, due: digest.due(new Date(), state) }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  if (url.pathname === "/api/vault-info") {
+    // Read-only facts for the vault page (owner, admin, split, balances) so a browser
+    // without a wallet, or one whose RPC calls are CORS-blocked, still sees them.
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const ts = treasuryLedger.settings(cfg);
+      const out = { ok: true, nft: cfg.treasuryNFT || null, tba: ts.tba, pct: ts.pct, max: ts.max, owner: null, admin: null, paused: null, balances: [] };
+      if (cfg.treasuryNFT) {
+        const nft = new ethers.Contract(cfg.treasuryNFT, ["function ownerOf(uint256) view returns (address)", "function owner() view returns (address)", "function feeSplitPct() view returns (uint256)", "function paused() view returns (bool)"], provider);
+        const [o, a, p, pz] = await Promise.all([nft.ownerOf(1).catch(() => null), nft.owner().catch(() => null), nft.feeSplitPct().catch(() => null), nft.paused().catch(() => null)]);
+        out.owner = o; out.admin = a; out.paused = pz;
+        if (p != null) out.pct = Number(p);
+      }
+      if (ts.tba) {
+        const eth = await provider.getBalance(ts.tba);
+        out.balances.push({ symbol: "ETH", address: null, amount: ethers.formatEther(eth), decimals: 18 });
+        const seenTok = new Set();
+        const tokens = [cfg.usdReference && cfg.usdReference.stable, cfg.contracts.weth, ...Object.keys(lastPrices)].filter((a) => a && !seenTok.has(a.toLowerCase()) && seenTok.add(a.toLowerCase()));
+        for (const addr of tokens.slice(0, 40)) {
+          try {
+            const meta = await u.getToken(addr, provider);
+            const raw = await new ethers.Contract(addr, ["function balanceOf(address) view returns (uint256)"], provider).balanceOf(ts.tba);
+            if (raw > 0n || addr.toLowerCase() === String(cfg.usdReference && cfg.usdReference.stable).toLowerCase()) out.balances.push({ symbol: meta.symbol, address: meta.address, amount: ethers.formatUnits(raw, meta.decimals), decimals: meta.decimals });
+          } catch {}
+        }
+      }
+      res.writeHead(200);
+      return res.end(JSON.stringify(out));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  if (url.pathname === "/vault" || url.pathname === "/vault.html") {
+    try {
+      const html = fs.readFileSync(path.join(__dirname, "treasury.html"));
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(html);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("treasury.html is not installed yet");
+    }
+  }
+  if (url.pathname === "/qr.js") {
+    try {
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(fs.readFileSync(path.join(__dirname, "qr.js")));
+    } catch {
+      res.writeHead(404);
+      return res.end("qr.js not found");
+    }
+  }
+  // === end weekly-digest-and-vault ===
+
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
@@ -1677,6 +1748,13 @@ async function backgroundTick() {
     const n = bf.invalidate(stale, live);
     if (n) console.log(`basis: refetching ${n} position(s) whose liquidity changed`);
   }
+  // === weekly-digest-and-vault ===
+  try {
+    await require("./digest").maybeSend({ alerts, base: `http://127.0.0.1:${PORT}` });
+  } catch (err) {
+    console.error("digest:", err.shortMessage || err.message);
+  }
+  // === end weekly-digest-and-vault ===
   if (bf.stale && latestIds.length) {
     try {
       await bf.build(latestIds, latestOpenIds, hist.startBlock);

@@ -34,6 +34,7 @@ price-log.json
 portfolio-all.json
 pool-samples.json
 alerts-state.json
+digest-state.json
 fee-split-ledger.json
 v4-positions*.json
 watch-*.json

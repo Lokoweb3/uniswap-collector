@@ -15,4 +15,7 @@ fi
 "$TS/tailscale" --socket="$SOCK" funnel --bg 8788                                  # public: MCP only
 "$TS/tailscale" --socket="$SOCK" funnel --bg --https=8443 http://127.0.0.1:8790    # public: dashboard behind lp-gate.mjs (passphrase)
 "$TS/tailscale" --socket="$SOCK" funnel --bg --https=10000 http://127.0.0.1:8791   # public: pool scanner behind lp-gate.mjs (passphrase)
+# === weekly-digest-and-vault === tailnet-only (no Funnel, no gate): the dashboard itself, e.g. the vault at
+# https://<your-node>.<your-tailnet>.ts.net:8444/vault, reachable only from devices logged into this tailnet.
+"$TS/tailscale" --socket="$SOCK" serve --bg --https=8444 http://127.0.0.1:8787
 "$TS/tailscale" --socket="$SOCK" funnel status

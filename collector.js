@@ -449,7 +449,7 @@ async function runOwner(ctx, owner) {
       const v0 = await val(sim.t0, sim.amount0), v1 = await val(sim.t1, sim.amount1);
       sim.wethValue = v0 + v1;
       totalWethValue += sim.wethValue;
-      log(`v4 #${id} ${sim.t0.symbol}/${sim.t1.symbol} ${sim.fee / 10000}%${sim.hooks ? " (hooks)" : ""}  ${fmt(sim.amount0, sim.t0.decimals)} ${sim.t0.symbol} + ${fmt(sim.amount1, sim.t1.decimals)} ${sim.t1.symbol}  ≈ ${ethers.formatEther(sim.wethValue)} WETH`);
+      log(`v4 #${id} ${sim.t0.symbol}/${sim.t1.symbol} ${sim.fee / 10000}%${sim.hooks && sim.hooks !== ethers.ZeroAddress ? " (hooks)" : ""}  ${fmt(sim.amount0, sim.t0.decimals)} ${sim.t0.symbol} + ${fmt(sim.amount1, sim.t1.decimals)} ${sim.t1.symbol}  ≈ ${ethers.formatEther(sim.wethValue)} WETH`);
       if (sim.wethValue < minWeth) { log(`  below threshold (${cfg.thresholds.minWethPerPosition} WETH) — skipping`); continue; }
       eligibleV4.push(sim);
     }
@@ -704,20 +704,34 @@ async function runOwner(ctx, owner) {
     const balance = held < collectedAmt ? held : collectedAmt;
     if (balance === 0n) continue;
 
+    // A fee token the operator cannot swap (no v3 pool: launchpad v4 tokens
+    // such as LAPTOP or PINK, or a swap over the cap) is never left in the hot
+    // wallet: it goes to the owner as-is, so nothing strands.
+    const handBack = async (why) => {
+      log(`  ! ${why}; sending ${fmt(balance, info.decimals)} ${info.symbol} to ${owner.address} as-is`);
+      try {
+        const htx = await erc20.transfer(owner.address, balance);
+        const hr = await htx.wait();
+        recordGas(state, hr.gasUsed * hr.gasPrice);
+        log(`  sent ${info.symbol} -> ${owner.address} -> ${htx.hash}`);
+      } catch (err) {
+        log(`  ! ${info.symbol} transfer to owner failed: ${err.shortMessage || err.message} — still in the operator wallet`);
+      }
+    };
     const feeTier = feeTierFor.get(tokenAddr);
     if (feeTier === undefined || feeTier === null) {
-      log(`  ! no known fee tier for ${info.symbol}, skipping swap`);
+      await handBack(`no known fee tier for ${info.symbol}`);
       continue;
     }
 
     // Fresh quote immediately before the swap, then apply slippage tolerance.
     const quoted = await quoteToWeth(quoter, tokenAddr, balance, feeTier, weth);
     if (quoted === 0n) {
-      log(`  ! could not quote ${info.symbol}, skipping swap`);
+      await handBack(`could not quote ${info.symbol} on a v3 pool`);
       continue;
     }
     if (quoted > maxSwap) {
-      log(`  ! ${info.symbol} swap would be ${ethers.formatEther(quoted)} WETH, over maxSwapValueWeth. Skipping — swap this one by hand.`);
+      await handBack(`${info.symbol} swap would be ${ethers.formatEther(quoted)} WETH, over maxSwapValueWeth`);
       continue;
     }
 

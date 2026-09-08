@@ -85,7 +85,7 @@ function create({ provider, cfg, log = console.log }) {
       amount0: BigInt(p.fees.amount0),
       amount1: BigInt(p.fees.amount1),
       fee: Number(key.fee), // lpFee in hundredths of a bip, like v3
-      hooks: p.hooks,
+      hooks: p.hooks && p.hooks !== ethers.ZeroAddress ? p.hooks : null,
       closed: false,
     };
   }

@@ -145,6 +145,13 @@ function create({ provider, cfg, alerts, getPositions, getWatched, log = console
     if (wantClose && rs.enabled && closer && !state.closed[key(p)]) {
       const signer = await getSigner();
       if (!signer) {
+        // Not spent for the episode: once the collector is armed the next evaluation retries the close.
+        // The reminder itself is rate-limited to once per 30 minutes per position.
+        const rk = `${key(p)}:lockednag`;
+        if (state.fired[rk] && now() - state.fired[rk] < 30 * 60000) { delete state.fired[fk]; save(); return null; }
+        state.fired[rk] = now();
+        delete state.fired[fk];
+        save();
         text = `🚨 ${p.pair} ${detail} — exit rule wants to CLOSE but the collector is locked; arm it at /arm or close by hand.`;
       } else {
         state.closed[key(p)] = now();

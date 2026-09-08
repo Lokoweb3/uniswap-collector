@@ -622,7 +622,9 @@ switch) is the income and history page:
 - **Collected fees** (chart, by-month table, position-value chart, collects table, CSV) and **Daily revenue**.
 - **Staking rewards**: `staking.js` samples each rebasing receipt listed under `staking.tokens` in
   config.json (sNET from NET Staking) hourly into `snet-staking.json`; history is rebuilt once from the
-  token's LogRebase events. A balance change matching the index change is a reward, anything else is a
+  token's LogRebase events. The Staking contract's verified source shows `stake()` issues sNET 1:1 and
+  `unstake()` returns NET 1:1, so principal is the net of the wallet's sNET transfers (two stakes on
+  2026-09-04, 3.717 sNET) and everything above it is reward. A balance change matching the index change is a reward, anything else is a
   stake/unstake and is skipped. `/api/staking` serves the view.
 
 All of it is the collector wallet's own history, so the wallet picker is hidden there. Each page fetches

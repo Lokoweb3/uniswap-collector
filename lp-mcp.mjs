@@ -280,10 +280,10 @@ server.registerTool(
       return text({
         at: d.at,
         stale: d.stale,
-        howToRead: "Prices are quoted as TOKENS PER ETH. A higher number means the token is worth LESS ETH. tokenValueVsEntryPct is the change in the token's ETH value since entry (negative = the token fell = loss for the LP); it is the figure to report.",
+        howToRead: "Prices are quoted as TOKENS PER QUOTE ASSET (quoteSymbol: ETH, or USDG for stable-paired pools). A higher number means the token is worth LESS. tokenValueVsEntryPct is the change in the token's ETH value since entry (negative = the token fell = loss for the LP); it is the figure to report.",
         positions: (d.positions || []).map((p) => ({
           tokenId: p.tokenId, pair: p.pair, wallet: p.wallet, status: p.status, reasons: p.reasons,
-          tokensPerEthNow: p.price, tokensPerEthAtEntry: p.entryPrice,
+          quoteSymbol: p.quoteSymbol || "ETH", tokensPerEthNow: p.price, tokensPerEthAtEntry: p.entryPrice, entrySource: p.entrySource || "config",
           tokenValueVsEntryPct: round(p.priceVsEntryPct, 1),
           drawdownFromEntryPct: round(p.drawdownPct, 1),
           inRange: p.inRange, outMinutes: round(p.outMinutes, 0),
@@ -395,6 +395,42 @@ server.registerTool(
       const d = await get("/api/positions");
       const c = await get("/api/collect").catch(() => null);
       return text({ blockNumber: d.blockNumber, cached: !!d.cached, armed: d.unlock, lastRun: d.ops && d.ops.lastRun, loops: d.loops, collectRun: c && c.run ? { startedAt: c.run.startedAt, done: c.run.done, tail: String(c.run.output || "").slice(-400) } : null });
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "status_report",
+  {
+    title: "Verified status report",
+    description:
+      "One call that answers 'is everything set?' from live data, for end-of-day summaries: arm window (armed until when), fee auto-collect settings (dollar threshold, minimum gap, last run, loop alive), the LOKOVault split in force (read from the contract) and vault balance, the memecoin guardian's watched positions with entry source, price vs entry and fee rate, uncollected fees per wallet, operator gas, the last collector run and its result, and Telegram alert status. Every figure comes from the dashboard at call time; report these numbers rather than remembered ones.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const [d, w, m, t] = await Promise.all([get("/api/positions"), get("/api/watch").catch(() => null), get("/api/memecoins").catch(() => null), get("/api/treasury").catch(() => null)]);
+      const wallets = [{ label: d.ownerLabel || "Main", address: d.owner, positions: d.positions || [] }, ...((w && w.wallets) || []).filter((x) => x.ok).map((x) => ({ label: x.label, address: x.address, positions: x.positions || [] }))];
+      const unlock = d.unlock || {};
+      return text({
+        asOf: new Date().toISOString(),
+        armed: { armed: !!unlock.armed, minutesLeft: unlock.minutesLeft ?? null, until: unlock.until ? new Date(unlock.until).toISOString() : null,
+          note: unlock.armed ? "The collector can sign until this time; re-arm at /arm (up to 7 days) before it lapses." : "Nothing can be collected or closed until the collector is armed at /arm." },
+        autoCollect: m && m.autoCollect ? { ...m.autoCollect, lastRunAt: m.autoCollect.lastRunAt ? new Date(m.autoCollect.lastRunAt).toISOString() : null, lastCheckAt: m.autoCollect.lastCheckAt ? new Date(m.autoCollect.lastCheckAt).toISOString() : null,
+          rule: `runs the collector when any memecoin position has ≥ $${m.autoCollect.minUsd} uncollected, at most every ${m.autoCollect.minIntervalMinutes} min` } : null,
+        vault: t ? { splitPct: t.pct, splitSource: t.pctSource || "config", maxPct: t.max, balanceUsdg: round(t.balanceUsdg), totalSplitUsdg: round(t.totalSplitUsdg), splits: t.count, note: "The split applies to fees swapped to USDG; tokens with no swap route go back to the wallet whole." } : null,
+        guardian: m ? { alive: !m.stale, watching: m.watching, discovery: m.discovery, positions: (m.positions || []).filter((p) => !p.closed).map((p) => ({ pair: p.pair, tokenId: p.tokenId, wallet: p.wallet, status: p.status, quoteSymbol: p.quoteSymbol || "ETH", tokensPerQuoteNow: p.price, entry: p.entryPrice, entrySource: p.entrySource || "config", tokenValueVsEntryPct: round(p.priceVsEntryPct, 1), inRange: p.inRange, uncollectedFeesUsd: round(p.feeUsd), feesPerHourUsd: round(p.feesPerHour), autoClose: !!p.autoClose })) } : null,
+        wallets: wallets.map((x) => ({ label: x.label, address: x.address, openPositions: x.positions.length, uncollectedFeesUsd: round(x.positions.reduce((s, p) => s + (p.feesUsd || 0), 0)),
+          positions: x.positions.map((p) => ({ pair: p.pair, tokenId: p.nftId || p.tokenId, version: p.version || 3, inRange: p.inRange, uncollectedFeesUsd: round(p.feesUsd), feesPerHourUsd: p.dailyUsd != null ? round(p.dailyUsd / 24) : null })) })),
+        operatorGas: d.operatorGas || null,
+        gas24h: d.ops && d.ops.gas24h,
+        lastCollectorRun: d.ops && d.ops.lastRun,
+        loops: d.loops || null,
+        alerts: d.alerts || null,
+        wethUsd: round(d.wethUsd),
+      });
     } catch (err) {
       return fail(err);
     }

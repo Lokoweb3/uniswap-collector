@@ -15,7 +15,7 @@ const watch = { ok: true, wallets: [
   ]},
 ]};
 
-// 1. Without config.memecoins: only v4 positions in the Trading wallet count.
+// 1. Without config.memecoins: v4 positions in the main wallet and the collected watched wallets count (Trading by name when the payload has no collector field).
 let list = memecoinPositions({ positions, watch, memecoins: null });
 assert.deepStrictEqual(list.map((p) => p.tokenId), ["2134854", "2151132"]);
 assert.strictEqual(list[0].wallet, "Trading");

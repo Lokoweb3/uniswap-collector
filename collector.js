@@ -254,6 +254,28 @@ async function quoteToWeth(quoter, tokenIn, amountIn, feeTier, wethAddress) {
   }
 }
 
+/**
+ * Value a fee token in WETH trying several v3 tiers: the pool's own tier first
+ * (a WETH-paired pool quotes there), then the sweep pool's tier (the stable
+ * leg of a USDG/X pool has no USDG/WETH pool at X's tier) and the standard
+ * tiers. Quiet until every tier fails, then one line.
+ */
+async function quoteToWethAny(quoter, tokenIn, amountIn, tiers, wethAddress) {
+  if (amountIn === 0n) return 0n;
+  if (tokenIn.toLowerCase() === wethAddress.toLowerCase()) return amountIn;
+  const tried = [];
+  for (const fee of tiers) {
+    if (fee == null || tried.includes(fee)) continue;
+    tried.push(fee);
+    try {
+      const res = await quoter.quoteExactInputSingle.staticCall({ tokenIn, tokenOut: wethAddress, amountIn, fee, sqrtPriceLimitX96: 0 });
+      if (res[0] > 0n) return res[0];
+    } catch {}
+  }
+  log(`  ! no v3 quote for ${tokenIn} -> WETH at tiers ${tried.map((f) => f / 10000 + "%").join(", ")}`);
+  return 0n;
+}
+
 async function quoteSingle(quoter, tokenIn, tokenOut, amountIn, feeTier) {
   if (amountIn === 0n) return 0n;
   try {
@@ -432,8 +454,9 @@ async function runOwner(ctx, owner) {
     }
 
     const { t0, t1, amount0, amount1, fee } = sim;
-    const v0 = await quoteToWeth(quoter, t0.address, amount0, fee, weth);
-    const v1 = await quoteToWeth(quoter, t1.address, amount1, fee, weth);
+    const tiers = [fee, target.kind === "token" ? target.feeTier : null, 100, 500, 3000, 10000];
+    const v0 = await quoteToWethAny(quoter, t0.address, amount0, tiers, weth);
+    const v1 = await quoteToWethAny(quoter, t1.address, amount1, tiers, weth);
     const value = v0 + v1;
     sim.wethValue = value;
     totalWethValue += value;
@@ -472,7 +495,8 @@ async function runOwner(ctx, owner) {
       if (sim.closed) { v4Closed++; continue; }
       v4Open++;
       // Value in WETH: native ETH counts 1:1, ERC-20s through the v3 quoter at the pool's own tier.
-      const val = async (t, amt) => (amt === 0n ? 0n : t.native || t.address.toLowerCase() === weth.toLowerCase() ? amt : await quoteToWeth(quoter, t.address, amt, sim.fee, weth));
+      const tiers = [sim.fee, target.kind === "token" ? target.feeTier : null, 100, 500, 3000, 10000];
+      const val = async (t, amt) => (amt === 0n ? 0n : t.native || t.address.toLowerCase() === weth.toLowerCase() ? amt : await quoteToWethAny(quoter, t.address, amt, tiers, weth));
       const v0 = await val(sim.t0, sim.amount0), v1 = await val(sim.t1, sim.amount1);
       sim.wethValue = v0 + v1;
       totalWethValue += sim.wethValue;
@@ -746,6 +770,12 @@ async function runOwner(ctx, owner) {
         log(`  ! ${info.symbol} transfer to owner failed: ${err.shortMessage || err.message} — still in the operator wallet`);
       }
     };
+    if (target.kind === "token" && tokenAddr.toLowerCase() === target.address.toLowerCase()) {
+      // Fees paid in the sweep token itself (a USDG-paired pool): already what
+      // the split and delivery below work from, nothing to swap.
+      log(`  ${fmt(balance, info.decimals)} ${info.symbol} collected as the sweep target; kept for the split`);
+      continue;
+    }
     const feeTier = feeTierFor.get(tokenAddr);
     if (feeTier === undefined || feeTier === null) {
       await handBack(`no known fee tier for ${info.symbol}`);

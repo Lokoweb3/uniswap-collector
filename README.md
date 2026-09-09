@@ -141,7 +141,7 @@ The pool chosen per token is cached six hours in `portfolio.json`.
 ### Chat panel on the site (`chat.js`, `chat-widget.js`)
 
 Every page has a 💬 button (bottom right; `/#chat` opens it) that answers questions
-from the same thirteen read-only tools the MCP server exposes, driven in-process, so
+from the same fourteen read-only tools the MCP server exposes, driven in-process, so
 the panel and the claude.ai connector always see the same numbers. It is read-only:
 it cannot arm, collect, close, or change settings. Through the passphrase gate it
 works on the phone too (`POST /api/chat` is the one write the gate lets through).
@@ -163,7 +163,7 @@ Sessions are kept in RAM per browser (two hours, last 40 turns); `↺` starts ov
 ### MCP server (`lp-mcp.mjs`)
 
 `lp-mcp.mjs` is an MCP server that exposes the dashboard's read-only data as
-thirteen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio` and the eight added since) so
+fourteen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and nine added since, ending with `status_report`) so
 Claude Code or Claude Desktop can answer questions from the live numbers. It
 fetches from the running dashboard over loopback and cannot sign, collect, or
 reach the operator key. The dashboard must be running.
@@ -189,7 +189,7 @@ used for day and month grouping (default America/New_York).
 ### From claude.ai and the Claude mobile app
 
 Those run on Anthropic's servers, so the tools have to be reachable over the
-internet. `lp-mcp-remote.mjs` serves the same read-only tools (thirteen, see
+internet. `lp-mcp-remote.mjs` serves the same read-only tools (fourteen, see
 "From an agent on a server") over HTTP behind its own OAuth login (claude.ai registers itself, you type a passphrase once, it
 gets a token that refreshes on its own). It binds to loopback; a tunnel gives
 it a public HTTPS address. Steps:
@@ -754,6 +754,19 @@ All of it is the collector wallet's own history, so the wallet picker is hidden 
 only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
+
+### 2026-09-09
+
+- Memecoin guardian discovers every v4 position in the main wallet and the collected watched wallets
+  on its own (`memecoin-discovered.json`; entry price from the hourly price log at the mint, else the
+  first sample; `memecoinDefaults` / `memecoinDiscovery: false` in config.json). Pools quoted in USDG
+  rather than ETH are handled (prices are token per quote asset). The $50 auto-collect trigger covers
+  the same wallets.
+- Collector: fee tokens are valued trying the sweep pool's tier and the standard tiers after the pool's
+  own, so the USDG leg of a USDG/X v4 position counts (it was valued at 0 and never collected); USDG
+  fees are kept for the split instead of being handed back unswapped.
+- `/api/treasury` reports the split in force from the contract; `status_report` MCP tool: one verified
+  answer for end-of-day summaries (arm window, auto-collect rule, split, guardian, fees, gas, alerts).
 
 ### 2026-09-08
 

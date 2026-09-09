@@ -27,7 +27,7 @@ log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 
 # Everything that is runtime history, present or not.
 FILES=()
-for f in fee-events.json v4-collects.json fee-snapshots.json fee-daily.json fee-prices.json backfill.json \
+for f in fee-events.json v4-collects.json memecoin-discovered.json fee-snapshots.json fee-daily.json fee-prices.json backfill.json \
          liquidity-ledger.json portfolio.json range-log.json snet-staking.json alerts-state.json \
          v4-positions*.json config.json; do
   [ -f "$f" ] && FILES+=("$f")

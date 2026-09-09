@@ -3,8 +3,8 @@
  * memecoin-collect.js — collect memecoin fees as soon as they are worth it.
  *
  * Every 15 minutes: read the dashboard's /api/positions and /api/watch, find
- * memecoin positions (every v4 position in the Trading wallet, plus config.json
- * `memecoins` ids) whose uncollected fees exceed `memecoinCollect.minUsd`
+ * memecoin positions (every v4 position in the main wallet and the collected
+ * watched wallets, plus config.json `memecoins` ids) whose uncollected fees exceed `memecoinCollect.minUsd`
  * (default $20), and run `./run-collector.sh full --quiet` — the normal
  * collector, which handles every wallet and the 10% LOKOVault split — instead
  * of waiting for the 09:00 run. At most one auto run per `minIntervalMinutes`.
@@ -86,13 +86,19 @@ function loadConfig() {
 function memecoinPositions({ positions, watch, memecoins, tradingLabel = "Trading" }) {
   const out = [];
   const byId = new Map((memecoins || []).map((m) => [String(m.tokenId), m]));
-  const consider = (p, wallet, walletAddress) => {
+  const consider = (p, wallet, walletAddress, served) => {
     const id = String(p.tokenId ?? p.nftId).replace(/^v4-/, "");
-    if (!byId.has(id) && !(p.version === 4 && wallet === tradingLabel)) return;
+    if (!byId.has(id) && !(p.version === 4 && served)) return;
     out.push({ tokenId: id, pair: p.pair, wallet, walletAddress, feesUsd: Number(p.feesUsd) || 0, version: p.version });
   };
-  if (positions && positions.ok) for (const p of positions.positions || []) consider(p, positions.ownerLabel || "Main", positions.owner);
-  if (watch && watch.ok) for (const w of watch.wallets || []) if (w.ok) for (const p of w.positions || []) consider(p, w.label || w.address, w.address);
+  // v4 positions count in the main wallet and in every watched wallet the collector serves
+  // (wallets.json collect: true and approved; the payload's `collector.enabled`), the Trading wallet by name as a fallback.
+  if (positions && positions.ok) for (const p of positions.positions || []) consider(p, positions.ownerLabel || "Main", positions.owner, true);
+  if (watch && watch.ok) for (const w of watch.wallets || []) {
+    if (!w.ok) continue;
+    const served = w.collector ? !!w.collector.enabled : (w.label || "") === tradingLabel;
+    for (const p of w.positions || []) consider(p, w.label || w.address, w.address, served);
+  }
   return out;
 }
 

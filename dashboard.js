@@ -1602,8 +1602,8 @@ async function loadMemecoins(){
           <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span></div>
         </div>
         <div class="grid">
-          <span>Price (${p.symbolToken || 'token'} per ETH)<b>${fmtN(p.price)}</b></span>
-          <span>Entry<b>${fmtN(p.entryPrice)}</b></span>
+          <span>Price (${p.symbolToken || 'token'} per ${p.quoteSymbol || 'ETH'})<b>${fmtN(p.price)}</b></span>
+          <span>Entry${p.entrySource && p.entrySource !== 'config' ? ` <span class="muted" title="${p.entrySource === 'first seen' ? 'No price record from the mint; the entry is the price when the guardian first saw the position' : 'Entry price taken from the hourly price log at the mint time'}">(${p.entrySource})</span>` : ''}<b>${fmtN(p.entryPrice)}</b></span>
           <span>vs entry (token value)<b class="${cls(p.priceVsEntryPct)}">${pct(p.priceVsEntryPct)}</b></span>
           <span>Drawdown<b class="${(p.drawdownPct || 0) >= 20 ? 'down' : ''}">${p.drawdownPct == null ? '—' : '-' + p.drawdownPct.toFixed(1) + '%'}</b></span>
           <span>Last hour<b class="${cls(p.change1hPct)}">${pct(p.change1hPct)}</b></span>

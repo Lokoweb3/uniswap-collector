@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
  * Memecoin guardian: a standalone watcher for the risky LP positions listed
- * under `memecoins` in config.json. Every 60 seconds it reads each position
+ * under `memecoins` in config.json, plus every v4 position in the main wallet
+ * and the collected watched wallets, discovered from the dashboard (entry price
+ * from the hourly price log at mint, else the first sample; see watchList).
+ * Every 60 seconds it reads each position
  * and its v4 pool straight from the chain, keeps a rolling history, writes
  * memecoin-status.json for the dashboard's "Memecoin Watch" section, sends
  * Telegram alerts (guardian-logic.js decides), and, only for entries with
@@ -82,29 +85,134 @@ async function ethUsd() {
   return null;
 }
 
-/** One sample for a listed position: price (token per ETH), pool liquidity, fee growth, uncollected fees in USD. */
+const WETH_ADDR = (cfg.contracts.weth || "").toLowerCase();
+const STABLE_ADDR = ((cfg.usdReference && cfg.usdReference.stable) || "").toLowerCase();
+const isEth = (a) => a === ethers.ZeroAddress || String(a).toLowerCase() === WETH_ADDR;
+const isStable = (a) => !!STABLE_ADDR && String(a).toLowerCase() === STABLE_ADDR;
+const addrOf = (t) => (typeof t === "string" ? t : t && t.address) || null;
+
+// ---------------------------------------------------------------------------
+// Discovery: every v4 position in the main wallet and in watched wallets the
+// collector serves is watched without a config entry (config.json `memecoins`
+// entries still win and can pin an entry price). Discovered entries live in
+// memecoin-discovered.json so the entry price stays fixed across restarts;
+// defaults come from `memecoinDefaults`; `memecoinDiscovery: false` turns it off.
+// ---------------------------------------------------------------------------
+const DISCOVERED_FILE = path.join(HERE, "memecoin-discovered.json");
+const DEFAULTS = { maxDrawdownPct: 50, autoClose: false, alertOnly: true, outOfRangeCloseMinutes: 120 };
+
+async function getJson(pathname) {
+  const r = await fetch(`${DASHBOARD}${pathname}`, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error(`${pathname} -> HTTP ${r.status}`);
+  return r.json();
+}
+
+/** v4 positions the dashboard knows, across the main wallet and collected watched wallets. */
+async function livePositions() {
+  const out = [];
+  const push = (p, wallet, walletAddress) => {
+    if (p.version !== 4) return;
+    out.push({ tokenId: String(p.nftId || String(p.tokenId).replace(/^v4-/, "")), version: 4, pair: p.pair, wallet, walletAddress,
+      token0: addrOf(p.token0), token1: addrOf(p.token1), since: p.pnlSince || null });
+  };
+  try {
+    const j = await getJson("/api/positions");
+    if (j && j.ok) for (const p of j.positions || []) push(p, j.ownerLabel || "Main", j.owner || cfg.ownerAddress);
+  } catch (err) { log(`discovery: /api/positions failed: ${err.message}`); }
+  try {
+    const j = await getJson("/api/watch");
+    if (j && j.ok) for (const w of j.wallets || []) {
+      if (!w.ok) continue;
+      const served = w.collector ? w.collector.enabled : w.label === "Trading";
+      if (!served) continue;
+      for (const p of w.positions || []) push(p, w.label || w.address, w.address);
+    }
+  } catch (err) { log(`discovery: /api/watch failed: ${err.message}`); }
+  return out;
+}
+
+/** Token-per-quote price from the hourly price log nearest `t` (within 3h), or null. */
+function priceLogAt(tokenAddr, quoteAddr, t) {
+  if (!tokenAddr || !t) return null;
+  const pl = readJson(path.join(HERE, "price-log.json"), { hours: {} });
+  let best = null;
+  for (const h of Object.keys(pl.hours || {})) {
+    const d = Math.abs(Number(h) - t);
+    if (d <= 3 * 3600 * 1000 && (!best || d < best.d)) best = { h, d };
+  }
+  if (!best) return null;
+  const row = pl.hours[best.h];
+  const tokUsd = row[String(tokenAddr).toLowerCase()];
+  const quoteUsd = isEth(quoteAddr) ? row.eth : isStable(quoteAddr) ? 1 : null;
+  if (!(tokUsd > 0) || !(quoteUsd > 0)) return null;
+  return quoteUsd / tokUsd;
+}
+
+/**
+ * The watch list for this cycle: config entries first, then discovered
+ * positions. New discoveries get their entry price from the price log at the
+ * mint time when it has the token, else from their first sample (filled in by
+ * the caller); closed ones are dropped from the discovered file.
+ */
+async function watchList(live) {
+  const listed = Array.isArray(live.memecoins) ? live.memecoins : [];
+  if (live.memecoinDiscovery === false) return listed;
+  const defaults = { ...DEFAULTS, ...(live.memecoinDefaults || {}) };
+  const discovered = readJson(DISCOVERED_FILE, []);
+  const have = new Set([...listed, ...discovered].map((m) => String(m.tokenId)));
+  let changed = false;
+  for (const p of await livePositions()) {
+    if (have.has(p.tokenId)) continue;
+    const quote = isEth(p.token0) || (!isEth(p.token1) && isStable(p.token0)) ? p.token0 : p.token1;
+    const token = quote === p.token0 ? p.token1 : p.token0;
+    const atMint = priceLogAt(token, quote, p.since);
+    const entry = { ...defaults, tokenId: p.tokenId, version: 4, pair: p.pair, wallet: p.wallet, walletAddress: p.walletAddress,
+      entryPrice: atMint || null, entrySource: atMint ? "price log at mint" : "first seen", entryAt: atMint ? p.since : null, discovered: true };
+    discovered.push(entry);
+    have.add(p.tokenId);
+    changed = true;
+    log(`discovered ${p.pair} #${p.tokenId} (${p.wallet})${atMint ? `, entry ${Math.round(atMint).toLocaleString("en-US")} from the price log at mint` : ", entry = first sample"}`);
+  }
+  if (changed) writeJson(DISCOVERED_FILE, discovered);
+  return [...listed, ...discovered.filter((d) => !listed.some((m) => String(m.tokenId) === String(d.tokenId)))];
+}
+
+/** Record a discovered entry's first-seen price, or drop a closed one. */
+function updateDiscovered(id, patch) {
+  const rows = readJson(DISCOVERED_FILE, []);
+  const i = rows.findIndex((r) => String(r.tokenId) === String(id));
+  if (i < 0) return;
+  if (patch === null) rows.splice(i, 1); else Object.assign(rows[i], patch);
+  writeJson(DISCOVERED_FILE, rows);
+}
+
+/** One sample for a listed position: price (token per quote), pool liquidity, fee growth, uncollected fees in USD. */
 async function sample(entry, wethUsd) {
   const owner = entry.walletAddress;
   const p = await v4.loadPosition({ provider, posm, stateView, cfg: { ...cfg, ownerAddress: owner } }, entry.tokenId);
   if (p.gone) return { gone: true };
   if (p.closed) return { closed: true };
-  const ethIs0 = p.token0.address === ethers.ZeroAddress || p.token0.address.toLowerCase() === (cfg.contracts.weth || "").toLowerCase();
-  // token per ETH regardless of which side ETH sits on
-  const tokPerEth = ethIs0 ? p.prices.current : 1 / p.prices.current;
+  // The quote side is ETH when the pair has it, else the reference stable
+  // (USDG/Bucket-style pools); prices are TOKEN PER QUOTE either way.
+  const ethIs0 = isEth(p.token0.address), ethIs1 = isEth(p.token1.address);
+  const quoteIs0 = ethIs0 ? true : ethIs1 ? false : isStable(p.token0.address) ? true : isStable(p.token1.address) ? false : true;
+  const quote = quoteIs0 ? p.token0 : p.token1, token = quoteIs0 ? p.token1 : p.token0;
+  const quoteUsd = isEth(quote.address) ? wethUsd : isStable(quote.address) ? 1 : null;
+  const tokPerQuote = quoteIs0 ? p.prices.current : 1 / p.prices.current;
   const [L, growth] = await Promise.all([stateView.getLiquidity(p.poolAddress), stateView.getFeeGrowthGlobals(p.poolAddress)]);
   const f0 = Number(ethers.formatUnits(p.fees.amount0, p.token0.decimals));
   const f1 = Number(ethers.formatUnits(p.fees.amount1, p.token1.decimals));
   const a0 = Number(ethers.formatUnits(p.amounts.amount0, p.token0.decimals));
   const a1 = Number(ethers.formatUnits(p.amounts.amount1, p.token1.decimals));
-  const tokUsd = wethUsd != null && tokPerEth > 0 ? wethUsd / tokPerEth : null;
-  const usd0 = ethIs0 ? wethUsd : tokUsd, usd1 = ethIs0 ? tokUsd : wethUsd;
+  const tokUsd = quoteUsd != null && tokPerQuote > 0 ? quoteUsd / tokPerQuote : null;
+  const usd0 = quoteIs0 ? quoteUsd : tokUsd, usd1 = quoteIs0 ? tokUsd : quoteUsd;
   const feeUsd = usd0 != null && usd1 != null ? f0 * usd0 + f1 * usd1 : null;
   const valueUsd = usd0 != null && usd1 != null ? a0 * usd0 + a1 * usd1 : null;
   return {
-    t: Date.now(), price: tokPerEth, liq: Number(L), g0: growth[0].toString(), g1: growth[1].toString(),
+    t: Date.now(), price: tokPerQuote, liq: Number(L), g0: growth[0].toString(), g1: growth[1].toString(),
     feeUsd, valueUsd, inRange: p.inRange, symbol0: p.token0.symbol, symbol1: p.token1.symbol,
-    ethSymbol: ethIs0 ? p.token0.symbol : p.token1.symbol, tokenSymbol: ethIs0 ? p.token1.symbol : p.token0.symbol,
-    amountEth: ethIs0 ? a0 : a1, amountToken: ethIs0 ? a1 : a0, tickLower: p.tickLower, tickUpper: p.tickUpper, currentTick: p.currentTick,
+    quoteSymbol: quote.symbol, ethSymbol: quote.symbol, tokenSymbol: token.symbol, tokenAddress: token.address, quoteAddress: quote.address,
+    amountEth: quoteIs0 ? a0 : a1, amountToken: quoteIs0 ? a1 : a0, tickLower: p.tickLower, tickUpper: p.tickUpper, currentTick: p.currentTick,
   };
 }
 
@@ -148,7 +256,7 @@ async function closeNow(entry, reason, who = "guardian") {
 
 async function cycle() {
   const live = readJson(CONFIG_FILE, cfg);
-  const list = Array.isArray(live.memecoins) ? live.memecoins : [];
+  const list = await watchList(live);
   const wethUsd = await ethUsd();
   const statuses = [];
   const now = Date.now();
@@ -166,13 +274,20 @@ async function cycle() {
     if (s.gone || s.closed) {
       st.closed = true;
       log(`#${id} ${entry.pair}: position is ${s.gone ? "no longer owned" : "closed"}; watching stops`);
+      if (entry.discovered) updateDiscovered(id, null);
       statuses.push({ tokenId: id, pair: entry.pair, wallet: entry.wallet, closed: true, at: now });
       continue;
+    }
+    if (entry.discovered && !(Number(entry.entryPrice) > 0) && s.price > 0) {
+      entry.entryPrice = s.price;
+      entry.entryAt = s.t;
+      updateDiscovered(id, { entryPrice: s.price, entryAt: s.t, entrySource: "first seen" });
     }
     st.samples.push(s);
     st.samples = st.samples.filter((x) => now - x.t <= KEEP_MS);
     const d = logic.derive(entry, st.samples, now);
-    Object.assign(d, { symbolToken: s.tokenSymbol, amountEth: s.amountEth, amountToken: s.amountToken, wethUsd, tickLower: s.tickLower, tickUpper: s.tickUpper, currentTick: s.currentTick, samples: st.samples.length });
+    Object.assign(d, { symbolToken: s.tokenSymbol, quoteSymbol: s.quoteSymbol, amountEth: s.amountEth, amountToken: s.amountToken, wethUsd, tickLower: s.tickLower, tickUpper: s.tickUpper, currentTick: s.currentTick, samples: st.samples.length,
+      entrySource: entry.entrySource || "config", entryAt: entry.entryAt || null, discovered: !!entry.discovered });
     for (const text of logic.alertsFor(d, state.sent, now)) await send(text);
     // Auto-close needs the trigger to hold for CONFIRM_CYCLES consecutive
     // 60-second cycles with the pool price stable within 10% between cycles,
@@ -204,13 +319,13 @@ async function main() {
   const args = process.argv.slice(2);
   if (args[0] === "--close") {
     const id = String(args[1] || "");
-    const entry = (readJson(CONFIG_FILE, cfg).memecoins || []).find((m) => String(m.tokenId) === id);
-    if (!entry) throw new Error(`#${id} is not listed under memecoins in config.json`);
+    const entry = [...(readJson(CONFIG_FILE, cfg).memecoins || []), ...readJson(DISCOVERED_FILE, [])].find((m) => String(m.tokenId) === id);
+    if (!entry) throw new Error(`#${id} is not listed under memecoins in config.json or memecoin-discovered.json`);
     const row = await closeNow(entry, args[2] || "manual close from the dashboard", "manual");
     console.log(JSON.stringify(row));
     process.exit(row.status === "closed" ? 0 : 2);
   }
-  log(`guardian started; watching ${(cfg.memecoins || []).length} position(s) every ${INTERVAL_MS / 1000}s`);
+  log(`guardian started; ${(cfg.memecoins || []).length} configured position(s) plus discovery${cfg.memecoinDiscovery === false ? " off" : " of every v4 position in collected wallets"}, every ${INTERVAL_MS / 1000}s`);
   for (;;) {
     try {
       await cycle();

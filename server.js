@@ -973,6 +973,7 @@ async function build() {
     owner: cfg.ownerAddress,
     ownerLabel: watch.ownerLabel(),
     loops: loopHealth(),
+    alerts: { telegram: !!(alerts && alerts.enabled) },
     operator: OPERATOR,
     operatorGas,
     unlock: unlockState(),
@@ -1334,12 +1335,21 @@ const server = http.createServer(async (req, res) => {
     try {
       const st = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-status.json"), "utf8"));
       st.stale = Date.now() - (st.at || 0) > 5 * 60 * 1000; // guardian not running?
-      st.watching = (cfg.memecoins || []).length;
+      st.watching = (st.positions || []).filter((p) => !p.closed).length;
+      st.configured = (cfg.memecoins || []).length;
+      st.discovery = cfg.memecoinDiscovery !== false;
+      // Fee auto-collect (memecoin-collect.js): settings and last activity, so status reports come from one place.
+      const mc = cfg.memecoinCollect || {};
+      let mcState = {}, mcBeat = {};
+      try { mcState = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-collect-state.json"), "utf8")); } catch {}
+      try { mcBeat = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-collect-heartbeat.json"), "utf8")); } catch {}
+      st.autoCollect = { enabled: mc.enabled !== false, minUsd: Number(mc.minUsd ?? 20), minIntervalMinutes: Number(mc.minIntervalMinutes ?? 30),
+        lastRunAt: mcState.lastRunAt || null, lastCheckAt: mcBeat.at || null, stale: Date.now() - (mcBeat.at || 0) > 40 * 60 * 1000 };
       res.writeHead(200);
       return res.end(JSON.stringify(st));
     } catch {
       res.writeHead(200);
-      return res.end(JSON.stringify({ ok: true, at: 0, positions: [], recent: [], stale: true, watching: (cfg.memecoins || []).length }));
+      return res.end(JSON.stringify({ ok: true, at: 0, positions: [], recent: [], stale: true, watching: 0, configured: (cfg.memecoins || []).length }));
     }
   }
   if (url.pathname === "/api/memecoins/close" && req.method === "POST") {

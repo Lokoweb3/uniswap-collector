@@ -42,7 +42,7 @@ assert.match(lines[3], /^🏆 Best: WETH \/ Index \$11\.00\/day at 120% APR$/);
 assert.match(lines[4], /^📉 Worst: WETH \/ Index 4\.9% IL \(-\$146\.00\)$/);
 assert.match(lines[5], /^🔐 LOKOVault: \$12\.50 \(\+\$2\.50 this week\)$/);
 assert.match(lines[6], /^📈 sNET: \$42\.50 rewards$/);
-assert.match(lines[7], /^🎰 Memecoin plays: ETH \/ LAPTOP \$300\.00 +31\.3% vs entry \(out of range\)$/);
+assert.match(lines[7], /^🎰 Memecoin plays: ETH \/ LAPTOP \$300\.00 \+31\.3% vs entry \(out of range\)$/);
 assert.match(lines[8], /^⛽ Gas: \$2\.50$/); // 0.001 ETH * 2500
 assert.strictEqual(lines[9], "");
 assert.match(lines[10], /^Portfolio: \$22,050\.00 \(\+5\.0% vs last week\)$/);

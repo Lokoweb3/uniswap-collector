@@ -141,7 +141,7 @@ The pool chosen per token is cached six hours in `portfolio.json`.
 ### Chat panel on the site (`chat.js`, `chat-widget.js`)
 
 Every page has a 💬 button (bottom right; `/#chat` opens it) that answers questions
-from the same fourteen read-only tools the MCP server exposes, driven in-process, so
+from the same seventeen read-only tools the MCP server exposes, driven in-process, so
 the panel and the claude.ai connector always see the same numbers. It is read-only:
 it cannot arm, collect, close, or change settings. Through the passphrase gate it
 works on the phone too (`POST /api/chat` is the one write the gate lets through).
@@ -163,7 +163,7 @@ Sessions are kept in RAM per browser (two hours, last 40 turns); `↺` starts ov
 ### MCP server (`lp-mcp.mjs`)
 
 `lp-mcp.mjs` is an MCP server that exposes the dashboard's read-only data as
-fourteen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and nine added since, ending with `status_report`) so
+seventeen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and twelve added since, ending with `status_report`, `position_history`, `price_history`, `pool_scout_history`) so
 Claude Code or Claude Desktop can answer questions from the live numbers. It
 fetches from the running dashboard over loopback and cannot sign, collect, or
 reach the operator key. The dashboard must be running.
@@ -189,7 +189,7 @@ used for day and month grouping (default America/New_York).
 ### From claude.ai and the Claude mobile app
 
 Those run on Anthropic's servers, so the tools have to be reachable over the
-internet. `lp-mcp-remote.mjs` serves the same read-only tools (fourteen, see
+internet. `lp-mcp-remote.mjs` serves the same read-only tools (seventeen, see
 "From an agent on a server") over HTTP behind its own OAuth login (claude.ai registers itself, you type a passphrase once, it
 gets a token that refreshes on its own). It binds to loopback; a tunnel gives
 it a public HTTPS address. Steps:
@@ -249,12 +249,33 @@ nothing else: `positions`, `watched_wallets`, `collects`, `daily_revenue`,
 `exit_rules`, `vault` (LOKOVault balance and splits), `staking`,
 `attribution` (P&L breakdown and benchmarks), `weekly_digest` (the Monday
 report text), `health` (armed state, last run, background loops) and `status_report` (one verified
-end-of-day checklist: arm window, auto-collect rule, split in force, guardian, fees, gas, alerts). Nothing
+end-of-day checklist: arm window, auto-collect rule, split in force, guardian, fees, gas, alerts),
+plus the strategy dataset: `position_history`, `price_history`, `pool_scout_history` (below). Nothing
 on the MCP can arm, collect, close or revoke; those stay on the dashboard
 machine. `--list-tokens` shows what is issued and
 `--revoke-token my-agent` cuts one off (restart after either change, since
 the running server keeps the state in memory). The token is stored hashed,
 so it cannot be recovered from the file; issue a new one if it is lost.
+
+### Giving an agent the history for strategy work (`strategy.js`)
+
+Live snapshots are not enough to design a strategy; the agent needs what happened. Three tools
+(and `/api/strategy/positions|prices|scout`) assemble it from the ledgers:
+
+- `position_history`: one record per position ever seen across every wallet, open and closed:
+  opened/closed times and hours open, deposited and withdrawn USD (the liquidity ledger priced from
+  the hourly log, else from that position's own collect-time price records, marked approximate),
+  every collect (count, USD at collect time, per day), realized fee APR, time in range and flips,
+  the price range and its width, PnL vs holding with its legs, the pool's TVL/volume/fees/APR, and
+  for closed positions the net result versus the deposit. Filters: wallet, include_closed, days.
+- `price_history`: hourly USD (and ETH-relative) prices of a token while it was held or in a position.
+- `pool_scout_history`: the scout's hourly record of each position's pool fee APR versus its best
+  sibling pool.
+
+A prompt that works: "Use position_history for the last 14 days, group by pair and fee tier, rank
+by realized fee APR and net result, note time in range and how long each was held, then propose
+ranges and holding times for the next week and say what data is missing." Everything is read-only;
+the agent can propose, not act.
 
 ## Moving the read-only stack to a VM
 
@@ -762,6 +783,9 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-09
 
+- Strategy dataset for agents (`strategy.js`, `/api/strategy/*`, MCP tools `position_history`,
+  `price_history`, `pool_scout_history`): per-position lifecycles across all wallets with deposits,
+  collects, realized APR, time in range and results; hourly price series; pool scout history.
 - Operator gas float refills itself: `sweep.gasTargetEth` (0.02) is the ETH the operator keeps out of
   collected fees before swapping or sending anything; `keepGasReserveEth` stays the floor.
 - Memecoin guardian discovers every v4 position in the main wallet and the collected watched wallets

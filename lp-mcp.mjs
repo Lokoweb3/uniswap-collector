@@ -437,6 +437,72 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "position_history",
+  {
+    title: "Position history (strategy dataset)",
+    description:
+      "One record per LP position ever seen across every wallet, open and closed, for judging what worked: opened/closed times, hours open, deposited and withdrawn USD, every collect (count, USD at collect time, per day), realized fee APR, time in range and flips, the price range and its width, PnL vs holding with its legs, the pool's TVL/volume/fees/APR, and for closed positions the net result. Use it to compare ranges, tiers, pairs and holding times before proposing a strategy. Filters: wallet (label or address), include_closed (default true), days (only positions active in the last N days).",
+    inputSchema: {
+      wallet: z.string().optional().describe("Wallet label or address (default all)"),
+      include_closed: z.boolean().optional().describe("Include closed positions (default true)"),
+      days: z.number().optional().describe("Only positions open at some point in the last N days"),
+    },
+  },
+  async ({ wallet, include_closed, days }) => {
+    try {
+      const qs = new URLSearchParams();
+      if (wallet) qs.set("wallet", wallet);
+      if (include_closed === false) qs.set("closed", "0");
+      if (days) qs.set("days", String(days));
+      return text(await get(`/api/strategy/positions?${qs}`));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "price_history",
+  {
+    title: "Hourly price history of a token",
+    description:
+      "Hourly USD prices of a token as the dashboard recorded them (pool-derived), with the ETH-relative price for non-ETH tokens, over the last N days (default 7) at a chosen step in hours. Tokens are logged only while held or in a position. Pass a symbol (LAPTOP, Bucket, ETH) or a contract address.",
+    inputSchema: {
+      token: z.string().describe("Token symbol or contract address; ETH for ether"),
+      days: z.number().optional().describe("Window in days (default 7)"),
+      step_hours: z.number().optional().describe("Sampling step in hours (default 1)"),
+    },
+  },
+  async ({ token, days, step_hours }) => {
+    try {
+      const qs = new URLSearchParams({ token });
+      if (days) qs.set("days", String(days));
+      if (step_hours) qs.set("step", String(step_hours));
+      return text(await get(`/api/strategy/prices?${qs}`));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "pool_scout_history",
+  {
+    title: "Pool scout history",
+    description:
+      "The pool scout's hourly record of each position's pool fee APR versus the best sibling pool for the same pair (other fee tier or Uniswap version), with TVL and how many days the sibling has been ahead. Shows whether a position has been sitting in the wrong pool. Last N days (default 30).",
+    inputSchema: { days: z.number().optional().describe("Window in days (default 30)") },
+  },
+  async ({ days }) => {
+    try {
+      return text(await get(`/api/strategy/scout?days=${days || 30}`));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
 return server;
 }
 

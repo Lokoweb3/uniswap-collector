@@ -1061,6 +1061,7 @@ const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
 const armer = require("./arm");
 const treasuryLedger = require("./treasury");
 const chatbot = require("./chat").create({ port: PORT });
+const strategy = require("./strategy").create({ cfg, dir: __dirname, port: PORT, metaFor: (id) => positionMeta(id) });
 
 // One portfolio refresh at a time, fed from the latest position build.
 let portfolioInFlight = null;
@@ -1564,6 +1565,28 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end in-site chat ===
+
+  // === strategy dataset (strategy.js) ===
+  if (url.pathname.startsWith("/api/strategy/")) {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const q = url.searchParams;
+      const num = (k, d) => (q.get(k) != null && q.get(k) !== "" ? Number(q.get(k)) : d);
+      let out;
+      if (url.pathname === "/api/strategy/positions") {
+        out = await strategy.positionHistory({ wallet: q.get("wallet"), includeClosed: q.get("closed") !== "0", days: num("days", null) });
+      }
+      else if (url.pathname === "/api/strategy/prices") out = await strategy.priceHistory({ token: q.get("token"), days: num("days", 7), stepHours: num("step", 1) });
+      else if (url.pathname === "/api/strategy/scout") out = strategy.scoutHistory({ days: num("days", 30) });
+      else { res.writeHead(404); return res.end(JSON.stringify({ ok: false, error: "unknown strategy view" })); }
+      res.writeHead(200);
+      return res.end(JSON.stringify(out));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end strategy dataset ===
 
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");

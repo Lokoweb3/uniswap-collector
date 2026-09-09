@@ -40,9 +40,10 @@
     "minOperatorGasBalanceEth": "0.003"
   },
   "sweep": {
-    "_comment": "After swapping fees to WETH: target ETH unwraps and sends ETH to sweepDestination; target USDG swaps the WETH to USDG through the WETH/USDG pool at targetFeeTier and sends that instead. Either way the operator keeps keepGasReserveEth of ETH for gas (topped up from WETH when low).",
+    "_comment": "After swapping fees to WETH: target ETH unwraps and sends ETH to sweepDestination; target USDG swaps the WETH to USDG through the WETH/USDG pool at targetFeeTier and sends that instead. Either way the operator keeps keepGasReserveEth of ETH for gas, and refills itself from collected fees up to gasTargetEth before anything is swapped or sent (kept ETH comes off the top, before the vault split).",
     "enabled": true,
     "keepGasReserveEth": "0.005",
+    "gasTargetEth": "0.02",
     "target": "USDG",
     "targetToken": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
     "targetFeeTier": 100

@@ -757,6 +757,8 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-09
 
+- Operator gas float refills itself: `sweep.gasTargetEth` (0.02) is the ETH the operator keeps out of
+  collected fees before swapping or sending anything; `keepGasReserveEth` stays the floor.
 - Memecoin guardian discovers every v4 position in the main wallet and the collected watched wallets
   on its own (`memecoin-discovered.json`; entry price from the hourly price log at the mint, else the
   first sample; `memecoinDefaults` / `memecoinDiscovery: false` in config.json). Pools quoted in USDG

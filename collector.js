@@ -287,6 +287,19 @@ async function quoteSingle(quoter, tokenIn, tokenOut, amountIn, feeTier) {
   }
 }
 
+/**
+ * The ETH the operator keeps for gas. `keepGasReserveEth` is the floor it must
+ * never sweep below; `gasTargetEth` (optional, >= the floor) is the float it
+ * refills itself to out of collected fees before anything is swapped or sent,
+ * so the hot wallet never runs dry between manual top-ups.
+ */
+function gasFloat(cfg) {
+  const reserve = ethers.parseEther(String(cfg.sweep.keepGasReserveEth || "0"));
+  let target = cfg.sweep.gasTargetEth != null ? ethers.parseEther(String(cfg.sweep.gasTargetEth)) : reserve;
+  if (target < reserve) target = reserve;
+  return { reserve, target };
+}
+
 /** The sweep target: ETH (unwrap and send) or a stable token (swap and send). */
 function sweepTarget(cfg) {
   const t = String((cfg.sweep && cfg.sweep.target) || "ETH").toUpperCase();
@@ -617,9 +630,12 @@ async function runOwner(ctx, owner) {
     // Native ETH fees landed in the operator's ETH balance; wrap what sits
     // above the gas reserve so the sweep below treats it as collected WETH.
     if (mode === "full" && cfg.sweep && cfg.sweep.enabled) {
-      const reserveWei = ethers.parseEther(cfg.sweep.keepGasReserveEth);
+      const { target: gasTargetWei } = gasFloat(cfg);
       const ethBal = await provider.getBalance(wallet.address);
-      const excess = ethBal - reserveWei - ethers.parseEther("0.0005");
+      const excess = ethBal - gasTargetWei - ethers.parseEther("0.0005");
+      if (ethBal < gasTargetWei && ethBal > before.eth) {
+        log(`gas float: keeping ${ethers.formatEther(ethBal - before.eth)} ETH of v4 fees (float ${ethers.formatEther(ethBal)} of ${ethers.formatEther(gasTargetWei)} target)`);
+      }
       if (excess > 0n) {
         try {
           const wtx = await new ethers.Contract(weth, WETH_ABI, wallet).deposit({ value: excess });
@@ -840,20 +856,20 @@ async function runOwner(ctx, owner) {
   // or are leftovers to sort out by hand).
   const wethNow = await wethC.balanceOf(wallet.address);
   let wethBal = wethNow > before.weth ? wethNow - before.weth : 0n;
-  const reserve = ethers.parseEther(cfg.sweep.keepGasReserveEth);
+  const { reserve, target: gasTarget } = gasFloat(cfg);
 
   if (target.kind === "token") {
     const tinfo = await tokenInfo(target.address, provider);
     const targetC = new ethers.Contract(target.address, ERC20_ABI, wallet);
 
     // 1. Gas float first: the operator pays gas in ETH, so if it has slipped
-    //    under the reserve, unwrap just enough WETH to refill it.
+    //    under the target float, unwrap enough of this pass's WETH to refill it.
     const ethBal0 = await provider.getBalance(wallet.address);
-    if (ethBal0 < reserve && wethBal > 0n) {
-      const topUp = reserve - ethBal0 < wethBal ? reserve - ethBal0 : wethBal;
+    if (ethBal0 < gasTarget && wethBal > 0n) {
+      const topUp = gasTarget - ethBal0 < wethBal ? gasTarget - ethBal0 : wethBal;
       try {
         const utx = await wethC.withdraw(topUp);
-        log(`gas top-up: unwrap ${ethers.formatEther(topUp)} WETH -> ${utx.hash}`);
+        log(`gas top-up: unwrap ${ethers.formatEther(topUp)} WETH -> ${utx.hash} (float ${ethers.formatEther(ethBal0)} -> ${ethers.formatEther(ethBal0 + topUp)} of ${ethers.formatEther(gasTarget)} target)`);
         const urcpt = await utx.wait();
         recordGas(state, urcpt.gasUsed * urcpt.gasPrice);
         wethBal -= topUp;
@@ -962,7 +978,7 @@ async function runOwner(ctx, owner) {
       }
     }
 
-    log(`Operator gas float now ${ethers.formatEther(await provider.getBalance(wallet.address))} ETH (reserve ${cfg.sweep.keepGasReserveEth}).`);
+    log(`Operator gas float now ${ethers.formatEther(await provider.getBalance(wallet.address))} ETH (reserve ${cfg.sweep.keepGasReserveEth}, target ${ethers.formatEther(gasTarget)}).`);
     log(`24h gas spend now ${ethers.formatEther(gasSpentLast24h(state))} / ${cfg.thresholds.dailyGasCapEth} ETH`);
     log(`=== ${owner.label}: done ===`);
     return;
@@ -981,15 +997,15 @@ async function runOwner(ctx, owner) {
 
   const ethNow = await provider.getBalance(wallet.address);
   const ethBal = owner.main ? ethNow : (ethNow > before.eth ? before.eth + (ethNow - before.eth) : 0n);
-  if (ethBal <= reserve) {
-    log(`Operator ETH (${ethers.formatEther(ethBal)}) at or below gas reserve. Nothing to sweep.`);
+  if (ethBal <= gasTarget) {
+    log(`Operator ETH (${ethers.formatEther(ethBal)}) at or below the gas float target. Nothing to sweep.`);
     return;
   }
 
   // Leave enough for the sweep transaction itself plus the reserve.
   const sweepGas = 21000n;
   const sweepCost = sweepGas * (gasPrice === 0n ? 1n : gasPrice);
-  const sendable = ethBal - reserve - sweepCost;
+  const sendable = ethBal - gasTarget - sweepCost;
   if (sendable <= 0n) {
     log("Not enough above reserve to cover the sweep transaction. Skipping.");
     return;

@@ -114,16 +114,19 @@ function build(d) {
   // -- sNET.
   const stakeUsd = ((d.staking && d.staking.tokens) || []).reduce((s, x) => s + ((x.rewards && x.rewards.d7Usd) || 0), 0);
 
-  // -- Memecoin plays: Trading wallet v4 positions (or config memecoins).
+  // -- Memecoin plays: every v4 position (the guardian watches them all); entry prices from config or discovery.
   const memeCfg = new Map(((d.memecoins || [])).map((m) => [String(m.tokenId), m]));
-  const memes = allPositions.filter((p) => p.version === 4 && (memeCfg.has(String(p.nftId || p.tokenId).replace(/^v4-/, "")) || /trading/i.test(p.wallet)));
+  const memes = allPositions.filter((p) => p.version === 4);
   const memeText = memes.length
     ? memes.map((p) => {
         const m = memeCfg.get(String(p.nftId || p.tokenId).replace(/^v4-/, ""));
         let vs = "";
         if (m && m.entryPrice && p.priceCurrent) {
-          // entryPrice is quoted as token per ETH; the payload's priceCurrent is token1 per token0 with token0 = ETH in these pools.
-          const change = (p.priceCurrent / m.entryPrice - 1) * 100;
+          // entryPrice is token per quote (ETH, or USDG for stable-paired pools); priceCurrent is token1 per token0.
+          // With the quote as token0 that is the same number; otherwise invert. The move is reported as the token's value change.
+          const quoteIs0 = /^(ETH|WETH|USDG) \//.test(p.pair || "");
+          const nowPerQuote = quoteIs0 ? p.priceCurrent : 1 / p.priceCurrent;
+          const change = (m.entryPrice / nowPerQuote - 1) * 100;
           vs = ` ${pct(change)} vs entry`;
         }
         return `${p.pair} ${usd(p.valueUsd)}${vs}${p.inRange ? "" : " (out of range)"}`;
@@ -197,7 +200,8 @@ async function gather(base = "http://127.0.0.1:8787") {
   return {
     now: Date.now(), positions, watch, history, daily, staking, treasury, portfolioAll,
     priceLog: read("price-log.json"), gasSpends: state.gasSpends || [],
-    memecoins: cfg.memecoins || [], usdgAddress: cfg.usdReference && cfg.usdReference.stable,
+    // Entries the guardian watches: config plus what it discovered (entry prices included).
+    memecoins: [...(cfg.memecoins || []), ...(read("memecoin-discovered.json") || [])], usdgAddress: cfg.usdReference && cfg.usdReference.stable,
   };
 }
 

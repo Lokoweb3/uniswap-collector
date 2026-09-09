@@ -1,7 +1,7 @@
 /**
  * In-site chat for the LP dashboard.
  *
- * Answers questions from the same 13 read-only tools the MCP server exposes
+ * Answers questions from the same read-only tools the MCP server exposes
  * (lp-mcp.mjs), driven in-process over an in-memory MCP transport, so the
  * chat and the claude.ai connector always see identical data. Nothing here
  * can arm, collect, or close: the tool set has no write actions.

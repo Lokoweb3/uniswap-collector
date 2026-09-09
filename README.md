@@ -248,7 +248,8 @@ nothing else: `positions`, `watched_wallets`, `collects`, `daily_revenue`,
 `portfolio`, `wallet_balances`, `memecoin_watch` (guardian status),
 `exit_rules`, `vault` (LOKOVault balance and splits), `staking`,
 `attribution` (P&L breakdown and benchmarks), `weekly_digest` (the Monday
-report text) and `health` (armed state, last run, background loops). Nothing
+report text), `health` (armed state, last run, background loops) and `status_report` (one verified
+end-of-day checklist: arm window, auto-collect rule, split in force, guardian, fees, gas, alerts). Nothing
 on the MCP can arm, collect, close or revoke; those stay on the dashboard
 machine. `--list-tokens` shows what is issued and
 `--revoke-token my-agent` cuts one off (restart after either change, since
@@ -306,8 +307,12 @@ operator key while the collector is armed; proceeds always go to the position's 
 
 ### Memecoin guardian (`memecoin-guardian.js`)
 
-A separate process (started by `start-all.sh`, `npm run guardian`) that every 60 s reads each position
-listed under `memecoins` in config.json straight from the v4 pool state: price vs entry (token value in
+A separate process (started by `start-all.sh`, `npm run guardian`) that every 60 s reads each watched
+position straight from the v4 pool state. It watches every v4 position in the main wallet and the
+collected watched wallets on its own (`memecoin-discovered.json`; entry price from the hourly price
+log at the mint, else the first sample; defaults from `memecoinDefaults`; `memecoinDiscovery: false`
+turns discovery off) plus anything listed under `memecoins` in config.json, whose entry price wins.
+Prices are token per quote asset (ETH, or USDG for stable-paired pools). Per position: price vs entry (token value in
 ETH), in/out of range and for how long, fees per hour, active liquidity vs its 24h high, price velocity.
 It writes `memecoin-status.json` (the "Memecoin Watch" section on the dashboard, `/api/memecoins`) and
 sends Telegram alerts, each once per episode: dump (−20% in 1h), out of range / back in range, volume
@@ -336,7 +341,7 @@ see the changelog for the planned merge.
 ### Fee auto-collect (`memecoin-collect.js`)
 
 Every 15 min (`memecoinCollect` in config.json: `minUsd` 50, `minIntervalMinutes` 15; the loop re-reads config each cycle) it checks the
-memecoin positions' uncollected fees (every v4 position in the Trading wallet, plus the ids in `memecoins`) and, when one exceeds the threshold and the collector is armed,
+memecoin positions' uncollected fees (every v4 position in the main wallet and the collected watched wallets, plus the ids in `memecoins`) and, when one exceeds the threshold and the collector is armed,
 runs the normal `./run-collector.sh full --quiet` (all wallets, vault split included), logs to
 `memecoin-collect-log.json` and reports "💰 Collected …" per position. While locked it nudges once per
 lock episode. It also verifies the first vault split (ledger entry, TBA balance, owner transfer) and
@@ -434,8 +439,8 @@ your main wallet.
 every collected token is swapped to WETH through the pool it came from, the
 WETH is unwrapped, and ETH above the gas reserve is sent to
 `sweepDestination`. `USDG`: the same consolidation into WETH, then the
-operator's ETH gas float is topped up from WETH if it has slipped under
-`keepGasReserveEth`, the remaining WETH is swapped to USDG through the
+operator's ETH gas float is refilled from this pass's ETH and WETH up to
+`gasTargetEth` (`keepGasReserveEth` is the floor it never sweeps below), the remaining WETH is swapped to USDG through the
 WETH/USDG pool at `targetFeeTier` and delivered straight to
 `sweepDestination`, and any USDG that arrived as fees is forwarded as-is.
 `maxSwapValueWeth` and `slippageBps` apply to that last swap too. Only the

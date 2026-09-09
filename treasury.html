@@ -416,8 +416,10 @@ td a:hover{text-decoration:underline}
     </div>
   </div>
 
-  <!-- === weekly-digest-and-vault === Open on your phone -->
-  <div class="card" id="qr-card">
+  <!-- === weekly-digest-and-vault === Open on your phone. Hidden until a public
+       domain replaces the tailnet address; the server's /api/vault-info still
+       reports publicHost, so removing the `hidden` attribute brings it back. -->
+  <div class="card" id="qr-card" hidden>
     <div class="card-title">Mobile access</div>
     <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
       <div style="text-align:center">
@@ -865,7 +867,8 @@ async function loadPublicInfo() {
 function renderQr(host) {
   if (typeof QR === 'undefined') return;
   // The node's public name comes from the server at runtime (/api/vault-info publicHost).
-  if (!host) { document.getElementById('qr-card').style.display = 'none'; return; }
+  const card = document.getElementById('qr-card');
+  if (!host || card.hasAttribute('hidden')) { card.style.display = 'none'; return; }
   const pub = `https://${host}:8443/vault`;
   const tail = `https://${host}:8444/vault`;
   try {

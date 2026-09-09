@@ -1061,6 +1061,26 @@ const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
 const armer = require("./arm");
 const treasuryLedger = require("./treasury");
 const chatbot = require("./chat").create({ port: PORT });
+// Public hostname for phone links and QR codes: LP_PUBLIC_HOST from the
+// environment, else the node's tailnet name asked from the user-space
+// tailscaled. Resolved at runtime so no tracked file carries the real name.
+let publicHostCache = { at: 0, host: null };
+function publicHost() {
+  if (process.env.LP_PUBLIC_HOST) return process.env.LP_PUBLIC_HOST;
+  if (Date.now() - publicHostCache.at < 10 * 60 * 1000) return publicHostCache.host;
+  publicHostCache.at = Date.now();
+  try {
+    const home = process.env.HOME || "";
+    const bin = path.join(home, ".local", "tailscale", "tailscale");
+    const sock = path.join(home, ".local", "state", "tailscale", "tailscaled.sock");
+    const out = require("child_process").execFileSync(bin, [`--socket=${sock}`, "status", "--json"], { timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    const dns = JSON.parse(String(out)).Self.DNSName || "";
+    publicHostCache.host = dns.replace(/\.$/, "") || null;
+  } catch {
+    publicHostCache.host = null;
+  }
+  return publicHostCache.host;
+}
 const strategy = require("./strategy").create({ cfg, dir: __dirname, port: PORT, metaFor: (id) => positionMeta(id) });
 
 // One portfolio refresh at a time, fed from the latest position build.
@@ -1438,7 +1458,7 @@ const server = http.createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     try {
       const ts = treasuryLedger.settings(cfg);
-      const out = { ok: true, nft: cfg.treasuryNFT || null, tba: ts.tba, pct: ts.pct, max: ts.max, owner: null, admin: null, paused: null, balances: [] };
+      const out = { ok: true, nft: cfg.treasuryNFT || null, tba: ts.tba, pct: ts.pct, max: ts.max, owner: null, admin: null, paused: null, balances: [], publicHost: publicHost() };
       if (cfg.treasuryNFT) {
         const nft = new ethers.Contract(cfg.treasuryNFT, ["function ownerOf(uint256) view returns (address)", "function owner() view returns (address)", "function feeSplitPct() view returns (uint256)", "function paused() view returns (bool)"], provider);
         const [o, a, p, pz] = await Promise.all([nft.ownerOf(1).catch(() => null), nft.owner().catch(() => null), nft.feeSplitPct().catch(() => null), nft.paused().catch(() => null)]);

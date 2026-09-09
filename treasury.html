@@ -840,6 +840,7 @@ async function loadPublicInfo() {
     const r = await fetch('/api/vault-info');
     const info = await r.json();
     if (!info.ok) throw new Error(info.error || 'vault-info failed');
+    if (info.publicHost) renderQr(info.publicHost);
     if (info.owner) nftOwner = info.owner;
     if (info.pct != null) currentSplitPct = Number(info.pct);
     if (!connectedAddress && info.balances && info.balances.length) {
@@ -861,9 +862,10 @@ async function loadPublicInfo() {
     console.error('Public info failed:', e.message);
   }
 }
-function renderQr() {
+function renderQr(host) {
   if (typeof QR === 'undefined') return;
-  const host = '<your-node>.<your-tailnet>.ts.net';
+  // The node's public name comes from the server at runtime (/api/vault-info publicHost).
+  if (!host) { document.getElementById('qr-card').style.display = 'none'; return; }
   const pub = `https://${host}:8443/vault`;
   const tail = `https://${host}:8444/vault`;
   try {
@@ -882,8 +884,7 @@ startAutoRefresh = function () { if (autoRefreshStarted) return; autoRefreshStar
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadConfig().then(async () => {
-  renderQr();
-  await loadPublicInfo();
+  await loadPublicInfo(); // also draws the phone QR codes once the server reports the node's public name
   await loadBalances();
   await loadHistory();
   startAutoRefresh();

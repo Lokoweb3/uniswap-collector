@@ -1310,7 +1310,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/treasury") {
     res.setHeader("Content-Type", "application/json");
     try {
-      const ts = treasuryLedger.settings(cfg);
+      // The percentage in force is the NFT's feeSplitPct() (the vault page's slider), not config.json.
+      const ts = await treasuryLedger.effectiveSettings(cfg, provider);
       let balanceUsdg = null;
       if (ts.tba && cfg.usdReference && cfg.usdReference.stable) {
         const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);

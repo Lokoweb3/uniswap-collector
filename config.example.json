@@ -97,6 +97,7 @@
   "treasuryTBA": "0x0000000000000000000000000000000000000021",
   "feeSplitPct": 10,
   "feeSplitMax": 20,
+  "treasuryWithdrawAlertUsdg": 1000,
   "treasuryNFT": "0x0000000000000000000000000000000000000022",
   "treasuryTokenId": 1,
   "treasuryImplementation": "0x0000000000000000000000000000000000000023",

@@ -2007,7 +2007,7 @@ async function treasuryState() {
     const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
     balanceUsdg = Number(ethers.formatUnits(raw, dec));
   } catch {}
-  return { enabled: ts.enabled, pct, pctSource, balanceUsdg, consecutiveFailures: treasuryLedger.consecutiveFailures() };
+  return { enabled: ts.enabled, pct, pctSource, balanceUsdg, consecutiveFailures: treasuryLedger.consecutiveFailures(), withdrawAlertUsdg: Number(cfg.treasuryWithdrawAlertUsdg) || null };
 }
 
 // === performance-attribution === (attribution.js): reads the ledgers plus the live views on request

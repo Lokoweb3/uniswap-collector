@@ -69,16 +69,20 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   const c2 = create({ transport: async (t, to) => { routed.push([to, t]); return true; }, stateFile: stateFile + ".t", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
   out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 10, balanceUsdg: 12, consecutiveFailures: 3 } });
   assert.strictEqual(out.length, 1); assert.match(out[0], /failed 3 times/); assert.strictEqual(routed[routed.length - 1][0], "vault");
-  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3 } });
+  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3, withdrawAlertUsdg: 100 } });
   assert.strictEqual(out.length, 2, "balance + pct change expected"); assert.ok(out.some(m => /150.00 USDG/.test(m))); assert.ok(out.some(m => /10% → 15%/.test(m)));
-  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3 } });
+  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3, withdrawAlertUsdg: 100 } });
   assert.strictEqual(out.length, 0, "no repeats within the window");
+  // default level is 1000 USDG: 150 without an explicit level stays quiet (fresh state file)
+  const c2b = create({ transport: async () => true, stateFile: stateFile + ".t3", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
+  out = await c2b.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 0 } });
+  assert.ok(!out.some(m => /Time to withdraw/.test(m)), "150 USDG is under the 1000 default");
   // fallback: treasury chat refuses, main chat gets it
   const routed2 = [];
   const c3 = create({ transport: async (t, to) => { routed2.push(to); return to !== "vault"; }, stateFile: stateFile + ".t2", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
-  out = await c3.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 10, balanceUsdg: 500, consecutiveFailures: 0 } });
+  out = await c3.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 10, balanceUsdg: 500, consecutiveFailures: 0, withdrawAlertUsdg: 100 } });
   assert.deepStrictEqual(routed2, ["vault", "main"]);
-  for (const f of [stateFile + ".t", stateFile + ".t2"]) { try { fs.unlinkSync(f); } catch {} }
+  for (const f of [stateFile + ".t", stateFile + ".t2", stateFile + ".t3"]) { try { fs.unlinkSync(f); } catch {} }
 
   // 9. watched wallets: a position leaves and re-enters range, prefixed with the wallet label, no repeats;
   //    the main wallet's own alerts are unchanged (same keys as before) and carry the owner label.

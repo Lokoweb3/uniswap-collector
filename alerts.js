@@ -28,7 +28,7 @@ const WARN_HOUR = 8; // remind about a locked collector from this hour
 const short = (a) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || "?");
 
 const TREASURY_CHAT = process.env.TELEGRAM_TREASURY_CHAT_ID || "";
-const TREASURY_BALANCE_ALERT_USDG = 100;
+const TREASURY_BALANCE_ALERT_USDG = 1000; // default; config.json treasuryWithdrawAlertUsdg overrides (passed as treasury.withdrawAlertUsdg)
 
 function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEGRAM_CHAT_ID || "", treasuryChatId = TREASURY_CHAT, transport, stateFile = STATE_FILE, now = () => Date.now(), log = console } = {}) {
   let state = { sent: {}, outSince: {}, lastTick: 0, lastRunSeen: null };
@@ -206,8 +206,9 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
       if (treasury.consecutiveFailures >= 3) {
         await say(`vaultfail:${treasury.consecutiveFailures}`, `❌ LOKOVault: the treasury transfer failed ${treasury.consecutiveFailures} times in a row (the wallets received the full amounts). Check treasuryTBA in config.json and the TBA contract.`, 0, sendTreasury);
       }
-      if (treasury.balanceUsdg != null && treasury.balanceUsdg >= TREASURY_BALANCE_ALERT_USDG) {
-        await say("vaultbalance", `💰 LOKOVault holds ${treasury.balanceUsdg.toFixed(2)} USDG (≥ ${TREASURY_BALANCE_ALERT_USDG}). Time to withdraw from the vault.`, ALERT_REPEAT_MS, sendTreasury);
+      const level = Number(treasury.withdrawAlertUsdg) > 0 ? Number(treasury.withdrawAlertUsdg) : TREASURY_BALANCE_ALERT_USDG;
+      if (treasury.balanceUsdg != null && treasury.balanceUsdg >= level) {
+        await say(`vaultbalance:${level}`, `💰 LOKOVault holds ${treasury.balanceUsdg.toFixed(2)} USDG (≥ ${level}). Time to withdraw from the vault.`, ALERT_REPEAT_MS, sendTreasury);
       }
       if (treasury.pct != null) {
         if (state.lastSplitPct != null && state.lastSplitPct !== treasury.pct) {

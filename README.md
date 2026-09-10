@@ -336,7 +336,7 @@ prints "Treasury split: … → LOKOVault TBA" and "Owner receives: …". The sp
 is set. `/treasury` serves `treasury.html` (the vault page, wallet-signed, no keys), `/api/treasury`
 returns settings, the TBA's USDG balance and totals by month; the Analytics page has a LOKOVault panel
 and the tax table/CSV carry the vault split. Alerts: three consecutive failed vault transfers, vault
-balance ≥ 100 USDG, split % changed (on-chain value when the TBA exposes `feeSplitPct()`), sent to
+balance ≥ `treasuryWithdrawAlertUsdg` (config.json, default 1000 USDG; repeated every 6 h while it stays above), split % changed (on-chain value when the TBA exposes `feeSplitPct()`), sent to
 `TELEGRAM_TREASURY_CHAT_ID` (default the group) with fallback to the main chat. The contracts
 (`TreasuryNFT.sol`, `TreasuryAccount.sol`), `deploy-treasury.js` and `treasury.html` are supplied
 separately; `solc` is installed for the deploy script.
@@ -862,6 +862,12 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Vault withdraw reminder level is configurable: `treasuryWithdrawAlertUsdg` (default 1000 USDG, was
+  a fixed 100).
+- Disposal scan: a transfer of a handed-back token into any contract whose transaction also swaps
+  (launchpad trading contracts included) is a sale, valued from the swap's USDG or ETH leg.
+- Confirm-before-sell live test: the request, the 10-minute expiry and the hand-back all worked;
+  an expired batch stays in the wallet and is not retried.
 - Sell path fixed for real: the router's exact-input struct has an extra empty bytes field (decoded
   from an app swap); with that layout ERC-20-quoted pools sell too, so Bucket sells in the deep
   USDG/Bucket pool. Router switched to the address the app uses.

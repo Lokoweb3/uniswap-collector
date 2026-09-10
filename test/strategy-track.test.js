@@ -42,6 +42,11 @@ srv.listen(0, "127.0.0.1", async () => {
     const port = srv.address().port;
     const track = require("../strategy-track").create({ cfg: {}, dir, port });
 
+    // Pair keys ignore order, spacing, and tier / version tags an agent may append.
+    const { pairKey } = require("../strategy-track");
+    assert.strictEqual(pairKey("ETH / USDG 1% V4"), pairKey("USDG/ETH"));
+    assert.strictEqual(pairKey("CASHCAT / WETH 0.3% V3"), "cashcat|weth");
+
     // Validation
     assert.throws(() => track.record({ author: "", horizonDays: 7, items: [{ wallet: "Main", pair: "A/B", action: "hold" }] }), /author/);
     assert.throws(() => track.record({ author: "x", horizonDays: 0, items: [{ wallet: "Main", pair: "A/B", action: "hold" }] }), /horizonDays/);

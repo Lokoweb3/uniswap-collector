@@ -38,10 +38,14 @@ function ledgerFile(dir) {
   return path.join(dir || __dirname, "strategy-proposals.json");
 }
 
-/** "ETH / LAPTOP", "LAPTOP/ETH", "laptop / eth" -> "eth|laptop" (order-insensitive). */
+/**
+ * "ETH / LAPTOP", "LAPTOP/ETH", "laptop / eth", "ETH / USDG 1% V4" -> "eth|laptop" / "eth|usdg":
+ * order-insensitive, and tier or version tags an agent may append ("1%", "0.3%", "v3", "v4") are ignored.
+ */
 function pairKey(s) {
   return String(s || "")
     .toLowerCase()
+    .replace(/\b\d+(?:\.\d+)?%|\bv[34]\b|\(.*?\)/g, " ")
     .replace(/\s+/g, "")
     .split("/")
     .map((x) => x.trim())

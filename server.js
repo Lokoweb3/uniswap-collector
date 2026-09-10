@@ -150,7 +150,11 @@ const watch = require("./watch").create({
   getPrices: () => lastPrices,
   getOperator: () => require("./arm").operatorAddress(), // keystore's public address, re-read each time
   // === performance-attribution === PnL vs HODL for watched positions: liquidity ledger basis + collect events
-  getBasis: (tokenId) => (typeof ledger !== "undefined" ? ledger.basis(tokenId) : null),
+  getBasis: (tokenId) => {
+    const id = String(tokenId);
+    if (id.startsWith("v4-")) return typeof ledgerV4 !== "undefined" && ledgerV4 ? ledgerV4.basis(id.slice(3)) : null;
+    return typeof ledger !== "undefined" ? ledger.basis(id) : null;
+  },
   getCollectEvents: (tokenId) => (typeof hist !== "undefined" ? hist.events.filter((e) => e.tokenId === String(tokenId)) : []),
 });
 // Liquidity history from the RPC itself; the PnL basis prefers it over
@@ -160,6 +164,19 @@ const ledger = require("./ledger").create({
   npmAddress: cfg.contracts.positionManager,
   forwardStart: hist.startBlock,
 });
+// v4 liquidity ledger (ledger-v4.js): ModifyLiquidity events on the PoolManager
+// keyed by the salt (tokenId), in the v3 ledger's shape so the PnL views and
+// strategy.js treat v4 positions the same way. Only when v4 is configured.
+const ledgerV4 = V4 && cfg.contracts.v4.poolManager && cfg.contracts.v4.stateView
+  ? require("./ledger-v4").create({
+      provider,
+      poolManager: cfg.contracts.v4.poolManager,
+      posm: V4.posm,
+      posmAddress: cfg.contracts.v4.positionManager,
+      stateView: cfg.contracts.v4.stateView,
+      forwardStart: hist.startBlock,
+    })
+  : null;
 // Portfolio: every token held, in the wallet or inside positions, valued.
 const portfolio = require("./portfolio").create({
   provider,
@@ -2087,6 +2104,25 @@ async function backgroundTick() {
     }
     if (ledger.forwardCaughtUp && ledger.pendingBack(allOpenIds).length) {
       ledger.scanBack(allOpenIds, 600).catch((err) => console.error("ledger back:", err.shortMessage || err.message));
+    }
+    // v4 ledger: the main wallet's discovered ids plus every watched wallet's
+    // (v4-positions-<address>.json, written by watch.js). Bare ids, no prefix.
+    // Neither scan is awaited: the first forward walk covers months of blocks.
+    if (ledgerV4) {
+      const v4Ids = new Set([...V4.discovery.ids].map(String));
+      for (const w of (watch.latest && watch.latest.wallets) || []) {
+        try { for (const id of JSON.parse(fs.readFileSync(path.join(__dirname, `v4-positions-${w.address.toLowerCase()}.json`), "utf8")).ids || []) v4Ids.add(String(id)); } catch {}
+      }
+      const v4Open = new Set([
+        ...((cache.payload.positions || []).filter((p) => p.version === 4).map((p) => String(p.nftId))),
+        ...(((watch.latest && watch.latest.wallets) || []).flatMap((w) => (w.positions || []).filter((p) => p.version === 4).map((p) => String(p.nftId || String(p.tokenId).slice(3))))),
+      ]);
+      const ids = [...v4Ids];
+      ledgerV4.scanForward(ids, cache.payload.blockNumber).then(() => {
+        if (ledgerV4.forwardCaughtUp && ledgerV4.pendingBack([...v4Open]).length) {
+          return ledgerV4.scanBack([...v4Open], 600);
+        }
+      }).catch((err) => console.error("ledger-v4:", err.shortMessage || err.message));
     }
   }
   // A position still on a Blockscout basis whose live liquidity disagrees

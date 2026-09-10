@@ -21,6 +21,9 @@ const FILE = path.join(__dirname, "fee-events.json");
 // tools/backfill-v4-collects.js). Rows share the event shape below, with
 // tokenId "v4-<id>" and the token metadata inline.
 const V4_FILE = path.join(__dirname, "v4-collects.json");
+// The owner's own collects through the v4 PositionManager (ledger-v4.js writes
+// them; the server owns that file, the collector owns v4-collects.json).
+const V4_OWNER_FILE = path.join(__dirname, "v4-owner-collects.json");
 const CHUNK = 2000;
 const START_BLOCK = 51940000; // just before the collector's first collect (2026-09-01)
 
@@ -192,12 +195,12 @@ function create({ provider, npmAddress }) {
   let merged = { key: "", rows: [] };
   function v4Rows() {
     let mtime = 0;
-    try { mtime = fs.statSync(V4_FILE).mtimeMs; } catch { mtime = 0; }
+    for (const f of [V4_FILE, V4_OWNER_FILE]) { try { mtime += fs.statSync(f).mtimeMs; } catch {} }
     if (mtime !== v4.mtime) {
       let rows = [];
-      try {
-        rows = JSON.parse(fs.readFileSync(V4_FILE, "utf8")).filter((r) => r && r.tx && r.tokenId);
-      } catch { rows = []; }
+      for (const f of [V4_FILE, V4_OWNER_FILE]) {
+        try { rows.push(...JSON.parse(fs.readFileSync(f, "utf8")).filter((r) => r && r.tx && r.tokenId)); } catch {}
+      }
       v4 = { mtime, rows: rows.map((r) => ({ ...r, tokenId: String(r.tokenId).startsWith("v4-") ? r.tokenId : `v4-${r.tokenId}`, wallet: r.wallet ? r.wallet.toLowerCase() : null, principal: !!r.principal })) };
     }
     return v4.rows;

@@ -29,6 +29,8 @@ fee-daily.json
 fee-prices.json
 backfill.json
 liquidity-ledger.json
+v4-liquidity-ledger.json
+v4-owner-collects.json
 portfolio.json
 range-log.json
 snet-staking.json

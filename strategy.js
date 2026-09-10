@@ -56,6 +56,9 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     const [pos, watch, hist] = await Promise.all([get("/api/positions"), get("/api/watch").catch(() => null), get("/api/history")]);
     const hours = priceLog();
     const ledger = readJson(path.join(dir, "liquidity-ledger.json"), { tokens: {} }).tokens || {};
+    // v4 liquidity changes live in their own ledger (ledger-v4.js), keyed by bare id there;
+    // merged here under the v4- prefix so a v3 and a v4 position with the same number never collide.
+    for (const [id, e] of Object.entries(readJson(path.join(dir, "v4-liquidity-ledger.json"), { tokens: {} }).tokens || {})) ledger[`v4-${id}`] = e;
     const rangeLog = readJson(path.join(dir, "range-log.json"), { positions: {} }).positions || {};
     const basis = readJson(path.join(dir, "watch-pnl-basis.json"), {});
     // Collect-time price records (fee-prices.json: tx:tokenId -> {p0, p1, w, t}) per position, for
@@ -136,7 +139,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
           flips = Math.max(0, rl.segments.length - 1);
         }
         // Life: deposits/withdrawals from the liquidity ledger (v3), the watched-wallet basis, or the live PnL legs.
-        const lg = ledger[nftId(id)];
+        const lg = isV4(id) ? ledger[id] : ledger[nftId(id)];
         let openedAt = null, closedAt = null, depositedUsd = null, withdrawnUsd = null, depositSource = null;
         if (open && open.pnlLegs) {
           depositedUsd = open.pnlLegs.deposited; withdrawnUsd = open.pnlLegs.withdrawn; openedAt = open.pnlSince || null; depositSource = open.pnlSource || "ledger";
@@ -145,6 +148,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
           const t0 = meta && meta.token0, t1 = meta && meta.token1;
           let dep = 0, wd = 0, priced = true, approx = false, how = null;
           for (const e of lg.events) {
+            if (e.priced === false) { priced = false; continue; } // v4 row without a pool price at its block: no amounts to value
             const px = t0 && t1 ? pairPricesAt(id, t0, t1, e.t) : null;
             const usd = px ? Number(ethers.formatUnits(e.a0, t0.decimals)) * px.p0 + Number(ethers.formatUnits(e.a1, t1.decimals)) * px.p1 : null;
             if (usd == null) priced = false;

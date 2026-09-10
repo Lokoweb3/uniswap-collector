@@ -450,7 +450,37 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     // unless the same transaction swapped: then the wallet sold through a router.
     const protocol = new Set([cfg.contracts.v4 && cfg.contracts.v4.poolManager, cfg.contracts.v4 && cfg.contracts.v4.positionManager, cfg.contracts.positionManager, cfg.contracts.swapRouter02, cfg.contracts.v4 && cfg.contracts.v4.universalRouter, cfg.contracts.v4 && cfg.contracts.v4.permit2].filter(Boolean).map((a) => String(a).toLowerCase()));
     const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId, { staticNetwork: true });
-    const swappedIn = async (tx) => { try { const r = await provider.getTransactionReceipt(tx); return !!(r && r.logs.some((l) => l.topics[0] === SWAP)); } catch { return null; } };
+    const SWAP_IFACE = new ethers.Interface(["event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"]);
+    const stable = String((cfg.usdReference && cfg.usdReference.stable) || "").toLowerCase();
+    const codeCache = new Map();
+    const isContract = async (a) => { if (!codeCache.has(a)) { try { codeCache.set(a, (await provider.getCode(a)) !== "0x"); } catch { codeCache.set(a, null); } } return codeCache.get(a); };
+    /**
+     * Did this transaction swap, and what came back? The token leg of the Swap
+     * event matches the transferred amount; the other leg is the proceeds: USDG
+     * when the wallet received USDG in the same transaction, else native ETH.
+     * Returns { sold: true, usd } / { sold: false } / null when the receipt is unavailable.
+     */
+    const swapProceeds = async (tx, wallet, tokenRaw, t) => {
+      let r; try { r = await provider.getTransactionReceipt(tx); } catch { return null; }
+      if (!r) return null;
+      const swaps = r.logs.filter((l) => l.topics[0] === SWAP);
+      if (!swaps.length) return { sold: false };
+      let usd = null;
+      const usdgIn = r.logs.filter((l) => l.address.toLowerCase() === stable && l.topics[0] === TRANSFER && l.topics.length === 3 && ("0x" + l.topics[2].slice(26)).toLowerCase() === wallet).reduce((s, l) => s + BigInt(l.data), 0n);
+      if (usdgIn > 0n) usd = Number(ethers.formatUnits(usdgIn, 6));
+      else {
+        let eth = 0n;
+        for (const l of swaps) {
+          const ev = SWAP_IFACE.parseLog(l);
+          const a0 = ev.args.amount0, a1 = ev.args.amount1;
+          const abs = (x) => (x < 0n ? -x : x);
+          if (abs(a0) === tokenRaw) eth += abs(a1); else if (abs(a1) === tokenRaw) eth += abs(a0);
+        }
+        const ethPx = t != null ? priceAt(hours, ethers.ZeroAddress, t) : null;
+        if (eth > 0n && ethPx != null) usd = Number(ethers.formatEther(eth)) * ethPx;
+      }
+      return { sold: true, usd: usd != null ? round(usd, 4) : null };
+    };
     const seen = new Set([...state.rows.map((r) => `${r.tx}:${r.logIndex}`), ...(state.deposits || [])]);
     let added = 0, queries = 0, deposits = 0;
     for (const sym of handed) {
@@ -473,17 +503,21 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
           const to = ("0x" + l.topics[2].slice(26)).toLowerCase();
           if (own.has(to)) continue; // a move between your own addresses
           seen.add(k);
-          let kind = "sent";
-          if (protocol.has(to)) {
-            const sold = await swappedIn(l.transactionHash);
-            if (sold === false) { deposits++; (state.deposits || (state.deposits = [])).push(k); continue; } // liquidity deposit: still yours, inside a position
-            if (sold === null) continue; // receipt unavailable; retried next scan (not marked seen in state)
-            kind = "sold";
-          }
           const t = l.timeStamp ? parseInt(l.timeStamp, 16) * 1000 : null;
-          const amount = Number(ethers.formatUnits(BigInt(l.data || "0x0"), tk.decimals));
-          const px = t != null ? priceAt(hours, tk.address, t) : null;
-          state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from: w, to, token: sym, tokenAddress: tk.address, amount, usd: px != null ? round(amount * px, 4) : null, kind });
+          const raw = BigInt(l.data || "0x0");
+          const amount = Number(ethers.formatUnits(raw, tk.decimals));
+          let kind = "sent", usd = null;
+          // A transfer to a contract: a swap in the same transaction (Uniswap or a launchpad's own
+          // trading contract) makes it a sale, valued from the swap; into the protocol without a
+          // swap it is a liquidity deposit, still yours.
+          if (protocol.has(to) || (await isContract(to))) {
+            const sp = await swapProceeds(l.transactionHash, w, raw, t);
+            if (sp === null) continue; // receipt unavailable; retried next scan
+            if (sp.sold) { kind = "sold"; usd = sp.usd; }
+            else if (protocol.has(to)) { deposits++; (state.deposits || (state.deposits = [])).push(k); continue; }
+          }
+          if (usd == null) { const px = t != null ? priceAt(hours, tk.address, t) : null; usd = px != null ? round(amount * px, 4) : null; }
+          state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from: w, to, token: sym, tokenAddress: tk.address, amount, usd, kind });
           added++;
         }
         state.lastBlock[key] = top;

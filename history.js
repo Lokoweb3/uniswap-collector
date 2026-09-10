@@ -1,6 +1,6 @@
 /**
  * Incremental Collect-event history for every wallet's positions: the main
- * wallet plus the wallets listed in wallets.json.
+ * wallet plus the wallets listed under wallets in settings.json.
  *
  * The RPC caps eth_getLogs at 2000 blocks per request and the chain moves at
  * ~10 blocks/s, so full history is unreachable; instead we scan forward from

@@ -321,7 +321,7 @@ async function main() {
     process.exit(1);
   }
 
-  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+  const cfg = require("./settings").load({ fresh: true });
   const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId);
 
   // Confirm we're on the chain we think we're on.
@@ -382,13 +382,13 @@ async function main() {
   if (treasurySettings.tba) log(`LOKOVault: split ${treasurySettings.pct}% (${treasurySettings.pctSource}) -> ${treasurySettings.tba}`);
   const ctx = { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target, treasurySettings };
 
-  // Owners: the main wallet, then every wallets.json entry marked collect: true
+  // Owners: the main wallet, then every settings.json wallet marked collect: true
   // (their fees are delivered back to their own address).
   const owners = [{ address: cfg.ownerAddress, label: "Main wallet", sweepTo: cfg.sweepDestination, main: true }];
   try {
-    const wj = JSON.parse(fs.readFileSync(path.join(__dirname, "wallets.json"), "utf8"));
-    if (wj.owner && wj.owner.label) owners[0].label = wj.owner.label;
-    for (const w of wj.watched || []) {
+    const wj = cfg.wallets || { list: [] };
+    if (wj.ownerLabel) owners[0].label = wj.ownerLabel;
+    for (const w of wj.list || []) {
       if (!w || !w.collect || !ethers.isAddress(w.address)) continue;
       const address = ethers.getAddress(w.address);
       if (address.toLowerCase() === cfg.ownerAddress.toLowerCase()) continue;
@@ -414,7 +414,7 @@ async function main() {
 /**
  * One full pass for one owner wallet: discover its positions, simulate, collect
  * to the operator, swap to the sweep target and deliver to owner.sweepTo.
- * Extra owners (wallets.json `collect: true`) get their fees sent back to
+ * Extra owners (settings.json wallets `collect: true`) get their fees sent back to
  * themselves; the main owner keeps the configured sweepDestination.
  */
 async function runOwner(ctx, owner) {
@@ -550,7 +550,7 @@ async function runOwner(ctx, owner) {
       log(`Treasury split: ${fmt(sp.toVault, tinfo.decimals, 2)} ${tinfo.symbol} (${ts.pct}%) → LOKOVault TBA ${ts.tba}`);
       log(`Owner receives: ${fmt(sp.toOwner, tinfo.decimals, 2)} ${tinfo.symbol} → ${owner.label}`);
     } else {
-      log(`Treasury split: off (treasuryTBA not set in config.json); owner receives ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol}.`);
+      log(`Treasury split: off (vault.tba not set in settings.json); owner receives ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol}.`);
     }
   }
 
@@ -769,7 +769,7 @@ async function runOwner(ctx, owner) {
       } else if (known !== sim.fee && overrides[t] === undefined) {
         // Same token, two tiers, no override: refuse rather than guess.
         log(`  ! ${sim.t0.symbol}/${sim.t1.symbol} appears at both ${known / 10000}% and ${sim.fee / 10000}%.`);
-        log(`    Set swapFeeTierOverrides for this token in config.json. Not swapping it.`);
+        log(`    Set collector.swapFeeTierOverrides for this token in settings.json. Not swapping it.`);
         feeTierFor.set(t, null);
       }
     }

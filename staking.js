@@ -1,7 +1,7 @@
 /**
  * Staking rewards ledger for rebasing receipt tokens (OHM-style: balance =
  * gons / gonsPerFragment, and a public index() that grows with every rebase).
- * sNET from the NET Staking contract is the first one; config.json `staking`
+ * sNET from the NET Staking contract is the first one; settings.json `staking`
  * lists them.
  *
  * Every hour the owner's balance, the index and the receipt's USD price are

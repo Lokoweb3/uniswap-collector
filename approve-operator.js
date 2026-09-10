@@ -55,7 +55,7 @@ function promptHidden(question) {
 }
 
 async function main() {
-  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+  const cfg = require("./settings").load();
   const checkOnly = process.argv.includes("--check");
   const v4Mode = process.argv.includes("--v4");
   const ids = process.argv.slice(2).filter((a) => /^\d+$/.test(a));
@@ -86,7 +86,7 @@ async function main() {
   if (v4Mode) {
     const posmAddr = cfg.contracts.v4 && cfg.contracts.v4.positionManager;
     if (!posmAddr) {
-      console.error("config.json has no contracts.v4.positionManager.");
+      console.error("settings.json has no contracts.v4.positionManager.");
       process.exit(1);
     }
     const posm = new ethers.Contract(posmAddr, NPM_ABI, provider);

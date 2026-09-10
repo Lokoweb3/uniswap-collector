@@ -1,7 +1,7 @@
 /**
  * LOKOVault fee split, shared by the collector, the server and the alerts.
  *
- * config.json: treasuryTBA (the vault's token-bound account, null = off),
+ * settings.json: treasuryTBA (the vault's token-bound account, null = off),
  * feeSplitPct (default 10), feeSplitMax (hard cap, default 20). After a
  * wallet's collected fees are swapped to the sweep target (USDG), the split
  * goes to the TBA and the rest to the wallet. Every split, including a
@@ -18,7 +18,7 @@ const LEDGER_FILE = path.join(__dirname, "fee-split-ledger.json");
 /**
  * The split percentage actually in force: the NFT contract's feeSplitPct()
  * (what the vault page's slider sets) when treasuryNFT is deployed, else
- * config.json. Always capped by feeSplitMax.
+ * settings.json. Always capped by feeSplitMax.
  */
 async function effectiveSettings(cfg, provider) {
   const s = settings(cfg);

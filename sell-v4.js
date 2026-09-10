@@ -7,7 +7,7 @@
  * pool the position earned them from, so the proceeds (ETH or USDG) join the
  * normal sweep: USDG, the vault split, the rest to the earning wallet.
  *
- * Policy (config.json `memecoinSell`, approved 2026-09-10):
+ * Policy (settings.json `risk.sell`, approved 2026-09-10):
  *   enabled          off = old behaviour (hand back)
  *   minUsd           sell only when the batch is worth at least this (default 25)
  *   maxImpactPct     price impact cap vs the pool's spot price (default 3); a

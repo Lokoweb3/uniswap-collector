@@ -6,7 +6,7 @@
  *   node discover.js                          # try the mainnet address
  *   node discover.js 0xYourPositionManager    # verify a candidate from an explorer
  *
- * Set rpcUrl and ownerAddress in config.json first. Nothing here sends a
+ * Set chain.rpcUrl and wallets.main in settings.json first. Nothing here sends a
  * transaction or needs a key.
  */
 
@@ -42,10 +42,10 @@ const KNOWN_CHAINS = {
 };
 
 async function main() {
-  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+  const cfg = require("./settings").load();
 
   if (!cfg.rpcUrl || cfg.rpcUrl.includes("REPLACE")) {
-    console.error("Set rpcUrl in config.json first.");
+    console.error("Set chain.rpcUrl in settings.json first.");
     process.exit(1);
   }
 
@@ -145,7 +145,7 @@ async function main() {
     console.log("");
   }
 
-  console.log("  Paste into config.json:");
+  console.log("  Paste into settings.json (collector.tokenIds):");
   console.log("");
   console.log(`    "chainId": ${chainId},`);
   console.log('    "contracts": {');

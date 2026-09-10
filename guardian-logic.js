@@ -12,8 +12,8 @@
  * made on the token's value in the quote (1 / price), so "-30%" means the
  * token lost 30% of its quote value.
  *
- * One rule block per position (config.json `memecoins[]`, or the defaults
- * under `memecoinDefaults` for discovered positions):
+ * One rule block per position (settings.json `risk.memecoins[]`, or the defaults
+ * under `risk.defaults` for discovered positions):
  *   alertPct            price down this much in 1h            -> dump alert
  *   closePct            price down this much from entry       -> close-now alert, or close when autoClose
  *   outOfRangeMinutes   out of range this long                -> alert, or close when autoClose

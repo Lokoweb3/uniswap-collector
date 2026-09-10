@@ -83,7 +83,7 @@ idle positions too. Without it, idle positions count at zero. It is a run
 rate, not a forecast, and says so.
 
 Uniswap v4 positions show up alongside v3 ones, tagged `v4`, when
-`contracts.v4` is set in `config.json` (position manager, StateView, pool
+`contracts.v4` is set in `settings.json` (position manager, StateView, pool
 manager — from the Uniswap deployments page). v4 has no owner enumeration, so
 ids come from Blockscout's holdings list plus a forward scan of Transfer logs
 kept in `v4-positions.json`. Value, range, and uncollected fees (liquidity ×
@@ -123,7 +123,7 @@ headline total is wallet plus positions plus fees, and an hourly series of
 that total (split the same way) is kept in `portfolio.json` and charted.
 Tokens are found through Blockscout's holdings list for the wallet (only a
 hint, refreshed every six hours) plus every token seen in a position and any
-address listed under `portfolio.tokens` in `config.json`; balances and
+address listed under `portfolio.tokens` in `settings.json`; balances and
 prices always come from the chain. A token is priced through the deepest v3
 pool it shares with WETH, else with USDG, and only if that pool holds a
 minimum of the quote token, so an airdrop with a dead pool shows as
@@ -183,7 +183,7 @@ Claude Code (already registered on this machine, user scope):
 claude mcp add lp-dashboard -s user -- node ~/uniswap-collector/lp-mcp.mjs
 ```
 
-Claude Desktop on Windows, in `%APPDATA%\Claude\claude_desktop_config.json`
+Claude Desktop on Windows, in `%APPDATA%\Claude\claude_desktop_settings.json`
 (the server runs inside WSL):
 
 ```json
@@ -245,7 +245,7 @@ move it to a password manager and delete the file.
 
 Patches from an agent are merged here, never pushed by the agent. The rules that keep merges clean:
 start from `origin/master` HEAD (`git fetch origin && git reset --hard origin/master` in the agent's
-clone before every task; ids in `config.json` and the ledgers change daily), deliver with
+clone before every task; ids in `settings.json` and the ledgers change daily), deliver with
 `git format-patch origin/master --stdout`, and hand over the patch file; the merge runs `npm test`
 (every suite plus the headless smoke test) and restarts the services. Nothing in a patch may touch
 `.env`, keystores, or the runtime ledgers, and a patch that only re-derives facts already verified in
@@ -332,7 +332,7 @@ strip stays current. Re-running the deploy script updates the code.
 
 ## LOKOVault treasury split
 
-`treasury.js` + config.json (`treasuryTBA`, `feeSplitPct` default 10, `feeSplitMax` 20): after each wallet's
+`treasury.js` + settings.json (`treasuryTBA`, `feeSplitPct` default 10, `feeSplitMax` 20): after each wallet's
 collected fees are swapped to USDG, `feeSplitPct` % is sent to the vault's token-bound account and the rest
 to the wallet; if the vault transfer fails the wallet receives everything and the failure is recorded.
 Every pass is appended to `fee-split-ledger.json` (served at `/fee-split-ledger.json`). Simulate mode
@@ -340,7 +340,7 @@ prints "Treasury split: … → LOKOVault TBA" and "Owner receives: …". The sp
 is set. `/wallet#vault` is the vault page (wallet-signed, no keys), `/api/treasury`
 returns settings, the TBA's USDG balance and totals by month; the Analytics page has a LOKOVault panel
 and the tax table/CSV carry the vault split. Alerts: three consecutive failed vault transfers, vault
-balance ≥ `treasuryWithdrawAlertUsdg` (config.json, default 1000 USDG; repeated every 6 h while it stays above), split % changed (on-chain value when the TBA exposes `feeSplitPct()`), sent to
+balance ≥ `treasuryWithdrawAlertUsdg` (settings.json, default 1000 USDG; repeated every 6 h while it stays above), split % changed (on-chain value when the TBA exposes `feeSplitPct()`), sent to
 `TELEGRAM_TREASURY_CHAT_ID` (default the group) with fallback to the main chat. The contracts
 (`TreasuryNFT.sol`, `TreasuryAccount.sol`) and `deploy-treasury.js` are supplied
 separately; `solc` is installed for the deploy script.
@@ -375,7 +375,7 @@ operator key while the collector is armed; proceeds always go to the position's 
 The one watcher for every open position of every wallet, v3 and v4 (a 60-second timer inside
 server.js; `npm run guardian` runs one cycle by hand). It reads each position and its pool from the chain, v4 every 60 s and
 v3 every 5 min, keeps a 24-hour history and derives a status (`guardian-logic.js`). Positions listed
-under `memecoins` in config.json carry their own rule block; every other open position is discovered
+under `memecoins` in settings.json carry their own rule block; every other open position is discovered
 from the dashboard (`memecoin-discovered.json`; entry price from the hourly price log at the mint,
 else the first sample) and uses `memecoinDefaults`. `memecoinDiscovery: false` watches only the
 listed entries. Prices are token per quote asset (ETH, or USDG for stable-paired pools).
@@ -403,7 +403,7 @@ skipped for an hour after a collect resets the fee balance.
 It writes `memecoin-status.json`, served as `/api/risk` (alias `/api/memecoins`): the **Risk** section
 on the dashboard lists every watched position with its status, the live reading next to each
 threshold (click a threshold or the entry price to change it; `POST /api/risk`, loopback-only; listed
-positions are updated in config.json, discovered ones in `memecoin-discovered.json`), an auto-close
+positions are updated in settings.json, discovered ones in `memecoin-discovered.json`), an auto-close
 toggle and a "Close now" button. With auto-close on, a close (100% of the liquidity, both tokens to
 the wallet that owns it; `close-position.js`, static-called first) runs only after the trigger has
 held on three consecutive cycles with the pool price stable within 10% between reads, so one bad RPC
@@ -434,7 +434,7 @@ delivery cover them. Every sale and every skip, with its reason, is written to `
 
 ### Fee auto-collect (`memecoin-collect.js`)
 
-Every 15 min, as a timer inside server.js (`memecoinCollect` in config.json: `minUsd` 50, `minIntervalMinutes` 15; re-read each cycle), it checks the
+Every 15 min, as a timer inside server.js (`memecoinCollect` in settings.json: `minUsd` 50, `minIntervalMinutes` 15; re-read each cycle), it checks the
 memecoin positions' uncollected fees (every v4 position in the main wallet and the collected watched wallets, plus the ids in `memecoins`) and, when one exceeds the threshold and the collector is armed,
 runs the normal `./run-collector.sh full --quiet` (all wallets, vault split included), logs to
 `memecoin-collect-log.json` and reports "💰 Collected …" per position. While locked it nudges once per
@@ -486,7 +486,7 @@ every suite plus the headless smoke test. Runtime state files (`memecoin-*.json`
 
 ## Daily summary
 
-`daily.js` sends one short Telegram message a day (`dailySummary` in config.json: `enabled`, `hour`
+`daily.js` sends one short Telegram message a day (`dailySummary` in settings.json: `enabled`, `hour`
 in `LP_TZ` local time, default 08:00, `chat` main or group): arm window and time left, collects in
 the last 24 h per wallet and the vault's share, open positions with uncollected fees and the top
 fee rates, guardian flags, the auto-collect rule and its last run, vault balance and split, operator
@@ -515,7 +515,7 @@ backfill. The key never leaves the server process.
 
 ### Collecting for more than one wallet
 
-Any wallet in `wallets.json` with `"collect": true` gets its own pass in every collector run, after the
+Any wallet in `settings.json `wallets`` with `"collect": true` gets its own pass in every collector run, after the
 main wallet: its v3 positions (owner enumeration) and v4 positions (the dashboard's discovery file for
 that address) are simulated, the eligible ones collected to the operator, swapped to the sweep target and
 delivered back to that wallet itself. Each pass only moves what it produced (balance deltas from the
@@ -525,14 +525,14 @@ pages accept any listed wallet and show every wallet's approval state. The dashb
 line shows "collector: v3 ✓ v4 ✓" for collect-enabled wallets.
 
 
-Uniswap v4 positions are collected too (`collect-v4.js`, `v4Collect.enabled` in config.json): a
+Uniswap v4 positions are collected too (`collect-v4.js`, `v4Collect.enabled` in settings.json): a
 `modifyLiquidities` call that decreases 0 liquidity and takes both currencies to the recipient. It needs
 the operator approved on the v4 PositionManager once, from the owner wallet. Two ways: the browser pages
 the Wallet page's Approvals tab (open http://127.0.0.1:8787/wallet#approvals while the dashboard
 runs, or `npm run approve` for a standalone server on :3333 serving both; the v3 page grants the same blanket
 approval on the v3 NonfungiblePositionManager; connect the owner wallet in MetaMask, the page checks the network, the
 account and the current approval, shows the exact calldata, and signs `setApprovalForAll` in the wallet so
-no key touches the server; addresses come from config.json and the operator keystore's public address via
+no key touches the server; addresses come from settings.json and the operator keystore's public address via
 `/api/v4-approval`), or `node approve-operator.js --v4` on the command line (`--v4 --check` reads the state). Native ETH fees are wrapped to WETH above the gas reserve so the
 normal swap-and-sweep handles them. Each collect is static-called first and skipped if it would revert.
 
@@ -542,7 +542,7 @@ your main wallet.
 
 ## What happens to collected fees
 
-`sweep.target` in `config.json` decides. `ETH` (the original behaviour):
+`sweep.target` in `settings.json` decides. `ETH` (the original behaviour):
 every collected token is swapped to WETH through the pool it came from, the
 WETH is unwrapped, and ETH above the gas reserve is sent to
 `sweepDestination`. `USDG`: the same consolidation into WETH, then the
@@ -560,14 +560,14 @@ convert to.
 
 ## Before anything else
 
-**Chain: RESOLVED — Robinhood Chain mainnet, chainId 4663.** config.json now
+**Chain: RESOLVED — Robinhood Chain mainnet, chainId 4663.** settings.json now
 carries the verified Uniswap v3 deployment for it (the position manager
 self-reports the factory and WETH9 on-chain, and CASHCAT/WETH pools exist with
 live liquidity). The original warning is kept below for context.
 
 **Verify your chain.** Your Uniswap position URLs contain `/robinhood/`, which
 is a chain slug and is not Ethereum mainnet. Revert reports "mainnet /
-ethereum". These disagree. The contract addresses in `config.json` are Ethereum
+ethereum". These disagree. The contract addresses in `settings.json` are Ethereum
 mainnet defaults. If your positions live on another chain, the position manager,
 router, quoter, and WETH addresses are all different, and running this as-is
 will fail or, worse, interact with an unrelated contract. Confirm first.
@@ -617,25 +617,47 @@ npm install
 
 Then:
 
-1. Put a real RPC endpoint in `config.json`. For full mode, a protected endpoint
+1. Put a real RPC endpoint in `settings.json` (`chain.rpcUrl`). For full mode, a protected endpoint
    (Flashbots Protect or similar) meaningfully reduces sandwich risk on the
    memecoin swaps.
-2. Set `ownerAddress` and `sweepDestination` to your main wallet.
+2. Set `wallets.main` (and `collector.sweepDestination`) to your main wallet.
 3. Send ~0.01 ETH to the operator address for gas.
 4. From your main wallet, approve the operator on the position manager.
+
+### settings.json
+
+One file, in sections, is the whole configuration (`settings.js` reads it; `settings.example.json`
+is the template; the file is gitignored because it holds your wallet addresses):
+
+| section | holds |
+|---|---|
+| `chain` | `rpcUrl`, `chainId`, `explorer` |
+| `wallets` | `main { address, label }` and `watched [ { address, label, collect } ]` |
+| `tokens` | `USDG`, `WETH` (each address once), `usdReferenceFeeTier` |
+| `contracts` | Uniswap v3 / v4 / v2 addresses (`v4.pricingHooks` included) |
+| `collector` | `sweepDestination`, `thresholds`, `sweep`, `tokenIds`, `denylist`, `v4Collect`, `swapFeeTierOverrides` |
+| `vault` | `nft`, `tba`, `implementation`, `tokenId`, `feeSplitPct`, `feeSplitMax`, `withdrawAlertUsdg` |
+| `risk` | `memecoins` (rule blocks), `defaults`, `discovery`, `autoCollect`, `sell` |
+| `alerts` | `telegramChat` (group), `fallbackChat` (personal), `treasuryChat`, `dailySummary` |
+| `dashboard`, `portfolio`, `staking` | port and collect mode, price routes, staking tokens |
+
+Secrets never go in it: `TELEGRAM_TOKEN`, `BLOCKSCOUT_API_KEY` and the chat provider keys stay in
+`.env`, the operator key in its keystore. Environment variables, when set, override the chat ids.
+The names used further down this README (`memecoins`, `memecoinSell`, `treasuryTBA`, `thresholds`,
+…) are the keys inside these sections; `settings.js` maps them for the modules. Coming from an older
+checkout with `config.json` + `wallets.json`: `node tools/migrate-settings.js` builds settings.json
+from them. The dashboard re-reads the file when it changes; the collector reads it at each run.
 
 ### Fresh machine, from the repo alone
 
 ```bash
 git clone https://github.com/Lokoweb3/uniswap-collector.git ~/uniswap-collector && cd ~/uniswap-collector
 chmod +x *.sh && npm install
-cp config.example.json config.json        # then set ownerAddress, sweepDestination, contracts, thresholds
-cp wallets.example.json wallets.json      # owner label + watched / collect wallets
+cp settings.example.json settings.json    # then fill in chain, wallets, contracts, collector thresholds
 ./setup-key.sh                             # operator keystore in ~/.lp-collector/ (never in the repo)
 cat > .env <<'EOF2'                        # secrets, gitignored; loaded by start-all.sh
 TELEGRAM_TOKEN=...
-TELEGRAM_CHAT_ID=...                       # your personal chat id
-TELEGRAM_TREASURY_CHAT_ID=...              # optional group for vault alerts
+# chat ids live in settings.json (alerts.telegramChat / fallbackChat / treasuryChat); env values override them
 LP_BACKUP_HOST=user@host                   # VPS for nightly ledger backups
 BLOCKSCOUT_API_KEY=proapi_...
 EOF2
@@ -646,7 +668,7 @@ npm test                                   # alert tests + headless smoke test o
 
 Then, from the browser with the owner wallet: `/wallet#approvals` (operator approvals, one per
 wallet that should be collected), `/wallet#arm` (one-time passphrase seal, then sign to arm), and
-`node deploy-treasury.js` once for the LOKOVault (writes its addresses into config.json). The JSON
+`node deploy-treasury.js` once for the LOKOVault (writes its addresses into settings.json). The JSON
 ledgers (`fee-*.json`, `portfolio*.json`, `price-log.json`, …) are runtime data, created on first run
 and restored from `backups/` or the VPS copy if you are moving machines. `./run-collector.sh simulate`
 is the read-only check that everything lines up before the first armed run.
@@ -788,9 +810,9 @@ The dashboard process starts the gate; `run-tailscale.sh` publishes the two Funn
 
 ## Watching other wallets
 
-`wallets.json` (copy `wallets.example.json`; gitignored) names the wallets: `owner.label` for the
+The `wallets` section of settings.json names the wallets: `owner.label` for the
 collector's wallet and `watched`, a list of `{"address": "0x...", "label": "name"}` entries shown
-read-only. `watchWallets` in `config.json` is the fallback when the file is absent. Both are re-read on
+read-only. `watchWallets` in `settings.json` is the fallback when the file is absent. Both are re-read on
 every refresh, so editing needs no restart. Watched wallets are observed only: no PnL, range log or collects, and the collector never touches
 them. The owner wallet is skipped if listed. Their fee accrual is tracked (`watch-accrual.json`: the
 change in each position's uncollected fees between refreshes, at current prices, in hourly buckets per
@@ -858,7 +880,7 @@ switch) is the income and history page:
   Fees taken on a close are included, the principal is netted out. A record, not tax advice.
 - **Collected fees** (chart, by-month table, position-value chart, collects table, CSV) and **Daily revenue**.
 - **Staking rewards**: `staking.js` samples each rebasing receipt listed under `staking.tokens` in
-  config.json (sNET from NET Staking) hourly into `snet-staking.json`; history is rebuilt once from the
+  settings.json (sNET from NET Staking) hourly into `snet-staking.json`; history is rebuilt once from the
   token's LogRebase events. The Staking contract's verified source shows `stake()` issues sNET 1:1 and
   `unstake()` returns NET 1:1, so principal is the net of the wallet's sNET transfers (two stakes on
   2026-09-04, 3.717 sNET) and everything above it is reward. A balance change matching the index change is a reward, anything else is a
@@ -871,6 +893,11 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- One settings.json replaces config.json + wallets.json: sections `chain`, `wallets`, `tokens`
+  (USDG and WETH written once), `contracts`, `collector`, `vault`, `risk`, `alerts` (chat ids;
+  the bot token stays in .env), `dashboard`, `portfolio`, `staking`. `settings.js` is the one
+  reader and writer; `tools/migrate-settings.js` converts an old pair of files;
+  `settings.example.json` is the template.
 - Three pages: Dashboard, Analytics, Wallet. The Wallet page (`wallet.html`) holds the former
   arm, approvals, approve-v3 / approve-v4 and treasury pages as tabs (Arm, Approvals with revoke
   buttons and the operator approvals, Vault, Operator status) with the site's header; the old

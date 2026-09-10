@@ -1,6 +1,7 @@
 {
-  "_comment": "Wallet labels for the dashboard. owner.label names the collector's wallet; watched lists extra read-only wallets (address + label). Re-read on every refresh, no restart needed. collect: true makes the collector also collect that wallet's positions (after that wallet approves the operator on the v3/v4 position managers via /approve-v3 and /approve-v4) and deliver the swept fees back to that same wallet. This file is gitignored; wallets.example.json is the template.",
-  "owner": {
+  "_comment": "Shape of the `wallets` section of settings.json (wallets live there now; this file is only a template). main: the collector's own wallet; watched: extra read-only wallets, collect: true makes the collector also collect that wallet's positions (after it approves the operator on the v3/v4 position managers, Wallet page > Approvals) and deliver the swept fees back to that same wallet.",
+  "main": {
+    "address": "0x0000000000000000000000000000000000000000",
     "label": "Main"
   },
   "watched": [

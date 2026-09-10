@@ -8,7 +8,7 @@
  * from the dashboard at send time, the same views the status_report MCP tool
  * uses, so it never reports from memory.
  *
- * Schedule: `dailySummary` in config.json: { enabled, hour (local, default 8),
+ * Schedule: `alerts.dailySummary` in settings.json: { enabled, hour (local, default 8),
  * chat: "main" | "group" }. Sent once per local day from the server tick;
  * state in digest-state.json (lastDailyDate). `node daily.js --print` previews.
  */

@@ -59,7 +59,7 @@ NEXT STEPS before running in collect or full mode:
   2. From your MAIN wallet, approve the operator on the position manager:
        narrowest, per position:  approve(operatorAddress, tokenId)
        all at once:              setApprovalForAll(operatorAddress, true)
-  3. Set ownerAddress and sweepDestination in config.json to your main wallet.
+  3. Set wallets.main (and collector.sweepDestination) in settings.json to your main wallet.
   4. ./run-collector.sh simulate
 
 setApprovalForAll also lets the operator call decreaseLiquidity and transfer the

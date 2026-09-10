@@ -31,7 +31,8 @@ const u = require(univ3Path);
 
 const history = require("./history");
 
-const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+const settings = require("./settings");
+const cfg = settings.load();
 const portArg = process.argv.find((a) => a.startsWith("--port="));
 const PORT = portArg ? Number(portArg.split("=")[1]) : (cfg.dashboard && cfg.dashboard.port) || 8787;
 
@@ -633,7 +634,7 @@ function opsInfo() {
 }
 
 // Every wallet whose collects are recorded: the main wallet (ids from the
-// last build) and each wallets.json wallet (v3 ids enumerated on the NPM,
+// last build) and each settings.json wallet (v3 ids enumerated on the NPM,
 // closed positions included so past collects are found). Cached briefly.
 let historyWalletsCache = { at: 0, list: [] };
 async function historyWallets() {
@@ -1310,20 +1311,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Browser-based operator approval (the Wallet page, Approvals tab): the page reads every
-  // address from here (config.json + the operator keystore's public address)
+  // address from here (settings.json + the operator keystore's public address)
   // and the current approval state from this server's RPC.
   if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
     res.setHeader("Content-Type", "application/json");
     try {
       const v = url.pathname === "/api/v4-approval" ? 4 : Number(url.searchParams.get("v")) === 3 ? 3 : 4;
       const mgr = v === 3 ? cfg.contracts.positionManager : cfg.contracts.v4 && cfg.contracts.v4.positionManager;
-      if (!mgr) throw new Error(`no v${v} position manager in config.json`);
-      // Which owner wallet: the main one by default, or any wallets.json wallet the collector may collect for.
+      if (!mgr) throw new Error(`no v${v} position manager in settings.json`);
+      // Which owner wallet: the main one by default, or any settings.json wallet the collector may collect for.
       const allowed = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main wallet", main: true }];
       for (const w of watch.readWallets()) allowed.push({ address: w.address, label: w.label || w.address, main: false, collect: !!w.collect });
       const want = url.searchParams.get("owner");
       const ownerEntry = want ? allowed.find((a) => a.address.toLowerCase() === want.toLowerCase()) : allowed[0];
-      if (!ownerEntry) throw new Error("that wallet is not the main wallet or a wallet listed in wallets.json");
+      if (!ownerEntry) throw new Error("that wallet is not the main wallet or a wallet listed under wallets in settings.json");
       const ownerAddr = ownerEntry.address;
       // Re-read the keystore's public address each time: the file can be replaced while the server runs.
       let operator = OPERATOR;
@@ -1565,14 +1566,14 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/api/approvals") {
     // Read-only audit of one wallet's allowances, operator approvals and vault
-    // status. `owner` must be the main wallet or a wallets.json wallet.
+    // status. `owner` must be the main wallet or a settings.json wallet.
     res.setHeader("Content-Type", "application/json");
     try {
       const allowed = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main wallet", main: true }];
       for (const w of watch.readWallets()) allowed.push({ address: w.address, label: w.label || w.address, main: false, collect: !!w.collect });
       const want = url.searchParams.get("owner");
       const entry = want ? allowed.find((a) => a.address.toLowerCase() === want.toLowerCase()) : allowed[0];
-      if (!entry) throw new Error("that wallet is not the main wallet or a wallet listed in wallets.json");
+      if (!entry) throw new Error("that wallet is not the main wallet or a wallet listed under wallets in settings.json");
       const data = await approvalsAudit.audit(entry.address, require("./arm").operatorAddress());
       res.writeHead(200);
       return res.end(JSON.stringify({ ...data, ownerLabel: entry.label, wallets: allowed, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", health: tokenHealth.view().byAddress }));
@@ -1804,7 +1805,7 @@ const server = http.createServer(async (req, res) => {
       }
       const totalUsd = rows.reduce((s, r) => s + (r.usd || 0), 0);
       const lockedSince = rows.filter((r) => r.locked && r.t).reduce((a, r) => (a == null || r.t < a ? r.t : a), null);
-      // Per-wallet breakdown, main wallet first, then in wallets.json order.
+      // Per-wallet breakdown, main wallet first, then in settings.json order.
       const byWallet = [];
       for (const w of [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main", main: true }, ...watch.readWallets()]) {
         const mine = rows.filter((r) => r.walletAddress && r.walletAddress.toLowerCase() === w.address.toLowerCase());
@@ -1958,7 +1959,7 @@ function loopHealth() {
 
 /** The treasury view (/api/treasury): settings in force, TBA balance, ledger totals. */
 async function treasuryView() {
-  // The percentage in force is the NFT's feeSplitPct() (the vault page's slider), not config.json.
+  // The percentage in force is the NFT's feeSplitPct() (the vault page's slider), not settings.json.
   const ts = await treasuryLedger.effectiveSettings(cfg, provider);
   let balanceUsdg = null;
   if (ts.tba && cfg.usdReference && cfg.usdReference.stable) {
@@ -1971,7 +1972,7 @@ async function treasuryView() {
 
 /**
  * Treasury state for the alerts: effective split % (the TBA contract's own
- * value when it exposes one, else config.json), TBA USDG balance, and the
+ * value when it exposes one, else settings.json), TBA USDG balance, and the
  * run of consecutive failed splits from the ledger.
  */
 async function treasuryState() {
@@ -2258,7 +2259,7 @@ async function backgroundTick() {
 backgroundTick();
 setInterval(backgroundTick, 10 * 60 * 1000);
 
-// Rule edits from the Risk section go through the guardian module (config.json or memecoin-discovered.json).
+// Rule edits from the Risk section go through the guardian module (settings.json or memecoin-discovered.json).
 function guardianRules(tokenId, patch) {
   return (guardian || require("./memecoin-guardian").create({ dir: __dirname, provider, positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets, log: () => {} })).setRule(tokenId, patch);
 }

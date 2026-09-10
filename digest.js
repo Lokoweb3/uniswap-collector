@@ -195,7 +195,7 @@ async function gather(base = "http://127.0.0.1:8787") {
   const [positions, watch, history, daily, staking, treasury, portfolioAll] = await Promise.all([
     get("/api/positions"), get("/api/watch"), get("/api/history"), get("/api/daily"), get("/api/staking"), get("/api/treasury"), get("/api/portfolio-all"),
   ]);
-  const cfg = read("config.json") || {};
+  let cfg = {}; try { cfg = require("./settings").load(); } catch {}
   const state = read("state.json") || {};
   return {
     now: Date.now(), positions, watch, history, daily, staking, treasury, portfolioAll,
@@ -228,8 +228,9 @@ function due(now = new Date(), state = readState()) {
 
 /** Send the text to the treasury chat, falling back to the personal chat. `send(text, chatId)` comes from alerts.js. */
 async function deliver(text, alerts) {
-  const treasuryChat = process.env.TELEGRAM_TREASURY_CHAT_ID || "";
-  const personal = process.env.TELEGRAM_CHAT_ID || "";
+  let chats = {}; try { chats = require("./settings").load().alerts || {}; } catch {}
+  const treasuryChat = process.env.TELEGRAM_TREASURY_CHAT_ID || chats.treasuryChat || chats.telegramChat || "";
+  const personal = process.env.TELEGRAM_CHAT_ID || chats.fallbackChat || "";
   if (await alerts.send(text, treasuryChat)) return treasuryChat;
   if (await alerts.send(text, personal)) return personal;
   return null;

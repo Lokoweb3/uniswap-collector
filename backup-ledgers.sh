@@ -4,7 +4,7 @@
 #
 # Ledgers are the only copy of the collector's history (fee snapshots, daily
 # accrual, collects, liquidity ledger, backfill, portfolio series, range log,
-# staking log) plus config.json and the alert / v4 discovery state. Secrets
+# staking log) plus settings.json and the alert / v4 discovery state. Secrets
 # (.env*, keystores, mcp-auth.json, gate-state.json) are never included.
 #
 #   ./backup-ledgers.sh            # archive + upload
@@ -29,7 +29,7 @@ log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 FILES=()
 for f in fee-events.json v4-collects.json memecoin-discovered.json fee-snapshots.json fee-daily.json fee-prices.json backfill.json \
          liquidity-ledger.json v4-liquidity-ledger.json v4-owner-collects.json token-sales.json token-disposals.json strategy-proposals.json portfolio.json range-log.json snet-staking.json alerts-state.json \
-         v4-positions*.json config.json; do
+         v4-positions*.json settings.json; do
   [ -f "$f" ] && FILES+=("$f")
 done
 [ "${#FILES[@]}" -gt 0 ] || { log "nothing to back up"; exit 1; }

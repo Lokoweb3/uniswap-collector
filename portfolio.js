@@ -5,7 +5,7 @@
  *
  * Discovery is Blockscout's ERC-20 holdings list for the wallet (a hint,
  * refreshed every six hours, unioned with every token seen in a position and
- * any listed under `portfolio.tokens` in config.json); balances and prices
+ * any listed under `portfolio.tokens` in settings.json); balances and prices
  * are always read from the chain. A token is priced through the deepest v3
  * pool it shares with WETH, else with the reference stable; tokens with no
  * such pool are shown unpriced rather than guessed at.
@@ -89,7 +89,7 @@ function create({ provider, factory, cfg, explorerApi }) {
   const owner = cfg.ownerAddress;
   const manual = ((cfg.portfolio && cfg.portfolio.tokens) || []).filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a));
   // Tokens priced as another token, 1:1 (staked / wrapped receipts such as
-  // sNET -> NET). Keys and values are addresses; see config.json.
+  // sNET -> NET). Keys and values are addresses; see settings.json.
   const priceVia = Object.fromEntries(
     Object.entries((cfg.portfolio && cfg.portfolio.priceVia) || {})
       .filter(([k, v]) => /^0x[0-9a-fA-F]{40}$/.test(k) && /^0x[0-9a-fA-F]{40}$/.test(v))

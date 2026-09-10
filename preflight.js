@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Validates config.json against the chain before anything else runs.
+ * Validates settings.json against the chain before anything else runs.
  *
  *   node preflight.js
  *
@@ -45,7 +45,7 @@ const bad = (m) => { failures++; console.log("  FAIL  " + m); };
 const warn = (m) => { warnings++; console.log("  warn  " + m); };
 
 async function main() {
-  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+  const cfg = require("./settings").load();
   console.log("");
 
   // --- addresses well-formed and not placeholders ---------------------------

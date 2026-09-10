@@ -874,7 +874,7 @@ function renderVault(){
   $('#vaultchart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:130px">${bars}</svg>`;
   $('#vaultnote').textContent = d.tba
     ? `Treasury account ${d.tba}. ${d.pct}% of every wallet's swept USDG goes to the vault at collect time; the rest goes to the wallet. Ledger: /fee-split-ledger.json.`
-    : 'No treasury address configured yet (treasuryTBA in config.json). Deploy the vault, set the address, and splits start with the next collect.';
+    : 'No treasury address configured yet (vault.tba in settings.json). Deploy the vault, set the address, and splits start with the next collect.';
 }
 
 let watchForAnalytics = null;
@@ -1393,7 +1393,7 @@ async function load(fresh){
     render(d);
   }catch(e){
     $('#list').innerHTML = `<div class="err">Could not reach the chain. ${e.message}
-      <br>Check rpcUrl in config.json and that the server is still running.</div>`;
+      <br>Check chain.rpcUrl in settings.json and that the server is still running.</div>`;
   }finally{
     btn.disabled = false;
     btn.textContent = 'Refresh';

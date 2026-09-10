@@ -96,7 +96,7 @@ server.registerTool(
   {
     title: "Watched wallets",
     description:
-      "Read-only view of the extra wallets listed in wallets.json (fallback: config.json watchWallets): each wallet's total value (tokens held in the wallet, valued like the portfolio, plus positions and fees; top tokens listed) and its open Uniswap v3/v4 positions (pair, fee tier, in-range status, distance to edges, price range, holdings, USD value, uncollected fees) and totals. These wallets are only observed, never collected from. Empty when no wallet is configured.",
+      "Read-only view of the extra wallets listed under wallets in settings.json: each wallet's total value (tokens held in the wallet, valued like the portfolio, plus positions and fees; top tokens listed) and its open Uniswap v3/v4 positions (pair, fee tier, in-range status, distance to edges, price range, holdings, USD value, uncollected fees) and totals. These wallets are only observed, never collected from. Empty when no wallet is configured.",
     inputSchema: {},
   },
   async () => {

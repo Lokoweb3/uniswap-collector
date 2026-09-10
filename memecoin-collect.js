@@ -4,7 +4,7 @@
  *
  * Every 15 minutes (a timer inside server.js): from the dashboard's own
  * position data, find memecoin positions (every v4 position in the main
- * wallet and the collected watched wallets, plus config.json `memecoins` ids)
+ * wallet and the collected watched wallets, plus settings.json `risk.memecoins` ids)
  * whose uncollected fees exceed `memecoinCollect.minUsd` (default $20), and
  * run `./run-collector.sh full --quiet` — the normal collector, which handles
  * every wallet and the LOKOVault split — instead of waiting for the 09:00 run.
@@ -62,7 +62,7 @@ function writeJson(file, data) {
 }
 
 function loadConfig() {
-  const cfg = readJson(path.join(HERE, "config.json"), {});
+  let cfg = {}; try { cfg = require("./settings").load(); } catch {}
   const mc = cfg.memecoinCollect || {};
   return {
     cfg,
@@ -93,7 +93,7 @@ function memecoinPositions({ positions, watch, memecoins, tradingLabel = "Tradin
     out.push({ tokenId: id, pair: p.pair, wallet, walletAddress, feesUsd: Number(p.feesUsd) || 0, version: p.version });
   };
   // v4 positions count in the main wallet and in every watched wallet the collector serves
-  // (wallets.json collect: true and approved; the payload's `collector.enabled`), the Trading wallet by name as a fallback.
+  // (settings.json wallets collect: true and approved; the payload's `collector.enabled`), the Trading wallet by name as a fallback.
   if (positions && positions.ok) for (const p of positions.positions || []) consider(p, positions.ownerLabel || "Main", positions.owner, true);
   if (watch && watch.ok) for (const w of watch.wallets || []) {
     if (!w.ok) continue;
@@ -195,11 +195,10 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
   const LOG = path.join(dir, "memecoin-collect-log.json");
   const STATE = path.join(dir, "memecoin-collect-state.json");
   const LEDGER = path.join(dir, "fee-split-ledger.json");
-  const CONFIG = path.join(dir, "config.json");
   let lastCycleAt = 0, running = false;
 
   function loadConfig() {
-    const cfg = readJson(CONFIG, {});
+    let cfg = {}; try { cfg = require("./settings").load(); } catch {}
     const mc = cfg.memecoinCollect || {};
     return { cfg, enabled: mc.enabled !== false, minUsd: Number(mc.minUsd ?? 20), minIntervalMinutes: Number(mc.minIntervalMinutes ?? 30),
       memecoins: Array.isArray(cfg.memecoins) ? cfg.memecoins : null, tradingLabel: mc.tradingWalletLabel || "Trading" };
@@ -286,7 +285,7 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     const ledger = readJson(LEDGER, []);
     const first = ledger.find((r) => r.status === "ok" && Number(r.splitUsdg) > 0);
     if (!first) return;
-    const cfg = readJson(CONFIG, {});
+    const cfg = loadConfig().cfg;
     const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId), { staticNetwork: true });
     const checks = {};
     try {

@@ -468,7 +468,7 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
 
   <div class="card">
     <h2>All wallets on this manager</h2>
-    <p style="margin:0 0 6px;font-size:14px" class="note">The collector collects for every wallet marked <span class="mono">collect</span> in wallets.json once that wallet has approved the operator. Connect a wallet to work on its row.</p>
+    <p style="margin:0 0 6px;font-size:14px" class="note">The collector collects for every wallet marked <span class="mono">collect</span> in settings.json once that wallet has approved the operator. Connect a wallet to work on its row.</p>
     <div data-id="wallets"></div>
   </div>
 
@@ -516,7 +516,7 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
 
   <div class="card">
     <h2>All wallets on this manager</h2>
-    <p style="margin:0 0 6px;font-size:14px" class="note">The collector collects for every wallet marked <span class="mono">collect</span> in wallets.json once that wallet has approved the operator. Connect a wallet to work on its row.</p>
+    <p style="margin:0 0 6px;font-size:14px" class="note">The collector collects for every wallet marked <span class="mono">collect</span> in settings.json once that wallet has approved the operator. Connect a wallet to work on its row.</p>
     <div data-id="wallets"></div>
   </div>
 
@@ -1112,7 +1112,7 @@ const initApprove = ((root, VERSION) => {
       try { await loadConfig(); } catch (e) { status(`${e.message}`, 'bad'); }
       const mine = account.toLowerCase() === cfg.owner.toLowerCase();
       $('[data-id="wallet"]').innerHTML = `<span class="mono">${short(account)}</span> ${mine ? '<span class="pill ok">owner</span>' : '<span class="pill bad">not the owner wallet</span>'}`;
-      if (!mine) status(`Connected account ${short(account)} is not the main wallet or a wallet listed in wallets.json. Switch accounts in your wallet.`, 'bad');
+      if (!mine) status(`Connected account ${short(account)} is not the main wallet or a wallet listed under wallets in settings.json. Switch accounts in your wallet.`, 'bad');
       else if (!chainOk) status('Wrong network. Click "Switch to Robinhood Chain".', 'warn');
       else status('Connected. Tick the checkbox, then approve.', 'ok');
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());

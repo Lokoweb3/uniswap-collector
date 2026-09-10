@@ -2,7 +2,7 @@
 /**
  * Risk guardian: the one watcher for every open LP position, main wallet and
  * watched wallets, v3 and v4. Positions listed under `memecoins` in
- * config.json carry their own rule block; every other open position is
+ * settings.json (risk.memecoins) carry their own rule block; every other open position is
  * discovered from the dashboard and watched with the `memecoinDefaults` rules
  * (entry price from the hourly price log at mint, else the first sample).
  *
@@ -49,20 +49,19 @@ const bareId = (p) => String(p.nftId || String(p.tokenId).replace(/^v4-/, ""));
 
 /**
  * create({ dir, provider, alerts, log, positions, watched, now })
- *   dir        directory holding config.json and the state files
+ *   dir        directory holding the state files (settings come from settings.js)
  *   positions  () => the dashboard's main-wallet payload ({ positions, owner, ownerLabel }) or null
  *   watched    () => the watched-wallet list ([{ ok, label, address, positions }]) or null
  *   alerts     alerts.js instance (sendGroup / send) or null
  */
 function create({ dir = __dirname, provider = null, alerts = null, log = (m) => console.log(`[${new Date().toISOString()}] ${m}`), positions = () => null, watched = () => null, now = () => Date.now() } = {}) {
-  const CONFIG_FILE = path.join(dir, "config.json");
   const STATE_FILE = path.join(dir, "memecoin-guardian-state.json");
   const STATUS_FILE = path.join(dir, "memecoin-status.json");
   const LOG_FILE = path.join(dir, "memecoin-guardian-log.json");
   const DISCOVERED_FILE = path.join(dir, "memecoin-discovered.json");
 
-  const cfg = readJson(CONFIG_FILE, null);
-  if (!cfg) throw new Error("config.json missing");
+  const settings = require("./settings");
+  const cfg = settings.load();
   provider = provider || new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId), { staticNetwork: true });
   const hasV4 = !!(cfg.contracts.v4 && cfg.contracts.v4.positionManager);
   const posm = hasV4 ? new ethers.Contract(cfg.contracts.v4.positionManager, v4.POSM_ABI, provider) : null;
@@ -77,7 +76,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
 
   let state = readJson(STATE_FILE, { positions: {}, sent: {} });
   let status = readJson(STATUS_FILE, { ok: true, at: 0, positions: [], recent: [] });
-  const liveConfig = () => readJson(CONFIG_FILE, cfg);
+  const liveConfig = () => { try { return settings.load(); } catch { return cfg; } };
 
   async function send(text) {
     log(`ALERT ${text.replace(/\n/g, " / ")}`);
@@ -286,7 +285,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
 
   /**
    * Change a position's rule block. A listed position is updated in
-   * config.json; a discovered one in memecoin-discovered.json. Returns the
+   * settings.json (risk.memecoins); a discovered one in memecoin-discovered.json. Returns the
    * effective rules.
    */
   function setRule(id, patch = {}) {
@@ -300,16 +299,14 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     if (patch.autoClose !== undefined) { next.autoClose = patch.autoClose === true; if (next.autoClose) next.alertOnly = false; }
     if (patch.alertOnly !== undefined) next.alertOnly = patch.alertOnly !== false;
     if (patch.entryPrice !== undefined && Number(patch.entryPrice) > 0) { next.entryPrice = Number(patch.entryPrice); next.entrySource = "set by hand"; }
-    const raw = readJson(CONFIG_FILE, null);
-    if (!raw) throw new Error("config.json unreadable");
-    const i = (raw.memecoins || []).findIndex((m) => String(m.tokenId) === String(id));
+    const live = liveConfig();
+    const i = (live.memecoins || []).findIndex((m) => String(m.tokenId) === String(id));
     if (i >= 0) {
-      Object.assign(raw.memecoins[i], next);
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(raw, null, 2) + "\n");
-      return logic.rulesOf(raw.memecoins[i], raw.memecoinDefaults);
+      const flat = settings.save((raw) => { Object.assign(raw.risk.memecoins[i], next); });
+      return logic.rulesOf(flat.memecoins[i], flat.memecoinDefaults);
     }
     if (!updateDiscovered(id, next)) throw new Error(`#${id} is not a watched position`);
-    return logic.rulesOf(entryFor(id), raw.memecoinDefaults);
+    return logic.rulesOf(entryFor(id), live.memecoinDefaults);
   }
 
   async function cycle() {

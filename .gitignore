@@ -66,6 +66,7 @@ compound-log.json
 
 # real configuration (addresses, thresholds); config.example.json is the template
 config.json
+settings.json
 # local notes and reviews
 docs/
 .collector.lock

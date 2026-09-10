@@ -22,7 +22,7 @@ const path = require("path");
 const { ethers } = require("ethers");
 
 const HERE = path.join(__dirname, "..");
-const cfg = JSON.parse(fs.readFileSync(path.join(HERE, "config.json"), "utf8"));
+const cfg = require("../settings").load();
 const LOG = path.join(HERE, "collector.log");
 const OUT = path.join(HERE, "v4-collects.json");
 const DRY = process.argv.includes("--dry");

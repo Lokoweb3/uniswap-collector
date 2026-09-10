@@ -59,7 +59,7 @@ Write-Host "  1. Send a small gas float to the operator address printed above (0
 Write-Host "  2. From your MAIN wallet, approve the operator on the position manager."
 Write-Host "     Narrowest option, per position:  approve(operatorAddress, tokenId)"
 Write-Host "     Convenient option, all at once:  setApprovalForAll(operatorAddress, true)"
-Write-Host "  3. Set ownerAddress and sweepDestination in config.json to your main wallet."
+Write-Host "  3. Set wallets.main (and collector.sweepDestination) in settings.json to your main wallet."
 Write-Host "  4. Run:  .\run-collector.ps1 -Mode simulate"
 Write-Host ""
 Write-Host "Note: setApprovalForAll also lets the operator call decreaseLiquidity and" -ForegroundColor Yellow

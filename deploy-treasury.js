@@ -8,7 +8,7 @@
  * 2. TreasuryNFT (ERC-721, LOKOVault)
  * 3. Mints token #1 to owner
  * 4. Creates TBA via EIP-6551 registry
- * 5. Saves addresses to config.json
+ * 5. Saves addresses to settings.json (vault section)
  * 6. Sends Telegram notification
  */
 
@@ -31,7 +31,6 @@ const CONFIG = {
   explorerUrl:  'https://robinhoodchain.blockscout.com',
   telegramToken: process.env.TELEGRAM_TOKEN,
   telegramChat:  process.env.TELEGRAM_CHAT || process.env.TELEGRAM_CHAT_ID || "",
-  configPath:   path.join(process.cwd(), 'config.json'),
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -202,20 +201,11 @@ async function main() {
     console.log('⚠️  TBA not yet deployed — will deploy on first interaction');
   }
 
-  // Save to config.json
-  let config = {};
-  if (fs.existsSync(CONFIG.configPath)) {
-    config = JSON.parse(fs.readFileSync(CONFIG.configPath, 'utf8'));
-  }
-  config.treasuryNFT = nftAddress;
-  config.treasuryTokenId = 1;
-  config.treasuryTBA = tbaAddress;
-  config.treasuryImplementation = accountAddress;
-  config.feeSplitPct = 10;
-  config.feeSplitMax = 20;
-
-  fs.writeFileSync(CONFIG.configPath, JSON.stringify(config, null, 2));
-  console.log('\n✅ config.json updated');
+  // Save to settings.json (vault section)
+  require('./settings').save((raw) => {
+    raw.vault = { ...(raw.vault || {}), nft: nftAddress, tokenId: 1, tba: tbaAddress, implementation: accountAddress, feeSplitPct: 10, feeSplitMax: 20 };
+  });
+  console.log('\n✅ settings.json updated (vault section)');
 
   // Print summary
   console.log('\n' + '═'.repeat(60));

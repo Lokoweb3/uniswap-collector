@@ -16,7 +16,7 @@ const UA =
 const KEY = [process.env.BLOCKSCOUT_API_KEY, process.env.LP_BLOCKSCOUT_KEY].find((k) => k && k.startsWith("proapi_")) || null;
 let chainId = null;
 try {
-  chainId = require("./config.json").chainId;
+  chainId = require("./settings").load().chainId;
 } catch {}
 
 const hasKey = () => !!KEY;

@@ -1,11 +1,11 @@
 /**
  * Watched wallets: read-only position views for extra addresses listed in
- * config.json `watchWallets`. Each entry is "0x..." or { address, label }.
+ * settings.json `wallets.watched`. Each entry is { address, label, collect }.
  *
  * Kept deliberately separate from the owner's pipeline: no fee snapshots, no
  * PnL basis, no range log, no collector eligibility. Just what the chain says
  * right now about each wallet's open v3 and v4 positions, priced the same way
- * as the owner's. The list is re-read from config.json on every refresh, so
+ * as the owner's. The list is re-read from settings.json on every refresh, so
  * adding a wallet needs no restart.
  */
 "use strict";
@@ -142,17 +142,9 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   let latest = null;
   let inFlight = null;
 
-  /** wallets.json (owner label + watched list) if present, else config.watchWallets. */
+  /** The watched wallets (settings.json `wallets`: main label + watched list), re-read on every refresh. */
   function readWalletFile() {
-    try {
-      const w = JSON.parse(fs.readFileSync(path.join(__dirname, "wallets.json"), "utf8"));
-      return { ownerLabel: (w.owner && w.owner.label) || null, list: Array.isArray(w.watched) ? w.watched : [] };
-    } catch {}
-    try {
-      return { ownerLabel: null, list: JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8")).watchWallets || [] };
-    } catch {
-      return { ownerLabel: null, list: [] };
-    }
+    return require("./settings").wallets();
   }
   function ownerLabel() {
     return readWalletFile().ownerLabel;

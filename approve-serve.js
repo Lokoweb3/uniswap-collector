@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+const cfg = require("./settings").load();
 const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId));
 function operatorAddress() {
   try {
@@ -50,16 +50,16 @@ http
         const mgr = v === 3 ? cfg.contracts.positionManager : cfg.contracts.v4 && cfg.contracts.v4.positionManager;
         const op = operatorAddress();
         const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
-        // Allowed owners: the main wallet plus wallets.json entries.
+        // Allowed owners: the main wallet plus the settings.json wallets.
         const allowed = [{ address: cfg.ownerAddress, label: "Main wallet", main: true }];
         try {
-          const wj = JSON.parse(fs.readFileSync(path.join(__dirname, "wallets.json"), "utf8"));
+          const wj = { watched: (cfg.wallets && cfg.wallets.list) || [] };
           if (wj.owner && wj.owner.label) allowed[0].label = wj.owner.label;
           for (const w of wj.watched || []) if (w && ethers.isAddress(w.address)) allowed.push({ address: ethers.getAddress(w.address), label: w.label || w.address, main: false, collect: !!w.collect });
         } catch {}
         const want = url.searchParams.get("owner");
         const ownerEntry = want ? allowed.find((a) => a.address.toLowerCase() === want.toLowerCase()) : allowed[0];
-        if (!ownerEntry) throw new Error("that wallet is not the main wallet or a wallet listed in wallets.json");
+        if (!ownerEntry) throw new Error("that wallet is not the main wallet or a wallet listed under wallets in settings.json");
         const approved = op ? await c.isApprovedForAll(ownerEntry.address, op) : null;
         const others = (await approvedOperators(provider, mgr, ownerEntry.address)).filter((o) => o.approved && (!op || o.address.toLowerCase() !== op.toLowerCase()));
         const wallets = [];

@@ -1,0 +1,181 @@
+{
+  "_comment": "LP dashboard + collector settings. One file: edit here, restart the dashboard (./start-all.sh). Secrets (TELEGRAM_TOKEN, BLOCKSCOUT_API_KEY, chat provider keys) live in .env only. settings.example.json is the template.",
+  "chain": {
+    "rpcUrl": "https://rpc.mainnet.chain.robinhood.com",
+    "chainId": 4663,
+    "explorer": "https://robinhoodchain.blockscout.com"
+  },
+  "wallets": {
+    "_comment": "main: the collector's own wallet (positions read, fees swept back to it). watched: extra wallets shown read-only; collect: true makes the collector also collect that wallet's positions (after it approves the operator on the v3/v4 position managers, Wallet page > Approvals) and deliver the swept fees back to that same wallet.",
+    "main": {
+      "address": "0x0000000000000000000000000000000000000001",
+      "label": "Main"
+    },
+    "watched": [
+      {
+        "address": "0x0000000000000000000000000000000000000001",
+        "label": "Trading",
+        "collect": false
+      },
+      {
+        "address": "0x0000000000000000000000000000000000000002",
+        "label": "LP Rewards",
+        "collect": false
+      }
+    ]
+  },
+  "tokens": {
+    "_comment": "Each token address written once. USDG is the sweep target and the USD reference; WETH the wrapped native token. usdReferenceFeeTier: the v3 WETH/USDG pool tier used for USD pricing.",
+    "USDG": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    "WETH": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+    "usdReferenceFeeTier": 100
+  },
+  "contracts": {
+    "_comment": "Uniswap v3 (positionManager, factory, swapRouter02, quoterV2), v4 (positionManager, stateView, poolManager, universalRouter, quoter, permit2, pricingHooks) and v2Factory on Robinhood Chain.",
+    "positionManager": "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3",
+    "swapRouter02": "0xCaf681a66D020601342297493863E78C959E5cb2",
+    "quoterV2": "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
+    "factory": "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA",
+    "v4": {
+      "positionManager": "0x58daec3116aae6d93017baaea7749052e8a04fa7",
+      "stateView": "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b",
+      "poolManager": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+      "universalRouter": "0x8876789976decbfcbbbe364623c63652db8c0904",
+      "quoter": "0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94",
+      "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "pricingHooks": [
+        "0xeb1E05dF4b1E0e7eEd94CD06628900868EA3A0CC",
+        "0x11aFe0130450df7127276e7AF474Eccdf4D420Cc",
+        "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044"
+      ]
+    },
+    "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f"
+  },
+  "collector": {
+    "_comment": "sweepDestination: where the main wallet's swept fees go (default the main wallet). thresholds: minWethPerPosition (collect when a position's fees are worth this much), maxGasPriceGwei, dailyGasCapEth, slippageBps, maxSwapValueWeth, minOperatorGasBalanceEth. sweep: enabled, target/targetToken/targetFeeTier (USDG), keepGasReserveEth (floor kept on the operator), gasTargetEth (float refilled from the sweep). tokenIds pins positions, denylist skips them, v4Collect covers v4 positions.",
+    "sweepDestination": "0x0000000000000000000000000000000000000001",
+    "thresholds": {
+      "minWethPerPosition": "0.002",
+      "maxGasPriceGwei": "3.0",
+      "dailyGasCapEth": "0.01",
+      "slippageBps": 150,
+      "maxSwapValueWeth": "0.5",
+      "minOperatorGasBalanceEth": "0.003"
+    },
+    "sweep": {
+      "enabled": true,
+      "keepGasReserveEth": "0.005",
+      "gasTargetEth": "0.02",
+      "target": "USDG",
+      "targetToken": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "targetFeeTier": 100
+    },
+    "tokenIds": [],
+    "denylist": [],
+    "v4Collect": {
+      "enabled": true,
+      "tokenIds": []
+    },
+    "swapFeeTierOverrides": {}
+  },
+  "vault": {
+    "_comment": "LOKOVault fee split: after each wallet's fees are swapped to USDG, feeSplitPct % goes to the vault's token-bound account (tba) and the rest to the wallet. tba null = split off. feeSplitMax caps the percentage; the NFT's own feeSplitPct() wins when it exposes one. withdrawAlertUsdg: Telegram reminder level.",
+    "nft": "0x0000000000000000000000000000000000000022",
+    "tba": "0x0000000000000000000000000000000000000021",
+    "implementation": "0x0000000000000000000000000000000000000023",
+    "tokenId": 1,
+    "feeSplitPct": 10,
+    "feeSplitMax": 20,
+    "withdrawAlertUsdg": 1000
+  },
+  "risk": {
+    "_comment": "Risk guardian: every open position of every wallet is watched (v4 every 60 s, v3 every 5 min). memecoins: positions with their own rule block {tokenId, pair, alertPct, closePct, outOfRangeMinutes, tvlDropPct, feeFloorPerHour, collectedTargetUsd, autoClose, alertOnly, entryPrice}; every other position is discovered and uses defaults. alertOnly: true never closes. autoCollect: run the collector once a memecoin position holds minUsd of fees (at most every minIntervalMinutes). sell: sell fee tokens with no v3 route in their v4 pool (minUsd, maxImpactPct, hold list, confirm = ask on Telegram first).",
+    "memecoins": [
+      {
+        "tokenId": "2134854",
+        "version": 4,
+        "pair": "LAPTOP/ETH",
+        "wallet": "Trading",
+        "walletAddress": "0x0000000000000000000000000000000000000012",
+        "entryPrice": 1181520,
+        "entryValueUsd": 1736,
+        "alertPct": 20,
+        "closePct": 50,
+        "outOfRangeMinutes": 120,
+        "tvlDropPct": 60,
+        "feeFloorPerHour": 10,
+        "collectedTargetUsd": 500,
+        "autoClose": false,
+        "alertOnly": true
+      },
+      {
+        "tokenId": "2151132",
+        "version": 4,
+        "pair": "PINK/ETH",
+        "wallet": "Trading",
+        "walletAddress": "0x0000000000000000000000000000000000000012",
+        "entryPrice": 1276100,
+        "entryValueUsd": 190,
+        "alertPct": 20,
+        "closePct": 50,
+        "outOfRangeMinutes": 120,
+        "autoClose": false,
+        "alertOnly": true
+      }
+    ],
+    "defaults": {
+      "alertPct": 20,
+      "closePct": 50,
+      "outOfRangeMinutes": 120,
+      "tvlDropPct": 50,
+      "feeFloorPerHour": null,
+      "autoClose": false,
+      "alertOnly": true
+    },
+    "discovery": true,
+    "autoCollect": {
+      "enabled": true,
+      "minUsd": 50,
+      "minIntervalMinutes": 15
+    },
+    "sell": {
+      "enabled": true,
+      "minUsd": 25,
+      "maxImpactPct": 3,
+      "hold": [],
+      "nativeQuoteOnly": false,
+      "confirm": true,
+      "confirmWaitMinutes": 10
+    }
+  },
+  "alerts": {
+    "_comment": "Telegram chat ids (the bot token stays in .env as TELEGRAM_TOKEN). telegramChat: the group for position alerts; fallbackChat: your personal chat (used when the group is unset or refuses); treasuryChat: vault messages (default the group). dailySummary: the 08:00 line-up.",
+    "telegramChat": "-100123456789",
+    "fallbackChat": "123456789",
+    "treasuryChat": "",
+    "dailySummary": {
+      "enabled": true,
+      "hour": 8,
+      "chat": "main"
+    }
+  },
+  "dashboard": {
+    "port": 8787,
+    "collectMode": "full"
+  },
+  "portfolio": {
+    "priceVia": {
+      "0xb773ec2C326B7f98a5a83fc098825492F020a4c7": "0xCA9c78Dd337A67F6e0077F65F5E9218719d30eDf"
+    }
+  },
+  "staking": {
+    "tokens": [
+      {
+        "token": "0xb773ec2C326B7f98a5a83fc098825492F020a4c7",
+        "underlying": "0xCA9c78Dd337A67F6e0077F65F5E9218719d30eDf",
+        "label": "NET staking",
+        "stakingContract": "0xB078cc304A0B264C5F3680DC0488954ACcd02E87"
+      }
+    ]
+  }
+}

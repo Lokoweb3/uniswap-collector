@@ -156,6 +156,7 @@ const watch = require("./watch").create({
     return typeof ledger !== "undefined" ? ledger.basis(id) : null;
   },
   getCollectEvents: (tokenId) => (typeof hist !== "undefined" ? hist.events.filter((e) => e.tokenId === String(tokenId)) : []),
+  getCollectSummary: (tokenKey, dec0, dec1, usd0, usd1) => collectSummary(tokenKey, dec0, dec1, usd0, usd1),
 });
 // Liquidity history from the RPC itself; the PnL basis prefers it over
 // Blockscout's, which has dropped transactions on this chain.
@@ -420,6 +421,25 @@ try {
   feePrices = JSON.parse(fs.readFileSync(PRICE_FILE, "utf8"));
 } catch {}
 const priceKey = (e) => `${e.tx}:${e.tokenId}`;
+/**
+ * What a position has paid out so far: every collect event for it (v3 scanned,
+ * v4 from the collector's and the owner's ledgers), valued at the collect-time
+ * price record when there is one, else at the prices given. For the cards.
+ */
+function collectSummary(tokenKey, dec0, dec1, usd0, usd1) {
+  let usd = 0, count = 0, last = null, locked = 0;
+  const events = typeof hist !== "undefined" ? [...(typeof bf !== "undefined" ? bf.events : []), ...hist.events] : [];
+  for (const e of events) {
+    if (e.tokenId !== String(tokenKey)) continue;
+    const f0 = Number(ethers.formatUnits(e.fee0 || "0", dec0)), f1 = Number(ethers.formatUnits(e.fee1 || "0", dec1));
+    const px = feePrices[priceKey(e)];
+    if (px) { usd += f0 * px.p0 + f1 * px.p1; locked++; }
+    else if (usd0 != null && usd1 != null) usd += f0 * usd0 + f1 * usd1;
+    count++;
+    if (e.t && (!last || e.t > last)) last = e.t;
+  }
+  return count ? { usd: +usd.toFixed(2), count, last, atCollectPrices: locked, approx: locked < count } : null;
+}
 const STATE_DEPTH = 4500; // probed: slot0 answers at -5000 blocks, not at -50000
 
 async function pricesAtBlock(m, block) {
@@ -896,6 +916,7 @@ async function build() {
         pnlApprox,
         pnlLegs,
         pnlSource,
+        collected: collectSummary(p.tokenId, p.token0.decimals, p.token1.decimals, usd0, usd1),
         liquidity: p.liquidity,
         pair: `${p.token0.symbol} / ${p.token1.symbol}`,
         symbol0: p.token0.symbol,
@@ -1379,6 +1400,14 @@ const server = http.createServer(async (req, res) => {
       const st = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-status.json"), "utf8"));
       st.stale = Date.now() - (st.at || 0) > 5 * 60 * 1000; // guardian not running?
       st.watching = (st.positions || []).filter((p) => !p.closed).length;
+      for (const p of st.positions || []) {
+        if (p.closed) continue;
+        try {
+          const m = await positionMeta(`v4-${p.tokenId}`);
+          const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
+          p.collected = collectSummary(`v4-${p.tokenId}`, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
+        } catch { p.collected = null; }
+      }
       st.configured = (cfg.memecoins || []).length;
       st.discovery = cfg.memecoinDiscovery !== false;
       // Fee auto-collect (memecoin-collect.js): settings and last activity, so status reports come from one place.

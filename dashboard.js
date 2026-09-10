@@ -1318,6 +1318,7 @@ function render(d){
         <div class="vals">
           <span class="v">${usd(p.valueUsd)}</span>
           <span class="f ${(p.feesUsd||0) < 0.005 ? 'zero':''}">${usd(p.feesUsd)} uncollected</span>
+          ${claimedLine(p)}
         </div>
       </div>
 
@@ -1401,6 +1402,14 @@ async function load(fresh){
 let coTimer = null;
 
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// "claimed $X · N collects · last <date>" for a position card (main, watched and memecoin cards).
+function claimedLine(p){
+  const c = p.collected;
+  if (!c || !c.count) return '<span class="c zero" title="No fees collected from this position yet">nothing claimed yet</span>';
+  const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const title = `${c.count} collect${c.count === 1 ? '' : 's'} so far${c.atCollectPrices ? `, ${c.atCollectPrices} valued at the price of their moment` : ''}${c.approx ? ', the rest at today\'s prices' : ''}`;
+  return `<span class="c" title="${title}">claimed ${c.approx ? '≈' : ''}<b>${usd(c.usd)}</b> · ${c.count}×${when ? ' · last ' + when : ''}</span>`;
+}
 // Tx hashes in the run log become explorer links.
 const linkify = s => EXPLORER
   ? esc(s).replace(/0x[0-9a-fA-F]{64}/g, h =>
@@ -1589,6 +1598,7 @@ function renderWatch(d){
           <div class="vals">
             <span class="v">${usd(p.valueUsd)}</span>
             <span class="f ${(p.feesUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feesUsd)} uncollected</span>
+            ${claimedLine(p)}
           </div>
         </div>
         <div class="rail">
@@ -1690,7 +1700,7 @@ async function loadMemecoins(){
         <div class="top">
           <div class="name"><span class="dot ${p.status}"></span><h2>${p.pair}</h2><span class="tier">v4 #${p.tokenId}</span><span class="muted">${p.wallet}</span>
             <span class="state ${p.inRange ? '' : 'out'}">${p.inRange ? 'In range' : 'Out of range · ' + Math.round(p.outMinutes) + ' min'}</span></div>
-          <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span></div>
+          <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span>${claimedLine(p)}</div>
         </div>
         <div class="grid">
           <span>Price (${p.symbolToken || 'token'} per ${p.quoteSymbol || 'ETH'})<b>${fmtN(p.price)}</b></span>

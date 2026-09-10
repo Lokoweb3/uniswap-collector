@@ -845,6 +845,8 @@ only what it shows. The public gate serves the page at the same path.
   collects are tagged in the collects table (with a note when the ETH leg is unknown); the fee-tokens
   table shows sales at collect time and hides junk prices from drained pools; Memecoin Watch cards
   label holdings with the pool's quote asset and show the per-position rules against their thresholds.
+- Every position card (main, watched, Memecoin Watch) shows what it has paid out so far: claimed
+  USD, number of collects, last collect time (collect-time prices where recorded, ≈ otherwise).
 - Strategy track record (`strategy-track.js`, Theo): agents record proposals through the MCP,
   the server scores them against the position history when the horizon passes, Analytics shows
   the outcomes and per-author averages.

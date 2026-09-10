@@ -602,3 +602,9 @@ select.scope option{background:#0b1017}
 .meme .reasons.rules b.up{color:var(--neon-green,#39ff88)}
 .meme .reasons.rules b.warn{color:var(--neon-gold,#f5c542)}
 .meme .reasons.rules b.down{color:var(--edge,#ff4d6d)}
+
+/* "claimed" line on position cards */
+.vals .c{font-size:12.5px;color:var(--muted);font-weight:400}
+.vals .c b{font-family:var(--font-mono);color:var(--neon-gold,#f5c542);font-weight:600}
+.vals .c.zero{color:var(--faint,#4a5665)}
+.vals{flex-wrap:wrap;row-gap:4px}

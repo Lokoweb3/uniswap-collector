@@ -5,16 +5,21 @@
  * A proposal is a set of items, each naming a wallet + pair (and optionally a
  * tokenId) with an action and an expected outcome. When now >= t + horizonDays
  * the proposal is scored once against the position history (position_history,
- * served at /api/strategy/positions): for each item we pull the matching
- * position(s) and compare the realised collects / fee APR / time in range /
- * net result with what was expected, giving a per-item verdict and a per-
- * proposal score (share of items met or beat). "avoid" items are met when no
- * position was opened in that pair during the window.
+ * served at /api/strategy/positions) and the collect history (/api/history):
+ * for each item we pull the matching position(s) and compare the realised
+ * collects / fee APR / time in range / net result with what was expected,
+ * giving a per-item verdict and a per-proposal score (share of items met or
+ * beat). "avoid" items are met when no position was opened in that pair during
+ * the window.
  *
- * Collects and fee APR come from the position rows, which cover a position's
- * whole life, not just the proposal's window; a position that predates the
- * proposal therefore carries earlier collects into the comparison. The item's
- * `note` says so when it applies.
+ * Collects are windowed: only collect rows whose timestamp falls inside the
+ * proposal's window [t, t + horizonDays] count, so a position that predates the
+ * proposal does not carry earlier collects into the comparison. The fee APR is
+ * computed over the window from those collects and the position's deposited
+ * USD. Time in range comes from the position row (the range log is per
+ * position, not per window) and is flagged in the item's note when the position
+ * predates the window. The position row's whole-life figures are kept under
+ * actuals.lifetime for reference.
  *
  * Read-only apart from the proposals ledger (strategy-proposals.json, atomic
  * tmp+rename). No chain calls beyond what position_history already does: we
@@ -25,6 +30,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DAY = 86400000;
+const HOUR = 3600000;
 const round = (n, p = 2) => (n == null || !isFinite(n) ? null : +Number(n).toFixed(p));
 
 /** Ledger path: the create() dir when given (tests use a temp dir), else the module dir. */
@@ -126,8 +132,8 @@ function create({ cfg, dir = __dirname, port }) {
     return byPair;
   }
 
-  /** Realised metrics for a position that was open at some point inside [t0, t1]. */
-  function realisedFor(pos, t0, t1) {
+  /** Whole-life realised metrics for a position that was open at some point inside [t0, t1]. */
+  function lifetimeFor(pos, t0, t1) {
     const opened = pos.openedAt ? Date.parse(pos.openedAt) : null;
     const closed = pos.closedAt ? Date.parse(pos.closedAt) : null;
     const start = opened != null ? opened : t0;
@@ -138,9 +144,26 @@ function create({ cfg, dir = __dirname, port }) {
       feeAprPct: pos.realizedFeeAprPct != null ? pos.realizedFeeAprPct : null,
       pctInRange: pos.timeInRange && pos.timeInRange.pctInRange != null ? pos.timeInRange.pctInRange : null,
       resultVsDepositUsd: pos.closed && pos.closed.resultVsDepositUsd != null ? pos.closed.resultVsDepositUsd : null,
+      depositedUsd: pos.depositedUsd != null ? pos.depositedUsd : null,
       status: pos.status,
       predatesWindow: opened != null && opened < t0,
     };
+  }
+
+  /** Sum the collect rows for a position that fall inside [t0, t1] (same id, version and wallet). */
+  function windowedCollectsUsd(pos, history, t0, t1) {
+    const nft = String(pos.tokenId);
+    const addr = String(pos.walletAddress || "").toLowerCase();
+    let sum = 0;
+    for (const r of history) {
+      if (r.principal) continue; // a close's principal is not a collect
+      if (r.t == null || r.t < t0 || r.t > t1) continue;
+      if (String(r.nftId) !== nft) continue;
+      if ((r.version || 3) !== (pos.version || 3)) continue; // a v3 and a v4 position can share a number
+      if (String(r.walletAddress || "").toLowerCase() !== addr) continue;
+      sum += r.usd || 0;
+    }
+    return sum;
   }
 
   /** Verdict for one expected metric given the actual; tolerances scale with |expected|, so negative targets work too. */
@@ -152,8 +175,8 @@ function create({ cfg, dir = __dirname, port }) {
     return "missed";
   }
 
-  /** Score one item against its matched positions. */
-  function scoreItem(item, positions, t0, t1) {
+  /** Score one item against its matched positions and the collect history. */
+  function scoreItem(item, positions, history, t0, t1) {
     const k = pairKey(item.pair);
     if (item.action === "avoid") {
       const openedInWindow = positions.some((p) => {
@@ -163,26 +186,38 @@ function create({ cfg, dir = __dirname, port }) {
       return { verdict: openedInWindow ? "missed" : "met", delta: null, actuals: null, note: openedInWindow ? "a position was opened in this pair during the window" : "no position opened in this pair during the window" };
     }
 
-    const matched = matchPositions(item, positions).map((p) => realisedFor(p, t0, t1)).filter(Boolean);
+    const matched = matchPositions(item, positions).map((p) => ({ pos: p, life: lifetimeFor(p, t0, t1) })).filter((m) => m.life);
     if (!matched.length) return { verdict: "no data", delta: null, actuals: null, note: "no matching position in the window" };
 
-    const agg = matched.reduce(
-      (a, m) => {
-        a.collectsUsd += m.collectsUsd || 0;
-        if (m.feeAprPct != null) { a.feeAprSum += m.feeAprPct; a.feeAprN++; }
-        if (m.pctInRange != null) { a.rangeSum += m.pctInRange; a.rangeN++; }
-        if (m.resultVsDepositUsd != null) { a.resultSum += m.resultVsDepositUsd; a.resultN++; }
-        if (m.predatesWindow) a.predates++;
-        return a;
-      },
-      { collectsUsd: 0, feeAprSum: 0, feeAprN: 0, rangeSum: 0, rangeN: 0, resultSum: 0, resultN: 0, predates: 0 }
-    );
+    // Windowed collects: the collect rows inside [t0, t1] for each matched position.
+    let collectsUsd = 0, depositedUsd = null, predates = 0;
+    for (const m of matched) {
+      collectsUsd += windowedCollectsUsd(m.pos, history, t0, t1);
+      if (m.life.depositedUsd != null) depositedUsd = (depositedUsd == null ? 0 : depositedUsd) + m.life.depositedUsd;
+      if (m.life.predatesWindow) predates++;
+    }
+    // Fee APR over the window from those collects and the deposit; null when the deposit is unknown.
+    const hoursInWindow = (t1 - t0) / HOUR;
+    const feeAprPct = depositedUsd > 0 && hoursInWindow > 0 ? (collectsUsd / depositedUsd) * (8760 / hoursInWindow) * 100 : null;
+
+    // Time in range and net result stay per position (whole life).
+    const rangeN = matched.filter((m) => m.life.pctInRange != null).length;
+    const rangeSum = matched.reduce((s, m) => s + (m.life.pctInRange || 0), 0);
+    const resultN = matched.filter((m) => m.life.resultVsDepositUsd != null).length;
+    const resultSum = matched.reduce((s, m) => s + (m.life.resultVsDepositUsd || 0), 0);
+    const lifeAprN = matched.filter((m) => m.life.feeAprPct != null).length;
     const actuals = {
-      collectsUsd: round(agg.collectsUsd),
-      feeAprPct: agg.feeAprN ? round(agg.feeAprSum / agg.feeAprN, 1) : null,
-      pctInRange: agg.rangeN ? round(agg.rangeSum / agg.rangeN, 1) : null,
-      resultVsDepositUsd: agg.resultN ? round(agg.resultSum / agg.resultN) : null,
+      collectsUsd: round(collectsUsd),
+      feeAprPct: round(feeAprPct, 1),
+      pctInRange: rangeN ? round(rangeSum / rangeN, 1) : null,
+      resultVsDepositUsd: resultN ? round(resultSum / resultN) : null,
       positions: matched.length,
+      lifetime: {
+        collectsUsd: round(matched.reduce((s, m) => s + (m.life.collectsUsd || 0), 0)),
+        feeAprPct: lifeAprN ? round(matched.reduce((s, m) => s + (m.life.feeAprPct || 0), 0) / lifeAprN, 1) : null,
+        pctInRange: rangeN ? round(rangeSum / rangeN, 1) : null,
+        resultVsDepositUsd: resultN ? round(resultSum / resultN) : null,
+      },
     };
 
     const exp = item.expected || {};
@@ -198,7 +233,7 @@ function create({ cfg, dir = __dirname, port }) {
     else if (verdicts.includes("met")) verdict = "met";
     else verdict = "beat";
 
-    const note = agg.predates ? `${agg.predates} matched position(s) predate the proposal; collects and APR cover their whole life, not only the window` : null;
+    const note = predates ? `${predates} matched position(s) predate the proposal; time in range covers their whole life, not only the window` : null;
     return { verdict, delta: deltas, actuals, note };
   }
 
@@ -207,7 +242,7 @@ function create({ cfg, dir = __dirname, port }) {
     const rows = readProposals(FILE);
     const now = Date.now();
     let changed = false;
-    let positions = null; // fetched once per call, only when something is due
+    let positions = null, history = null; // fetched once per call, only when something is due
     for (const row of rows) {
       if (row.scoredAt != null) continue;
       if (now < row.t + row.horizonDays * DAY) continue;
@@ -215,12 +250,13 @@ function create({ cfg, dir = __dirname, port }) {
       if (!positions) {
         try {
           positions = (await get("/api/strategy/positions")).positions || [];
+          history = (await get("/api/history")).rows || [];
         } catch {
           return { ok: true, scored: false }; // dashboard not reachable; try again next tick
         }
       }
       const items = row.items.map((it) => {
-        const s = scoreItem(it, positions, t0, t1);
+        const s = scoreItem(it, positions, history, t0, t1);
         return { ...it, verdict: s.verdict, delta: s.delta, actuals: s.actuals, note: s.note };
       });
       const met = items.filter((i) => i.verdict === "met" || i.verdict === "beat").length;

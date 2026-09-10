@@ -16,15 +16,25 @@ const positions = [
   {
     wallet: "Main", walletAddress: owner, tokenId: "1", version: 3, pair: "ETH / LAPTOP",
     status: "open", openedAt, closedAt: null,
-    collects: { usd: 40, count: 2 }, realizedFeeAprPct: 12.5,
+    collects: { usd: 40, count: 2 }, realizedFeeAprPct: 12.5, depositedUsd: 100,
     timeInRange: { pctInRange: 80.0, trackedHours: 48, flips: 1 },
     closed: null,
   },
 ];
 
+// Stubbed /api/history: for the LAPTOP position (nftId "1", owner wallet) one
+// collect falls inside the proposal window, one before it, and one is a v4
+// position with the same number. Only the in-window v3 one should count.
+const history = [
+  { t: now - 2.5 * 86400000, nftId: "1", version: 3, walletAddress: owner, tokenId: "1", pair: "ETH / LAPTOP", usd: 40, principal: false }, // inside window
+  { t: now - 5 * 86400000, nftId: "1", version: 3, walletAddress: owner, tokenId: "1", pair: "ETH / LAPTOP", usd: 100, principal: false }, // before window
+  { t: now - 2.4 * 86400000, nftId: "1", version: 4, walletAddress: owner, tokenId: "v4-1", pair: "ETH / LAPTOP", usd: 999, principal: false }, // other version
+];
+
 const srv = http.createServer((req, res) => {
   res.setHeader("Content-Type", "application/json");
   if (req.url.startsWith("/api/strategy/positions")) return res.end(JSON.stringify({ ok: true, positions }));
+  if (req.url.startsWith("/api/history")) return res.end(JSON.stringify({ ok: true, rows: history }));
   res.end(JSON.stringify({ ok: true, positions: [] }));
 });
 srv.listen(0, "127.0.0.1", async () => {
@@ -67,6 +77,11 @@ srv.listen(0, "127.0.0.1", async () => {
     assert.strictEqual(hold.verdict, "beat", "collected 40 vs expected 30 -> beat");
     assert.strictEqual(hold.delta.feesUsd, 10);
     assert.strictEqual(hold.note, null, "opened inside the window: no predates note");
+    // Windowed collects: only the in-window v3 collect counts (40, not 140, not 1039).
+    assert.strictEqual(hold.actuals.collectsUsd, 40, "only the in-window collect of the same version counts");
+    assert.strictEqual(hold.actuals.lifetime.collectsUsd, 40, "lifetime keeps the position row's whole-life figure");
+    // Fee APR over the 1-day window: 40 / 100 * (8760 / 24) * 100 = 14600.
+    assert.strictEqual(hold.actuals.feeAprPct, 14600, "APR uses the window hours and windowed collects");
     assert.strictEqual(avoid.verdict, "met", "no position opened in ETH/PINK -> met");
     assert.strictEqual(nope.verdict, "no data");
     assert.strictEqual(p.outcome.score, 66.7, "2 of 3 items met or beat");
@@ -77,7 +92,7 @@ srv.listen(0, "127.0.0.1", async () => {
     // Scoring again is a no-op (never rescore).
     assert.strictEqual((await track.score()).scored, false, "already scored -> no change");
 
-    console.log("strategy-track: record, validation, scoring, view and no-rescore assertions passed");
+    console.log("strategy-track: record, validation, windowed scoring, view and no-rescore assertions passed");
   } catch (e) {
     console.error(e);
     process.exitCode = 1;

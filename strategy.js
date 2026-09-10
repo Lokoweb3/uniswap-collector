@@ -340,7 +340,8 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
         let li = 0;
         for (const d of ds.sort((a, b) => (a.t || 0) - (b.t || 0))) {
           let left = d.amount;
-          while (left > 0 && li < ls.length) {
+          // A disposal can only consume lots received before it; earlier transfers were other holdings of the token.
+          while (left > 0 && li < ls.length && Date.parse(ls[li].t) <= (d.t || 0)) {
             const lot = ls[li];
             const take = Math.min(left, lot.remainingAmount);
             const basisPer = lot.usd != null && lot.received > 0 ? lot.usd / lot.received : null;
@@ -377,7 +378,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
         priceNowUsd: price != null ? +Number(price).toPrecision(6) : null, valueNowUsd: price != null ? round(b.remainingAmount * price) : null,
         unrealizedUsd: price != null && priced ? round(b.remainingAmount * price - b.remainingBasisUsd) : null,
         disposedAmount: round(disp.disposedAmount, 6), proceedsUsd: disp.disposedAmount > 0 ? round(disp.proceedsUsd) : null,
-        realizedUsd: disp.disposedAmount > 0 && priced && !disp.unpricedDisposals ? round(disp.realizedUsd) : null,
+        realizedUsd: disp.disposedAmount > 0 && priced ? round(disp.realizedUsd) : null, unpricedDisposals: disp.unpricedDisposals,
         remainingAmount: round(b.remainingAmount, 6), remainingBasisUsd: round(b.remainingBasisUsd),
         stillHeld: now ? round(now.balance, 6) : null, priceNote };
     }).sort((a, b) => (b.basisUsd || 0) - (a.basisUsd || 0));
@@ -398,7 +399,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       })),
       soldAtCollect: Object.values(sales).map((b) => ({ ...b, amountSold: round(b.amountSold, 6), proceedsUsd: round(b.proceedsUsd) })),
       notes: ["A lot is one hand-back of a fee token the collector could not swap (collector.log); its basis is the USD price of that hour. Selling later realizes the gain or loss against this basis.",
-        "Disposals consume lots FIFO (token-disposals.json, from the outbound-transfer scan): a transfer into the protocol whose transaction swapped is a sale through a router (kind 'sold'); a transfer to any other address that is not one of your own wallets, the operator or the vault is 'sent'; a transfer into the protocol without a swap is a liquidity deposit and is not a disposal. Both kinds are valued at the hourly price of that hour, not at actual proceeds. realizedUsd = that value minus the disposed lots' basis; unrealized and value now cover the remaining amount only.",
+        "Disposals consume lots FIFO, and only lots received before the disposal (earlier transfers were other holdings of the token) (token-disposals.json, from the outbound-transfer scan): a transfer into the protocol whose transaction swapped is a sale through a router (kind 'sold'); a transfer to any other address that is not one of your own wallets, the operator or the vault is 'sent'; a transfer into the protocol without a swap is a liquidity deposit and is not a disposal. Both kinds are valued at the hourly price of that hour, not at actual proceeds. realizedUsd = that value minus the disposed lots' basis; unrealized and value now cover the remaining amount only.",
         "soldAtCollect: fee tokens the collector sold in their v4 pool at collect time (token-sales.json); those proceeds are income already and never became lots.",
         "stillHeld is the wallet balance now (all sources), which can differ from the lots total if you bought, sold or moved the token.", "Tokens the collector swapped at collect time (ETH, WETH, USDG, and anything with a v3 route) are already counted as income."] };
   }
@@ -430,7 +431,12 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     const [pos, watch, pf] = await Promise.all([get("/api/positions").catch(() => null), get("/api/watch").catch(() => null), get("/api/portfolio").catch(() => null)]);
     // Tokens that were ever handed back, with address and decimals.
     const tokens = new Map(); // symbol -> { address, decimals }
-    const note = (sym, addr, dec) => { if (sym && addr && addr !== ethers.ZeroAddress && !tokens.has(sym)) tokens.set(sym, { address: String(addr).toLowerCase(), decimals: dec != null ? Number(dec) : null }); };
+    const note = (sym, addr, dec) => {
+      if (!sym || !addr || addr === ethers.ZeroAddress) return;
+      const cur = tokens.get(sym);
+      if (!cur) tokens.set(sym, { address: String(addr).toLowerCase(), decimals: dec != null ? Number(dec) : null });
+      else if (cur.decimals == null && dec != null) cur.decimals = Number(dec); // a later source may know the decimals
+    };
     for (const p of (pos && pos.positions) || []) { note(p.symbol0, p.token0 && (p.token0.address || p.token0), p.token0 && p.token0.decimals); note(p.symbol1, p.token1 && (p.token1.address || p.token1), p.token1 && p.token1.decimals); }
     for (const w of (watch && watch.wallets) || []) for (const t of (w.holdings && w.holdings.tokens) || []) note(t.symbol, t.address, t.decimals);
     for (const r of (pf && pf.rows) || []) note(r.symbol, r.address, r.decimals);

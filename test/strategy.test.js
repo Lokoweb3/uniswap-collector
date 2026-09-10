@@ -30,7 +30,10 @@ fs.writeFileSync(path.join(dir, "price-log.json"), JSON.stringify({ hours: {
 // A sale at collect time is NOT a disposal of lots (those tokens never became lots): it must not consume anything.
 fs.writeFileSync(path.join(dir, "token-sales.json"), JSON.stringify([{ t: Date.parse("2026-09-12T20:00:00Z"), token: "LAPTOP", tokenAddress: LAPTOP, amount: 999, usd: 999, tx: "0x" + "99".repeat(32), skipped: false }]));
 // A disposal of held lots: 150 LAPTOP sent out at $3 each. FIFO: all of lot 1 (100 @ $1) and half of lot 2 (50 @ $2).
-fs.writeFileSync(path.join(dir, "token-disposals.json"), JSON.stringify({ lastBlock: {}, rows: [{ t: Date.parse("2026-09-12T21:00:00Z"), token: "LAPTOP", tokenAddress: LAPTOP, amount: 150, usd: 450, tx: "0x" + "11".repeat(32), logIndex: "0x1", from: trading, to: "0x00000000000000000000000000000000000000d1", kind: "sent" }] }));
+fs.writeFileSync(path.join(dir, "token-disposals.json"), JSON.stringify({ lastBlock: {}, rows: [
+  { t: Date.parse("2026-09-01T21:00:00Z"), token: "LAPTOP", tokenAddress: LAPTOP, amount: 5000, usd: 5000, tx: "0x" + "22".repeat(32), logIndex: "0x1", from: trading, to: "0x00000000000000000000000000000000000000d2", kind: "sold" }, // before any lot: other holdings, consumes nothing
+  { t: Date.parse("2026-09-12T21:00:00Z"), token: "LAPTOP", tokenAddress: LAPTOP, amount: 150, usd: 450, tx: "0x" + "11".repeat(32), logIndex: "0x1", from: trading, to: "0x00000000000000000000000000000000000000d1", kind: "sent" },
+] }));
 fs.writeFileSync(path.join(dir, "v4-collects.json"), JSON.stringify([{ tx: "0x1", tokenId: "v4-1", block: 1, t: 1, fee0: "0", fee1: "0", t0: { address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", symbol: "USDG", decimals: 6 }, t1: { address: "0x00000000000000000000000000000000000000B1", symbol: "Bucket", decimals: 18 } }]));
 
 // Stub the dashboard: every view empty.

@@ -141,7 +141,7 @@ The pool chosen per token is cached six hours in `portfolio.json`.
 ### Chat panel on the site (`chat.js`, `chat-widget.js`)
 
 Every page has a 💬 button (bottom right; `/#chat` opens it) that answers questions
-from the same seventeen read-only tools the MCP server exposes, driven in-process, so
+from the same eighteen read-only tools the MCP server exposes, driven in-process, so
 the panel and the claude.ai connector always see the same numbers. It is read-only:
 it cannot arm, collect, close, or change settings. Through the passphrase gate it
 works on the phone too (`POST /api/chat` is the one write the gate lets through).
@@ -163,7 +163,7 @@ Sessions are kept in RAM per browser (two hours, last 40 turns); `↺` starts ov
 ### MCP server (`lp-mcp.mjs`)
 
 `lp-mcp.mjs` is an MCP server that exposes the dashboard's read-only data as
-seventeen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and twelve added since, ending with `status_report`, `position_history`, `price_history`, `pool_scout_history`) so
+eighteen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and thirteen added since, ending with `status_report`, `position_history`, `price_history`, `pool_scout_history`, `token_lots`) so
 Claude Code or Claude Desktop can answer questions from the live numbers. It
 fetches from the running dashboard over loopback and cannot sign, collect, or
 reach the operator key. The dashboard must be running.
@@ -189,7 +189,7 @@ used for day and month grouping (default America/New_York).
 ### From claude.ai and the Claude mobile app
 
 Those run on Anthropic's servers, so the tools have to be reachable over the
-internet. `lp-mcp-remote.mjs` serves the same read-only tools (seventeen, see
+internet. `lp-mcp-remote.mjs` serves the same read-only tools (eighteen, see
 "From an agent on a server") over HTTP behind its own OAuth login (claude.ai registers itself, you type a passphrase once, it
 gets a token that refreshes on its own). It binds to loopback; a tunnel gives
 it a public HTTPS address. Steps:
@@ -271,6 +271,10 @@ Live snapshots are not enough to design a strategy; the agent needs what happene
 - `price_history`: hourly USD (and ETH-relative) prices of a token while it was held or in a position.
 - `pool_scout_history`: the scout's hourly record of each position's pool fee APR versus its best
   sibling pool.
+- `token_lots`: cost basis of the fee tokens the collector handed back unconverted (LAPTOP, Bucket,
+  CRUMBS, ...): one lot per hand-back from `collector.log`, priced at that hour, with per-token
+  totals, average cost, value now and unrealized gain. Also the "Fee tokens received" table on
+  Analytics with a CSV. Tokens swapped at collect time are already income.
 
 A prompt that works: "Use position_history for the last 14 days, group by pair and fee tier, rank
 by realized fee APR and net result, note time in range and how long each was held, then propose
@@ -417,6 +421,15 @@ the connected wallet's signature. The header nav has an "Approvals" link.
 `test/`. `npm test` runs every suite plus the headless smoke test. Runtime state files
 (`memecoin-*.json`, `exit-*.json`, `advisor-cache.json`, `pool-scout-*.json`, `token-health.json`,
 `digest-state.json`, `compound-log.json`) are gitignored.
+
+## Daily summary
+
+`daily.js` sends one short Telegram message a day (`dailySummary` in config.json: `enabled`, `hour`
+in `LP_TZ` local time, default 08:00, `chat` main or group): arm window and time left, collects in
+the last 24 h per wallet and the vault's share, open positions with uncollected fees and the top
+fee rates, guardian flags, the auto-collect rule and its last run, vault balance and split, operator
+gas, the last collector run, and any stopped loop. Every figure is read from the dashboard at send
+time. `npm run daily` prints it; `/api/daily` previews it with the schedule state.
 
 ## Weekly digest
 
@@ -794,6 +807,9 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-09
 
+- Daily Telegram summary (`daily.js`, `dailySummary` config, 08:00 local) and the fee-token cost
+  basis view (`token_lots` tool, `/api/strategy/lots`, "Fee tokens received" on Analytics with CSV,
+  `test/strategy.test.js`).
 - Guardian per-position rules (fee-rate floor, collected-USD target, liquidity drop from max) with
   group-chat delivery; first used on Bucket/USDG #2239358 ($10/h floor, $500 target, -60%).
 - Vault page: phone links come from the server at runtime (`publicHost`) instead of a hostname in

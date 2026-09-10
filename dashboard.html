@@ -213,6 +213,16 @@
   <div class="enote" id="stakenote"></div>
 </section>
 
+<section class="earnings analytics" id="lotsec" hidden>
+  <div class="ehead">
+    <h3>Fee tokens received</h3>
+    <span class="etotal" id="lottotal"></span>
+    <button class="msel" id="lotcsv" title="Every lot: date, wallet, position, token, amount, price that hour, USD, tx">CSV</button>
+  </div>
+  <div class="etablewrap" id="lottable"></div>
+  <div class="enote" id="lotnote">Cost basis of the fee tokens that were handed back unconverted (the collector swaps ETH, WETH and USDG on the spot; those are already income). Each lot is valued at the price of the hour it arrived; the basis is what a later sale is measured against.</div>
+</section>
+
 
 <div class="foot">
   Rails are drawn on a log scale, matching how ticks are spaced. The centre mark is the

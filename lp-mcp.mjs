@@ -503,6 +503,31 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "token_lots",
+  {
+    title: "Cost basis of fee tokens received",
+    description:
+      "Every fee token the wallets received unconverted (LAPTOP, Bucket, CRUMBS, ...): one lot per collect leg with the amount and the USD price of that hour, plus per-token totals: lots, amount, basis USD, average cost, price now, value now, unrealized gain, and the balance still held. This is the tax basis for tokens that were not swapped at collect time. ETH, WETH and USDG legs are excluded (already swapped and counted as income). Filters: token symbol, wallet, days.",
+    inputSchema: {
+      token: z.string().optional().describe("Only this token symbol"),
+      wallet: z.string().optional().describe("Wallet label or address"),
+      days: z.number().optional().describe("Only lots from the last N days"),
+    },
+  },
+  async ({ token, wallet, days }) => {
+    try {
+      const qs = new URLSearchParams();
+      if (token) qs.set("token", token);
+      if (wallet) qs.set("wallet", wallet);
+      if (days) qs.set("days", String(days));
+      return text(await get(`/api/strategy/lots?${qs}`));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
 return server;
 }
 

@@ -1452,6 +1452,20 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
     }
   }
+  if (url.pathname === "/api/daily") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const daily = require("./daily");
+      const text = daily.build(await daily.gather(`http://127.0.0.1:${PORT}`));
+      let state = {};
+      try { state = JSON.parse(fs.readFileSync(path.join(__dirname, "digest-state.json"), "utf8")); } catch {}
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, text, settings: daily.settings(cfg), lastDailyDate: state.lastDailyDate || null, lastDailyAt: state.lastDailyAt || null, due: daily.due(cfg, new Date(), state) }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
   if (url.pathname === "/api/vault-info") {
     // Read-only facts for the vault page (owner, admin, split, balances) so a browser
     // without a wallet, or one whose RPC calls are CORS-blocked, still sees them.
@@ -1598,6 +1612,7 @@ const server = http.createServer(async (req, res) => {
       }
       else if (url.pathname === "/api/strategy/prices") out = await strategy.priceHistory({ token: q.get("token"), days: num("days", 7), stepHours: num("step", 1) });
       else if (url.pathname === "/api/strategy/scout") out = strategy.scoutHistory({ days: num("days", 30) });
+      else if (url.pathname === "/api/strategy/lots") out = await strategy.tokenLots({ token: q.get("token"), wallet: q.get("wallet"), days: num("days", null) });
       else { res.writeHead(404); return res.end(JSON.stringify({ ok: false, error: "unknown strategy view" })); }
       res.writeHead(200);
       return res.end(JSON.stringify(out));
@@ -2099,6 +2114,12 @@ async function backgroundTick() {
     await require("./digest").maybeSend({ alerts, base: `http://127.0.0.1:${PORT}` });
   } catch (err) {
     console.error("digest:", err.shortMessage || err.message);
+  }
+  // Daily line-up (daily.js): once a day at config dailySummary.hour (local), from live data.
+  try {
+    await require("./daily").maybeSend({ cfg, alerts, base: `http://127.0.0.1:${PORT}` });
+  } catch (err) {
+    console.error("daily:", err.shortMessage || err.message);
   }
   // === end weekly-digest-and-vault ===
   if (bf.stale && latestIds.length) {

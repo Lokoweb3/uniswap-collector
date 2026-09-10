@@ -725,6 +725,45 @@ async function loadDaily(){
   }catch(e){ /* panel stays hidden */ }
 }
 
+/* ---- analytics page: fee token lots (cost basis) ---- */
+let lotsD = null;
+async function loadLots(){
+  try {
+    const r = await fetch('/api/strategy/lots');
+    const d = await r.json();
+    if (!d.ok) return;
+    lotsD = d;
+    renderLots();
+  } catch(e){}
+}
+function renderLots(){
+  const d = lotsD;
+  if (!d) return;
+  $('#lotsec').hidden = false;
+  const fmtN = n => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: n < 100 ? 4 : 0 });
+  const toks = d.tokens || [];
+  const basis = toks.reduce((s,t)=>s+(t.basisUsd||0),0), value = toks.filter(t=>t.valueNowUsd!=null).reduce((s,t)=>s+t.valueNowUsd,0);
+  $('#lottotal').innerHTML = toks.length ? `basis <b>${usd(basis)}</b> · now <b>${usd(value)}</b>` : '';
+  $('#lottable').innerHTML = toks.length ? `<table class="etable">
+    <tr><th>Token</th><th>Lots</th><th>Received</th><th>Basis (USD)</th><th>Avg cost</th><th>Price now</th><th>Value now</th><th>Unrealized</th><th>Still held</th><th>First · last</th></tr>
+    ${toks.map(t => `<tr>
+      <td><b>${t.token}</b></td><td class="u">${t.lots}${t.unpriced ? ` <span class="muted" title="${t.unpriced} lot(s) have no price record">(${t.unpriced} unpriced)</span>` : ''}</td>
+      <td class="u">${fmtN(t.amount)}</td><td class="u">${usd(t.basisUsd)}</td>
+      <td class="u">${t.avgCostUsd != null ? '$' + t.avgCostUsd : '—'}</td><td class="u">${t.priceNowUsd != null ? '$' + t.priceNowUsd : '—'}</td>
+      <td class="u">${t.valueNowUsd != null ? usd(t.valueNowUsd) : '—'}</td>
+      <td class="u chg ${t.unrealizedUsd == null ? '' : t.unrealizedUsd >= 0 ? 'up' : 'down'}">${t.unrealizedUsd == null ? '—' : (t.unrealizedUsd >= 0 ? '+' : '') + usd(t.unrealizedUsd)}</td>
+      <td class="u">${t.stillHeld != null ? fmtN(t.stillHeld) : '—'}</td>
+      <td class="l muted">${t.first.slice(5,10)} · ${t.last.slice(5,10)}</td>
+    </tr>`).join('')}</table>` : '<div class="muted">No fee tokens received unconverted yet.</div>';
+}
+document.addEventListener('click', e => {
+  if (e.target.id !== 'lotcsv' || !lotsD) return;
+  const head = 'time,wallet,tokenId,pair,token,amount,usd_per_token,usd,basis,tx';
+  const lines = lotsD.lots.map(l => [l.t, l.wallet, l.tokenId, l.pair, l.token, l.amount, l.usdPerToken ?? '', l.usd ?? '', l.basis, l.tx].map(v => String(v).includes(',') ? '"' + v + '"' : v).join(','));
+  const blob = new Blob([[head, ...lines].join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'fee-token-lots.csv'; a.click();
+});
+
 /* ---- analytics page: staking, performance, taxes ---- */
 let stakingD = null;
 async function loadStaking(){
@@ -1570,7 +1609,7 @@ fetch('/api/collect').then(r => r.json()).then(d => {
 const ANALYTICS = PAGE === 'analytics';
 function tick(fresh){
   load(fresh);
-  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); loadTreasury(); }
+  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); loadTreasury(); loadLots(); }
   else { loadRewards(); loadBalances(); loadAllSeries(); }
 }
 $('#reload').addEventListener('click', () => tick(true));

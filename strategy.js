@@ -243,6 +243,92 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       changePct: first && last ? round((last.usd / first.usd - 1) * 100, 1) : null, note: "Hourly prices as the dashboard saw them (pool-derived); tokens are logged only while held or in a position." };
   }
 
+  // ---- token lots (cost basis of fee tokens handed back) ---------------------
+  /**
+   * Every fee token the collector handed back unconverted (no swap route, or
+   * over the swap cap): one lot per hand-back, from collector.log, with the
+   * USD price of that hour, so the basis of what you hold (LAPTOP, Bucket,
+   * CRUMBS, ...) is on record for the day you sell. Tokens the collector
+   * swapped (ETH, WETH, USDG, and anything with a v3 route) are already income.
+   */
+  function handBacks() {
+    let lines = [];
+    try { lines = fs.readFileSync(path.join(dir, "collector.log"), "utf8").split("\n"); } catch { return []; }
+    const out = [];
+    let owner = { label: "Main", address: cfg.ownerAddress };
+    let pending = null;
+    for (const line of lines) {
+      let m;
+      if ((m = line.match(/\] --- (.+?) \((0x[0-9a-fA-F]{40})\) ---$/))) owner = { label: m[1], address: m[2] };
+      else if ((m = line.match(/\] === (.+?): done ===$/))) owner = { label: "Main", address: cfg.ownerAddress };
+      else if ((m = line.match(/! (.+?); sending ([\d.]+) (\S+) to (0x[0-9a-fA-F]{40}) as-is$/))) pending = { why: m[1], amount: Number(m[2]), token: m[3], to: m[4], t: Date.parse(line.slice(1, 25)) };
+      else if (pending && (m = line.match(/\] +sent (\S+) -> (0x[0-9a-fA-F]{40}) -> (0x[0-9a-fA-F]{64})$/)) && m[1] === pending.token) {
+        out.push({ ...pending, tx: m[3], wallet: owner.address.toLowerCase() === pending.to.toLowerCase() ? owner.label : pending.to });
+        pending = null;
+      }
+    }
+    return out;
+  }
+
+  async function tokenLots({ token = null, wallet = null, days = null } = {}) {
+    const [hist, pos, watch, pf] = await Promise.all([get("/api/history").catch(() => null), get("/api/positions").catch(() => null), get("/api/watch").catch(() => null), get("/api/portfolio").catch(() => null)]);
+    const hours = priceLog();
+    const latestHour = Object.keys(hours).sort().pop();
+    const latest = latestHour ? hours[latestHour] : {};
+    const since = days ? Date.now() - days * 86400000 : null;
+    // symbol -> address from the live views and the v4 ledger, for prices
+    const addrOf = new Map();
+    for (const p of (pos && pos.positions) || []) { addrOf.set(p.symbol0, (p.token0 && (p.token0.address || p.token0)) || null); addrOf.set(p.symbol1, (p.token1 && (p.token1.address || p.token1)) || null); }
+    for (const w of (watch && watch.wallets) || []) {
+      for (const p of w.positions || []) { addrOf.set(p.symbol0, p.token0); addrOf.set(p.symbol1, p.token1); }
+      for (const t of (w.holdings && w.holdings.tokens) || []) if (t.address) addrOf.set(t.symbol, t.address);
+    }
+    for (const r of (pf && pf.rows) || []) if (r.address) addrOf.set(r.symbol, r.address);
+    for (const r of readJson(path.join(dir, "v4-collects.json"), [])) for (const t of [r.t0, r.t1]) if (t && t.address && t.address !== ethers.ZeroAddress && !addrOf.has(t.symbol)) addrOf.set(t.symbol, t.address);
+    // collect-time price records per symbol (from the priced history rows), for hours the log lacks
+    const recs = new Map();
+    for (const r of (hist && hist.rows) || []) if (r.locked) { if (r.p0 != null) (recs.get(r.sym0) || recs.set(r.sym0, []).get(r.sym0)).push({ t: r.t, p: r.p0 }); if (r.p1 != null) (recs.get(r.sym1) || recs.set(r.sym1, []).get(r.sym1)).push({ t: r.t, p: r.p1 }); }
+    const priceFor = (sym, t) => {
+      const a = addrOf.get(sym);
+      const fromLog = a ? priceAt(hours, a, t) : null;
+      if (fromLog != null) return { p: fromLog, basis: "hourly log" };
+      let best = null;
+      for (const r of recs.get(sym) || []) { const d = Math.abs(r.t - t); if (d <= 6 * HOUR && (!best || d < best.d)) best = { r, d }; }
+      return best ? { p: best.r.p, basis: `collect-time record ${round(best.d / HOUR, 1)}h away` } : null;
+    };
+    const heldNow = new Map();
+    for (const w of (watch && watch.wallets) || []) for (const t of (w.holdings && w.holdings.tokens) || []) { const h = heldNow.get(t.symbol) || { balance: 0, price: null }; h.balance += t.balance || 0; if (t.price != null) h.price = t.price; heldNow.set(t.symbol, h); }
+    for (const r of (pf && pf.rows) || []) { const h = heldNow.get(r.symbol) || { balance: 0, price: null }; h.balance += r.balance || 0; if (r.price != null) h.price = r.price; heldNow.set(r.symbol, h); }
+
+    const lots = [];
+    for (const h of handBacks()) {
+      if (since && h.t < since) continue;
+      if (wallet && ![h.wallet, h.to].some((x) => x && String(x).toLowerCase() === String(wallet).toLowerCase())) continue;
+      if (token && h.token.toLowerCase() !== String(token).toLowerCase()) continue;
+      const px = priceFor(h.token, h.t);
+      lots.push({ t: new Date(h.t).toISOString(), wallet: h.wallet, token: h.token, amount: h.amount, usdPerToken: px ? +Number(px.p).toPrecision(6) : null, usd: px ? round(h.amount * px.p, 4) : null, basis: px ? px.basis : "no price record", reason: h.why, tx: h.tx });
+    }
+    const byToken = {};
+    for (const l of lots) {
+      const b = byToken[l.token] || (byToken[l.token] = { token: l.token, lots: 0, amount: 0, basisUsd: 0, unpriced: 0, first: l.t, last: l.t });
+      b.lots++; b.amount += l.amount; if (l.usd != null) b.basisUsd += l.usd; else b.unpriced++;
+      if (l.t < b.first) b.first = l.t; if (l.t > b.last) b.last = l.t;
+    }
+    const summary = Object.values(byToken).map((b) => {
+      const addr = addrOf.get(b.token);
+      const now = heldNow.get(b.token);
+      const price = (now && now.price) ?? (addr && latest[String(addr).toLowerCase()]) ?? null;
+      const priced = b.amount > 0 && b.basisUsd > 0 && b.unpriced === 0;
+      return { ...b, amount: round(b.amount, 6), basisUsd: round(b.basisUsd), avgCostUsd: priced ? +(b.basisUsd / b.amount).toPrecision(6) : null,
+        priceNowUsd: price != null ? +Number(price).toPrecision(6) : null, valueNowUsd: price != null ? round(b.amount * price) : null,
+        unrealizedUsd: price != null && priced ? round(b.amount * price - b.basisUsd) : null,
+        stillHeld: now ? round(now.balance, 6) : null };
+    }).sort((a, b) => (b.basisUsd || 0) - (a.basisUsd || 0));
+    return { ok: true, asOf: new Date().toISOString(), tokens: summary, lots: lots.sort((a, b) => a.t.localeCompare(b.t)),
+      notes: ["A lot is one hand-back of a fee token the collector could not swap (collector.log); its basis is the USD price of that hour. Selling later realizes the gain or loss against this basis.",
+        "stillHeld is the wallet balance now (all sources), which can differ from the lots total if you bought, sold or moved the token.", "Tokens the collector swapped at collect time (ETH, WETH, USDG, and anything with a v3 route) are already counted as income."] };
+  }
+
   // ---- pool scout ------------------------------------------------------------
   function scoutHistory({ days = 30 } = {}) {
     const log = readJson(path.join(dir, "pool-scout-log.json"), []);
@@ -251,7 +337,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     return { ok: true, days, rows, note: "Hourly comparison of each position's pool fee APR against its best sibling pool (same pair, other tier or version)." };
   }
 
-  return { positionHistory, priceHistory, scoutHistory };
+  return { positionHistory, priceHistory, scoutHistory, tokenLots };
 }
 
 module.exports = { create };

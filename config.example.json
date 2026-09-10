@@ -184,5 +184,11 @@
       "priceDropPct1h": 30,
       "outOfRangeMinutes": 120
     }
+  },
+  "dailySummary": {
+    "_comment": "daily.js: one short Telegram line-up per day (arm window, 24h collects per wallet, open positions and fee rates, guardian flags, vault, gas, last run). hour is local time; chat main or group.",
+    "enabled": true,
+    "hour": 8,
+    "chat": "main"
   }
 }

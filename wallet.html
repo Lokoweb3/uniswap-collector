@@ -1,0 +1,1666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallet</title>
+<!--
+  Wallet page: arming (wallet signature or passphrase), the approval audit with
+  revoke buttons, the operator approvals for v3 / v4, the LOKOVault treasury
+  and the operator's status, as tabs (#arm, #approvals, #vault, #operator).
+  Assembled from the former arm / approvals / approve-v3 / approve-v4 /
+  treasury pages; the loopback-only APIs behind them are unchanged.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/dashboard.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 18px}
+.tabs a{font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;padding:6px 14px;border-radius:999px;border:1px solid var(--rule);background:var(--card)}
+.tabs a.here{color:var(--bright);border-color:var(--glass-border,var(--rule));background:var(--glass-strong,var(--card));box-shadow:0 0 18px var(--glow-cyan,transparent) inset}
+.tab[hidden]{display:none!important}
+.tab .secttl{font-size:20px;margin:0 0 6px;color:var(--bright)}
+.tab .mono,.tab .address-val{overflow-wrap:anywhere}
+.tab .row>span:last-child{min-width:0;overflow-wrap:anywhere}
+.tab table .mono{overflow-wrap:normal;word-break:normal;white-space:nowrap}
+.tab .card h2{flex-wrap:wrap}
+.tab .wrap{max-width:none;padding:0 0 40px}
+.tab .container{padding:0 0 40px}
+@media (max-width:480px){.tabs a{padding:6px 10px;font-size:12px}}
+#sec-arm {
+--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.12);--ink:#c9d4de;--bright:#fff;--muted:#7b8a99;--green:#39ff88;--cyan:#22d3ee;--gold:#f5c542;--red:#ff4d6d;.wrap{max-width:680px;margin:0 auto;padding:40px 20px 80px}
+h1{font-size:22px;margin:0 0 6px;color:var(--bright)}
+.sub{color:var(--muted);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-bottom:16px;backdrop-filter:blur(12px)}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.row{display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14px;flex-wrap:wrap}
+.row:last-child{border-bottom:0}
+.row .k{color:var(--muted)}
+.mono{font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;font-size:13px;word-break:break-all}
+.big{font-size:30px;font-weight:700;color:var(--bright);letter-spacing:-.02em}
+.big.ok{color:var(--green);text-shadow:0 0 18px rgba(57,255,136,.3)} .big.bad{color:var(--red)}
+.ok{color:var(--green)} .warn{color:var(--gold)} .bad{color:var(--red)}
+button,select,input{font:inherit;font-size:14px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.06);color:var(--bright);padding:10px 14px}
+button{font-weight:600;cursor:pointer;padding:10px 18px}
+button:hover:not([disabled]){border-color:rgba(255,255,255,.3)}
+button[disabled]{opacity:.45;cursor:not-allowed}
+button.primary{border:0;color:#04110a;background:linear-gradient(135deg,#39ff88,#22d3ee);box-shadow:0 0 22px rgba(57,255,136,.28)}
+button.danger{border-color:rgba(255,77,109,.5);color:var(--red)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+input[type=password]{width:260px}
+[data-id="status"],[data-id="setupstatus"]{min-height:22px;margin-top:12px;font-size:14px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;border:1px solid var(--border);font-size:12px;font-weight:600}
+.pill.ok{border-color:rgba(57,255,136,.5)} .pill.bad{border-color:rgba(255,77,109,.5)} .pill.warn{border-color:rgba(245,197,66,.5)}
+details{margin-top:10px;font-size:13px;color:var(--muted)} summary{cursor:pointer}
+pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;border-radius:8px}
+
+.note{font-size:13px;color:var(--muted)}
+}
+#sec-approvals {
+--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.12);--ink:#c9d4de;--bright:#fff;--muted:#7b8a99;--green:#39ff88;--cyan:#22d3ee;--gold:#f5c542;--red:#ff4d6d;.wrap{max-width:1060px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:22px;margin:0 0 6px;color:var(--bright)}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin-bottom:16px;backdrop-filter:blur(12px)}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 12px;display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.mono{font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;font-size:12.5px;word-break:break-all}
+.ok{color:var(--green)} .warn{color:var(--gold)} .bad{color:var(--red)} .muted{color:var(--muted)}
+button,select{font:inherit;font-size:13px;border-radius:9px;border:1px solid var(--border);background:rgba(255,255,255,.06);color:var(--bright);padding:7px 12px;cursor:pointer}
+button:hover:not([disabled]){border-color:rgba(255,255,255,.3)}
+button[disabled]{opacity:.45;cursor:not-allowed}
+button.primary{border:0;color:#04110a;background:linear-gradient(135deg,#39ff88,#22d3ee)}
+button.danger{border-color:rgba(255,77,109,.5);color:var(--red)}
+.abar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;border:1px solid var(--border);font-size:12px;font-weight:600;white-space:nowrap}
+.pill.ok{border-color:rgba(57,255,136,.5);color:var(--green)} .pill.bad{border-color:rgba(255,77,109,.5);color:var(--red)} .pill.warn{border-color:rgba(245,197,66,.5);color:var(--gold)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:11px;letter-spacing:.05em;text-transform:uppercase;padding:6px 10px 6px 0;border-bottom:1px solid var(--border)}
+td{padding:7px 10px 7px 0;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.tablewrap{overflow-x:auto}
+[data-id="status"]{min-height:22px;margin-top:10px;font-size:14px}
+
+.note{font-size:12.5px;color:var(--muted)}
+.row{display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14px;flex-wrap:wrap}
+.row:last-child{border-bottom:0} .row .k{color:var(--muted)}
+.health{font-size:12px;cursor:help}
+.approve summary{cursor:pointer;font-weight:600;color:var(--bright);padding:6px 0}
+.approve{margin-top:8px}
+.approve > div{padding-top:8px}
+.approve h3{font-size:16px;margin:8px 0 4px;color:var(--bright)}
+.approve .wrap{max-width:720px;margin:0 auto;padding:40px 20px 80px}
+h1{font-size:22px;margin:0 0 6px;color:var(--bright)}
+.sub{color:var(--muted);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-bottom:16px;backdrop-filter:blur(12px)}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.row{display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14px;flex-wrap:wrap}
+.row:last-child{border-bottom:0}
+.row .k{color:var(--muted)}
+.mono{font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;font-size:13px;word-break:break-all}
+.ok{color:var(--green)} .warn{color:var(--gold)} .bad{color:var(--red)} .cyan{color:var(--cyan)}
+button{font:inherit;font-size:14px;font-weight:600;padding:10px 18px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.06);color:var(--bright);cursor:pointer}
+button:hover:not([disabled]){border-color:rgba(255,255,255,.3)}
+button[disabled]{opacity:.45;cursor:not-allowed}
+button.primary{border:0;color:#04110a;background:linear-gradient(135deg,#39ff88,#22d3ee);box-shadow:0 0 22px rgba(57,255,136,.28)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+ul{margin:8px 0 0 18px;padding:0} li{margin:4px 0}
+label.chk{display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:14px;cursor:pointer}
+label.chk input{margin-top:4px}
+[data-id="status"]{min-height:22px;margin-top:12px;font-size:14px}
+details{margin-top:10px;font-size:13px;color:var(--muted)} summary{cursor:pointer}
+
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;border:1px solid var(--border);font-size:12px;font-weight:600}
+.pill.ok{border-color:rgba(57,255,136,.5)} .pill.bad{border-color:rgba(255,77,109,.5)} .pill.warn{border-color:rgba(245,197,66,.5)}
+}
+#sec-vault {
+
+  --paper:#05070b; --surface:#0b1017; --card:#0d131b;
+  --ink:#c9d4de; --bright:#ffffff; --muted:#7b8a99; --faint:#4a5665;
+  --rule:#26313d; --rule-soft:#161e27;
+  --glass:rgba(255,255,255,.035); --glass-strong:rgba(255,255,255,.06); --glass-border:rgba(255,255,255,.10);
+  --gold:#f5c542; --gold-2:#d4a52a; --gold-soft:rgba(245,197,66,.14); --gold-line:rgba(245,197,66,.32); --glow-gold:rgba(245,197,66,.22);
+  --cyan:#22d3ee; --cyan-soft:rgba(34,211,238,.12); --cyan-line:rgba(34,211,238,.32);
+  --green:#39ff88; --green-soft:rgba(57,255,136,.12); --green-line:rgba(57,255,136,.28);
+  --red:#ff4d6d; --red-soft:rgba(255,77,109,.12); --red-line:rgba(255,77,109,.32);
+  --font-sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+  --font-serif:'Cormorant Garamond',Georgia,'Times New Roman',serif;
+  /* aliases used by the page script */
+  --bg:var(--paper); --bg2:var(--card); --bg3:var(--surface); --border:var(--glass-border);
+  --text:var(--ink); --text2:var(--muted); --text3:var(--faint);
+  --green-dim:var(--green-soft); --red-dim:var(--red-soft); --gold-dim:var(--gold-soft);
+  --blue:var(--cyan); --blue-dim:var(--cyan-soft);
+  --mono:var(--font-mono); --sans:var(--font-sans);
+/* LOKOVault: private-bank theme on the site's dark glass palette.
+   Tokens mirror dashboard.css (Theme v2); the old --text/--bg names stay as
+   aliases because the page script still emits inline styles with them. */
+
+
+/* guilloché: the fine engraved lattice of a banknote, kept very faint */
+
+/* ── Header: the same glass bar as the dashboard, with a crest ─────────── */
+.header{
+  position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:12px 22px;background:rgba(5,7,11,.72);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);
+  border-bottom:1px solid var(--glass-border);
+}
+.header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:linear-gradient(90deg,transparent,var(--gold-line),transparent)}
+.logo{display:flex;align-items:center;gap:10px;font-family:var(--font-serif);font-size:22px;font-weight:600;letter-spacing:.06em;color:var(--bright)}
+.logo .word{color:var(--bright)}.logo .word span{color:var(--gold)}
+.crest{
+  width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-family:var(--font-serif);font-weight:700;font-size:15px;color:var(--gold);
+  border:1px solid var(--gold-line);background:radial-gradient(circle at 35% 30%, rgba(245,197,66,.28), rgba(245,197,66,.05) 60%, transparent);
+  box-shadow:0 0 16px var(--glow-gold), inset 0 0 0 3px var(--paper), inset 0 0 0 4px var(--gold-line);
+}
+.nav-links{display:flex;gap:4px;flex-wrap:wrap}
+.nav-links a{
+  color:var(--muted);text-decoration:none;font-size:12.5px;font-weight:500;letter-spacing:.02em;padding:6px 11px;border-radius:8px;border:1px solid transparent;transition:color .15s,border-color .15s,background .15s;
+}
+.nav-links a:hover{color:var(--bright);border-color:var(--glass-border);background:var(--glass)}
+.nav-links a.here{color:var(--gold)!important;background:var(--glass-strong);border-color:var(--gold-line);box-shadow:0 0 18px var(--glow-gold) inset}
+.connect-btn{
+  font-family:var(--font-sans);font-size:12.5px;font-weight:600;color:#1a1200;cursor:pointer;border:0;border-radius:8px;padding:8px 16px;
+  background:linear-gradient(135deg,#f5c542 0%,#d4a52a 100%);box-shadow:0 0 22px var(--glow-gold),0 4px 14px rgba(0,0,0,.4);
+  transition:filter .15s,transform .15s;white-space:nowrap;
+}
+.connect-btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
+
+.container{max-width:960px;margin:0 auto;padding:26px 20px 60px}
+
+/* Page masthead, like the top of a bank statement */
+.masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:6px 6px 18px}
+.masthead h1{font-family:var(--font-serif);font-weight:600;font-size:34px;letter-spacing:.04em;color:var(--bright);line-height:1.05}
+.masthead h1 em{font-style:italic;color:var(--gold);font-weight:500}
+.masthead .est{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);margin-top:6px}
+.masthead .est b{color:var(--gold-2);font-weight:600}
+.seal{display:flex;gap:8px;flex-wrap:wrap}
+.seal span{
+  font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:5px 10px;border-radius:999px;border:1px solid var(--glass-border);background:var(--glass);
+}
+.seal span b{color:var(--ink);font-weight:600;font-family:var(--font-mono);letter-spacing:0;text-transform:none}
+.seal span.gold{color:var(--gold);border-color:var(--gold-line)}
+
+/* ── Cards: glass with a gold hairline and engraved corners ───────────── */
+.card{
+  position:relative;background:linear-gradient(180deg,var(--glass-strong),var(--glass)),var(--card);
+  border:1px solid var(--glass-border);border-radius:14px;padding:22px 24px;margin-bottom:18px;
+  box-shadow:0 12px 40px rgba(0,0,0,.35);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.card::before{content:"";position:absolute;left:18px;right:18px;top:0;height:1px;background:linear-gradient(90deg,transparent,var(--gold-line),transparent)}
+.card::after{
+  content:"";position:absolute;inset:6px;border-radius:10px;pointer-events:none;
+  border:1px solid rgba(245,197,66,.07);
+}
+.card-title{
+  display:flex;align-items:center;gap:10px;font-family:var(--font-sans);font-size:11px;font-weight:600;color:var(--gold-2);letter-spacing:.2em;text-transform:uppercase;margin-bottom:16px;
+}
+.card-title::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--gold-line),transparent)}
+.card-title span{margin-left:auto;font-family:var(--font-mono);font-weight:400;letter-spacing:0;text-transform:none;color:var(--faint)!important;float:none!important}
+
+/* ── Hero: the NFT sits inside a vault door ───────────────────────────── */
+.vhero{display:grid;grid-template-columns:236px 1fr;gap:28px;align-items:center}
+.door{position:relative;width:236px;height:236px;display:grid;place-items:center}
+.door::before{
+  content:"";position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 0deg, #2a2f38, #565d69 12%, #1a1f27 25%, #565d69 37%, #2a2f38 50%, #565d69 62%, #1a1f27 75%, #565d69 87%, #2a2f38);
+  box-shadow:0 18px 50px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.door::after{
+  content:"";position:absolute;inset:9px;border-radius:50%;
+  background:repeating-conic-gradient(from 0deg, transparent 0 28deg, rgba(245,197,66,.55) 28deg 30deg);
+  -webkit-mask:radial-gradient(circle, transparent 0 62%, #000 63% 68%, transparent 69%);mask:radial-gradient(circle, transparent 0 62%, #000 63% 68%, transparent 69%);
+  animation:dial 60s linear infinite;
+}
+@keyframes dial{to{transform:rotate(360deg)}}
+.nft-image{
+  position:relative;z-index:1;width:172px;height:172px;border-radius:50%;overflow:hidden;background:#0f172a;
+  border:3px solid var(--gold-2);box-shadow:0 0 0 6px var(--paper),0 0 0 7px var(--gold-line),0 0 30px var(--glow-gold);
+}
+.nft-image svg{width:100%;height:100%;transform:scale(1.06)}
+.nft-info{flex:1;min-width:0}
+.nft-name{font-family:var(--font-serif);font-size:32px;font-weight:600;letter-spacing:.03em;color:var(--bright);margin-bottom:8px;line-height:1.1}
+.nft-name span{color:var(--gold)!important;font-style:italic;font-weight:500}
+.nft-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;font-size:11.5px;font-weight:500;letter-spacing:.04em;margin-bottom:16px}
+.badge-owner{background:var(--green-soft);color:var(--green);border:1px solid var(--green-line)}
+.badge-readonly{background:var(--red-soft);color:var(--red);border:1px solid var(--red-line)}
+.badge-connecting{background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold-line)}
+.address-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--rule-soft)}
+.address-label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);width:96px;flex:none}
+.address-val{font-family:var(--font-mono);font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis}
+.copy-btn{background:none;border:1px solid transparent;border-radius:6px;color:var(--faint);cursor:pointer;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px}
+.copy-btn:hover{color:var(--gold);border-color:var(--gold-line)}
+
+/* ── Balances: an account balance ─────────────────────────────────────── */
+.total-value{
+  font-family:var(--font-mono);font-size:40px;font-weight:600;letter-spacing:-.01em;color:var(--gold);margin-bottom:2px;line-height:1.1;
+  text-shadow:0 0 24px var(--glow-gold);
+}
+.balance-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.balance-item{
+  background:var(--glass);border:1px solid var(--glass-border);border-left:2px solid var(--gold-line);border-radius:10px;padding:12px 14px;
+  transition:border-color .2s,transform .2s;
+}
+.balance-item:hover{border-color:var(--gold-line);transform:translateY(-1px)}
+.balance-symbol{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+.balance-amount{font-family:var(--font-mono);font-size:18px;font-weight:600;color:var(--bright)}
+.balance-usd{font-size:11px;color:var(--muted);margin-top:2px}
+
+/* ── Split control ────────────────────────────────────────────────────── */
+.split-display{font-family:var(--font-mono);font-size:40px;font-weight:600;color:var(--cyan);margin-bottom:12px;text-shadow:0 0 22px rgba(34,211,238,.25)}
+.slider-wrap{margin-bottom:16px}
+input[type="range"]{width:100%;-webkit-appearance:none;appearance:none;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--gold-line),var(--cyan-line));outline:none;margin-bottom:8px}
+input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:var(--gold);cursor:pointer;border:3px solid var(--paper);box-shadow:0 0 14px var(--glow-gold)}
+input[type="range"]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--gold);cursor:pointer;border:3px solid var(--paper);box-shadow:0 0 14px var(--glow-gold)}
+.slider-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-family:var(--font-mono)}
+.warning-box{background:var(--gold-soft);border:1px solid var(--gold-line);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--gold);margin-bottom:12px;display:none}
+
+/* ── Forms ────────────────────────────────────────────────────────────── */
+.form-row{margin-bottom:12px}
+.form-label{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+.form-input{
+  width:100%;background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:9px 12px;font-family:var(--font-mono);font-size:13px;color:var(--bright);outline:none;transition:border-color .15s,box-shadow .15s;
+}
+.form-input:focus{border-color:var(--gold-line);box-shadow:0 0 0 3px var(--gold-soft)}
+.form-input::placeholder{color:var(--faint)}
+select.form-input{cursor:pointer}
+select.form-input option{background:#0b1017}
+.input-with-max{display:flex;gap:8px}
+.input-with-max .form-input{flex:1}
+.max-btn{background:var(--glass);border:1px solid var(--glass-border);border-radius:8px;padding:8px 12px;font-family:var(--font-mono);font-size:11px;color:var(--gold);cursor:pointer}
+.max-btn:hover{border-color:var(--gold-line)}
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+.btn{width:100%;margin-top:4px;padding:11px 20px;border-radius:9px;border:0;font-family:var(--font-sans);font-size:13px;font-weight:600;letter-spacing:.02em;cursor:pointer;transition:filter .15s,transform .15s,box-shadow .2s}
+.btn:hover{transform:translateY(-1px)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-primary{color:#04121a;background:linear-gradient(135deg,#22d3ee 0%,#39ff88 100%);box-shadow:0 0 22px rgba(34,211,238,.25),0 4px 14px rgba(0,0,0,.4)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-gold{color:#1a1200;background:linear-gradient(135deg,#f5c542 0%,#d4a52a 100%);box-shadow:0 0 22px var(--glow-gold),0 4px 14px rgba(0,0,0,.4)}
+.btn-gold:hover{filter:brightness(1.08)}
+.btn-danger{color:var(--red);background:var(--red-soft);border:1px solid var(--red-line)}
+
+/* ── Status ───────────────────────────────────────────────────────────── */
+.status-msg{margin-top:10px;padding:8px 12px;border-radius:8px;font-size:12px;font-family:var(--font-mono);display:none}
+.status-success{background:var(--green-soft);color:var(--green);border:1px solid var(--green-line)}
+.status-error{background:var(--red-soft);color:var(--red);border:1px solid var(--red-line)}
+.status-pending{background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold-line)}
+
+/* ── Statement table (fee split history) ──────────────────────────────── */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px 12px;font-family:var(--font-sans);font-size:10px;font-weight:600;letter-spacing:.16em;color:var(--gold-2);border-bottom:1px solid var(--gold-line);text-transform:uppercase;white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid var(--rule-soft);font-family:var(--font-mono);color:var(--ink);white-space:nowrap}
+tbody tr:nth-child(even) td{background:rgba(255,255,255,.015)}
+tr:hover td{background:var(--gold-soft)}
+td a{color:var(--cyan);text-decoration:none}
+td a:hover{text-decoration:underline}
+.empty-state{text-align:center;padding:40px;color:var(--faint);font-family:var(--font-serif);font-style:italic;font-size:15px}
+
+/* ── Info grid, loading, locked ───────────────────────────────────────── */
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin-bottom:16px}
+.kv .k{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+.kv .val{font-family:var(--font-mono);font-size:13px;color:var(--ink)}
+.skeleton{background:linear-gradient(90deg,var(--surface) 25%,var(--card) 50%,var(--surface) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:20px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.locked-overlay{text-align:center;padding:26px;color:var(--muted);font-size:13px;border:1px dashed var(--rule);border-radius:10px;background:var(--glass)}
+.locked-overlay .lock-icon{font-size:30px;margin-bottom:8px;filter:drop-shadow(0 0 10px var(--glow-gold))}
+.fine{font-size:12px;color:var(--muted);line-height:1.6}
+.note{font-size:11px;color:var(--muted)}
+
+@media (max-width:640px){
+  .header{padding:10px 14px}
+  .nav-links a{padding:5px 8px;font-size:12px}
+  .vhero{grid-template-columns:1fr;justify-items:center;text-align:center}
+  .address-row{justify-content:center}.address-label{width:auto}
+  .masthead h1{font-size:28px}
+  .total-value{font-size:32px}
+  .kv{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){.door::after{animation:none}}
+.masthead{align-items:center}
+.masthead .connect-btn{margin-left:auto}
+.header{display:none}
+
+}
+#sec-operator {
+--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.12);--ink:#c9d4de;--bright:#fff;--muted:#7b8a99;--green:#39ff88;--cyan:#22d3ee;--gold:#f5c542;--red:#ff4d6d;.wrap{max-width:680px;margin:0 auto;padding:40px 20px 80px}
+h1{font-size:22px;margin:0 0 6px;color:var(--bright)}
+.sub{color:var(--muted);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-bottom:16px;backdrop-filter:blur(12px)}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.row{display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14px;flex-wrap:wrap}
+.row:last-child{border-bottom:0}
+.row .k{color:var(--muted)}
+.mono{font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;font-size:13px;word-break:break-all}
+.big{font-size:30px;font-weight:700;color:var(--bright);letter-spacing:-.02em}
+.big.ok{color:var(--green);text-shadow:0 0 18px rgba(57,255,136,.3)} .big.bad{color:var(--red)}
+.ok{color:var(--green)} .warn{color:var(--gold)} .bad{color:var(--red)}
+button,select,input{font:inherit;font-size:14px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.06);color:var(--bright);padding:10px 14px}
+button{font-weight:600;cursor:pointer;padding:10px 18px}
+button:hover:not([disabled]){border-color:rgba(255,255,255,.3)}
+button[disabled]{opacity:.45;cursor:not-allowed}
+button.primary{border:0;color:#04110a;background:linear-gradient(135deg,#39ff88,#22d3ee);box-shadow:0 0 22px rgba(57,255,136,.28)}
+button.danger{border-color:rgba(255,77,109,.5);color:var(--red)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+input[type=password]{width:260px}
+#status,#setupstatus{min-height:22px;margin-top:12px;font-size:14px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;border:1px solid var(--border);font-size:12px;font-weight:600}
+.pill.ok{border-color:rgba(57,255,136,.5)} .pill.bad{border-color:rgba(255,77,109,.5)} .pill.warn{border-color:rgba(245,197,66,.5)}
+details{margin-top:10px;font-size:13px;color:var(--muted)} summary{cursor:pointer}
+pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;border-radius:8px}
+
+.note{font-size:13px;color:var(--muted)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <nav class="pages"><a href="/" id="nav-dash">Dashboard</a><a href="/analytics" id="nav-analytics">Analytics</a><a href="/wallet" id="nav-wallet" class="here">Wallet</a></nav>
+  <div class="addr"><span>Arm, approvals, vault and the operator — everything that needs your wallet.</span></div>
+</header>
+<nav class="tabs" id="tabs"><a href="#arm" data-tab="arm">Arm</a><a href="#approvals" data-tab="approvals">Approvals</a><a href="#vault" data-tab="vault">Vault</a><a href="#operator" data-tab="operator">Operator</a></nav>
+
+<section class="tab" id="sec-arm" hidden>
+<div class="wrap">
+  <h2 class="secttl">Arm the fee collector</h2>
+  <p class="sub">Sign a message with the owner wallet. No transaction, no gas, no passphrase to type.</p>
+
+  <div class="card">
+    <h2>Status</h2>
+    <div class="big" data-id="state">checking…</div>
+    <div class="row"><span class="k">Expires</span><span data-id="expiry">—</span></div>
+    <div class="row"><span class="k">Owner</span><span class="mono" data-id="owner">—</span></div>
+    <div class="row"><span class="k">Operator</span><span class="mono" data-id="operator">—</span></div>
+    <div class="row"><span class="k">Wallet</span><span data-id="wallet">not connected</span></div>
+    <div class="actions">
+      <button data-id="connect">Connect wallet</button>
+      <select data-id="minutes"><option value="120">2 hours</option><option value="480">8 hours</option><option value="1440">24 hours</option><option value="4320">3 days</option><option value="10080" selected>1 week</option></select>
+      <button data-id="arm" class="primary" disabled>Arm with signature</button>
+      <button data-id="lock" hidden>Lock now</button>
+    </div>
+    <div data-id="status"></div>
+    <details><summary>What gets signed</summary><pre data-id="message">—</pre>
+      <p>The signature never leaves this machine: the page posts it to the dashboard on 127.0.0.1, which turns it into the key that decrypts the saved passphrase, checks the passphrase still opens the operator keystore, and caches it in RAM for the chosen time, exactly like <span class="mono">./unlock.sh</span>. Only the owner wallet's signature works.</p>
+    </details>
+  </div>
+
+  <div class="card" data-id="setup">
+    <h2 data-id="setuptitle">One-time setup</h2>
+    <p class="note" data-id="setupnote">Save the operator passphrase once, sealed with your wallet's signature. After this you only sign.</p>
+    <div class="actions">
+      <input type="password" data-id="pass" placeholder="Operator passphrase" autocomplete="off">
+      <button data-id="save" disabled>Save & arm</button>
+      <button data-id="forget" class="danger" hidden>Forget saved passphrase</button>
+    </div>
+    <div data-id="setupstatus"></div>
+  </div>
+
+  
+</div>
+</section>
+<section class="tab" id="sec-approvals" hidden>
+<div id="audit"><div class="wrap">
+  <h2 class="secttl">Approval audit</h2>
+  <p class="sub">Everything each wallet has granted that lets a contract or address move its assets. Revoke with the wallet itself; nothing is signed on the server.</p>
+
+  <div class="abar">
+    <label>Wallet <select data-id="wallet"></select></label>
+    <button data-id="connect">Connect wallet</button>
+    <span data-id="conn" class="note">not connected</span>
+    <button data-id="reload">Reload</button>
+    
+  </div>
+  <div data-id="status"></div>
+
+  <div class="card">
+    <h2><span>ERC-20 allowances</span><span data-id="alcount" class="note"></span></h2>
+    <div class="tablewrap"><table data-id="allow"><thead><tr><th>Token</th><th>Spender</th><th>Allowance</th><th>Granted</th><th>Flags</th><th></th></tr></thead><tbody></tbody></table></div>
+    <p class="note" data-id="alnote"></p>
+  </div>
+
+  <div class="card">
+    <h2><span>Position manager operators</span><span class="note">setApprovalForAll on the Uniswap v3 / v4 position managers</span></h2>
+    <div class="tablewrap"><table data-id="ops"><thead><tr><th>Manager</th><th>Operator</th><th>Role</th><th></th></tr></thead><tbody></tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2><span>LOKOVault</span></h2>
+    <div data-id="vault"></div>
+  </div>
+</div></div>
+<div class="card">
+  <h2>Operator approvals</h2>
+  <p class="note">The collector needs one <span class="mono">setApprovalForAll</span> per position manager from every wallet it collects for. Open a version to grant or revoke it with that wallet.</p>
+  <details class="approve"><summary>Uniswap v3 position manager</summary><div id="approve-v3"><div class="wrap">
+  <h3 data-id="title">Approve the fee collector</h3>
+  <p class="sub" data-id="subtitle">One-time setup. Your wallet signs a single <span class="mono">setApprovalForAll</span> on the position manager. No private key is entered anywhere.</p>
+
+  <div class="card">
+    <h2>What is being approved</h2>
+    <div class="row"><span class="k">Owner (your wallet)</span><span class="mono" data-id="owner">—</span></div>
+    <div class="row"><span class="k">Wallet name</span><span data-id="ownerlabel">—</span></div>
+    <div class="row"><span class="k">Operator (collector)</span><span class="mono" data-id="operator">—</span></div>
+    <div class="row"><span class="k">Contract</span><span class="mono" data-id="posm">—</span></div>
+    <div class="row"><span class="k">Network</span><span data-id="network">—</span></div>
+    <div class="row"><span class="k">Current approval</span><span data-id="approval"><span class="pill warn">checking…</span></span></div>
+    <p style="margin:12px 0 0;font-size:14px" data-id="explain"></p>
+    <details><summary>Show the exact transaction</summary>
+      <div class="row"><span class="k">to</span><span class="mono" data-id="tx-to">—</span></div>
+      <div class="row"><span class="k">function</span><span class="mono">setApprovalForAll(address operator, bool approved)</span></div>
+      <div class="row"><span class="k">calldata</span><span class="mono" data-id="tx-data">—</span></div>
+      <div class="row"><span class="k">value</span><span class="mono">0</span></div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Approve</h2>
+    <div class="row"><span class="k">Wallet</span><span data-id="wallet">not connected</span></div>
+    <label class="chk"><input type="checkbox" data-id="verify" disabled><span>I checked that the operator address above matches the collector's address shown on the dashboard's "Operator gas" chip and in <span class="mono">collector.log</span> ("Operator: 0x…").</span></label>
+    <div class="actions">
+      <button data-id="connect">Connect wallet</button>
+      <button data-id="switch" hidden>Switch to Robinhood Chain</button>
+      <button data-id="approve" class="primary" disabled>Approve operator</button>
+      <button data-id="revoke" hidden>Revoke approval</button>
+    </div>
+    <div data-id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>All wallets on this manager</h2>
+    <p style="margin:0 0 6px;font-size:14px" class="note">The collector collects for every wallet marked <span class="mono">collect</span> in wallets.json once that wallet has approved the operator. Connect a wallet to work on its row.</p>
+    <div data-id="wallets"></div>
+  </div>
+
+  <div class="card" data-id="otherscard" hidden>
+    <h2>Other operators still approved</h2>
+    <p style="margin:0 0 6px;font-size:14px">These addresses were granted the same blanket approval by this wallet earlier and still hold it. A replaced or lost collector key should be revoked.</p>
+    <div data-id="others"></div>
+  </div>
+
+  <p class="note">After approving, the collector picks up the positions on its next run (<span class="mono">node collector.js --mode=simulate</span> shows them; the daily 09:00 run collects). Positions must be open and above the fee threshold to be collected.</p>
+</div></div></details>
+  <details class="approve"><summary>Uniswap v4 position manager</summary><div id="approve-v4"><div class="wrap">
+  <h3 data-id="title">Approve the fee collector</h3>
+  <p class="sub" data-id="subtitle">One-time setup. Your wallet signs a single <span class="mono">setApprovalForAll</span> on the position manager. No private key is entered anywhere.</p>
+
+  <div class="card">
+    <h2>What is being approved</h2>
+    <div class="row"><span class="k">Owner (your wallet)</span><span class="mono" data-id="owner">—</span></div>
+    <div class="row"><span class="k">Wallet name</span><span data-id="ownerlabel">—</span></div>
+    <div class="row"><span class="k">Operator (collector)</span><span class="mono" data-id="operator">—</span></div>
+    <div class="row"><span class="k">Contract</span><span class="mono" data-id="posm">—</span></div>
+    <div class="row"><span class="k">Network</span><span data-id="network">—</span></div>
+    <div class="row"><span class="k">Current approval</span><span data-id="approval"><span class="pill warn">checking…</span></span></div>
+    <p style="margin:12px 0 0;font-size:14px" data-id="explain"></p>
+    <details><summary>Show the exact transaction</summary>
+      <div class="row"><span class="k">to</span><span class="mono" data-id="tx-to">—</span></div>
+      <div class="row"><span class="k">function</span><span class="mono">setApprovalForAll(address operator, bool approved)</span></div>
+      <div class="row"><span class="k">calldata</span><span class="mono" data-id="tx-data">—</span></div>
+      <div class="row"><span class="k">value</span><span class="mono">0</span></div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Approve</h2>
+    <div class="row"><span class="k">Wallet</span><span data-id="wallet">not connected</span></div>
+    <label class="chk"><input type="checkbox" data-id="verify" disabled><span>I checked that the operator address above matches the collector's address shown on the dashboard's "Operator gas" chip and in <span class="mono">collector.log</span> ("Operator: 0x…").</span></label>
+    <div class="actions">
+      <button data-id="connect">Connect wallet</button>
+      <button data-id="switch" hidden>Switch to Robinhood Chain</button>
+      <button data-id="approve" class="primary" disabled>Approve operator</button>
+      <button data-id="revoke" hidden>Revoke approval</button>
+    </div>
+    <div data-id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>All wallets on this manager</h2>
+    <p style="margin:0 0 6px;font-size:14px" class="note">The collector collects for every wallet marked <span class="mono">collect</span> in wallets.json once that wallet has approved the operator. Connect a wallet to work on its row.</p>
+    <div data-id="wallets"></div>
+  </div>
+
+  <div class="card" data-id="otherscard" hidden>
+    <h2>Other operators still approved</h2>
+    <p style="margin:0 0 6px;font-size:14px">These addresses were granted the same blanket approval by this wallet earlier and still hold it. A replaced or lost collector key should be revoked.</p>
+    <div data-id="others"></div>
+  </div>
+
+  <p class="note">After approving, the collector picks up the positions on its next run (<span class="mono">node collector.js --mode=simulate</span> shows them; the daily 09:00 run collects). Positions must be open and above the fee threshold to be collected.</p>
+</div></div></details>
+</div>
+</section>
+<section class="tab" id="sec-vault" hidden>
+
+
+<div class="container">
+
+  <div class="masthead">
+    <div>
+      <h1>Private <em>Treasury</em></h1>
+      <div class="est">Token-bound account · <b>Robinhood Chain</b> · Est. 2026</div>
+    </div>
+    <div class="seal">
+      <span class="gold">Fee split <b id="seal-split">—</b></span>
+      <span>Account <b>#1</b></span>
+      <span>EIP-6551</span>
+    </div>
+    <button class="connect-btn" id="connect-btn" onclick="connectWallet()">Connect Wallet</button>
+  </div>
+
+  <!-- Hero -->
+  <div class="card">
+    <div class="vhero">
+      <div class="door">
+      <div class="nft-image" id="nft-image">
+        <!-- SVG loaded from contract -->
+        <svg viewBox="0 0 680 680" xmlns="http://www.w3.org/2000/svg">
+          <rect x="40" y="40" width="600" height="600" rx="32" fill="#0f172a"/>
+          <rect x="60" y="60" width="560" height="560" rx="24" fill="#1e293b"/>
+          <circle cx="100" cy="100" r="6" fill="#3b82f6" opacity="0.6"/>
+          <circle cx="580" cy="100" r="6" fill="#3b82f6" opacity="0.6"/>
+          <circle cx="100" cy="580" r="6" fill="#3b82f6" opacity="0.6"/>
+          <circle cx="580" cy="580" r="6" fill="#3b82f6" opacity="0.6"/>
+          <rect x="190" y="180" width="300" height="280" rx="16" fill="#1e3a5f" stroke="#2d5a8e" stroke-width="2"/>
+          <circle cx="340" cy="310" r="100" fill="#162032" stroke="#3b82f6" stroke-width="3"/>
+          <circle cx="340" cy="310" r="85" stroke="#2563eb" stroke-width="1.5" fill="none" opacity="0.6"/>
+          <circle cx="340" cy="310" r="65" stroke="#1d4ed8" stroke-width="1" fill="none" opacity="0.4"/>
+          <line x1="340" y1="225" x2="340" y2="395" stroke="#3b82f6" stroke-width="1.5" opacity="0.5"/>
+          <line x1="255" y1="310" x2="425" y2="310" stroke="#3b82f6" stroke-width="1.5" opacity="0.5"/>
+          <line x1="280" y1="250" x2="400" y2="370" stroke="#3b82f6" stroke-width="1" opacity="0.3"/>
+          <line x1="400" y1="250" x2="280" y2="370" stroke="#3b82f6" stroke-width="1" opacity="0.3"/>
+          <circle cx="340" cy="310" r="18" fill="#1d4ed8" stroke="#60a5fa" stroke-width="2"/>
+          <circle cx="340" cy="310" r="8" fill="#93c5fd"/>
+          <path d="M390 300 Q410 300 410 310 Q410 320 390 320" stroke="#60a5fa" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <circle cx="220" cy="210" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
+          <circle cx="460" cy="210" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
+          <circle cx="220" cy="430" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
+          <circle cx="460" cy="430" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
+          <ellipse cx="160" cy="274" rx="22" ry="10" fill="#fbbf24" stroke="#d97706" stroke-width="1.5"/>
+          <text x="160" y="278" text-anchor="middle" font-size="10" fill="#78350f" font-weight="700" font-family="sans-serif">$</text>
+          <ellipse cx="520" cy="344" rx="22" ry="10" fill="#fbbf24" stroke="#d97706" stroke-width="1.5"/>
+          <text x="520" y="348" text-anchor="middle" font-size="10" fill="#78350f" font-weight="700" font-family="sans-serif">$</text>
+          <rect x="430" y="170" width="80" height="30" rx="15" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/>
+          <text id="svg-pct" x="470" y="191" text-anchor="middle" font-size="13" fill="#bfdbfe" font-weight="700" font-family="sans-serif">10%</text>
+          <rect x="170" y="170" width="100" height="24" rx="12" fill="#0f2744" stroke="#2563eb" stroke-width="1"/>
+          <text x="220" y="187" text-anchor="middle" font-size="11" fill="#93c5fd" font-family="sans-serif">Chain 4663</text>
+          <text x="340" y="510" text-anchor="middle" font-size="28" fill="#e2e8f0" font-weight="700" font-family="sans-serif">LOKOVault</text>
+          <text x="340" y="540" text-anchor="middle" font-size="13" fill="#64748b" font-family="sans-serif">EIP-6551 Token Bound Account</text>
+          <text x="340" y="570" text-anchor="middle" font-size="11" fill="#475569" font-family="sans-serif">#1 Robinhood Chain</text>
+          <line x1="200" y1="590" x2="480" y2="590" stroke="#1e3a5f" stroke-width="1"/>
+        </svg>
+      </div>
+      </div>
+      <div class="nft-info">
+        <div class="nft-name">LOKOVault <span>№ 1</span></div>
+        <div id="owner-badge" class="nft-badge badge-connecting">Connecting...</div>
+        <div class="address-row">
+          <span class="address-label">NFT</span>
+          <span class="address-val" id="nft-address">Loading...</span>
+          <button class="copy-btn" onclick="copyAddr('nft-address')">copy</button>
+        </div>
+        <div class="address-row">
+          <span class="address-label">Vault (TBA)</span>
+          <span class="address-val" id="tba-address">Loading...</span>
+          <button class="copy-btn" onclick="copyAddr('tba-address')">copy</button>
+        </div>
+        <div class="address-row">
+          <span class="address-label">NFT owner</span>
+          <span class="address-val" id="nft-owner">Loading...</span>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <a id="blockscout-nft" href="#" target="_blank" style="font-size:11px">View NFT on Blockscout ↗</a>
+          <span style="color:var(--faint)">·</span>
+          <a id="blockscout-tba" href="#" target="_blank" style="font-size:11px">View TBA ↗</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Balances -->
+  <div class="card">
+    <div class="card-title">Account balance <span id="last-refresh"></span></div>
+    <div class="total-value" id="total-usd">$—</div>
+    <div class="note" style="margin-bottom:16px">Available balance · USDG held by the vault</div>
+    <div class="balance-grid" id="balance-grid">
+      <div class="balance-item"><div class="balance-symbol">Loading...</div><div class="skeleton" style="margin-top:8px"></div></div>
+    </div>
+  </div>
+
+  <!-- Fee Split Control -->
+  <div class="card" id="split-card">
+    <div class="card-title">Deposit rate · fee split</div>
+    <div id="split-locked" class="locked-overlay">
+      <div class="lock-icon">🔒</div>
+      Connect the NFT holder wallet to adjust
+    </div>
+    <div id="split-controls" style="display:none">
+      <div class="split-display"><span id="split-val">10</span>%</div>
+      <div class="slider-wrap">
+        <input type="range" id="split-slider" min="0" max="20" value="10"
+          oninput="onSlider(this.value)">
+        <div class="slider-labels"><span>0%</span><span>10%</span><span>20% max</span></div>
+      </div>
+      <div class="warning-box" id="split-warning">⚠️ High split rate — you keep less of your fees</div>
+      <button class="btn btn-gold" id="update-split-btn" onclick="updateSplit()">Update split %</button>
+      <div class="status-msg" id="split-status"></div>
+    </div>
+  </div>
+
+  <!-- Withdraw -->
+  <div class="card">
+    <div class="card-title">Withdrawal</div>
+    <div id="withdraw-locked" class="locked-overlay">
+      <div class="lock-icon">🔒</div>
+      Connect the NFT holder wallet to withdraw
+    </div>
+    <div id="withdraw-controls" style="display:none">
+      <div class="form-row">
+        <div class="form-label">Token</div>
+        <select class="form-input" id="withdraw-token" onchange="onTokenSelect()">
+          <option value="">Select token...</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-label">Amount</div>
+        <div class="input-with-max">
+          <input type="text" class="form-input" id="withdraw-amount" placeholder="0.00"/>
+          <button class="max-btn" onclick="setMax()">MAX</button>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">Destination</div>
+        <input type="text" class="form-input" id="withdraw-dest" placeholder="0x..."/>
+      </div>
+      <button class="btn btn-primary" id="withdraw-btn" onclick="doWithdraw()">Withdraw</button>
+      <div class="status-msg" id="withdraw-status"></div>
+    </div>
+  </div>
+
+  <!-- Fee Split History -->
+  <div class="card">
+    <div class="card-title">Statement · deposits</div>
+    <div id="history-content">
+      <div class="empty-state">No splits recorded yet.<br>The collector will log splits here after each collect run.</div>
+    </div>
+  </div>
+
+  <!-- NFT Info -->
+  <div class="card">
+    <div class="card-title">Account details</div>
+    <div class="kv">
+      <div><div class="k">Name</div><div class="val">LOKOVault</div></div>
+      <div><div class="k">Symbol</div><div class="val">LKVAULT</div></div>
+      <div><div class="k">Token ID</div><div class="val">#1</div></div>
+      <div><div class="k">Chain</div><div class="val">Robinhood Chain (4663)</div></div>
+    </div>
+    <div id="transfer-section" style="display:none">
+      <div style="background:var(--red-soft);border:1px solid var(--red-line);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--red)">
+        ⚠️ Transferring this NFT gives the recipient full control of the vault and all funds inside.
+      </div>
+      <button class="btn btn-danger" onclick="transferNFT()">Transfer NFT</button>
+    </div>
+  </div>
+
+  <!-- === weekly-digest-and-vault === Open on your phone. Hidden until a public
+       domain replaces the tailnet address; the server's /api/vault-info still
+       reports publicHost, so removing the `hidden` attribute brings it back. -->
+  <div class="card" id="qr-card" hidden>
+    <div class="card-title">Mobile access</div>
+    <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+      <div style="text-align:center">
+        <div id="qr-public" style="background:#fff;padding:6px;border-radius:8px;display:inline-block"></div>
+        <div class="note" style="margin-top:6px;max-width:200px">Anywhere · passphrase gate · read-only<br><span style="font-family:var(--mono);font-size:10px" id="qr-public-url"></span></div>
+      </div>
+      <div style="text-align:center">
+        <div id="qr-tailnet" style="background:#fff;padding:6px;border-radius:8px;display:inline-block"></div>
+        <div class="note" style="margin-top:6px;max-width:200px">Tailnet devices only · no gate<br><span style="font-family:var(--mono);font-size:10px" id="qr-tailnet-url"></span></div>
+      </div>
+      <div class="fine" style="max-width:320px">
+        To withdraw or change the split from the phone, open the URL <b>inside Rabby's in-app browser</b> (Rabby → Discover → paste the URL) so the page can sign with the NFT holder wallet. In a normal mobile browser the page is read-only.
+      </div>
+    </div>
+  </div>
+
+</div>
+</section>
+<section class="tab" id="sec-operator" hidden>
+<div class="wrap"><h2 class="secttl">Operator</h2>
+<p class="sub">The key that signs collects and closes. It only ever holds gas; fees go to the wallets and the vault.</p>
+<div class="card">
+  <h2>Status</h2>
+  <div class="row"><span class="k">Operator address</span><span class="mono" data-id="op-address">—</span></div>
+  <div class="row"><span class="k">Gas balance</span><span data-id="op-gas">—</span></div>
+  <div class="row"><span class="k">Collector</span><span data-id="op-armed">—</span></div>
+  <div class="row"><span class="k">Last collector run</span><span data-id="op-lastrun">—</span></div>
+  <div class="row"><span class="k">Gas spent, 24 h</span><span data-id="op-gas24">—</span></div>
+</div>
+<div class="card">
+  <h2>Background loops</h2>
+  <div data-id="op-loops" class="note">loading…</div>
+  <p class="note">Everything runs inside the dashboard process (<span class="mono">./start-all.sh</span>): the risk guardian every 60 s, fee auto-collect every 15 min, the ledger backup at 02:00. Their output is in <span class="mono">server.log</span>.</p>
+</div></div>
+</section>
+</div>
+<script src="/qr.js"></script>
+<script>
+(() => {
+  const tabs = [...document.querySelectorAll('#tabs a')];
+  const show = (id) => {
+    if (!document.getElementById('sec-' + id)) id = 'arm';
+    for (const s of document.querySelectorAll('section.tab')) s.hidden = s.id !== 'sec-' + id;
+    for (const a of tabs) a.classList.toggle('here', a.dataset.tab === id);
+    document.title = tabs.find((a) => a.dataset.tab === id).textContent + ' · Wallet';
+  };
+  window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+  show(location.hash.slice(1) || 'arm');
+})();
+</script>
+<script>
+
+(() => {
+  const root = document.getElementById('sec-arm');
+  const $ = (s) => root.querySelector(s);
+  const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
+  let st = null, provider = null, signer = null, account = null;
+  const status = (el, msg, cls = '') => { $(el).innerHTML = `<span class="${cls}">${msg}</span>`; };
+  const isOwner = () => !!(account && st && account.toLowerCase() === st.owner.toLowerCase());
+
+  function local() {
+    return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
+  }
+
+  async function load() {
+    const r = await fetch('/api/arm/status', { cache: 'no-store' });
+    st = await r.json();
+    if (!st.ok) throw new Error(st.error || 'status failed');
+    render();
+  }
+
+  function render() {
+    const armed = st.unlock && st.unlock.armed;
+    const el = $('[data-id="state"]');
+    el.textContent = armed ? 'ARMED' : 'LOCKED';
+    el.className = 'big ' + (armed ? 'ok' : 'bad');
+    if (armed) {
+      const d = Math.floor(st.unlock.minutesLeft / 1440), h = Math.floor((st.unlock.minutesLeft % 1440) / 60), m = st.unlock.minutesLeft % 60;
+      const at = new Date(Date.now() + st.unlock.minutesLeft * 60000);
+      $('[data-id="expiry"]').textContent = `${d ? d + 'd ' : ''}${h ? h + 'h ' : ''}${m}m from now · ${at.toLocaleString()}`;
+    } else if (st.unlock && st.unlock.lost) {
+      $('[data-id="expiry"]').innerHTML = `<span class="bad">lost at a restart</span> · was armed until ${new Date(st.unlock.until).toLocaleString()} · sign again to re-arm`;
+    } else $('[data-id="expiry"]').textContent = 'not armed; the 09:00 run and the Collect button will skip';
+    $('[data-id="owner"]').textContent = st.owner;
+    $('[data-id="operator"]').textContent = st.operator || 'no keystore found';
+    $('[data-id="message"]').textContent = st.message;
+    $('[data-id="lock"]').hidden = !armed;
+    $('[data-id="setuptitle"]').textContent = st.configured ? 'Saved passphrase' : 'One-time setup';
+    $('[data-id="setupnote"]').textContent = st.configured
+      ? `A passphrase sealed with your signature is saved (since ${new Date(st.createdAt).toLocaleString()}). Re-save here if the operator keystore or its passphrase changes.`
+      : 'Save the operator passphrase once, sealed with your wallet\'s signature. After this you only sign.';
+    $('[data-id="forget"]').hidden = !st.configured;
+    updateButtons();
+  }
+
+  function updateButtons() {
+    const ok = isOwner() && local();
+    $('[data-id="arm"]').disabled = !(ok && st.configured);
+    $('[data-id="save"]').disabled = !ok;
+    $('[data-id="forget"]').disabled = !ok;
+    $('[data-id="lock"]').disabled = !local();
+  }
+
+  async function connect() {
+    if (!window.ethereum) { status('[data-id="status"]', 'No wallet found. Install Rabby or MetaMask.', 'bad'); return; }
+    try {
+      provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send('eth_requestAccounts', []);
+      account = ethers.getAddress(accounts[0]);
+      signer = await provider.getSigner();
+      $('[data-id="wallet"]').innerHTML = `<span class="mono">${short(account)}</span> ${isOwner() ? '<span class="pill ok">owner</span>' : '<span class="pill bad">not the owner wallet</span>'}`;
+      if (!isOwner()) status('[data-id="status"]', `Connected account is not the owner ${short(st.owner)}. Switch accounts in your wallet.`, 'bad');
+      else status('[data-id="status"]', st.configured ? 'Connected. Pick a duration and sign to arm.' : 'Connected. Do the one-time setup below first.', 'ok');
+      window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
+      updateButtons();
+    } catch (e) {
+      status('[data-id="status"]', `Connection failed: ${e.shortMessage || e.message}`, 'bad');
+    }
+  }
+
+  async function sign() {
+    // personal_sign over the exact server-provided message; any chain is fine, nothing is sent on chain.
+    status('[data-id="status"]', 'Confirm the signature in your wallet…', 'warn');
+    return signer.signMessage(st.message);
+  }
+
+  async function post(url, body) {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
+  }
+
+  async function arm() {
+    $('[data-id="arm"]').disabled = true;
+    try {
+      const signature = await sign();
+      status('[data-id="status"]', 'Signature accepted by the wallet, arming…', 'warn');
+      const j = await post('/api/arm', { signature, minutes: Number($('[data-id="minutes"]').value) });
+      await load();
+      status('[data-id="status"]', `Armed for ${j.unlock.minutesLeft} minutes.`, 'ok');
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status('[data-id="status"]', /rejected|denied|4001/i.test(m) ? 'Signature rejected in the wallet. Nothing changed.' : `Failed: ${m}`, 'bad');
+      updateButtons();
+    }
+  }
+
+  async function save() {
+    const passphrase = $('[data-id="pass"]').value;
+    if (!passphrase) { status('[data-id="setupstatus"]', 'Enter the operator passphrase.', 'warn'); return; }
+    $('[data-id="save"]').disabled = true;
+    try {
+      const signature = await sign();
+      status('[data-id="setupstatus"]', 'Checking the passphrase against the keystore and sealing it…', 'warn');
+      const j = await post('/api/arm/setup', { signature, passphrase, minutes: Number($('[data-id="minutes"]').value) });
+      $('[data-id="pass"]').value = '';
+      await load();
+      status('[data-id="setupstatus"]', `Saved. Armed for ${j.unlock.minutesLeft} minutes; from now on just sign.`, 'ok');
+      status('[data-id="status"]', '', '');
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status('[data-id="setupstatus"]', /rejected|denied|4001/i.test(m) ? 'Signature rejected in the wallet. Nothing saved.' : `Failed: ${m}`, 'bad');
+      updateButtons();
+    }
+  }
+
+  async function forget() {
+    if (!confirm('Delete the saved (encrypted) passphrase? You will need to set up again to arm by signature.')) return;
+    try {
+      const signature = await sign();
+      await post('/api/arm/forget', { signature });
+      await load();
+      status('[data-id="setupstatus"]', 'Saved passphrase deleted.', 'ok');
+    } catch (e) { status('[data-id="setupstatus"]', `Failed: ${e.shortMessage || e.message}`, 'bad'); }
+  }
+
+  async function lock() {
+    try {
+      await post('/api/lock', {});
+      await load();
+      status('[data-id="status"]', 'Locked. The passphrase is no longer cached.', 'ok');
+    } catch (e) { status('[data-id="status"]', `Failed: ${e.message}`, 'bad'); }
+  }
+
+  $('[data-id="connect"]').addEventListener('click', connect);
+  $('[data-id="arm"]').addEventListener('click', arm);
+  $('[data-id="save"]').addEventListener('click', save);
+  $('[data-id="forget"]').addEventListener('click', forget);
+  $('[data-id="lock"]').addEventListener('click', lock);
+  $('[data-id="pass"]').addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+
+  if (!local()) status('[data-id="status"]', 'Arming only works when this page is opened on the dashboard machine (http://127.0.0.1:8787/wallet).', 'bad');
+  load().then(() => setInterval(load, 60000)).catch((e) => status('[data-id="status"]', `Could not load status: ${e.message}`, 'bad'));
+})();
+
+</script>
+<script>
+
+(() => {
+  const root = document.getElementById('audit');
+  const $ = (s) => root.querySelector(s);
+  const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
+  const ERC20 = ['function approve(address spender, uint256 amount) returns (bool)'];
+  const NFT = ['function setApprovalForAll(address operator, bool approved)'];
+  let data = null, provider = null, signer = null, account = null;
+  const status = (m, cls = '') => { $('[data-id="status"]').innerHTML = `<span class="${cls}">${m}</span>`; };
+  const selected = () => $('[data-id="wallet"]').value;
+  const canSign = () => !!(signer && account && account.toLowerCase() === selected().toLowerCase());
+  const fmtAmt = (r) => r.unlimited ? '<span class="bad">unlimited</span>' : (r.amount == null ? '—' : r.amount.toLocaleString('en-US', { maximumFractionDigits: 4 }));
+  const when = (t) => t ? new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+
+  async function load(owner) {
+    status('Loading…', 'muted');
+    const r = await fetch('/api/approvals' + (owner ? '?owner=' + owner : ''), { cache: 'no-store' });
+    data = await r.json();
+    if (!data.ok) { status(data.error || 'failed', 'bad'); return; }
+    const sel = $('[data-id="wallet"]');
+    if (!sel.options.length) {
+      sel.innerHTML = data.wallets.map((w) => `<option value="${w.address}">${w.label} (${short(w.address)})</option>`).join('');
+    }
+    sel.value = data.owner;
+    render();
+    status('', '');
+  }
+
+  function healthBadge(addr) {
+    const h = data.health && data.health[addr.toLowerCase()];
+    if (!h) return '';
+    return ` <span class="health" title="${(h.notes || []).join(', ')}">${h.badge}</span>`;
+  }
+
+  function render() {
+    const d = data;
+    const tb = $('[data-id="allow"] tbody');
+    tb.innerHTML = d.allowances.map((r, i) => `<tr>
+      <td><b>${r.symbol || '?'}</b>${healthBadge(r.token)}<div class="mono muted"><a href="${d.explorer}/token/${r.token}" target="_blank" rel="noopener">${short(r.token)}</a></div></td>
+      <td>${r.spenderLabel ? `<b>${r.spenderLabel}</b><div class="mono muted">${short(r.spender)}</div>` : `<span class="mono">${r.spender}</span>`}</td>
+      <td>${fmtAmt(r)}</td>
+      <td>${when(r.grantedAt)}</td>
+      <td>${r.unlimited ? '<span class="pill bad">unlimited</span> ' : ''}${r.old ? '<span class="pill warn">older than 90 days</span>' : ''}${!r.spenderLabel ? ' <span class="pill warn" title="Not a known Uniswap / vault contract">unknown spender</span>' : ''}</td>
+      <td><button class="danger revoke-allow" data-i="${i}" ${canSign() ? '' : 'disabled'}>Revoke</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">No standing allowances.</td></tr>';
+    $('[data-id="alcount"]').textContent = d.allowancesOk ? `${d.allowances.length} standing · ${d.allowances.filter((r) => r.unlimited).length} unlimited` : 'allowance scan failed: ' + (d.allowancesError || '');
+    $('[data-id="alnote"]').textContent = 'From every Approval event this wallet ever emitted, filtered to allowances that are still non-zero on chain. Revoke sets the allowance to 0.';
+    const ob = $('[data-id="ops"] tbody');
+    ob.innerHTML = d.operators.map((o, i) => `<tr>
+      <td>Uniswap ${o.version} <span class="mono muted">${short(o.manager)}</span></td>
+      <td><span class="mono">${o.operator}</span></td>
+      <td>${o.isCollector ? '<span class="pill ok">the collector</span>' : '<span class="pill warn">not the current collector</span>'}</td>
+      <td><button class="danger revoke-op" data-i="${i}" ${canSign() ? '' : 'disabled'}>Revoke</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" class="muted">No operator approvals.</td></tr>';
+    const v = d.vault;
+    $('[data-id="vault"]').innerHTML = !v ? '<span class="muted">No vault configured.</span>' : v.error ? `<span class="bad">${v.error}</span>` : `
+      <div class="row"><span class="k">NFT #1 holder (controls the vault)</span><span class="mono">${v.holder} ${v.holder.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
+      <div class="row"><span class="k">NFT contract admin (fee split, pause)</span><span class="mono">${v.admin} ${v.admin.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
+      <div class="row"><span class="k">Collector operator power over the vault NFT</span><span>${v.operatorHasVaultPower ? '<span class="pill bad">approved — revoke this</span>' : '<span class="pill ok">none</span>'}</span></div>
+      <div class="row"><span class="k">Fee split</span><span>${v.feeSplitPct == null ? '—' : v.feeSplitPct + '%'}${v.paused ? ' · <span class="bad">paused</span>' : ''}</span></div>
+      <div class="row"><span class="k">Vault account</span><span class="mono">${v.tba || '—'}</span></div>`;
+  }
+
+  async function connect() {
+    if (!window.ethereum) { status('No wallet found. Install Rabby or MetaMask.', 'bad'); return; }
+    try {
+      provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send('eth_requestAccounts', []);
+      account = ethers.getAddress(accounts[0]);
+      signer = await provider.getSigner();
+      const net = await provider.getNetwork();
+      if (Number(net.chainId) !== Number(data.chainId)) {
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(data.chainId).toString(16) }] }); } catch (e) { status('Switch the wallet to Robinhood Chain (4663).', 'warn'); }
+      }
+      // Work on the connected wallet's row if it is one of ours.
+      if (data.wallets.some((w) => w.address.toLowerCase() === account.toLowerCase())) await load(account);
+      $('[data-id="conn"]').innerHTML = `<span class="mono">${short(account)}</span> ${canSign() ? '<span class="pill ok">matches selected wallet</span>' : '<span class="pill warn">select this wallet to revoke</span>'}`;
+      window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
+      render();
+    } catch (e) { status(`Connection failed: ${e.shortMessage || e.message}`, 'bad'); }
+  }
+
+  async function send(label, fn) {
+    if (!canSign()) { status('Connect the wallet that granted this approval.', 'warn'); return; }
+    try {
+      status(`Confirm in your wallet: ${label}…`, 'warn');
+      const tx = await fn();
+      status(`Sent <a href="${data.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+      const rc = await tx.wait();
+      status(`Done in block ${rc.blockNumber}. <a href="${data.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      setTimeout(() => load(selected()), 4000);
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status(/rejected|denied|4001/i.test(m) ? 'Rejected in the wallet. Nothing changed.' : `Failed: ${m}`, 'bad');
+    }
+  }
+
+  root.addEventListener('click', (e) => {
+    const a = e.target.closest('.revoke-allow');
+    if (a) { const r = data.allowances[+a.dataset.i]; if (confirm(`Set ${r.symbol || r.token}'s allowance for ${r.spenderLabel || r.spender} to 0?`)) send(`approve(${short(r.spender)}, 0)`, () => new ethers.Contract(r.token, ERC20, signer).approve(r.spender, 0)); }
+    const o = e.target.closest('.revoke-op');
+    if (o) { const r = data.operators[+o.dataset.i]; if (confirm(`Revoke operator ${r.operator} on Uniswap ${r.version}?${r.isCollector ? ' This is the collector: fees stop being collected for this wallet.' : ''}`)) send(`setApprovalForAll(${short(r.operator)}, false)`, () => new ethers.Contract(r.manager, NFT, signer).setApprovalForAll(r.operator, false)); }
+  });
+  $('[data-id="connect"]').addEventListener('click', connect);
+  $('[data-id="reload"]').addEventListener('click', () => load(selected()));
+  $('[data-id="wallet"]').addEventListener('change', () => load(selected()));
+  load().catch((e) => status(`Could not load: ${e.message}`, 'bad'));
+})();
+
+</script>
+<script>
+const initApprove = ((root, VERSION) => {
+  const $ = (s) => root.querySelector(s);
+  const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
+  const ABI = [
+    'function isApprovedForAll(address owner, address operator) view returns (bool)',
+    'function setApprovalForAll(address operator, bool approved)',
+  ];
+  let cfg = null;           // from /api/approval?v=N: owner, operator, posm, chainId, rpc, explorer, approved
+  let provider = null, signer = null, account = null, chainOk = false, approved = null;
+
+  const status = (msg, cls = '') => { $('[data-id="status"]').innerHTML = `<span class="${cls}">${msg}</span>`; };
+
+  function render() {
+    $('[data-id="title"]').textContent = `Approve the V${VERSION} fee collector`;
+    $('[data-id="subtitle"]').innerHTML = `One-time setup. Your wallet signs a single <span class="mono">setApprovalForAll</span> on the Uniswap v${VERSION} ${VERSION === 3 ? 'NonfungiblePositionManager' : 'PositionManager'}. No private key is entered anywhere.`;
+    $('[data-id="explain"]').innerHTML = VERSION === 3
+      ? `With this approval the operator is treated like an owner of every v3 position NFT this wallet holds now or later: it can call <span class="mono">collect</span> (what the collector does), and technically also <span class="mono">decreaseLiquidity</span>, <span class="mono">burn</span> or transfer the NFTs. It cannot touch tokens or ETH held in your wallet. Grant it only to an operator key you control, and revoke it any time with <span class="mono">setApprovalForAll(operator, false)</span>. (Per-position approval with <span class="mono">approve-operator.js &lt;tokenId&gt;</span> is the narrower alternative.)`
+      : `With this approval the operator can call <span class="mono">modifyLiquidities</span> on v4 positions this wallet owns. The collector uses it only to take accrued fees (decrease 0 liquidity, then take both currencies to the sweep recipient); the same permission would also allow withdrawing liquidity, so grant it only to an operator key you control. It cannot move tokens or ETH held in your wallet, and you can revoke it any time with <span class="mono">setApprovalForAll(operator, false)</span>.`;
+    $('[data-id="owner"]').textContent = cfg.owner;
+    $('[data-id="ownerlabel"]').textContent = cfg.ownerLabel || '—';
+    $('[data-id="wallets"]').innerHTML = (cfg.wallets || []).map((w) => `<div class="row"><span><span class="mono">${w.address}</span> <span class="note">${w.label}${w.main ? ' · main' : w.collect ? ' · collect on' : ' · watch only'}</span></span><span>${w.approved === true ? '<span class="pill ok">approved</span>' : w.approved === false ? '<span class="pill bad">not approved</span>' : '<span class="pill warn">unknown</span>'}${account && account.toLowerCase() === w.address.toLowerCase() ? ' <span class="pill ok">connected</span>' : ''}</span></div>`).join('');
+    $('[data-id="operator"]').textContent = cfg.operator || 'unknown (no operator keystore on the server)';
+    $('[data-id="posm"]').textContent = cfg.posm;
+    $('[data-id="network"]').textContent = `${cfg.chainName} (chainId ${cfg.chainId})`;
+    $('[data-id="tx-to"]').textContent = cfg.posm;
+    if (cfg.operator) {
+      const iface = new ethers.Interface(ABI);
+      $('[data-id="tx-data"]').textContent = iface.encodeFunctionData('setApprovalForAll', [cfg.operator, true]);
+    }
+    const a = $('[data-id="approval"]');
+    if (approved === true) a.innerHTML = '<span class="pill ok">approved</span> the operator can already collect v4 fees';
+    else if (approved === false) a.innerHTML = '<span class="pill bad">not approved</span>';
+    else a.innerHTML = '<span class="pill warn">unknown</span>';
+    $('[data-id="revoke"]').hidden = approved !== true;
+    $('[data-id="verify"]').disabled = !cfg.operator;
+    const others = cfg.others || [];
+    $('[data-id="otherscard"]').hidden = !others.length;
+    $('[data-id="others"]').innerHTML = others.map((o) => `<div class="row"><span class="mono">${o.address}</span><span><span class="pill bad">approved</span> <button class="revoke-other" data-op="${o.address}" ${account && chainOk ? '' : 'disabled'}>Revoke</button></span></div>`).join('');
+    for (const b of root.querySelectorAll('.revoke-other')) b.addEventListener('click', () => { if (confirm(`Revoke approval for ${b.dataset.op}? The collector must not depend on this key any more.`)) revokeOther(b.dataset.op); });
+    updateButtons();
+  }
+
+  async function revokeOther(op) {
+    if (!signer) { status('Connect the owner wallet first.', 'warn'); return; }
+    try {
+      const c = new ethers.Contract(cfg.posm, ABI, signer);
+      status(`Confirm in your wallet: setApprovalForAll(${short(op)}, false)…`, 'warn');
+      const tx = await c.setApprovalForAll(op, false);
+      status(`Sent <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting for confirmation…`, 'warn');
+      const rc = await tx.wait();
+      status(`Revoked ${short(op)} in block ${rc.blockNumber}. <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      await loadConfig();
+      await refreshApproval();
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status(/rejected|denied|4001/i.test(m) ? 'Transaction rejected in the wallet. Nothing was sent.' : `Failed: ${m}`, 'bad');
+    }
+  }
+
+  function updateButtons() {
+    const ready = !!(cfg && cfg.operator && account && chainOk && $('[data-id="verify"]').checked && account.toLowerCase() === cfg.owner.toLowerCase());
+    $('[data-id="approve"]').disabled = !ready || approved === true;
+    $('[data-id="revoke"]').disabled = !ready;
+    $('[data-id="switch"]').hidden = !(account && !chainOk);
+  }
+
+  async function loadConfig() {
+    // The owner whose approval this page manages: the connected wallet if it is one of the listed wallets, else the main wallet.
+    const r = await fetch('/api/approval?v=' + VERSION + (account ? '&owner=' + account : ''), { cache: 'no-store' });
+    if (!r.ok) throw new Error(`server returned ${r.status}`);
+    cfg = await r.json();
+    if (!cfg.ok) throw new Error(cfg.error || 'bad config');
+    approved = cfg.approved; // server-side read over its own RPC, no wallet needed
+    render();
+  }
+
+  async function refreshApproval() {
+    // Read again through the RPC in the wallet's provider once connected, so the page never trusts one source only.
+    try {
+      const rp = new ethers.JsonRpcProvider(cfg.rpc, cfg.chainId);
+      const c = new ethers.Contract(cfg.posm, ABI, rp);
+      approved = await c.isApprovedForAll(cfg.owner, cfg.operator);
+    } catch (e) { /* keep the server's answer */ }
+    render();
+  }
+
+  async function connect() {
+    if (!window.ethereum) { status('No wallet found. Install MetaMask (or open this page in a wallet browser).', 'bad'); return; }
+    try {
+      provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send('eth_requestAccounts', []);
+      account = ethers.getAddress(accounts[0]);
+      signer = await provider.getSigner();
+      await checkChain();
+      try { await loadConfig(); } catch (e) { status(`${e.message}`, 'bad'); }
+      const mine = account.toLowerCase() === cfg.owner.toLowerCase();
+      $('[data-id="wallet"]').innerHTML = `<span class="mono">${short(account)}</span> ${mine ? '<span class="pill ok">owner</span>' : '<span class="pill bad">not the owner wallet</span>'}`;
+      if (!mine) status(`Connected account ${short(account)} is not the main wallet or a wallet listed in wallets.json. Switch accounts in your wallet.`, 'bad');
+      else if (!chainOk) status('Wrong network. Click "Switch to Robinhood Chain".', 'warn');
+      else status('Connected. Tick the checkbox, then approve.', 'ok');
+      window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
+      window.ethereum.on && window.ethereum.on('chainChanged', () => location.reload());
+      await refreshApproval();
+      render();
+    } catch (e) {
+      status(`Connection failed: ${e.shortMessage || e.message}`, 'bad');
+    }
+  }
+
+  async function checkChain() {
+    const net = await provider.getNetwork();
+    chainOk = Number(net.chainId) === Number(cfg.chainId);
+    updateButtons();
+  }
+
+  async function switchChain() {
+    const hex = '0x' + Number(cfg.chainId).toString(16);
+    try {
+      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] });
+    } catch (e) {
+      if (e.code === 4902 || /unrecognized|not added/i.test(e.message || '')) {
+        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{
+          chainId: hex, chainName: cfg.chainName, rpcUrls: [cfg.rpc],
+          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, blockExplorerUrls: [cfg.explorer],
+        }] });
+      } else { status(`Could not switch network: ${e.message}`, 'bad'); return; }
+    }
+    await checkChain();
+    status(chainOk ? 'On Robinhood Chain.' : 'Still on the wrong network.', chainOk ? 'ok' : 'warn');
+  }
+
+  async function send(flag) {
+    if (!signer) return;
+    $('[data-id="approve"]').disabled = true; $('[data-id="revoke"]').disabled = true;
+    try {
+      const c = new ethers.Contract(cfg.posm, ABI, signer);
+      status(`Confirm in your wallet: setApprovalForAll(${short(cfg.operator)}, ${flag})…`, 'warn');
+      const tx = await c.setApprovalForAll(cfg.operator, flag);
+      status(`Sent <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting for confirmation…`, 'warn');
+      const rc = await tx.wait();
+      status(`${flag ? 'Approved' : 'Revoked'} in block ${rc.blockNumber}. <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      await refreshApproval();
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status(/rejected|denied|4001/i.test(m) ? 'Transaction rejected in the wallet. Nothing was sent.' : `Failed: ${m}`, 'bad');
+      updateButtons();
+    }
+  }
+
+  $('[data-id="connect"]').addEventListener('click', connect);
+  $('[data-id="switch"]').addEventListener('click', switchChain);
+  $('[data-id="approve"]').addEventListener('click', () => send(true));
+  $('[data-id="revoke"]').addEventListener('click', () => { if (confirm('Revoke the operator\'s v4 approval?')) send(false); });
+  $('[data-id="verify"]').addEventListener('change', updateButtons);
+
+  loadConfig().catch((e) => {
+    status(`Could not load the configuration: ${e.message}. Open this page from the dashboard server (http://127.0.0.1:8787/wallet) or run \`npm run approve\` (port 3333).`, 'bad');
+  });
+});
+  initApprove(document.getElementById('approve-v3'), 3);
+  initApprove(document.getElementById('approve-v4'), 4);
+</script>
+<script>
+
+// ── Config ────────────────────────────────────────────────────────────────────
+const EXPLORER = 'https://robinhoodchain.blockscout.com';
+const CHAIN_ID = 4663;
+
+const NFT_ABI = [
+  'function ownerOf(uint256) view returns (address)',
+  'function tbaAddress() view returns (address)',
+  'function feeSplitPct() view returns (uint256)',
+  'function setFeeSplitPct(uint256 pct) external',
+  'function safeTransferFrom(address,address,uint256) external',
+];
+
+const TBA_ABI = [
+  'function withdraw(address token, uint256 amount, address to) external',
+  'function withdrawAll(address token, address to) external',
+  'function withdrawETH(uint256 amount, address to) external',
+  'function withdrawAllETH(address to) external',
+  'function getBalance(address token) view returns (uint256)',
+  'function getNativeBalance() view returns (uint256)',
+];
+
+const ERC20_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function symbol() view returns (string)',
+  'function decimals() view returns (uint8)',
+];
+
+const KNOWN_TOKENS = {
+  '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168': { symbol: 'USDG', decimals: 6 },
+  '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73': { symbol: 'WETH', decimals: 18 },
+  '0x020bfc650a365f8bb26819deaabf3e21291018b4': { symbol: 'CASHCAT', decimals: 18 }, // weekly-digest-and-vault: corrected address (the previous one is not a contract on this chain)
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let provider = null;
+let signer = null;
+let connectedAddress = null;
+let nftAddress = null;
+let tbaAddress = null;
+let nftOwner = null;
+let isOwner = false;
+let balances = {};
+let currentSplitPct = 10;
+
+// Load config
+async function loadConfig() {
+  try {
+    const r = await fetch('/config.json');
+    const c = await r.json();
+    nftAddress = c.treasuryNFT;
+    tbaAddress = c.treasuryTBA;
+    if (nftAddress) {
+      document.getElementById('nft-address').textContent = short(nftAddress);
+      document.getElementById('tba-address').textContent = short(tbaAddress);
+      document.getElementById('blockscout-nft').href = `${EXPLORER}/token/${nftAddress}`;
+      document.getElementById('blockscout-tba').href = `${EXPLORER}/address/${tbaAddress}`;
+    }
+  } catch(e) {
+    console.error('Config not loaded:', e.message);
+  }
+}
+
+// ── Wallet ────────────────────────────────────────────────────────────────────
+async function connectWallet() {
+  if (!window.ethereum) {
+    alert('No wallet found. Install Rabby or MetaMask.');
+    return;
+  }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send('eth_requestAccounts', []);
+
+    const network = await provider.getNetwork();
+    if (Number(network.chainId) !== CHAIN_ID) {
+      try {
+        await provider.send('wallet_switchEthereumChain', [{ chainId: '0x' + CHAIN_ID.toString(16) }]);
+      } catch(e) {
+        await provider.send('wallet_addEthereumChain', [{
+          chainId: '0x' + CHAIN_ID.toString(16),
+          chainName: 'Robinhood Chain',
+          rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
+          nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+          blockExplorerUrls: [EXPLORER],
+        }]);
+      }
+    }
+
+    signer = await provider.getSigner();
+    connectedAddress = await signer.getAddress();
+    document.getElementById('connect-btn').textContent = short(connectedAddress);
+
+    await checkOwnership();
+    await loadBalances();
+    await loadHistory();
+    startAutoRefresh();
+  } catch(e) {
+    console.error('Connect failed:', e.message);
+  }
+}
+
+async function checkOwnership() {
+  if (!nftAddress || !connectedAddress) return;
+  try {
+    const nft = new ethers.Contract(nftAddress, NFT_ABI, provider);
+    nftOwner = await nft.ownerOf(1);
+    currentSplitPct = Number(await nft.feeSplitPct());
+
+    document.getElementById('nft-owner').textContent = short(nftOwner);
+    document.getElementById('split-val').textContent = currentSplitPct;
+    document.getElementById('split-slider').value = currentSplitPct;
+    document.getElementById('svg-pct').textContent = currentSplitPct + '%';
+    document.getElementById('seal-split').textContent = currentSplitPct + '%';
+    onSlider(currentSplitPct);
+
+    isOwner = nftOwner.toLowerCase() === connectedAddress.toLowerCase();
+
+    const badge = document.getElementById('owner-badge');
+    if (isOwner) {
+      badge.className = 'nft-badge badge-owner';
+      badge.textContent = '✓ You own this vault';
+      document.getElementById('split-locked').style.display = 'none';
+      document.getElementById('split-controls').style.display = 'block';
+      document.getElementById('withdraw-locked').style.display = 'none';
+      document.getElementById('withdraw-controls').style.display = 'block';
+      document.getElementById('transfer-section').style.display = 'block';
+
+      // Set default destination
+      document.getElementById('withdraw-dest').value = connectedAddress;
+    } else {
+      badge.className = 'nft-badge badge-readonly';
+      badge.textContent = '👁 Read only';
+    }
+  } catch(e) {
+    console.error('Ownership check failed:', e.message);
+  }
+}
+
+// ── Balances ──────────────────────────────────────────────────────────────────
+async function loadBalances() {
+  if (!tbaAddress) return;
+  const grid = document.getElementById('balance-grid');
+  const rpc = new ethers.JsonRpcProvider('https://rpc.mainnet.chain.robinhood.com');
+
+  try {
+    // ETH balance
+    const ethBal = await rpc.getBalance(tbaAddress);
+    balances['ETH'] = { amount: ethers.formatEther(ethBal), symbol: 'ETH', address: null, usd: 0 };
+
+    // Known ERC-20 tokens (a token that fails to answer is skipped, not fatal — weekly-digest-and-vault)
+    for (const [addr, info] of Object.entries(KNOWN_TOKENS)) {
+      try {
+        const token = new ethers.Contract(addr, ERC20_ABI, rpc);
+        const bal = await token.balanceOf(tbaAddress);
+        const formatted = ethers.formatUnits(bal, info.decimals);
+        balances[info.symbol] = { amount: formatted, symbol: info.symbol, address: addr, usd: 0 };
+      } catch(e) {
+        console.warn('Balance skipped for', info.symbol, e.message);
+      }
+    }
+
+    renderBalances();
+    populateTokenSelect();
+
+    document.getElementById('last-refresh').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    console.error('Balance load failed:', e.message);
+  }
+}
+
+function renderBalances() {
+  const grid = document.getElementById('balance-grid');
+  const entries = Object.entries(balances).filter(([,v]) => parseFloat(v.amount) > 0 || v.symbol === 'ETH');
+
+  if (entries.length === 0) {
+    grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">No tokens in vault yet</div>';
+    document.getElementById('total-usd').textContent = '$0.00';
+    return;
+  }
+
+  grid.innerHTML = entries.map(([sym, data]) => `
+    <div class="balance-item">
+      <div class="balance-symbol">${sym}</div>
+      <div class="balance-amount">${parseFloat(data.amount).toLocaleString(undefined, {maximumFractionDigits: 4})}</div>
+    </div>
+  `).join('');
+
+  document.getElementById('total-usd').textContent =
+    parseFloat(balances['USDG']?.amount || 0).toFixed(2) !== '0.00'
+    ? '$' + parseFloat(balances['USDG']?.amount || 0).toFixed(2)
+    : '—';
+}
+
+function populateTokenSelect() {
+  const sel = document.getElementById('withdraw-token');
+  sel.innerHTML = '<option value="">Select token...</option>';
+  for (const [sym, data] of Object.entries(balances)) {
+    if (parseFloat(data.amount) > 0) {
+      const opt = document.createElement('option');
+      opt.value = data.address || 'ETH';
+      opt.textContent = `${sym} (${parseFloat(data.amount).toFixed(4)})`;
+      opt.dataset.symbol = sym;
+      opt.dataset.amount = data.amount;
+      sel.appendChild(opt);
+    }
+  }
+}
+
+// ── Slider ────────────────────────────────────────────────────────────────────
+function onSlider(val) {
+  val = parseInt(val);
+  document.getElementById('split-val').textContent = val;
+  document.getElementById('svg-pct').textContent = val + '%';
+  const warning = document.getElementById('split-warning');
+  warning.style.display = val > 15 ? 'block' : 'none';
+}
+
+async function updateSplit() {
+  const newPct = parseInt(document.getElementById('split-slider').value);
+  const btn = document.getElementById('update-split-btn');
+  const status = document.getElementById('split-status');
+
+  if (newPct === currentSplitPct) {
+    showStatus(status, 'Already set to ' + newPct + '%', 'pending');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Waiting for signature...';
+  showStatus(status, 'Confirm in Rabby...', 'pending');
+
+  try {
+    const nft = new ethers.Contract(nftAddress, NFT_ABI, signer);
+    const tx = await nft.setFeeSplitPct(newPct);
+    showStatus(status, 'Transaction submitted...', 'pending');
+    await tx.wait();
+    currentSplitPct = newPct;
+    showStatus(status, `✓ Split updated to ${newPct}% — TX: ${short(tx.hash)}`, 'success');
+  } catch(e) {
+    showStatus(status, '✗ ' + (e.reason || e.message), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Update split %';
+  }
+}
+
+// ── Withdraw ──────────────────────────────────────────────────────────────────
+function onTokenSelect() {
+  const sel = document.getElementById('withdraw-token');
+  const opt = sel.options[sel.selectedIndex];
+  if (opt && opt.dataset.amount) {
+    // Don't auto-fill, let user enter amount
+  }
+}
+
+function setMax() {
+  const sel = document.getElementById('withdraw-token');
+  const opt = sel.options[sel.selectedIndex];
+  if (opt && opt.dataset.amount) {
+    document.getElementById('withdraw-amount').value = opt.dataset.amount;
+  }
+}
+
+async function doWithdraw() {
+  const tokenAddr = document.getElementById('withdraw-token').value;
+  const amount = document.getElementById('withdraw-amount').value;
+  const dest = document.getElementById('withdraw-dest').value;
+  const btn = document.getElementById('withdraw-btn');
+  const status = document.getElementById('withdraw-status');
+
+  if (!tokenAddr || !amount || !dest) {
+    showStatus(status, 'Fill all fields', 'error');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Waiting for signature...';
+  showStatus(status, 'Confirm in Rabby...', 'pending');
+
+  try {
+    const tba = new ethers.Contract(tbaAddress, TBA_ABI, signer);
+    let tx;
+
+    if (tokenAddr === 'ETH') {
+      const wei = ethers.parseEther(amount);
+      tx = await tba.withdrawETH(wei, dest);
+    } else {
+      const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+      const decimals = await token.decimals();
+      const parsed = ethers.parseUnits(amount, decimals);
+      tx = await tba.withdraw(tokenAddr, parsed, dest);
+    }
+
+    showStatus(status, 'Transaction submitted...', 'pending');
+    await tx.wait();
+    showStatus(status, `✓ Withdrawn! TX: <a href="${EXPLORER}/tx/${tx.hash}" target="_blank">${short(tx.hash)}</a>`, 'success');
+    await loadBalances();
+  } catch(e) {
+    showStatus(status, '✗ ' + (e.reason || e.message), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Withdraw';
+  }
+}
+
+async function transferNFT() {
+  const to = prompt('Transfer LOKOVault #1 to address:\n\n⚠️ This transfers full vault control!');
+  if (!to || !to.startsWith('0x')) return;
+  try {
+    const nft = new ethers.Contract(nftAddress, NFT_ABI, signer);
+    const tx = await nft.safeTransferFrom(connectedAddress, to, 1);
+    await tx.wait();
+    alert('NFT transferred! You no longer control this vault.');
+    location.reload();
+  } catch(e) {
+    alert('Transfer failed: ' + e.message);
+  }
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const r = await fetch('/fee-split-ledger.json');
+    const data = await r.json();
+    if (!data || data.length === 0) return;
+
+    const total = data.reduce((s, r) => s + (r.splitUsdg || 0), 0);
+
+    document.getElementById('history-content').innerHTML = `
+      <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <span class="note" style="letter-spacing:.14em;text-transform:uppercase;font-size:10.5px">Closing balance · all deposits</span>
+        <span style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--gold);text-shadow:0 0 18px var(--glow-gold)">${total.toFixed(2)} USDG</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Wallet</th>
+              <th>Position</th>
+              <th>Collected</th>
+              <th>Split %</th>
+              <th>Amount</th>
+              <th>TX</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.slice(-50).reverse().map(r => `
+              <tr>
+                <td>${new Date(r.timestamp).toLocaleDateString()}</td>
+                <td>${r.wallet || 'Main'}</td>
+                <td>#${r.positionId}</td>
+                <td>${(r.totalCollectedUsdg || 0).toFixed(2)} USDG</td>
+                <td>${r.splitPct || 10}%</td>
+                <td style="color:var(--gold)">${(r.splitUsdg || 0).toFixed(4)} USDG</td>
+                <td><a href="${EXPLORER}/tx/${r.splitTxHash}" target="_blank">${short(r.splitTxHash || '')}</a></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch(e) {
+    // No history yet
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function short(addr) {
+  if (!addr) return '—';
+  return addr.slice(0, 6) + '...' + addr.slice(-4);
+}
+
+function copyAddr(id) {
+  const el = document.getElementById(id);
+  const text = el.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    el.textContent = 'copied!';
+    setTimeout(() => el.textContent = text, 1500);
+  });
+}
+
+function showStatus(el, msg, type) {
+  el.innerHTML = msg;
+  el.className = `status-msg status-${type}`;
+  el.style.display = 'block';
+}
+
+function startAutoRefresh() {
+  setInterval(loadBalances, 30000);
+}
+
+// === weekly-digest-and-vault ===
+// Read-only view without a wallet: owner and split from the public RPC, balances and history as usual.
+let autoRefreshStarted = false;
+async function loadPublicInfo() {
+  if (!nftAddress) return;
+  try {
+    // Served by the dashboard (server-side RPC): works without a wallet and without CORS on the RPC.
+    const r = await fetch('/api/vault-info');
+    const info = await r.json();
+    if (!info.ok) throw new Error(info.error || 'vault-info failed');
+    if (info.publicHost) renderQr(info.publicHost);
+    if (info.owner) nftOwner = info.owner;
+    if (info.pct != null) currentSplitPct = Number(info.pct);
+    if (!connectedAddress && info.balances && info.balances.length) {
+      for (const b of info.balances) balances[b.symbol] = { amount: b.amount, symbol: b.symbol, address: b.address, usd: 0 };
+      renderBalances();
+      document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    }
+    document.getElementById('nft-owner').textContent = nftOwner ? short(nftOwner) : '—';
+    document.getElementById('split-val').textContent = currentSplitPct;
+    document.getElementById('split-slider').value = currentSplitPct;
+    document.getElementById('svg-pct').textContent = currentSplitPct + '%';
+    document.getElementById('seal-split').textContent = currentSplitPct + '%';
+    if (!connectedAddress) {
+      const badge = document.getElementById('owner-badge');
+      badge.className = 'nft-badge badge-readonly';
+      badge.textContent = '👁 Read only — connect the NFT holder wallet to manage';
+    }
+  } catch(e) {
+    console.error('Public info failed:', e.message);
+  }
+}
+function renderQr(host) {
+  if (typeof QR === 'undefined') return;
+  // The node's public name comes from the server at runtime (/api/vault-info publicHost).
+  const card = document.getElementById('qr-card');
+  if (!host || card.hasAttribute('hidden')) { card.style.display = 'none'; return; }
+  const pub = `https://${host}:8443/wallet#vault`;
+  const tail = `https://${host}:8444/wallet#vault`;
+  try {
+    document.getElementById('qr-public').innerHTML = QR.qrSvg(pub, 150);
+    document.getElementById('qr-tailnet').innerHTML = QR.qrSvg(tail, 150);
+    document.getElementById('qr-public-url').textContent = pub;
+    document.getElementById('qr-tailnet-url').textContent = tail;
+  } catch(e) {
+    document.getElementById('qr-card').style.display = 'none';
+  }
+  // A phone does not need to scan itself.
+  if (window.innerWidth < 640) document.getElementById('qr-card').style.display = 'none';
+}
+const _startAutoRefresh = startAutoRefresh;
+startAutoRefresh = function () { if (autoRefreshStarted) return; autoRefreshStarted = true; _startAutoRefresh(); };
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadConfig().then(async () => {
+  await loadPublicInfo(); // also draws the phone QR codes once the server reports the node's public name
+  await loadBalances();
+  await loadHistory();
+  startAutoRefresh();
+  if (window.ethereum?.selectedAddress) connectWallet();
+});
+// === end weekly-digest-and-vault ===
+
+</script>
+<script>
+(() => {
+  const root = document.getElementById('sec-operator');
+  const $ = (s) => root.querySelector(s);
+  const ago = (t) => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
+  async function load() {
+    try {
+      const d = await (await fetch('/api/positions', { cache: 'no-store' })).json();
+      $('[data-id="op-address"]').textContent = d.operator || 'no operator keystore on this machine';
+      $('[data-id="op-gas"]').innerHTML = d.operatorGas ? `<b>${d.operatorGas.eth.toFixed(4)} ETH</b>${d.operatorGas.low ? ' <span class="pill warn">low — the next collect tops it up from the sweep</span>' : ''}` : '—';
+      const u = d.unlock || {};
+      $('[data-id="op-armed"]').innerHTML = u.armed ? `<span class="pill ok">armed</span> ${Math.floor(u.minutesLeft / 60)} h ${u.minutesLeft % 60} min left` : '<span class="pill bad">locked</span> arm it in the Arm tab';
+      const lr = d.ops && d.ops.lastRun;
+      $('[data-id="op-lastrun"]').textContent = lr && lr.t ? `${new Date(lr.t).toLocaleString()} · ${lr.mode || ''} · ${lr.collected != null ? lr.collected + ' collected' : ''}${lr.failed ? ', ' + lr.failed + ' failed' : ''}` : 'no run recorded';
+      const g = d.ops && d.ops.gas24h;
+      $('[data-id="op-gas24"]').textContent = g ? `${(g.eth || 0).toFixed(5)} ETH${g.capEth ? ' of ' + g.capEth + ' ETH cap' : ''}` : '—';
+    } catch (e) { $('[data-id="op-address"]').textContent = 'could not load: ' + e.message; }
+    try {
+      const r = await (await fetch('/api/risk', { cache: 'no-store' })).json();
+      const loops = r.loops || {};
+      $('[data-id="op-loops"]').innerHTML = Object.keys(loops).length ? Object.values(loops).map((l) => `<div class="row"><span class="k">${l.label}</span><span>${l.stale ? '<span class="pill bad">late</span>' : '<span class="pill ok">ok</span>'} last cycle ${ago(l.ageMin == null ? null : Date.now() - l.ageMin * 60000)}${l.lastResult ? ' · exit ' + l.lastResult.code : ''}</span></div>`).join('') : '<span class="muted">loops run in the main dashboard process only</span>';
+    } catch (e) { $('[data-id="op-loops"]').textContent = 'could not load loop health'; }
+  }
+  load(); setInterval(load, 60000);
+})();
+</script>
+<script src="/chat-widget.js"></script>
+</body>
+</html>

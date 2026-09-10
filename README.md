@@ -19,10 +19,12 @@ which also exposes it to your local network, so prefer the default.
 Reads load no key. Your RPC endpoint stays in the Node process and is never
 handed to the browser, which also means no CORS to fight.
 
-The site has these pages: the dashboard at `/` (tiles, Positions panel for every wallet, Memecoin
-Watch, Portfolio), `/analytics` (income, taxes, attribution, staking, vault), `/treasury` (alias
-`/vault`, the LOKOVault page), `/approvals` (allowance and operator audit), `/arm` (arm the collector
-with a wallet signature) and `/approve-v3`, `/approve-v4` (operator approvals). A wallet picker in the
+The site has three pages: the dashboard at `/` (tiles, Positions panel for every wallet, Risk,
+Portfolio), `/analytics` (income, taxes, attribution, staking, vault tile) and `/wallet`, whose tabs
+hold everything that needs your wallet: `#arm` (arm the collector with a wallet signature),
+`#approvals` (allowance and operator audit with revoke buttons, plus the v3 / v4 operator approvals),
+`#vault` (the LOKOVault page) and `#operator` (operator status and loop health). The old addresses
+(`/arm`, `/approvals`, `/approve-v3`, `/approve-v4`, `/treasury`, `/vault`) redirect to their tab. A wallet picker in the
 header switches the dashboard between the main wallet, all wallets, and each watched wallet; see
 "Watching other wallets" below.
 
@@ -335,30 +337,30 @@ collected fees are swapped to USDG, `feeSplitPct` % is sent to the vault's token
 to the wallet; if the vault transfer fails the wallet receives everything and the failure is recorded.
 Every pass is appended to `fee-split-ledger.json` (served at `/fee-split-ledger.json`). Simulate mode
 prints "Treasury split: … → LOKOVault TBA" and "Owner receives: …". The split is off until `treasuryTBA`
-is set. `/treasury` serves `treasury.html` (the vault page, wallet-signed, no keys), `/api/treasury`
+is set. `/wallet#vault` is the vault page (wallet-signed, no keys), `/api/treasury`
 returns settings, the TBA's USDG balance and totals by month; the Analytics page has a LOKOVault panel
 and the tax table/CSV carry the vault split. Alerts: three consecutive failed vault transfers, vault
 balance ≥ `treasuryWithdrawAlertUsdg` (config.json, default 1000 USDG; repeated every 6 h while it stays above), split % changed (on-chain value when the TBA exposes `feeSplitPct()`), sent to
 `TELEGRAM_TREASURY_CHAT_ID` (default the group) with fallback to the main chat. The contracts
-(`TreasuryNFT.sol`, `TreasuryAccount.sol`), `deploy-treasury.js` and `treasury.html` are supplied
+(`TreasuryNFT.sol`, `TreasuryAccount.sol`) and `deploy-treasury.js` are supplied
 separately; `solc` is installed for the deploy script.
 
 ### Vault from your phone
 
-Three URLs serve the same page (`treasury.html`, also at `/vault`):
+Three URLs serve the same page (the Vault tab of `wallet.html`; `/treasury` and `/vault` redirect to it):
 
 | URL | Works from | What you can do |
 |---|---|---|
-| `http://127.0.0.1:8787/vault` | the PC only | everything, with Rabby/MetaMask in the browser |
-| `https://<your-node>.<your-tailnet>.ts.net:8443/vault` | anywhere (Funnel, passphrase gate) | read-only in a normal browser; withdraw / change the split when opened **inside Rabby mobile's in-app browser** (Rabby → Discover → paste the URL), which is what gives the page a wallet to sign with |
-| `https://<your-node>.<your-tailnet>.ts.net:8444/vault` | devices logged into the tailnet (no gate) | same as above; the phone needs the Tailscale app for this one |
+| `http://127.0.0.1:8787/wallet#vault` | the PC only | everything, with Rabby/MetaMask in the browser |
+| `https://<your-node>.<your-tailnet>.ts.net:8443/wallet#vault` | anywhere (Funnel, passphrase gate) | read-only in a normal browser; withdraw / change the split when opened **inside Rabby mobile's in-app browser** (Rabby → Discover → paste the URL), which is what gives the page a wallet to sign with |
+| `https://<your-node>.<your-tailnet>.ts.net:8444/wallet#vault` | devices logged into the tailnet (no gate) | same as above; the phone needs the Tailscale app for this one |
 
 The desktop vault page shows both URLs as QR codes ("Open on your phone"; `qr.js` is a small self-contained
 encoder, verified against a real decoder). Without a wallet the page loads the balances, split and history
 read-only. `run-tailscale.sh` adds the tailnet-only :8444 serve; the public :8443 route passes through the gate.
 
 The "Mobile access" card with the two QR codes is hidden on the page for now (`hidden` on
-`#qr-card` in `treasury.html`) until a public domain replaces the tailnet address. The server
+`#qr-card` in `wallet.html`) until a public domain replaces the tailnet address. The server
 still reports the node's public name at runtime (`/api/vault-info` → `publicHost`, from
 `LP_PUBLIC_HOST` or tailscaled), so removing the attribute brings the card back with the right
 links; no hostname lives in a tracked file.
@@ -465,8 +467,8 @@ own timers last completed a cycle (guardian, auto-collect, backup); it alerts on
 
 `token-health.js` scores every token held in any wallet (bytecode selectors for mint/pause/tax/admin,
 live `paused()`/`taxEnabled()`/`owner()` reads, Blockscout holders/age/verification; cached 6h in
-`token-health.json`, `/api/token-health`) and shows a 🟢/🟡/🔴 badge per Portfolio row. `/approvals`
-(`approvals.html`, `/api/approvals?owner=`) lists every ERC-20 allowance and operator approval of each
+`token-health.json`, `/api/token-health`) and shows a 🟢/🟡/🔴 badge per Portfolio row. The Approvals tab of the Wallet page
+(`/wallet#approvals`, `/api/approvals?owner=`) lists every ERC-20 allowance and operator approval of each
 wallet, flags unlimited or older-than-90-days ones, shows the LOKOVault holder/admin, and revokes with
 the connected wallet's signature. The header nav has an "Approvals" link.
 
@@ -474,7 +476,7 @@ the connected wallet's signature. The header nav has an "Approvals" link.
 
 `memecoin-guardian.js`, `guardian-logic.js`, `close-position.js`, `memecoin-collect.js`,
 `attribution.js`, `advisor.js`, `scout.js`, `compound.js`, `token-health.js`, `approvals.js`,
-`approvals.html`, `digest.js`, `daily.js`, `qr.js`, `ops.js` (collector-log parsing for alerts),
+`wallet.html` (arm, approvals, vault, operator tabs), `digest.js`, `daily.js`, `qr.js`, `ops.js` (collector-log parsing for alerts),
 `chat.js` + `chat-widget.js` (in-site chat), `strategy.js` (strategy dataset), `ledger-v4.js` (v4
 liquidity ledger), `sell-v4.js` (fee-token sells), and their tests under `test/`. `npm test` runs
 every suite plus the headless smoke test. Runtime state files (`memecoin-*.json`,
@@ -518,7 +520,7 @@ main wallet: its v3 positions (owner enumeration) and v4 positions (the dashboar
 that address) are simulated, the eligible ones collected to the operator, swapped to the sweep target and
 delivered back to that wallet itself. Each pass only moves what it produced (balance deltas from the
 start of the pass), so wallets never receive each other's fees. The wallet has to approve the operator
-once on each position manager: open `/approve-v3` and `/approve-v4`, connect that wallet, approve; the
+once on each position manager: open `/wallet#approvals`, unfold the v3 and v4 managers, connect that wallet, approve; the
 pages accept any listed wallet and show every wallet's approval state. The dashboard's wallet header
 line shows "collector: v3 ✓ v4 ✓" for collect-enabled wallets.
 
@@ -526,7 +528,7 @@ line shows "collector: v3 ✓ v4 ✓" for collect-enabled wallets.
 Uniswap v4 positions are collected too (`collect-v4.js`, `v4Collect.enabled` in config.json): a
 `modifyLiquidities` call that decreases 0 liquidity and takes both currencies to the recipient. It needs
 the operator approved on the v4 PositionManager once, from the owner wallet. Two ways: the browser pages
-`approve-v4.html` / `approve-v3.html` (open http://127.0.0.1:8787/approve-v4 or /approve-v3 while the dashboard
+the Wallet page's Approvals tab (open http://127.0.0.1:8787/wallet#approvals while the dashboard
 runs, or `npm run approve` for a standalone server on :3333 serving both; the v3 page grants the same blanket
 approval on the v3 NonfungiblePositionManager; connect the owner wallet in MetaMask, the page checks the network, the
 account and the current approval, shows the exact calldata, and signs `setApprovalForAll` in the wallet so
@@ -642,8 +644,8 @@ chmod 600 .env
 npm test                                   # alert tests + headless smoke test of every page (needs Windows Chrome from WSL)
 ```
 
-Then, from the browser with the owner wallet: `/approve-v3` and `/approve-v4` (operator approvals, one per
-wallet that should be collected), `/arm` (one-time passphrase seal, then sign to arm), and
+Then, from the browser with the owner wallet: `/wallet#approvals` (operator approvals, one per
+wallet that should be collected), `/wallet#arm` (one-time passphrase seal, then sign to arm), and
 `node deploy-treasury.js` once for the LOKOVault (writes its addresses into config.json). The JSON
 ledgers (`fee-*.json`, `portfolio*.json`, `price-log.json`, …) are runtime data, created on first run
 and restored from `backups/` or the VPS copy if you are moving machines. `./run-collector.sh simulate`
@@ -671,9 +673,9 @@ Then run `collect` for a while. Only move to `full` once you trust it.
 
 ## Unlocking
 
-### Arming with a wallet signature (arm.html)
+### Arming with a wallet signature (Wallet page, Arm tab)
 
-`http://127.0.0.1:8787/arm` (the dashboard's "Arm collector…" button opens it; shift-click keeps the old
+`http://127.0.0.1:8787/wallet#arm` (the dashboard's "Arm collector…" button opens it; shift-click keeps the old
 passphrase form) arms the collector with the owner wallet's signature instead of the passphrase. One-time
 setup: connect the owner wallet, enter the operator passphrase once and sign; `arm.js` verifies the
 passphrase against the keystore, derives an AES-256-GCM key from the signature bytes (EOA signatures over
@@ -869,6 +871,10 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Three pages: Dashboard, Analytics, Wallet. The Wallet page (`wallet.html`) holds the former
+  arm, approvals, approve-v3 / approve-v4 and treasury pages as tabs (Arm, Approvals with revoke
+  buttons and the operator approvals, Vault, Operator status) with the site's header; the old
+  addresses redirect to their tab. The smoke test loads every page at desktop and 375 px width.
 - One process: the risk guardian, fee auto-collect and the nightly backup are timers inside
   server.js; the gate, remote MCP server, Tailscale funnel and pool scanner are supervised children
   of it. `./start-all.sh` is one command, `./stop-all.sh` its opposite, `server.log` the one log.

@@ -401,7 +401,7 @@ server.registerTool(
       return text({
         asOf: new Date().toISOString(),
         armed: { armed: !!unlock.armed, minutesLeft: unlock.minutesLeft ?? null, until: unlock.until ? new Date(unlock.until).toISOString() : null,
-          note: unlock.armed ? "The collector can sign until this time; re-arm at /arm (up to 7 days) before it lapses." : "Nothing can be collected or closed until the collector is armed at /arm." },
+          note: unlock.armed ? "The collector can sign until this time; re-arm on the Wallet page (/wallet#arm, up to 7 days) before it lapses." : "Nothing can be collected or closed until the collector is armed at /arm." },
         autoCollect: m && m.autoCollect ? { ...m.autoCollect, lastRunAt: m.autoCollect.lastRunAt ? new Date(m.autoCollect.lastRunAt).toISOString() : null, lastCheckAt: m.autoCollect.lastCheckAt ? new Date(m.autoCollect.lastCheckAt).toISOString() : null,
           rule: `runs the collector when any memecoin position has ≥ $${m.autoCollect.minUsd} uncollected, at most every ${m.autoCollect.minIntervalMinutes} min` } : null,
         vault: t ? { splitPct: t.pct, splitSource: t.pctSource || "config", maxPct: t.max, balanceUsdg: round(t.balanceUsdg), totalSplitUsdg: round(t.totalSplitUsdg), splits: t.count, note: "The split applies to fees swapped to USDG; tokens with no swap route go back to the wallet whole." } : null,

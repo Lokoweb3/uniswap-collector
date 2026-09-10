@@ -21,9 +21,8 @@ const CHROME = process.env.CHROME || "/mnt/c/Program Files/Google/Chrome/Applica
 const PAGES = [
   { path: "/", marker: 'id="summary"' },
   { path: "/analytics", marker: 'id="perfsec"' },
-  { path: "/arm", marker: 'id="state"' },
-  { path: "/approve-v4", marker: 'id="approve"' },
-  { path: "/treasury", marker: "<html" },
+  { path: "/wallet", marker: 'id="sec-arm"' },
+  { path: "/wallet#vault", marker: 'id="sec-vault"' },
 ];
 // Console lines that are noise, not errors.
 const IGNORE = [/Password field is not contained in a form/i, /DevTools listening/i, /Fontconfig/i];
@@ -42,10 +41,10 @@ async function waitFor(url, ms, perRequestMs = 3000) {
   return false;
 }
 
-function loadPage(url) {
+function loadPage(url, width = 1280) {
   const r = spawnSync(
     CHROME,
-    ["--headless=new", "--disable-gpu", "--enable-logging=stderr", "--v=0", "--virtual-time-budget=20000", "--dump-dom", url],
+    ["--headless=new", "--disable-gpu", "--enable-logging=stderr", "--v=0", "--virtual-time-budget=20000", `--window-size=${width},${width < 600 ? 812 : 900}`, "--dump-dom", url],
     { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 90000 }
   );
   const dom = r.stdout || "";
@@ -78,17 +77,18 @@ async function main() {
     for (const warm of ["/api/history", "/api/strategy/lots"]) {
       if (!(await waitFor(`${base}${warm}`, 300000, 240000))) console.error(`smoke: ${warm} did not answer within 5 min; continuing`);
     }
-    for (const p of PAGES) {
-      const { dom, errors, status } = loadPage(base + p.path);
+    // Every page at desktop width and at a 375 px phone width: same markers, no console errors.
+    for (const width of [1280, 375]) for (const p of PAGES) {
+      const { dom, errors, status } = loadPage(base + p.path, width);
       const problems = [];
       if (status !== 0) problems.push(`chrome exited ${status}`);
       if (!dom.includes(p.marker)) problems.push(`marker ${p.marker} missing`);
       for (const e of errors) problems.push(e.trim().slice(0, 200));
       if (problems.length) {
         failed++;
-        console.log(`FAIL ${p.path}\n  ${problems.join("\n  ")}`);
+        console.log(`FAIL ${p.path} @${width}px\n  ${problems.join("\n  ")}`);
       } else {
-        console.log(`ok   ${p.path} (${dom.length} bytes)`);
+        console.log(`ok   ${p.path} @${width}px (${dom.length} bytes)`);
       }
     }
     // The split assets must be served with the right types.

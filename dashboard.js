@@ -1489,7 +1489,7 @@ $('#collect').addEventListener('click', startCollect);
 /* ---- arm / lock ---- */
 // Arm collector opens the wallet-signature page (/arm); shift-click keeps the inline passphrase form.
 $('#armbtn').addEventListener('click', (e) => {
-  if (!e.shiftKey) { location.href = '/arm'; return; }
+  if (!e.shiftKey) { location.href = '/wallet#arm'; return; }
   $('#armform').hidden = false;
   $('#armmsg').textContent = '';
   $('#armpass').focus();
@@ -1559,7 +1559,7 @@ function renderWatch(d){
     const earnedPart = e && (e.all > 0 || e.since) ? `<span title="Fee accrual from snapshots since ${e.since || 'today'}, at current prices">earned today <b>${usd(e.today)}</b> · 7d <b>${usd(e.d7)}</b></span>` : '';
     const c = w.collector;
     const mark = v => v === true ? '<span class="in">✓</span>' : v === false ? '<span class="idle">✗</span>' : '?';
-    const collectorPart = c && c.enabled ? `<span title="The collector collects this wallet's fees once it has approved the operator on the v3 and v4 position managers (/approve-v3, /approve-v4)">collector: v3 ${mark(c.v3)} v4 ${mark(c.v4)}${c.v3 === false || c.v4 === false ? ' <a href="/approve-v3" class="muted">approve</a>' : ''}</span>` : '';
+    const collectorPart = c && c.enabled ? `<span title="The collector collects this wallet's fees once it has approved the operator on the v3 and v4 position managers (Wallet page, Approvals tab)">collector: v3 ${mark(c.v3)} v4 ${mark(c.v4)}${c.v3 === false || c.v4 === false ? ' <a href="/wallet#approvals" class="muted">approve</a>' : ''}</span>` : '';
     const head = `<div class="wh">${link}<span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>in pools <b>${usd(t.liquidityUsd)}</b></span><span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}<span><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>`;
     // Top tokens sitting in the wallet, compact.
     const toks = h && h.tokens.length

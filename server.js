@@ -1172,15 +1172,23 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ ok: false, error: "This dashboard is read-only; the collector runs on another machine." }));
   }
 
-  // Wallet-signature arming (arm.js / arm.html). Loopback only, like unlock.
-  if (url.pathname === "/arm" || url.pathname === "/arm.html") {
+  // The Wallet page: arming, approvals (audit + operator approvals), the vault and the operator, as tabs.
+  // The former pages redirect to their tab so old links and bookmarks keep working.
+  if (url.pathname === "/wallet" || url.pathname === "/wallet.html") {
     try {
-      const html = fs.readFileSync(path.join(__dirname, "arm.html"));
+      const html = fs.readFileSync(path.join(__dirname, "wallet.html"));
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(html);
     } catch {
       res.writeHead(404, { "Content-Type": "text/plain" });
-      return res.end("arm.html not found");
+      return res.end("wallet.html not found");
+    }
+  }
+  {
+    const tab = { "/arm": "arm", "/approvals": "approvals", "/approve-v3": "approvals", "/approve-v4": "approvals", "/treasury": "vault", "/vault": "vault" }[url.pathname.replace(/\.html$/, "")];
+    if (tab) {
+      res.writeHead(302, { Location: `/wallet#${tab}` });
+      return res.end();
     }
   }
   if (url.pathname.startsWith("/api/arm")) {
@@ -1301,7 +1309,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Browser-based v4 operator approval (approve-v4.html): the page reads every
+  // Browser-based operator approval (the Wallet page, Approvals tab): the page reads every
   // address from here (config.json + the operator keystore's public address)
   // and the current approval state from this server's RPC.
   if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
@@ -1342,17 +1350,6 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
     }
   }
-  if (/^\/approve-v[34](\.html)?$/.test(url.pathname)) {
-    const file = url.pathname.includes("v3") ? "approve-v3.html" : "approve-v4.html";
-    try {
-      const html = fs.readFileSync(path.join(__dirname, file));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(html);
-    } catch {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      return res.end(`${file} not found`);
-    }
-  }
 
   if (url.pathname === "/api/portfolio-all") {
     res.setHeader("Content-Type", "application/json");
@@ -1360,17 +1357,7 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify(allWalletsView()));
   }
 
-  // LOKOVault: the treasury page, the split ledger, and a summary for the analytics tile.
-  if (url.pathname === "/treasury" || url.pathname === "/treasury.html") {
-    try {
-      const html = fs.readFileSync(path.join(__dirname, "treasury.html"));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(html);
-    } catch {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      return res.end("treasury.html is not installed yet: copy it into the project folder next to server.js");
-    }
-  }
+  // LOKOVault: the split ledger and a summary for the analytics tile (the vault page is a Wallet tab).
   if (url.pathname === "/config.json") {
     // Only the public treasury / contract addresses; nothing operational.
     const pick = ["chainId", "treasuryNFT", "treasuryTBA", "treasuryTokenId", "treasuryImplementation", "feeSplitPct", "feeSplitMax", "ownerAddress"];
@@ -1552,16 +1539,6 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
     }
   }
-  if (url.pathname === "/vault" || url.pathname === "/vault.html") {
-    try {
-      const html = fs.readFileSync(path.join(__dirname, "treasury.html"));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(html);
-    } catch {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      return res.end("treasury.html is not installed yet");
-    }
-  }
   if (url.pathname === "/qr.js") {
     try {
       res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
@@ -1585,16 +1562,6 @@ const server = http.createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     res.writeHead(200);
     return res.end(JSON.stringify(tokenHealth.view()));
-  }
-  if (url.pathname === "/approvals" || url.pathname === "/approvals.html") {
-    try {
-      const html = fs.readFileSync(path.join(__dirname, "approvals.html"));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(html);
-    } catch {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      return res.end("approvals.html not found");
-    }
   }
   if (url.pathname === "/api/approvals") {
     // Read-only audit of one wallet's allowances, operator approvals and vault

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `npm run approve`: serve approve-v4.html on http://127.0.0.1:3333 with the
+ * `npm run approve`: serve the Wallet page (its Approvals tab) on http://127.0.0.1:3333 with the
  * same /api/v4-approval endpoint the dashboard offers, for when the dashboard
  * is not running. Serves nothing else (no directory listing, no .env).
  */
@@ -70,15 +70,18 @@ http
         return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
       }
     }
-    if (url.pathname === "/" || /^\/approve-v[34](\.html)?$/.test(url.pathname)) {
-      const file = url.pathname.includes("v3") ? "approve-v3.html" : "approve-v4.html";
+    if (/^\/approve-v[34](\.html)?$/.test(url.pathname)) { res.writeHead(302, { Location: "/wallet#approvals" }); return res.end(); }
+    if (url.pathname === "/" || url.pathname === "/wallet" || url.pathname === "/wallet.html") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(fs.readFileSync(path.join(__dirname, file)));
+      return res.end(fs.readFileSync(path.join(__dirname, "wallet.html")));
+    }
+    if (url.pathname === "/dashboard.css" || url.pathname === "/qr.js" || url.pathname === "/chat-widget.js") {
+      try { res.writeHead(200, { "Content-Type": url.pathname.endsWith(".css") ? "text/css" : "application/javascript" }); return res.end(fs.readFileSync(path.join(__dirname, url.pathname.slice(1)))); } catch {}
     }
     res.writeHead(404);
     res.end("not found");
   })
   .listen(PORT, "127.0.0.1", () => {
-    console.log(`v3: http://127.0.0.1:${PORT}/approve-v3   v4: http://127.0.0.1:${PORT}/approve-v4   (open in the browser with your wallet extension)`);
+    console.log(`http://127.0.0.1:${PORT}/wallet#approvals   (open in the browser with your wallet extension; only the Approvals tab works here)`);
     console.log(`Owner ${cfg.ownerAddress}, operator ${operator || "(no keystore found)"}.`);
   });

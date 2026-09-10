@@ -7,7 +7,7 @@ if [ -z "$pid" ]; then echo "dashboard: not running"; exit 0; fi
 kill "$pid" && echo "dashboard: stopped (pid $pid)"
 # Children the old separate-process layout may still have left behind.
 for d in /proc/[0-9]*; do
-  cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+  cmd=$(tr "\0" " " < "$d/cmdline" 2>/dev/null) || continue
   case "$cmd" in
     "node memecoin-guardian.js"*|"node memecoin-collect.js"*|*"bash ./nightly.sh"*|"node lp-gate.mjs"*|"node "*"lp-mcp-remote.mjs"*) kill "${d#/proc/}" 2>/dev/null && echo "stopped: $cmd" ;;
   esac

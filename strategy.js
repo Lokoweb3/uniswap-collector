@@ -328,8 +328,19 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
         unrealizedUsd: price != null && priced ? round(b.amount * price - b.basisUsd) : null,
         stillHeld: now ? round(now.balance, 6) : null };
     }).sort((a, b) => (b.basisUsd || 0) - (a.basisUsd || 0));
+    // Sales made at collect time (sell-v4.js, token-sales.json): those tokens never became lots; report them alongside.
+    const salesRows = readJson(path.join(dir, "token-sales.json"), []).filter((r) => !since || r.t >= since);
+    const sales = {};
+    for (const r of salesRows) {
+      if (token && String(r.token).toLowerCase() !== String(token).toLowerCase()) continue;
+      const b = sales[r.token] || (sales[r.token] = { token: r.token, sales: 0, amountSold: 0, proceedsUsd: 0, skips: 0, lastSkipReason: null });
+      if (r.skipped) { b.skips++; b.lastSkipReason = r.reason; continue; }
+      b.sales++; b.amountSold += Number(r.amount) || 0; b.proceedsUsd += Number(r.usd) || 0;
+    }
     return { ok: true, asOf: new Date().toISOString(), tokens: summary, lots: lots.sort((a, b) => a.t.localeCompare(b.t)),
+      soldAtCollect: Object.values(sales).map((b) => ({ ...b, amountSold: round(b.amountSold, 6), proceedsUsd: round(b.proceedsUsd) })),
       notes: ["A lot is one hand-back of a fee token the collector could not swap (collector.log); its basis is the USD price of that hour. Selling later realizes the gain or loss against this basis.",
+        "soldAtCollect: fee tokens the collector sold in their v4 pool at collect time (token-sales.json); those proceeds are income already and never became lots.",
         "stillHeld is the wallet balance now (all sources), which can differ from the lots total if you bought, sold or moved the token.", "Tokens the collector swapped at collect time (ETH, WETH, USDG, and anything with a v3 route) are already counted as income."] };
   }
 

@@ -508,7 +508,7 @@ server.registerTool(
   {
     title: "Cost basis of fee tokens received",
     description:
-      "Every fee token the wallets received unconverted (LAPTOP, Bucket, CRUMBS, ...): one lot per collect leg with the amount and the USD price of that hour, plus per-token totals: lots, amount, basis USD, average cost, price now, value now, unrealized gain, and the balance still held. This is the tax basis for tokens that were not swapped at collect time. ETH, WETH and USDG legs are excluded (already swapped and counted as income). Filters: token symbol, wallet, days.",
+      "Every fee token the wallets received unconverted (LAPTOP, Bucket, CRUMBS, ...): one lot per collect leg with the amount and the USD price of that hour, plus per-token totals: lots, amount, basis USD, average cost, price now, value now, unrealized gain, and the balance still held. This is the tax basis for tokens that were not swapped at collect time. ETH, WETH and USDG legs are excluded (already swapped and counted as income). soldAtCollect lists fee tokens the collector sold in their v4 pool at collect time (sell-v4.js policy: ≥ $25 batches, 3% impact cap), with proceeds and skips. Filters: token symbol, wallet, days.",
     inputSchema: {
       token: z.string().optional().describe("Only this token symbol"),
       wallet: z.string().optional().describe("Wallet label or address"),

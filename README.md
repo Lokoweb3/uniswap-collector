@@ -374,6 +374,21 @@ position is marked closed only after a successful transaction; a close that fail
 minutes while the trigger still holds. Closes are logged to `exit-log.json`. The guardian and the exit rules overlap on purpose for now;
 see the changelog for the planned merge.
 
+### Selling fee tokens (`sell-v4.js`)
+
+Launchpad tokens (LAPTOP, Bucket, CRUMBS, ...) have no v3 route, so the collector used to hand
+them back unsold and the vault split never saw them. With `memecoinSell.enabled` the collector
+sells them at collect time in the hookless v4 pool the fees came from (the pool key from the
+position itself, native ETH as address zero), through the Universal Router's V4_SWAP command with
+Permit2 pulling the input (exact-amount approvals, one hour). Policy: only when the batch is worth
+at least `minUsd` (25); price impact against the pool's spot price capped at `maxImpactPct` (3),
+with a batch over the cap trimmed to the largest slice under it and skipped when that slice is
+under `minUsd`; `hold` lists tokens never to sell; hooked pools are never used;
+`thresholds.maxSwapValueWeth` and `slippageBps` apply; the exact call is dry-run from the operator
+before it is sent. Proceeds (ETH or USDG) join the normal sweep, so the vault split and the wallet
+delivery cover them. Every sale and every skip, with its reason, is written to `token-sales.json`
+(backed up nightly) and shows in the daily summary and the `token_lots` tool.
+
 ### Fee auto-collect (`memecoin-collect.js`)
 
 Every 15 min (`memecoinCollect` in config.json: `minUsd` 50, `minIntervalMinutes` 15; the loop re-reads config each cycle) it checks the
@@ -804,6 +819,14 @@ All of it is the collector wallet's own history, so the wallet picker is hidden 
 only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
+
+### 2026-09-10
+
+- v4 liquidity ledger (`ledger-v4.js`): deposits, withdrawals and owner collects for v4 positions
+  from PoolManager events, priced at the block; feeds PnL legs and the strategy dataset.
+- Fee tokens with no v3 route are sold in their own v4 pool at collect time (`sell-v4.js`,
+  `memecoinSell`): $25 minimum, 3% impact cap with the minimum-slice rule, hold list, Permit2
+  exact approvals, dry-run before sending, `token-sales.json`, daily summary and `token_lots`.
 
 ### 2026-09-09
 

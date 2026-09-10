@@ -63,6 +63,16 @@ function build(d) {
     ? `💰 Collected 24h: ${usd(total)} in ${rows.length} collect${rows.length === 1 ? "" : "s"} (${Object.entries(byWallet).map(([w, v]) => `${w} ${usd(v)}`).join(", ")})${vault24 ? ` · vault +${vault24.toFixed(2)} USDG` : ""}`
     : "💰 Collected 24h: nothing");
 
+  // Fee tokens sold at collect time (sell-v4.js)
+  let salesRows = [];
+  try { salesRows = JSON.parse(fs.readFileSync(path.join(HERE, "token-sales.json"), "utf8")).filter((r) => r.t > dayAgo); } catch {}
+  const sold = salesRows.filter((r) => !r.skipped), skipped = salesRows.filter((r) => r.skipped);
+  if (sold.length || skipped.length) {
+    const byTok = {};
+    for (const r of sold) byTok[r.token] = (byTok[r.token] || 0) + (r.usd || 0);
+    lines.push(`💱 Fee tokens sold 24h: ${sold.length ? Object.entries(byTok).map(([t, v]) => `${t} ${usd(v)}`).join(", ") : "none"}${skipped.length ? ` · ${skipped.length} skipped (${skipped[skipped.length - 1].reason})` : ""}`);
+  }
+
   // Open positions and what they earn
   const all = [];
   for (const x of p.positions || []) all.push({ ...x, wallet: p.ownerLabel || "Main" });

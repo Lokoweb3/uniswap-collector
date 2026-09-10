@@ -31,6 +31,7 @@ backfill.json
 liquidity-ledger.json
 v4-liquidity-ledger.json
 v4-owner-collects.json
+token-sales.json
 portfolio.json
 range-log.json
 snet-staking.json

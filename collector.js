@@ -493,6 +493,11 @@ async function runOwner(ctx, owner) {
   // operator approved on the v4 PositionManager (node approve-operator.js --v4).
   const v4c = cfg.v4Collect && cfg.v4Collect.enabled ? require("./collect-v4").create({ provider, cfg: { ...cfg, ownerAddress: owner.address }, log }) : null;
   const eligibleV4 = [];
+  // Selling fee tokens in their own v4 pool (sell-v4.js, policy in config
+  // memecoinSell): the pool key per token comes from the positions collected
+  // in this pass, so a token is only ever sold where it was earned.
+  const seller = require("./sell-v4").create({ provider, cfg, log });
+  const v4KeyFor = new Map(); // token address (lower) -> pool key
   let v4Open = 0, v4Closed = 0;
   if (v4c) {
     for (const id of v4c.knownIds(owner.main ? null : owner.address)) {
@@ -623,6 +628,7 @@ async function runOwner(ctx, owner) {
           if (amt > 0n && !t.native) collected.set(t.address, (collected.get(t.address) || 0n) + amt);
         }
         recordV4Collect({ sim, rcpt, owner });
+        for (const t of [sim.t0, sim.t1]) if (!t.native && sim.key && !v4KeyFor.has(t.address.toLowerCase())) v4KeyFor.set(t.address.toLowerCase(), sim.key);
       } catch (err) {
         log(`  ! v4 collect failed for #${sim.tokenId}: ${err.shortMessage || err.message}`);
       }
@@ -761,6 +767,7 @@ async function runOwner(ctx, owner) {
     }
   }
 
+  let soldEthWei = 0n; // native ETH received from v4 sells in this loop; wrapped below so it joins the sweep
   for (const [tokenAddr, collectedAmt] of collected) {
     if (tokenAddr.toLowerCase() === weth.toLowerCase()) continue;
     if (target.kind === "token" && tokenAddr.toLowerCase() === target.address.toLowerCase()) continue; // forwarded as-is below
@@ -769,7 +776,7 @@ async function runOwner(ctx, owner) {
     const erc20 = new ethers.Contract(tokenAddr, ERC20_ABI, wallet);
     const held = await erc20.balanceOf(wallet.address);
     // Swap only what this owner's positions paid out in this pass.
-    const balance = held < collectedAmt ? held : collectedAmt;
+    let balance = held < collectedAmt ? held : collectedAmt;
     if (balance === 0n) continue;
 
     // A fee token the operator cannot swap (no v3 pool: launchpad v4 tokens
@@ -791,6 +798,26 @@ async function runOwner(ctx, owner) {
       // the split and delivery below work from, nothing to swap.
       log(`  ${fmt(balance, info.decimals)} ${info.symbol} collected as the sweep target; kept for the split`);
       continue;
+    }
+    // No v3 route (launchpad tokens): sell in the v4 pool the fees came from,
+    // under the memecoinSell policy; whatever is not sold is handed back below.
+    const v4key = v4KeyFor.get(tokenAddr.toLowerCase());
+    if (seller.ready && v4key && (feeTierFor.get(tokenAddr) === undefined || feeTierFor.get(tokenAddr) === null || !(await quoteToWethAny(quoter, tokenAddr, balance, [feeTierFor.get(tokenAddr)], weth)))) {
+      const usdOf = async (cur, amt) => {
+        if (target.kind !== "token") return null;
+        if (cur.toLowerCase() === target.address.toLowerCase()) return Number(fmt(amt, 6, 6));
+        if (cur === ethers.ZeroAddress || cur.toLowerCase() === weth.toLowerCase()) { const o = await quoteSingle(quoter, weth, target.address, amt, target.feeTier); return o > 0n ? Number(fmt(o, 6, 6)) : null; }
+        return null;
+      };
+      const wethOf = async (cur, amt) => (cur === ethers.ZeroAddress || cur.toLowerCase() === weth.toLowerCase() ? amt : cur.toLowerCase() === target.address.toLowerCase() ? await quoteSingle(quoter, target.address, weth, amt, target.feeTier) : null);
+      const res = await seller.sell({ token: tokenAddr, symbol: info.symbol, decimals: info.decimals, amount: balance, key: v4key, wallet, owner, usdOf, wethOf, maxSwapWeth: maxSwap, slippageBps, recordGas: (c) => recordGas(state, c) });
+      if (res.sold) {
+        log(`  sold ${fmt(res.amountIn, info.decimals)} ${info.symbol} for ≈ $${res.usd.toFixed(2)} -> ${res.tx}`);
+        if (res.currencyOut === ethers.ZeroAddress) soldEthWei += res.amountOut;
+        if (res.remaining === 0n) continue;
+        // Hand back the slice that did not fit under the impact cap.
+        balance = res.remaining;
+      }
     }
     const feeTier = feeTierFor.get(tokenAddr);
     if (feeTier === undefined || feeTier === null) {
@@ -842,6 +869,25 @@ async function runOwner(ctx, owner) {
       log(`  ! swap failed for ${info.symbol}: ${err.shortMessage || err.message}`);
       log(`    tokens remain in the operator wallet — swap manually or rerun.`);
     }
+  }
+
+  // ETH from v4 sells arrived after the earlier wrap step: wrap what sits
+  // above the gas float target so it is swept with the rest of this pass.
+  if (soldEthWei > 0n && cfg.sweep && cfg.sweep.enabled) {
+    const { target: gasTargetWei } = gasFloat(cfg);
+    const ethBal = await provider.getBalance(wallet.address);
+    const excess = ethBal - gasTargetWei - ethers.parseEther("0.0005");
+    const toWrap = excess < soldEthWei ? excess : soldEthWei;
+    if (toWrap > 0n) {
+      try {
+        const wtx = await new ethers.Contract(weth, WETH_ABI, wallet).deposit({ value: toWrap });
+        log(`wrap ${ethers.formatEther(toWrap)} ETH (v4 sale proceeds) -> WETH -> ${wtx.hash}`);
+        const wr = await wtx.wait();
+        recordGas(state, wr.gasUsed * wr.gasPrice);
+      } catch (err) {
+        log(`  ! wrap of sale proceeds failed: ${err.shortMessage || err.message}`);
+      }
+    } else log(`gas float: keeping ${ethers.formatEther(soldEthWei)} ETH of sale proceeds (float below target)`);
   }
 
   // -- Unwrap and sweep ------------------------------------------------------

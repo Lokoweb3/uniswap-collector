@@ -64,6 +64,11 @@ const coder = ethers.AbiCoder.defaultAbiCoder();
 const POOL_KEY_T = "tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks)";
 
 const poolIdOf = (k) => ethers.keccak256(coder.encode(["address", "address", "uint24", "int24", "address"], [k.currency0, k.currency1, k.fee, k.tickSpacing, k.hooks]));
+// Fee / tick-spacing pairs seen on this chain (standard tiers plus the launchpad's), for pool discovery.
+const TIERS = [[100, 1], [500, 10], [2500, 50], [3000, 60], [10000, 200], [15000, 300], [20000, 400], [29988, 300], [30000, 600], [50000, 200], [100000, 1000]];
+const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const MULTICALL_ABI = ["function aggregate3(tuple(address target,bool allowFailure,bytes callData)[] calls) view returns (tuple(bool success,bytes returnData)[])"];
+const LIQ_ABI = ["function getLiquidity(bytes32 poolId) view returns (uint128)"];
 const isNative = (a) => a === ethers.ZeroAddress;
 
 /** Output expected at the current spot price, before the pool fee, for selling `amountIn` of one side. */
@@ -151,6 +156,29 @@ function create({ provider, cfg, log = console.log }) {
   const stateView = st.stateView ? new ethers.Contract(st.stateView, STATE_VIEW_ABI, provider) : null;
   const ready = st.enabled && st.router && quoter && stateView;
 
+  /**
+   * Hookless pools pairing `token` with native ETH that hold liquidity, found by
+   * enumerating the known fee tiers (one Multicall3 batch). Lets a token be sold
+   * even when no open position of ours sits in its ETH pool.
+   */
+  const discovered = new Map(); // token -> { at, keys }
+  async function discoverEthPools(token) {
+    const cached = discovered.get(token.toLowerCase());
+    if (cached && Date.now() - cached.at < 60 * 60 * 1000) return cached.keys;
+    const keys = TIERS.map(([fee, tickSpacing]) => ({ currency0: ethers.ZeroAddress, currency1: ethers.getAddress(token), fee, tickSpacing, hooks: ethers.ZeroAddress }));
+    const liqIface = new ethers.Interface(LIQ_ABI);
+    let live = [];
+    try {
+      const mc = new ethers.Contract(MULTICALL3, MULTICALL_ABI, provider);
+      const res = await mc.aggregate3(keys.map((k) => ({ target: st.stateView, allowFailure: true, callData: liqIface.encodeFunctionData("getLiquidity", [poolIdOf(k)]) })));
+      live = keys.filter((k, i) => res[i].success && res[i].returnData.length >= 66 && BigInt(res[i].returnData) > 0n);
+    } catch {
+      for (const k of keys) { try { if ((await new ethers.Contract(st.stateView, LIQ_ABI, provider).getLiquidity(poolIdOf(k))) > 0n) live.push(k); } catch {} }
+    }
+    discovered.set(token.toLowerCase(), { at: Date.now(), keys: live });
+    return live;
+  }
+
   async function quoteOut(key, zeroForOne, amountIn) {
     const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: key, zeroForOne, exactAmount: amountIn, hookData: "0x" });
     return BigInt(r[0]);
@@ -170,8 +198,13 @@ function create({ provider, cfg, log = console.log }) {
     };
     if (!ready) return { sold: false, reason: "disabled", remaining: amount };
     if (st.hold.has(String(symbol).toLowerCase()) || st.hold.has(String(token).toLowerCase())) return skip("on the hold list");
-    const candidates = (keys && keys.length ? keys : key ? [key] : []).filter((k) => k && [k.currency0, k.currency1].some((c) => String(c).toLowerCase() === String(token).toLowerCase()));
-    if (!candidates.length) return skip("no v4 pool key for this token");
+    let candidates = (keys && keys.length ? keys : key ? [key] : []).filter((k) => k && [k.currency0, k.currency1].some((c) => String(c).toLowerCase() === String(token).toLowerCase()));
+    // Add every live ETH-quoted hookless pool for the token, so a closed position does not take its sell route with it.
+    try {
+      const found = await discoverEthPools(token);
+      for (const k of found) if (!candidates.some((c) => poolIdOf(c) === poolIdOf(k))) candidates.push(k);
+    } catch {}
+    if (!candidates.length) return skip("no v4 pool for this token");
     const usable = candidates.filter((k) => !(k.hooks && k.hooks !== ethers.ZeroAddress) && (!st.nativeQuoteOnly || isNative(k.currency0) || isNative(k.currency1)));
     if (!usable.length) {
       const why = candidates.every((k) => k.hooks && k.hooks !== ethers.ZeroAddress) ? "its pools have hooks; sells not proven" : "its pools are ERC-20-quoted; this chain's PoolManager rejects router swaps there (only ETH-quoted pools work)";
@@ -255,7 +288,7 @@ function create({ provider, cfg, log = console.log }) {
     }
   }
 
-  return { ready: !!ready, settings: st, sell, quoteOut };
+  return { ready: !!ready, settings: st, sell, quoteOut, discoverEthPools };
 }
 
 module.exports = { create, settings, buildSwapCalldata, fitSlice, spotOut, impactPct, poolIdOf, ACT, CMD_V4_SWAP };

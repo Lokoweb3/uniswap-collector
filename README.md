@@ -321,6 +321,12 @@ The desktop vault page shows both URLs as QR codes ("Open on your phone"; `qr.js
 encoder, verified against a real decoder). Without a wallet the page loads the balances, split and history
 read-only. `run-tailscale.sh` adds the tailnet-only :8444 serve; the public :8443 route passes through the gate.
 
+The "Mobile access" card with the two QR codes is hidden on the page for now (`hidden` on
+`#qr-card` in `treasury.html`) until a public domain replaces the tailnet address. The server
+still reports the node's public name at runtime (`/api/vault-info` → `publicHost`, from
+`LP_PUBLIC_HOST` or tailscaled), so removing the attribute brings the card back with the right
+links; no hostname lives in a tracked file.
+
 ## Risk and automation (memecoin positions)
 
 Everything in this section that can move funds is **off by default** and only ever signs with the
@@ -783,6 +789,8 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-09
 
+- Vault page: phone links come from the server at runtime (`publicHost`) instead of a hostname in
+  the file; the mobile-access card is hidden until a public domain exists.
 - Strategy dataset for agents (`strategy.js`, `/api/strategy/*`, MCP tools `position_history`,
   `price_history`, `pool_scout_history`): per-position lifecycles across all wallets with deposits,
   collects, realized APR, time in range and results; hourly price series; pool scout history.

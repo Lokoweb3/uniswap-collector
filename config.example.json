@@ -107,7 +107,7 @@
     "minUsd": 50,
     "minIntervalMinutes": 15
   },
-  "_memecoinsComment": "Risky LP positions watched by memecoin-guardian.js every 60 s (memecoin-status.json, Memecoin Watch on the dashboard, Telegram alerts). entryPrice = token per ETH at entry. autoClose true lets the guardian close the position (operator signs while armed; proceeds go to walletAddress) when the price is maxDrawdownPct below entry or it has been out of range for outOfRangeCloseMinutes; alertOnly true keeps it to alerts.",
+  "_memecoinsComment": "Risk guardian (memecoin-guardian.js): every open position of every wallet is watched (v4 every 60 s, v3 every 5 min). Entries here carry their own rule block; every other position is discovered and uses memecoinDefaults. entryPrice = token per quote (ETH or USDG) at entry. alertPct: price down this much in 1h -> dump alert. closePct: down this much from entry -> close-now alert (close when autoClose). outOfRangeMinutes: out that long -> alert (close when autoClose). tvlDropPct: pool liquidity down this much vs its 24h high -> LPs-leaving alert. feeFloorPerHour: 15-min fee rate under this USD/h -> alert (null = off). collectedTargetUsd: swept USDG reached -> one alert. autoClose: close through the operator when a close trigger holds 3 cycles (needs the armed collector). alertOnly: true never closes, whatever autoClose says. One Telegram message per event. memecoinDiscovery: false watches only the entries listed here.",
   "memecoins": [
     {
       "tokenId": "2134854",
@@ -117,14 +117,14 @@
       "walletAddress": "0x0000000000000000000000000000000000000012",
       "entryPrice": 1181520,
       "entryValueUsd": 1736,
-      "maxDrawdownPct": 50,
-      "autoClose": false,
-      "alertOnly": true,
-      "outOfRangeCloseMinutes": 120,
-      "_rules": "optional per-position alerts, sent to TELEGRAM_GROUP_CHAT_ID (else the treasury chat, falling back to the main chat): feeRateFloorUsdPerHour (15-min fee rate below this), collectedTargetUsd (swept USDG in fee-split-ledger.json reaches this, once), liqDropAlertPct (active liquidity this far below its 24h max)",
-      "feeRateFloorUsdPerHour": 10,
+      "alertPct": 20,
+      "closePct": 50,
+      "outOfRangeMinutes": 120,
+      "tvlDropPct": 60,
+      "feeFloorPerHour": 10,
       "collectedTargetUsd": 500,
-      "liqDropAlertPct": 60
+      "autoClose": false,
+      "alertOnly": true
     },
     {
       "tokenId": "2151132",
@@ -134,61 +134,21 @@
       "walletAddress": "0x0000000000000000000000000000000000000012",
       "entryPrice": 1276100,
       "entryValueUsd": 190,
-      "maxDrawdownPct": 50,
+      "alertPct": 20,
+      "closePct": 50,
+      "outOfRangeMinutes": 120,
       "autoClose": false,
-      "alertOnly": true,
-      "outOfRangeCloseMinutes": 120
+      "alertOnly": true
     }
   ],
-  "_exitRulesComment": "Exit rules (exit-rules.js): evaluated every 5 min over every open position of every wallet. pairs match either order (\"LAPTOP/ETH\" = \"ETH / LAPTOP\"); \"*\" = all. action alert = Telegram; action close = decrease 100% liquidity to the OWNER wallet (operator signs, only while armed) and only for positions whose exitRuleOverrides entry has enabled: true. Overrides also set per-position thresholds: priceDropPct1h (alert threshold), outOfRangeMinutes, tvlDropPct.",
-  "exitRules": [
-    {
-      "type": "priceDropPct1h",
-      "threshold": 30,
-      "pairs": [
-        "LAPTOP/ETH",
-        "PINK/ETH"
-      ],
-      "action": "alert"
-    },
-    {
-      "type": "priceDropPct1h",
-      "threshold": 50,
-      "pairs": [
-        "LAPTOP/ETH",
-        "PINK/ETH"
-      ],
-      "action": "close"
-    },
-    {
-      "type": "outOfRange",
-      "durationMinutes": 120,
-      "pairs": [
-        "LAPTOP/ETH",
-        "PINK/ETH"
-      ],
-      "action": "close"
-    },
-    {
-      "type": "tvlDrop",
-      "threshold": 50,
-      "pairs": [
-        "*"
-      ],
-      "action": "alert"
-    }
-  ],
-  "exitRuleOverrides": {
-    "2134854": {
-      "enabled": false,
-      "priceDropPct1h": 30,
-      "outOfRangeMinutes": 120
-    },
-    "2151132": {
-      "enabled": false,
-      "priceDropPct1h": 30,
-      "outOfRangeMinutes": 120
-    }
+  "memecoinDefaults": {
+    "alertPct": 20,
+    "closePct": 50,
+    "outOfRangeMinutes": 120,
+    "tvlDropPct": 50,
+    "feeFloorPerHour": null,
+    "autoClose": false,
+    "alertOnly": true
   },
   "memecoinSell": {
     "_comment": "sell-v4.js: sell fee tokens that have no v3 route (LAPTOP, Bucket, CRUMBS, ...) in the hookless v4 pool they were earned from, via the Universal Router (Permit2, exact-amount approvals, dry-run before sending). Only when the batch is worth >= minUsd; price impact vs spot capped at maxImpactPct (a batch over the cap is trimmed to the largest slice under it, and skipped if that slice is under minUsd); hold lists symbols never to sell; thresholds.maxSwapValueWeth and slippageBps still apply; every sale and skip goes to token-sales.json. Proceeds join the normal USDG -> vault split -> wallet flow. nativeQuoteOnly (default false) restricts sells to ETH-quoted pools; not needed since the router's real parameter layout (extra bytes field, read from an app swap on 2026-09-10) made ERC-20-quoted pools work. confirm (default false): announce each sale on Telegram with the quoted proceeds, impact and the vault/wallet split, and wait confirmWaitMinutes for approval through Loko_AI's approve_sale tool (or POST /api/sales/approve); unanswered or rejected sales are handed back unsold.",

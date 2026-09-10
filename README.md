@@ -27,7 +27,7 @@ header switches the dashboard between the main wallet, all wallets, and each wat
 "Watching other wallets" below.
 
 `./start-all.sh` runs everything: the dashboard server (which also hosts the 10-minute tick with
-alerts, exit rules, pool scout, price log, backups of state and the weekly digest), the memecoin
+alerts, risk guardian, pool scout, price log, backups of state and the weekly digest), the memecoin
 guardian, the fee auto-collect loop, the nightly backup loop, the public gate, the remote MCP server
 and the Tailscale tunnel. `npm test` checks all of it.
 
@@ -260,8 +260,8 @@ node lp-mcp-remote.mjs --issue-token my-agent --days 365   # prints the token on
 The agent then talks Streamable HTTP to `https://<that address>/mcp` with
 the header `Authorization: Bearer <token>`. It gets the read-only tools and
 nothing else: `positions`, `watched_wallets`, `collects`, `daily_revenue`,
-`portfolio`, `wallet_balances`, `memecoin_watch` (guardian status),
-`exit_rules`, `vault` (LOKOVault balance and splits), `staking`,
+`portfolio`, `wallet_balances`, `memecoin_watch` (risk guardian status and rules),
+`vault` (LOKOVault balance and splits), `staking`,
 `attribution` (P&L breakdown and benchmarks), `weekly_digest` (the Monday
 report text), `health` (armed state, last run, background loops) and `status_report` (one verified
 end-of-day checklist: arm window, auto-collect rule, split in force, guardian, fees, gas, alerts),
@@ -361,48 +361,52 @@ still reports the node's public name at runtime (`/api/vault-info` → `publicHo
 `LP_PUBLIC_HOST` or tailscaled), so removing the attribute brings the card back with the right
 links; no hostname lives in a tracked file.
 
-## Risk and automation (memecoin positions)
+## Risk and automation
 
 Everything in this section that can move funds is **off by default** and only ever signs with the
 operator key while the collector is armed; proceeds always go to the position's own wallet.
 
-### Memecoin guardian (`memecoin-guardian.js`)
+### Risk guardian (`memecoin-guardian.js`)
 
-A separate process (started by `start-all.sh`, `npm run guardian`) that every 60 s reads each watched
-position straight from the v4 pool state. It watches every v4 position in the main wallet and the
-collected watched wallets on its own (`memecoin-discovered.json`; entry price from the hourly price
-log at the mint, else the first sample; defaults from `memecoinDefaults`; `memecoinDiscovery: false`
-turns discovery off) plus anything listed under `memecoins` in config.json, whose entry price wins.
-Prices are token per quote asset (ETH, or USDG for stable-paired pools). A config entry can also
-carry per-position rules, delivered to the group chat (`TELEGRAM_GROUP_CHAT_ID`, else the treasury
-chat, falling back to the main chat): `feeRateFloorUsdPerHour` (the 15-minute fee rate falls below
-it; once per episode, again after 6 h), `collectedTargetUsd` (the USDG swept for the position in
-`fee-split-ledger.json` reaches it; once), `liqDropAlertPct` (active liquidity that far below its
-24-hour max). Per position: price vs entry (token value in
-ETH), in/out of range and for how long, fees per hour, active liquidity vs its 24h high, price velocity.
-It writes `memecoin-status.json` (the "Memecoin Watch" section on the dashboard, `/api/memecoins`) and
-sends Telegram alerts, each once per episode: dump (−20% in 1h), out of range / back in range, volume
-dying (fees/h −70% in 30 min), LPs leaving (liquidity −50% from the 24h high), close-now (−40% from
-entry). With `autoClose: true` on an entry it closes the position (100% of the liquidity, both tokens to
-the wallet that owns it; `close-position.js`, static-called first) when the price is `maxDrawdownPct`
-below entry or it has been out of range longer than `outOfRangeCloseMinutes`, and only after the trigger
-has held on three consecutive 60-second cycles with the pool price stable within 10% between reads (one
-bad RPC answer or a one-block wick cannot close a position). A failed close restarts that confirmation
-and is retried after a 30-minute cool-down. The card's "Close now" button does the same on demand
-(loopback-only, refused by the public gate). Entry prices come from config; check them against the mint
-transactions before enabling `autoClose`.
+The one watcher for every open position of every wallet, v3 and v4 (started by `start-all.sh`,
+`npm run guardian`). It reads each position and its pool straight from the chain, v4 every 60 s and
+v3 every 5 min, keeps a 24-hour history and derives a status (`guardian-logic.js`). Positions listed
+under `memecoins` in config.json carry their own rule block; every other open position is discovered
+from the dashboard (`memecoin-discovered.json`; entry price from the hourly price log at the mint,
+else the first sample) and uses `memecoinDefaults`. `memecoinDiscovery: false` watches only the
+listed entries. Prices are token per quote asset (ETH, or USDG for stable-paired pools).
 
-### Exit rules (`exit-rules.js`)
+One rule block per position, every field optional:
 
-Evaluated every 5 min by the dashboard server over every open position of every wallet, from
-`exitRules` in config.json: `priceDropPct1h`, `outOfRange` (duration) and `tvlDrop`, each with `pairs`
-(either order, `"*"` = all) and `action` `alert` or `close`. A close only runs when that position's
-`exitRuleOverrides` entry has `enabled: true` (set from the card's "Exit rules" toggle or
-`/api/exit-rules`), the close module is loaded, the collector is armed, and the trigger has held on two
-consecutive 5-minute evaluations with the price stable within 10%; otherwise it degrades to an alert. A
-position is marked closed only after a successful transaction; a close that fails is retried after 15
-minutes while the trigger still holds. Closes are logged to `exit-log.json`. The guardian and the exit rules overlap on purpose for now;
-see the changelog for the planned merge.
+```json
+{ "tokenId": "2239358", "pair": "Bucket/USDG",
+  "alertPct": 20, "closePct": 50, "outOfRangeMinutes": 120, "tvlDropPct": 50,
+  "feeFloorPerHour": 10, "collectedTargetUsd": 500, "autoClose": false, "alertOnly": true }
+```
+
+`alertPct`: the token down that much in 1 h sends a dump alert (repeats hourly while it holds).
+`closePct`: down that much from entry sends a close-now alert, or closes the position when
+`autoClose` is on. `outOfRangeMinutes`: out of range that long sends an alert, or closes with
+`autoClose` (leaving and re-entering the range alert once each). `tvlDropPct`: pool liquidity that
+far below its 24-hour high sends an LPs-leaving alert (once, again after 6 h if it persists).
+`feeFloorPerHour`: the 15-minute fee rate under that many USD/h alerts once per episode (null = off).
+`collectedTargetUsd`: the USDG swept for the position (`fee-split-ledger.json`) reaching it alerts
+once. `alertOnly: true` is a safety latch: nothing closes whatever `autoClose` says. Every event is
+exactly one Telegram message (group chat when `TELEGRAM_GROUP_CHAT_ID` is set, else the treasury chat,
+falling back to the main chat). "Volume dying" (fees/h −70% in 30 min) shows on the card only, and is
+skipped for an hour after a collect resets the fee balance.
+
+It writes `memecoin-status.json`, served as `/api/risk` (alias `/api/memecoins`): the **Risk** section
+on the dashboard lists every watched position with its status, the live reading next to each
+threshold (click a threshold or the entry price to change it; `POST /api/risk`, loopback-only; listed
+positions are updated in config.json, discovered ones in `memecoin-discovered.json`), an auto-close
+toggle and a "Close now" button. With auto-close on, a close (100% of the liquidity, both tokens to
+the wallet that owns it; `close-position.js`, static-called first) runs only after the trigger has
+held on three consecutive cycles with the pool price stable within 10% between reads, so one bad RPC
+answer or a one-block wick cannot close a position; a failed or locked attempt restarts that
+confirmation and is retried after a 30-minute cool-down. Closes and refusals go to
+`memecoin-guardian-log.json`. Check entry prices against the mint transactions before enabling
+`autoClose`.
 
 ### Selling fee tokens (`sell-v4.js`)
 
@@ -465,12 +469,12 @@ the connected wallet's signature. The header nav has an "Approvals" link.
 
 ### Modules and state files
 
-`memecoin-guardian.js`, `guardian-logic.js`, `close-position.js`, `exit-rules.js`, `memecoin-collect.js`,
+`memecoin-guardian.js`, `guardian-logic.js`, `close-position.js`, `memecoin-collect.js`,
 `attribution.js`, `advisor.js`, `scout.js`, `compound.js`, `token-health.js`, `approvals.js`,
 `approvals.html`, `digest.js`, `daily.js`, `qr.js`, `ops.js` (collector-log parsing for alerts),
 `chat.js` + `chat-widget.js` (in-site chat), `strategy.js` (strategy dataset), `ledger-v4.js` (v4
 liquidity ledger), `sell-v4.js` (fee-token sells), and their tests under `test/`. `npm test` runs
-every suite plus the headless smoke test. Runtime state files (`memecoin-*.json`, `exit-*.json`,
+every suite plus the headless smoke test. Runtime state files (`memecoin-*.json`,
 `advisor-cache.json`, `pool-scout-*.json`, `token-health.json`, `digest-state.json`,
 `compound-log.json`, `v4-collects.json`, `v4-owner-collects.json`, `v4-liquidity-ledger.json`,
 `token-sales.json`) are gitignored and backed up nightly by `backup-ledgers.sh`.
@@ -862,6 +866,12 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Exit rules merged into the guardian: one risk engine over every open position of every wallet
+  (v3 and v4), one rule block per position (`alertPct`, `closePct`, `outOfRangeMinutes`,
+  `tvlDropPct`, `feeFloorPerHour`, `autoClose`, `alertOnly`), one Telegram message per event, one
+  "Risk" section on the dashboard with editable thresholds. `exit-rules.js`, `exit-state.json`,
+  `exitRules` and `exitRuleOverrides` are gone; `/api/risk` replaces `/api/exit-rules`; the
+  `exit_rules` MCP tool is folded into `memecoin_watch` (21 tools).
 - Vault withdraw reminder level is configurable: `treasuryWithdrawAlertUsdg` (default 1000 USDG, was
   a fixed 100).
 - Disposal scan: a transfer of a handed-back token into any contract whose transaction also swaps

@@ -269,14 +269,14 @@ server.registerTool(
 server.registerTool(
   "memecoin_watch",
   {
-    title: "Memecoin guardian status",
+    title: "Risk guardian status and rules",
     description:
-      "Live status of the memecoin positions the guardian watches every 60 s. Prices are TOKENS PER ETH (higher = token worth less); use tokenValueVsEntryPct for gain/loss vs entry. Includes drawdown, in/out of range and for how long, fees per hour, pool active liquidity and its 1h change, price velocity, status colour with reasons, whether auto-close is enabled, and the last close attempts. Read-only: closing is only possible from the dashboard machine.",
+      "Live status of every open position the risk guardian watches (v4 every 60 s, v3 every 5 min) with each position's rule block: alertPct (1h dump alert), closePct (drawdown from entry: close-now alert, or close when autoClose), outOfRangeMinutes, tvlDropPct (pool liquidity vs 24h high), feeFloorPerHour, autoClose/alertOnly. Prices are TOKENS PER QUOTE (ETH or USDG; higher = token worth less); use priceVsEntryPct for gain/loss vs entry. Includes drawdown, in/out of range and for how long, fees per hour, pool liquidity change, status colour with reasons, and the last close attempts. Read-only: rule changes and closing happen on the dashboard machine.",
     inputSchema: {},
   },
   async () => {
     try {
-      const d = await get("/api/memecoins");
+      const d = await get("/api/risk");
       return text({
         at: d.at,
         stale: d.stale,
@@ -294,22 +294,6 @@ server.registerTool(
         })),
         recentCloses: d.recent || [],
       });
-    } catch (err) {
-      return fail(err);
-    }
-  }
-);
-
-server.registerTool(
-  "exit_rules",
-  {
-    title: "Exit rules and their last evaluation",
-    description: "The configured exit rules (price drop in 1h, out of range duration, pool liquidity drop; alert or close), the per-position overrides (enabled, thresholds) and the last evaluation of every open position. Read-only.",
-    inputSchema: {},
-  },
-  async () => {
-    try {
-      return text(await get("/api/exit-rules"));
     } catch (err) {
       return fail(err);
     }

@@ -1660,62 +1660,66 @@ $('#reload').addEventListener('click', () => tick(true));
 tick(false);
 setInterval(() => tick(false), 60000);
 
-// === memecoin-guardian ===
-// Per-position rules (config memecoins entry): each part is red past its threshold, amber within 20% of it.
+// === risk-guardian ===
+// Risk section: every open position the guardian watches (v3 and v4, every wallet),
+// its status, its rule block (click a threshold to change it), the auto-close
+// toggle and a Close-now button. Status from /api/risk every 30 s.
+const RULE_LABELS = { alertPct: 'Alert when the token drops more than this % in 1 hour:', closePct: 'Close-now alert (or close, when auto-close is on) when the token is down this % from entry:', outOfRangeMinutes: 'Alert (or close, when auto-close is on) after the position has been out of range this many minutes:', tvlDropPct: 'Alert when the pool\'s liquidity drops more than this % from its 24h high:', feeFloorPerHour: 'Alert when the 15-minute fee rate falls under this many $ per hour (empty = off):', collectedTargetUsd: 'Alert once when the swept USDG for this position reaches this amount (empty = off):' };
 function rulesLine(p){
-  const parts = [];
+  const r = p.rules || p;
   const tone = (past, near) => past ? 'down' : near ? 'warn' : 'up';
-  if (p.feeRateFloorUsdPerHour != null) {
+  const th = (k, txt, title) => `<b class="rk-th" data-k="${k}" title="${title || 'click to change'}">${txt}</b>`;
+  const parts = [];
+  const c1 = p.change1hPct, past1 = c1 != null && c1 <= -r.alertPct, near1 = c1 != null && c1 <= -r.alertPct * 0.6;
+  parts.push(`1h <b class="${tone(past1, near1)}">${c1 == null ? '—' : (c1 >= 0 ? '+' : '') + c1.toFixed(1) + '%'}</b> vs ${th('alertPct', '-' + r.alertPct + '%')} alert`);
+  const dd = p.drawdownPct, pastD = dd != null && dd >= r.closePct, nearD = dd != null && dd >= r.closePct * 0.6;
+  parts.push(`entry <b class="${tone(pastD, nearD)}">${dd == null ? '—' : '-' + dd.toFixed(1) + '%'}</b> vs ${th('closePct', '-' + r.closePct + '%')} ${p.canClose ? 'close' : 'close-now alert'}`);
+  const om = p.inRange ? 0 : p.outMinutes || 0;
+  parts.push(`out <b class="${tone(om >= r.outOfRangeMinutes, om >= r.outOfRangeMinutes * 0.6)}">${p.inRange ? 'no' : Math.round(om) + ' min'}</b> vs ${th('outOfRangeMinutes', r.outOfRangeMinutes + ' min')}`);
+  const lq = p.liqDropFromMaxPct || 0;
+  parts.push(`liquidity <b class="${tone(lq >= r.tvlDropPct, lq >= r.tvlDropPct * 0.6)}">-${lq.toFixed(0)}%</b> vs ${th('tvlDropPct', '-' + r.tvlDropPct + '%')} 24h`);
+  if (r.feeFloorPerHour != null) {
     const v = p.feesPerHour15m != null ? p.feesPerHour15m : p.feesPerHour;
-    const past = v != null && v < p.feeRateFloorUsdPerHour, near = v != null && v < p.feeRateFloorUsdPerHour * 1.2;
-    parts.push(`<b class="${tone(past, near)}">${v == null ? '—' : usd(v)}/h</b> vs $${p.feeRateFloorUsdPerHour} floor`);
+    parts.push(`fees <b class="${tone(v != null && v < r.feeFloorPerHour, v != null && v < r.feeFloorPerHour * 1.2)}">${v == null ? '—' : usd(v)}/h</b> vs ${th('feeFloorPerHour', '$' + r.feeFloorPerHour)} floor`);
+  } else parts.push(`fee floor ${th('feeFloorPerHour', 'off')}`);
+  if (r.collectedTargetUsd != null) {
+    const v = p.collectedUsd || 0;
+    parts.push(`collected <b class="${v >= r.collectedTargetUsd ? 'up' : v >= r.collectedTargetUsd * 0.8 ? 'warn' : ''}">${usd(v)}</b> of ${th('collectedTargetUsd', '$' + r.collectedTargetUsd)}`);
   }
-  if (p.collectedTargetUsd != null) {
-    const v = p.collectedUsd || 0, reached = v >= p.collectedTargetUsd, near = v >= p.collectedTargetUsd * 0.8;
-    parts.push(`collected <b class="${reached ? 'up' : near ? 'warn' : ''}">${usd(v)}</b> of $${p.collectedTargetUsd}`);
-  }
-  if (p.liqDropAlertPct != null) {
-    const v = p.liqDropFromMaxPct || 0, past = v >= p.liqDropAlertPct, near = v >= p.liqDropAlertPct * 0.8;
-    parts.push(`liquidity <b class="${tone(past, near)}">−${v.toFixed(0)}%</b> vs −${p.liqDropAlertPct}% alert`);
-  }
-  return parts.length ? `<div class="reasons rules" title="Rules from this position's config entry; alerts go to the group chat">rules: ${parts.join(' · ')}</div>` : '';
+  return `<div class="reasons rules" data-nft="${p.tokenId}" title="This position's rules; click a threshold to change it">${parts.join(' · ')} · auto-close <button class="rk-toggle ${p.canClose ? 'on' : ''}" ${READ_ONLY ? 'disabled' : ''} title="${p.canClose ? 'Auto-close is ON: the operator closes the position when a close trigger holds for 3 checks' : 'Auto-close is off: rules only alert'}">${p.canClose ? 'ON' : 'off'}</button>${p.closeConfirm ? ` <span class="warn">closing ${p.closeConfirm}</span>` : ''}</div>`;
 }
 
-// Memecoin Watch: status from memecoin-guardian.js via /api/memecoins, every 30 s.
-async function loadMemecoins(){
+async function loadRisk(){
   try {
-    const r = await fetch('/api/memecoins', { cache: 'no-store' });
+    const r = await fetch('/api/risk', { cache: 'no-store' });
     const d = await r.json();
     if (!d.ok) return;
-    const sec = $('#memesec');
-    if (!d.watching) { sec.hidden = true; return; }
+    const sec = $('#risksec');
+    if (!d.watching && !d.stale) { sec.hidden = true; return; }
     sec.hidden = false;
-    const fmtN = n => n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    const fmtN = n => n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: n >= 100 ? 0 : 4 });
     const pct = (n, d = 1) => n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(d) + '%';
     const cls = n => n == null ? '' : n >= 0 ? 'up' : 'down';
     const age = d.at ? Math.round((Date.now() - d.at) / 1000) : null;
-    $('#memenote').textContent = d.stale ? 'guardian not reporting (start it with ./start-all.sh)' : `updated ${age}s ago · every 60 s from the v4 pool state${d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : ''}`;
-    $('#memelist').innerHTML = (d.positions || []).map(p => {
-      if (p.closed) return `<article class="pos meme stale"><div class="top"><div class="name"><h2>${p.pair}</h2><span class="tier">#${p.tokenId}</span><span class="muted">${p.wallet}</span></div><div class="vals"><span class="muted">position closed</span></div></div></article>`;
+    $('#risknote').textContent = d.stale ? 'guardian not reporting' : `${d.watching} watched · updated ${age}s ago · v4 every 60 s, v3 every 5 min${d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : ''}`;
+    const order = { red: 0, yellow: 1, green: 2 };
+    const list = (d.positions || []).filter(p => !p.closed).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.valueUsd || 0) - (a.valueUsd || 0));
+    $('#risklist').innerHTML = list.map(p => {
       const lc = p.lastClose;
       return `<article class="pos meme ${p.status === 'red' ? 'out' : ''} ${d.stale ? 'stale' : ''}">
         <div class="top">
-          <div class="name"><span class="dot ${p.status}"></span><h2>${p.pair}</h2><span class="tier">v4 #${p.tokenId}</span><span class="muted">${p.wallet}</span>
+          <div class="name"><span class="dot ${p.status}"></span><h2>${p.pair}</h2><span class="tier">v${p.version || 4} #${p.tokenId}</span><span class="muted">${p.wallet}</span>
             <span class="state ${p.inRange ? '' : 'out'}">${p.inRange ? 'In range' : 'Out of range · ' + Math.round(p.outMinutes) + ' min'}</span></div>
           <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span>${claimedLine(p)}</div>
         </div>
         <div class="grid">
           <span>Price (${p.symbolToken || 'token'} per ${p.quoteSymbol || 'ETH'})<b>${fmtN(p.price)}</b></span>
-          <span>Entry${p.entrySource && p.entrySource !== 'config' ? ` <span class="muted" title="${p.entrySource === 'first seen' ? 'No price record from the mint; the entry is the price when the guardian first saw the position' : 'Entry price taken from the hourly price log at the mint time'}">(${p.entrySource})</span>` : ''}<b>${fmtN(p.entryPrice)}</b></span>
+          <span>Entry${p.entrySource && p.entrySource !== 'config' ? ` <span class="muted" title="${p.entrySource === 'first seen' ? 'No price record from the mint; the entry is the price when the guardian first saw the position' : p.entrySource === 'set by hand' ? 'Entry price set from this page' : 'Entry price taken from the hourly price log at the mint time'}">(${p.entrySource})</span>` : ''}<b class="rk-entry" title="click to set the entry price">${fmtN(p.entryPrice)}</b></span>
           <span>vs entry (token value)<b class="${cls(p.priceVsEntryPct)}">${pct(p.priceVsEntryPct)}</b></span>
-          <span>Drawdown<b class="${(p.drawdownPct || 0) >= 20 ? 'down' : ''}">${p.drawdownPct == null ? '—' : '-' + p.drawdownPct.toFixed(1) + '%'}</b></span>
           <span>Last hour<b class="${cls(p.change1hPct)}">${pct(p.change1hPct)}</b></span>
-          <span>Velocity<b class="${cls(p.velocityPctPerH)}">${p.velocityPctPerH == null ? '—' : pct(p.velocityPctPerH) + '/h'}</b></span>
           <span>Fees / hour<b>${p.feesPerHour == null ? '—' : usd(p.feesPerHour)}${p.feeRateChangePct != null ? ' <span class="' + cls(p.feeRateChangePct) + '" style="font-size:11px">' + pct(p.feeRateChangePct, 0) + '</span>' : ''}</b></span>
-          <span>Pool active liquidity, 1h<b class="${cls(p.liqChange1hPct)}">${pct(p.liqChange1hPct)}</b></span>
-          <span>Liquidity vs recent max<b class="${(p.liqDropFromMaxPct || 0) >= 25 ? 'down' : ''}">${p.liqDropFromMaxPct == null ? '—' : '-' + p.liqDropFromMaxPct.toFixed(0) + '%'}</b></span>
+          <span>Pool liquidity, 1h<b class="${cls(p.liqChange1hPct)}">${pct(p.liqChange1hPct)}</b></span>
           <span>Holdings<b>${p.amountEth == null ? '—' : amount(p.amountEth) + ' ' + (p.quoteSymbol || 'ETH') + ' · ' + fmtN(p.amountToken) + ' ' + (p.symbolToken || '')}</b></span>
-          <span>Auto-close<b>${p.autoClose ? 'ON · -' + p.maxDrawdownPct + '% or ' + p.outOfRangeCloseMinutes + ' min out' : 'off (alerts only)'}</b></span>
         </div>
         ${rulesLine(p)}
         ${p.reasons && p.reasons.length ? `<div class="reasons">${p.reasons.join(' · ')}</div>` : ''}
@@ -1723,94 +1727,53 @@ async function loadMemecoins(){
         <button class="reload closebtn" data-close="${p.tokenId}" data-pair="${p.pair}" ${READ_ONLY ? 'disabled' : ''}>Close now</button>
       </article>`;
     }).join('');
-    $('#memerecent').innerHTML = (d.recent || []).length
+    const df = d.defaults || {};
+    $('#riskrecent').innerHTML = (d.recent || []).length
       ? 'Recent: ' + d.recent.slice(0, 5).map(r => `${new Date(r.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${r.pair} ${r.status}${r.tx ? ' <a href="' + (EXPLORER || '') + '/tx/' + r.tx + '" target="_blank" rel="noopener">tx</a>' : ''}${r.error ? ' (' + r.error + ')' : ''}`).join(' · ')
-      : 'Alerts: dump >20%/1h, out of range, fee rate -70%/30 min, active liquidity -50%, -40% from entry. Auto-close only when a position has autoClose: true in config.json; proceeds go to the position\'s own wallet.';
+      : `One Telegram message per event. Defaults for discovered positions: dump -${df.alertPct ?? 20}%/1h, close-now -${df.closePct ?? 50}% from entry, out of range ${df.outOfRangeMinutes ?? 120} min, liquidity -${df.tvlDropPct ?? 50}% vs 24h high. Auto-close only where switched on; proceeds go to the position's own wallet.`;
   } catch (e) {}
+}
+async function postRule(body){
+  const r = await fetch('/api/risk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'failed');
+  await loadRisk();
 }
 document.addEventListener('click', async e => {
   const b = e.target.closest('button[data-close]');
-  if (!b) return;
-  if (!confirm(`Close ${b.dataset.pair} #${b.dataset.close} now? All liquidity and fees are withdrawn to the position's wallet. The collector must be armed.`)) return;
-  b.disabled = true; b.textContent = 'Closing…';
-  try {
-    const r = await fetch('/api/memecoins/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokenId: b.dataset.close }) });
-    const j = await r.json();
-    const res = j.result || {};
-    alert(j.ok ? `Closed: ${res.recovered || ''} tx ${res.tx || ''}` : `Not closed: ${res.error || j.error || 'see memecoin-guardian-log.json'}`);
-  } catch (err) { alert('Close request failed: ' + err.message); }
-  b.disabled = false; b.textContent = 'Close now';
-  loadMemecoins();
-});
-if (PAGE !== 'analytics') { loadMemecoins(); setInterval(loadMemecoins, 30000); }
-// === end memecoin-guardian ===
-// === exit-rules ===
-// Exit rules line on every position card (main and watched): the active rule
-// set, the last evaluation, an on/off toggle for auto-close and editable
-// thresholds. Cards are found by their NFT link text, so the card templates
-// above stay untouched; a MutationObserver re-decorates after every render.
-let exitRulesD = null;
-async function loadExitRules(){
-  if (PAGE !== 'dashboard') return;
-  try { const r = await fetch('/api/exit-rules', { cache: 'no-store' }); if (!r.ok) return; exitRulesD = await r.json(); decorateExitRules(); } catch(e){}
-}
-function exitRulesFor(nftId, pair){
-  const d = exitRulesD; if (!d) return null;
-  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '').split('/').sort().join('|');
-  const rules = (d.rules || []).filter(r => Array.isArray(r.pairs) && (r.pairs.includes('*') || r.pairs.some(p => norm(p) === norm(pair))));
-  if (!rules.length) return null;
-  const o = (d.overrides || {})[String(nftId)] || {};
-  return { rules, override: o, closeAvailable: d.closeAvailable, lastEval: d.lastEval, closed: d.closed };
-}
-function decorateExitRules(){
-  if (!exitRulesD) return;
-  for (const card of document.querySelectorAll('article.pos')){
-    const nftEl = card.querySelector('.nft'); const comp = card.querySelector('.comp');
-    if (!nftEl || !comp) continue;
-    const nftId = (nftEl.textContent.match(/#(\d+)/) || [])[1]; if (!nftId) continue;
-    const pair = (card.querySelector('h2') || {}).textContent || '';
-    const info = exitRulesFor(nftId, pair);
-    let line = comp.querySelector('.exitrules');
-    if (!info) { if (line) line.remove(); continue; }
-    if (!line) { line = document.createElement('span'); line.className = 'rate exitrules'; comp.appendChild(line); }
-    const o = info.override;
-    const ev = Object.entries(info.lastEval || {}).map(([k, v]) => ({ k, ...v })).find(e => e.k.endsWith(':' + nftId)) || null;
-    const closedAt = Object.entries(info.closed || {}).find(([k]) => k.endsWith(':' + nftId));
-    const th = { drop: o.priceDropPct1h != null ? o.priceDropPct1h : (info.rules.find(r => r.type === 'priceDropPct1h' && r.action === 'alert') || {}).threshold, out: o.outOfRangeMinutes != null ? o.outOfRangeMinutes : (info.rules.find(r => r.type === 'outOfRange') || {}).durationMinutes, tvl: o.tvlDropPct != null ? o.tvlDropPct : (info.rules.find(r => r.type === 'tvlDrop') || {}).threshold };
-    const closeRules = info.rules.filter(r => r.action === 'close').map(r => r.type === 'priceDropPct1h' ? `close at -${r.threshold}%/1h` : r.type === 'outOfRange' ? `close after ${th.out || r.durationMinutes} min out` : r.type).join(', ');
-    const evTxt = ev ? `last check ${new Date(ev.t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}: ${ev.drop1hPct == null ? '1h move n/a' : (ev.drop1hPct >= 0 ? '-' : '+') + Math.abs(ev.drop1hPct).toFixed(1) + '% 1h'}${ev.outMinutes ? ` · out ${ev.outMinutes} min` : ''}${ev.tvlDropPct != null ? ` · liquidity ${ev.tvlDropPct >= 0 ? '-' : '+'}${Math.abs(ev.tvlDropPct).toFixed(0)}% vs 24h high` : ''}` : 'not evaluated yet';
-    line.innerHTML = `exit rules: ${th.drop != null ? `alert at <b class="er-th" data-k="priceDropPct1h" title="click to change">-${th.drop}%/1h</b>` : 'no price rule'}${th.tvl != null ? ` · liquidity <b class="er-th" data-k="tvlDropPct" title="click to change">-${th.tvl}%</b>` : ''}${closeRules ? ` · ${closeRules}` : ''} · auto-close <button class="er-toggle ${o.enabled ? 'on' : ''}" title="${info.closeAvailable ? 'Toggle automatic closing for this position' : 'close module not installed; rules only alert'}">${o.enabled ? 'ON' : 'off'}</button>${closedAt ? ' <span class="idle">closed by rule ' + new Date(closedAt[1]).toLocaleString() + '</span>' : ''} <span class="muted">${evTxt}</span>`;
-    line.dataset.nft = nftId;
+  if (b) {
+    if (!confirm(`Close ${b.dataset.pair} #${b.dataset.close} now? All liquidity and fees are withdrawn to the position's wallet. The collector must be armed.`)) return;
+    b.disabled = true; b.textContent = 'Closing…';
+    try {
+      const r = await fetch('/api/memecoins/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokenId: b.dataset.close }) });
+      const j = await r.json();
+      const res = j.result || {};
+      alert(j.ok ? `Closed: ${res.recovered || ''} tx ${res.tx || ''}` : `Not closed: ${res.error || j.error || 'see memecoin-guardian-log.json'}`);
+    } catch (err) { alert('Close request failed: ' + err.message); }
+    b.disabled = false; b.textContent = 'Close now';
+    loadRisk();
+    return;
   }
-}
-async function postExitRule(body){
-  const r = await fetch('/api/exit-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || 'failed');
-  await loadExitRules();
-}
-document.addEventListener('click', async e => {
-  const line = e.target.closest('.exitrules'); if (!line) return;
-  const nftId = line.dataset.nft;
-  if (e.target.classList.contains('er-toggle')){
+  const card = e.target.closest('article.meme'); if (!card || READ_ONLY) return;
+  const line = card.querySelector('.rules'); const nftId = line && line.dataset.nft; if (!nftId) return;
+  if (e.target.classList.contains('rk-toggle')){
     const on = !e.target.classList.contains('on');
-    if (on && !confirm('Turn ON automatic closing for #' + nftId + '?\nWhen a close rule triggers, the operator will remove 100% of the liquidity and send the tokens to the position\'s owner wallet. It needs the collector to be armed.')) return;
-    try { await postExitRule({ tokenId: nftId, enabled: on }); } catch(err){ alert('Could not save: ' + err.message); }
-  } else if (e.target.classList.contains('er-th')){
+    if (on && !confirm('Turn ON automatic closing for #' + nftId + '?\nWhen a close trigger (drawdown or out-of-range time) holds for 3 checks, the operator removes 100% of the liquidity and sends the tokens to the position\'s owner wallet. It needs the collector to be armed.')) return;
+    try { await postRule({ tokenId: nftId, autoClose: on, alertOnly: !on }); } catch(err){ alert('Could not save: ' + err.message); }
+  } else if (e.target.classList.contains('rk-th')){
     const k = e.target.dataset.k;
     const cur = e.target.textContent.replace(/[^0-9.]/g, '');
-    const v = prompt(k === 'priceDropPct1h' ? 'Alert when the token drops more than this % in 1 hour:' : 'Alert when the pool\'s active liquidity drops more than this % from its 24h high:', cur);
+    const v = prompt(RULE_LABELS[k] || k, cur);
     if (v == null) return;
-    try { await postExitRule({ tokenId: nftId, [k]: v === '' ? null : Number(v) }); } catch(err){ alert('Could not save: ' + err.message); }
+    try { await postRule({ tokenId: nftId, [k]: v.trim() === '' ? null : Number(v) }); } catch(err){ alert('Could not save: ' + err.message); }
+  } else if (e.target.classList.contains('rk-entry')){
+    const v = prompt('Entry price (token per quote) used for the drawdown rule:', e.target.textContent.replace(/[^0-9.]/g, ''));
+    if (v == null || v.trim() === '') return;
+    try { await postRule({ tokenId: nftId, entryPrice: Number(v) }); } catch(err){ alert('Could not save: ' + err.message); }
   }
 });
-if (PAGE === 'dashboard'){
-  const mo = new MutationObserver(() => decorateExitRules());
-  for (const id of ['list', 'watchlist']) { const el = document.getElementById(id); if (el) mo.observe(el, { childList: true }); }
-  loadExitRules();
-  setInterval(loadExitRules, 60000);
-}
-// === end exit-rules ===
+if (PAGE !== 'analytics') { loadRisk(); setInterval(loadRisk, 30000); }
+// === end risk-guardian ===
 
 // === performance-attribution ===
 // PnL vs HODL line for watched cards (same markup as the owner cards).

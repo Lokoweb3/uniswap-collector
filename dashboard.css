@@ -573,12 +573,6 @@ select.scope option{background:#0b1017}
 .meme .closebtn{margin-top:10px;border-color:rgba(255,77,109,.5);color:var(--edge,#ff4d6d)}
 .meme.stale{opacity:.6}
 /* === end memecoin-guardian === */
-/* === exit-rules === */
-.exitrules{width:100%;line-height:1.7}
-.exitrules .er-th{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
-.exitrules .er-toggle{font:inherit;font-size:11px;font-weight:700;padding:0 8px;border-radius:999px;border:1px solid var(--rule);background:transparent;color:var(--muted);cursor:pointer;vertical-align:1px}
-.exitrules .er-toggle.on{color:#04110a;background:var(--edge);border-color:var(--edge)}
-/* === end exit-rules === */
 /* === performance-attribution === */
 #attribsec .msel{margin-right:6px}
 #attribsec .etable td.neg,#attribsec .etable td.u.neg,#attribsec .etable td.u .neg,#attribstats b.neg,#attribtotal .neg{color:var(--edge)}
@@ -596,12 +590,16 @@ select.scope option{background:#0b1017}
 .thbadge.th-risk{filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
 /* === end token-health-and-approvals === */
 
-/* Memecoin Watch: per-position rules line (red past a threshold, amber within 20% of it) */
+/* Risk section: per-position rules line (red past a threshold, amber near it); thresholds are clickable */
 .meme .reasons.rules{color:var(--muted)}
 .meme .reasons.rules b{font-family:var(--font-mono)}
 .meme .reasons.rules b.up{color:var(--neon-green,#39ff88)}
 .meme .reasons.rules b.warn{color:var(--neon-gold,#f5c542)}
 .meme .reasons.rules b.down{color:var(--edge,#ff4d6d)}
+.meme .reasons.rules .rk-th,.meme .grid .rk-entry{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.meme .reasons.rules .warn{color:var(--neon-gold,#f5c542)}
+.rk-toggle{font:inherit;font-size:11px;font-weight:700;padding:0 8px;border-radius:999px;border:1px solid var(--rule);background:transparent;color:var(--muted);cursor:pointer;vertical-align:1px}
+.rk-toggle.on{color:#04110a;background:var(--edge);border-color:var(--edge)}
 
 /* "claimed" line on position cards */
 .vals .c{font-size:12.5px;color:var(--muted);font-weight:400}

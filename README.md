@@ -84,10 +84,15 @@ manager — from the Uniswap deployments page). v4 has no owner enumeration, so
 ids come from Blockscout's holdings list plus a forward scan of Transfer logs
 kept in `v4-positions.json`. Value, range, and uncollected fees (liquidity ×
 fee-growth delta, via StateView) work the same as v3; native-ETH pools are
-priced as WETH and pools against the reference stable at a dollar. Read-only:
-the collector does not collect v4 fees, so v4 cards never show `collectable`
-or `not approved`, and v4 collects do not appear in the collected-fees history
-(the daily revenue panel covers their earnings as they accrue).
+priced as WETH and pools against the reference stable at a dollar. With
+`v4Collect.enabled` the collector collects v4 fees too (see Collector); v4
+collects are recorded in `v4-collects.json` and appear in the collected-fees
+history, and `ledger-v4.js` reads each v4 position's deposits, withdrawals and
+owner-side collects from the PoolManager's ModifyLiquidity events (amounts from
+the liquidity math at the pool price of that block: the RPC's state while it
+still has it, else the nearest Swap, the Initialize price, or the current state
+when no swap has happened since; rows it cannot price stay unpriced), so v4
+positions get the same PnL legs and strategy data as v3.
 
 Every number is derived from pool state — no third-party price API. Position
 value comes from `liquidity` plus the pool's `sqrtPriceX96` run through
@@ -267,14 +272,16 @@ Live snapshots are not enough to design a strategy; the agent needs what happene
   the hourly log, else from that position's own collect-time price records, marked approximate),
   every collect (count, USD at collect time, per day), realized fee APR, time in range and flips,
   the price range and its width, PnL vs holding with its legs, the pool's TVL/volume/fees/APR, and
-  for closed positions the net result versus the deposit. Filters: wallet, include_closed, days.
+  for closed positions the net result versus the deposit. v4 positions take their deposits from
+  `v4-liquidity-ledger.json`. Filters: wallet, include_closed, days.
 - `price_history`: hourly USD (and ETH-relative) prices of a token while it was held or in a position.
 - `pool_scout_history`: the scout's hourly record of each position's pool fee APR versus its best
   sibling pool.
-- `token_lots`: cost basis of the fee tokens the collector handed back unconverted (LAPTOP, Bucket,
-  CRUMBS, ...): one lot per hand-back from `collector.log`, priced at that hour, with per-token
-  totals, average cost, value now and unrealized gain. Also the "Fee tokens received" table on
-  Analytics with a CSV. Tokens swapped at collect time are already income.
+- `token_lots`: cost basis of the fee tokens the collector handed back unconverted: one lot per
+  hand-back from `collector.log`, priced at that hour, with per-token totals, average cost, value
+  now and unrealized gain, plus `soldAtCollect` for the tokens `sell-v4.js` sold in their own pool
+  (proceeds and skips from `token-sales.json`). Also the "Fee tokens received" table on Analytics
+  with a CSV. Tokens swapped or sold at collect time are already income.
 
 A prompt that works: "Use position_history for the last 14 days, group by pair and fee tier, rank
 by realized fee APR and net result, note time in range and how long each was held, then propose
@@ -428,14 +435,17 @@ live `paused()`/`taxEnabled()`/`owner()` reads, Blockscout holders/age/verificat
 wallet, flags unlimited or older-than-90-days ones, shows the LOKOVault holder/admin, and revokes with
 the connected wallet's signature. The header nav has an "Approvals" link.
 
-### Files added tonight
+### Modules and state files
 
 `memecoin-guardian.js`, `guardian-logic.js`, `close-position.js`, `exit-rules.js`, `memecoin-collect.js`,
 `attribution.js`, `advisor.js`, `scout.js`, `compound.js`, `token-health.js`, `approvals.js`,
-`approvals.html`, `digest.js`, `qr.js`, `ops.js` (collector-log parsing for alerts), and their tests under
-`test/`. `npm test` runs every suite plus the headless smoke test. Runtime state files
-(`memecoin-*.json`, `exit-*.json`, `advisor-cache.json`, `pool-scout-*.json`, `token-health.json`,
-`digest-state.json`, `compound-log.json`) are gitignored.
+`approvals.html`, `digest.js`, `daily.js`, `qr.js`, `ops.js` (collector-log parsing for alerts),
+`chat.js` + `chat-widget.js` (in-site chat), `strategy.js` (strategy dataset), `ledger-v4.js` (v4
+liquidity ledger), `sell-v4.js` (fee-token sells), and their tests under `test/`. `npm test` runs
+every suite plus the headless smoke test. Runtime state files (`memecoin-*.json`, `exit-*.json`,
+`advisor-cache.json`, `pool-scout-*.json`, `token-health.json`, `digest-state.json`,
+`compound-log.json`, `v4-collects.json`, `v4-owner-collects.json`, `v4-liquidity-ledger.json`,
+`token-sales.json`) are gitignored and backed up nightly by `backup-ledgers.sh`.
 
 ## Daily summary
 
@@ -502,8 +512,10 @@ WETH is unwrapped, and ETH above the gas reserve is sent to
 operator's ETH gas float is refilled from this pass's ETH and WETH up to
 `gasTargetEth` (`keepGasReserveEth` is the floor it never sweeps below), the remaining WETH is swapped to USDG through the
 WETH/USDG pool at `targetFeeTier` and delivered straight to
-`sweepDestination`, and any USDG that arrived as fees is forwarded as-is.
-`maxSwapValueWeth` and `slippageBps` apply to that last swap too. Only the
+`sweepDestination`, and any USDG that arrived as fees is kept for the split.
+Fee tokens with no v3 route are sold in their own v4 pool first when
+`memecoinSell` allows it (see Selling fee tokens); what is not sold is handed
+back to the owner as-is. `maxSwapValueWeth` and `slippageBps` apply to every swap. Only the
 `full` mode converts; `collect` sends the raw tokens to the owner. The
 Windows task and the dashboard's Collect button (`dashboard.collectMode`)
 are both set to `full`. Simulate mode prints what the eligible fees would

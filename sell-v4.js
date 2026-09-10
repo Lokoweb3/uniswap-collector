@@ -15,14 +15,17 @@
  *                    and if that slice is under minUsd nothing is sold this run
  *   hold             token symbols/addresses never to sell
  *   hooked pools     never, unless a dry-run proves the sell passes
- *   ETH-quoted only  this chain's PoolManager rejects router swaps (bare revert,
- *                    both routers, both swap forms) in pools whose currency0 is
- *                    an ERC-20, while accepting them where currency0 is native
- *                    ETH; the quoter answers for both, so only the router path
- *                    is affected. A token is sold in the best ETH-quoted pool it
- *                    was earned in; a token with only ERC-20-quoted pools is
- *                    handed back (verified 2026-09-10, nativeQuoteOnly to relax)
+ *   best pool        every hookless pool the token was earned in, plus the live
+ *                    ETH-quoted pools found by tier enumeration, are quoted and
+ *                    the highest USD proceeds under the cap wins
  *   the collector's own maxSwapValueWeth and slippageBps still apply
+ *
+ * Router layout (this chain's Universal Router build, read from a swap the
+ * Uniswap app sent on 2026-09-10): the V4 exact-input struct carries an extra
+ * empty `bytes` field between the path and the amounts, so the stock
+ * single-pool encoding is decoded as garbage and reverts with no data. The
+ * working form is the path variant with that field, then SETTLE(currency, 0,
+ * payerIsUser) and TAKE(currency, recipient, 0), 0 meaning the full delta.
  *
  * Every sale and every skip (with the reason) is appended to token-sales.json.
  *
@@ -30,7 +33,7 @@
  *   quote      V4Quoter.quoteExactInputSingle((PoolKey,bool,uint128,bytes))
  *   spot       StateView.getSlot0 -> sqrtPriceX96 -> expected output before fees
  *   swap       UniversalRouter.execute(commands=[V4_SWAP], inputs=[(actions, params)])
- *              actions = SWAP_EXACT_IN_SINGLE, SETTLE_ALL, TAKE_ALL
+ *              actions = SWAP_EXACT_IN (one hop), SETTLE, TAKE
  *              ERC-20 input is pulled through Permit2: exact-amount ERC-20
  *              approval to Permit2, then Permit2.approve(token, router, amount,
  *              1 h); native ETH output lands in the operator's ETH balance,
@@ -46,7 +49,7 @@ const SALES_FILE = path.join(__dirname, "token-sales.json");
 const Q96 = 2n ** 96n;
 
 // v4-periphery Actions and universal-router Commands
-const ACT = { SWAP_EXACT_IN_SINGLE: 0x06, SETTLE_ALL: 0x0c, TAKE_ALL: 0x0f };
+const ACT = { SWAP_EXACT_IN: 0x07, SETTLE: 0x0b, TAKE: 0x0e };
 const CMD_V4_SWAP = 0x10;
 const PERMIT2_DEFAULT = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 
@@ -87,15 +90,21 @@ function impactPct(quotedOut, spot, feePips) {
   return Math.max(0, (1 - ratio) * 100);
 }
 
-/** Universal Router calldata for one exact-input v4 swap; output to the caller. */
-function buildSwapCalldata({ key, zeroForOne, amountIn, minOut, deadline }) {
-  const actions = ethers.concat([new Uint8Array([ACT.SWAP_EXACT_IN_SINGLE]), new Uint8Array([ACT.SETTLE_ALL]), new Uint8Array([ACT.TAKE_ALL])]);
+/**
+ * Universal Router calldata for one exact-input v4 swap through `key`, output
+ * to `recipient` (the caller when omitted). This chain's router layout: the
+ * exact-input struct has an extra empty bytes field before the amounts.
+ */
+function buildSwapCalldata({ key, zeroForOne, amountIn, minOut, deadline, recipient = null }) {
+  const actions = ethers.concat([new Uint8Array([ACT.SWAP_EXACT_IN]), new Uint8Array([ACT.SETTLE]), new Uint8Array([ACT.TAKE])]);
   const currencyIn = zeroForOne ? key.currency0 : key.currency1;
   const currencyOut = zeroForOne ? key.currency1 : key.currency0;
+  const to = recipient || "0x0000000000000000000000000000000000000001"; // ActionConstants.MSG_SENDER
   const params = [
-    coder.encode([`tuple(${POOL_KEY_T} poolKey,bool zeroForOne,uint128 amountIn,uint128 amountOutMinimum,bytes hookData)`], [{ poolKey: key, zeroForOne, amountIn, amountOutMinimum: minOut, hookData: "0x" }]),
-    coder.encode(["address", "uint256"], [currencyIn, amountIn]),
-    coder.encode(["address", "uint256"], [currencyOut, minOut]),
+    coder.encode(["tuple(address currencyIn,tuple(address intermediateCurrency,uint24 fee,int24 tickSpacing,address hooks,bytes hookData)[] path,bytes extra,uint128 amountIn,uint128 amountOutMinimum)"],
+      [{ currencyIn, path: [{ intermediateCurrency: currencyOut, fee: key.fee, tickSpacing: key.tickSpacing, hooks: key.hooks, hookData: "0x" }], extra: "0x", amountIn, amountOutMinimum: minOut }]),
+    coder.encode(["address", "uint256", "bool"], [currencyIn, 0n, true]), // settle the full debt, paid by the caller (Permit2 / msg.value)
+    coder.encode(["address", "address", "uint256"], [currencyOut, to, 0n]), // take the full credit to the recipient
   ];
   const input = coder.encode(["bytes", "bytes[]"], [actions, params]);
   const iface = new ethers.Interface(ROUTER_ABI);
@@ -142,7 +151,7 @@ function settings(cfg) {
     minUsd: Number(s.minUsd ?? 25),
     maxImpactPct: Number(s.maxImpactPct ?? 3),
     hold: new Set((s.hold || []).map((x) => String(x).toLowerCase())),
-    nativeQuoteOnly: s.nativeQuoteOnly !== false,
+    nativeQuoteOnly: s.nativeQuoteOnly === true, // off by default: ERC-20-quoted pools work with the router's real layout
     router: s.router || v4.universalRouter || null,
     quoter: s.quoter || v4.quoter || null,
     permit2: s.permit2 || v4.permit2 || PERMIT2_DEFAULT,
@@ -237,7 +246,7 @@ function create({ provider, cfg, log = console.log }) {
 
     const minOut = (fit.quotedOut * (10000n - slippageBps)) / 10000n;
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
-    const call = buildSwapCalldata({ key, zeroForOne, amountIn: fit.amountIn, minOut, deadline });
+    const call = buildSwapCalldata({ key, zeroForOne, amountIn: fit.amountIn, minOut, deadline, recipient: wallet.address });
 
     // Permit2: exact-amount ERC-20 allowance to Permit2, then a 1-hour Permit2 allowance to the router.
     try {

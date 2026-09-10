@@ -15,10 +15,10 @@
       "positionManager": "0x58daec3116aae6d93017baaea7749052e8a04fa7",
       "stateView": "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b",
       "poolManager": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
-      "universalRouter": "0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99",
+      "universalRouter": "0x8876789976decbfcbbbe364623c63652db8c0904",
       "quoter": "0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94",
       "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
-      "_sellComment": "universalRouter / quoter / permit2 are the stock v4-periphery deployments on Robinhood Chain, used by sell-v4.js (memecoinSell) to sell fee tokens in their own hookless pool.",
+      "_sellComment": "universalRouter (the address the Uniswap app uses on this chain; 0x06AfBA43… is a second v4-capable build), quoter and permit2 are used by sell-v4.js (memecoinSell). The router's exact-input struct carries an extra empty bytes field before the amounts; sell-v4.js encodes that layout.",
       "pricingHooks": [
         "0xeb1E05dF4b1E0e7eEd94CD06628900868EA3A0CC",
         "0x11aFe0130450df7127276e7AF474Eccdf4D420Cc",
@@ -190,12 +190,12 @@
     }
   },
   "memecoinSell": {
-    "_comment": "sell-v4.js: sell fee tokens that have no v3 route (LAPTOP, Bucket, CRUMBS, ...) in the hookless v4 pool they were earned from, via the Universal Router (Permit2, exact-amount approvals, dry-run before sending). Only when the batch is worth >= minUsd; price impact vs spot capped at maxImpactPct (a batch over the cap is trimmed to the largest slice under it, and skipped if that slice is under minUsd); hold lists symbols never to sell; thresholds.maxSwapValueWeth and slippageBps still apply; every sale and skip goes to token-sales.json. Proceeds join the normal USDG -> vault split -> wallet flow. nativeQuoteOnly (default true): sell only in ETH-quoted pools, because this chain's PoolManager rejects router swaps in pools whose currency0 is an ERC-20 (verified 2026-09-10); tokens with only ERC-20-quoted pools are handed back.",
+    "_comment": "sell-v4.js: sell fee tokens that have no v3 route (LAPTOP, Bucket, CRUMBS, ...) in the hookless v4 pool they were earned from, via the Universal Router (Permit2, exact-amount approvals, dry-run before sending). Only when the batch is worth >= minUsd; price impact vs spot capped at maxImpactPct (a batch over the cap is trimmed to the largest slice under it, and skipped if that slice is under minUsd); hold lists symbols never to sell; thresholds.maxSwapValueWeth and slippageBps still apply; every sale and skip goes to token-sales.json. Proceeds join the normal USDG -> vault split -> wallet flow. nativeQuoteOnly (default false) restricts sells to ETH-quoted pools; not needed since the router's real parameter layout (extra bytes field, read from an app swap on 2026-09-10) made ERC-20-quoted pools work.",
     "enabled": true,
     "minUsd": 25,
     "maxImpactPct": 3,
     "hold": [],
-    "nativeQuoteOnly": true
+    "nativeQuoteOnly": false
   },
   "dailySummary": {
     "_comment": "daily.js: one short Telegram line-up per day (arm window, 24h collects per wallet, open positions and fee rates, guardian flags, vault, gas, last run). hour is local time; chat main or group.",

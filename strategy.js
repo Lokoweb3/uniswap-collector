@@ -20,6 +20,17 @@ const HOUR = 3600 * 1000;
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
 const round = (n, p = 2) => (n == null || !isFinite(n) ? null : +Number(n).toFixed(p));
 
+/**
+ * Disposals of held lots: token-disposals.json (outbound transfers found by the
+ * disposal scan, kind "sent", and any future batch sale, kind "sold"). Sales the
+ * collector makes at collect time (token-sales.json) are NOT disposals: those
+ * tokens were sold before they were handed back, so they never became lots.
+ */
+function readDisposals(dir) {
+  const rows = readJson(path.join(dir, "token-disposals.json"), { rows: [] }).rows;
+  return (Array.isArray(rows) ? rows : []).map((r) => ({ t: r.t, token: r.token, amount: Number(r.amount) || 0, usd: r.usd != null ? Number(r.usd) : null, tx: r.tx || null, kind: r.kind || "sent", to: r.to || null }));
+}
+
 function create({ cfg, dir = __dirname, port, metaFor = null }) {
   const BASE = `http://127.0.0.1:${port}`;
   const WETH = (cfg.contracts.weth || "").toLowerCase();
@@ -312,10 +323,45 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       const px = priceFor(h.token, h.t);
       lots.push({ t: new Date(h.t).toISOString(), wallet: h.wallet, token: h.token, amount: h.amount, usdPerToken: px ? +Number(px.p).toPrecision(6) : null, usd: px ? round(h.amount * px.p, 4) : null, basis: px ? px.basis : "no price record", reason: h.why, tx: h.tx });
     }
+    // Disposals consume lots FIFO per token. Each lot keeps its received amount;
+    // disposed / remaining / proceeds / realized are tracked alongside.
+    for (const l of lots) { l.received = l.amount; l.disposedAmount = 0; l.remainingAmount = l.amount; l.proceedsUsd = 0; l.realizedUsd = 0; l.disposalKind = null; l.disposalTx = null; }
+    const disposedByToken = {}; // token -> { disposedAmount, proceedsUsd, realizedUsd, unpricedDisposals }
+    {
+      const byTok = {};
+      for (const d of readDisposals(dir)) {
+        if (since && d.t < since) continue;
+        if (token && String(d.token).toLowerCase() !== String(token).toLowerCase()) continue;
+        (byTok[d.token] || (byTok[d.token] = [])).push(d);
+      }
+      for (const [tok, ds] of Object.entries(byTok)) {
+        const ls = lots.filter((l) => l.token === tok).sort((a, b) => a.t.localeCompare(b.t));
+        const acc = (disposedByToken[tok] = { disposedAmount: 0, proceedsUsd: 0, realizedUsd: 0, unpricedDisposals: 0 });
+        let li = 0;
+        for (const d of ds.sort((a, b) => (a.t || 0) - (b.t || 0))) {
+          let left = d.amount;
+          while (left > 0 && li < ls.length) {
+            const lot = ls[li];
+            const take = Math.min(left, lot.remainingAmount);
+            const basisPer = lot.usd != null && lot.received > 0 ? lot.usd / lot.received : null;
+            const proceeds = d.usd != null && d.amount > 0 ? (d.usd / d.amount) * take : null;
+            if (proceeds == null) acc.unpricedDisposals++;
+            const realized = basisPer != null && proceeds != null ? proceeds - basisPer * take : null;
+            lot.disposedAmount += take; lot.remainingAmount -= take;
+            lot.proceedsUsd += proceeds || 0; lot.realizedUsd += realized || 0;
+            lot.disposalKind = d.kind; lot.disposalTx = d.tx;
+            acc.disposedAmount += take; acc.proceedsUsd += proceeds || 0; acc.realizedUsd += realized || 0;
+            left -= take;
+            if (lot.remainingAmount <= 1e-12) { lot.remainingAmount = 0; li++; }
+          }
+        }
+      }
+    }
     const byToken = {};
     for (const l of lots) {
-      const b = byToken[l.token] || (byToken[l.token] = { token: l.token, lots: 0, amount: 0, basisUsd: 0, unpriced: 0, first: l.t, last: l.t });
-      b.lots++; b.amount += l.amount; if (l.usd != null) b.basisUsd += l.usd; else b.unpriced++;
+      const b = byToken[l.token] || (byToken[l.token] = { token: l.token, lots: 0, amount: 0, basisUsd: 0, unpriced: 0, first: l.t, last: l.t, remainingAmount: 0, remainingBasisUsd: 0 });
+      b.lots++; b.amount += l.received; if (l.usd != null) b.basisUsd += l.usd; else b.unpriced++;
+      b.remainingAmount += l.remainingAmount; if (l.usd != null && l.received > 0) b.remainingBasisUsd += (l.usd / l.received) * l.remainingAmount;
       if (l.t < b.first) b.first = l.t; if (l.t > b.last) b.last = l.t;
     }
     const summary = Object.values(byToken).map((b) => {
@@ -326,9 +372,13 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       // A drained pool yields a price of effectively zero; that is no price, not a value.
       if (price != null && !(price > 1e-12)) { priceNote = `pool price ${Number(price).toExponential(2)} is below any sane floor (drained pool)`; price = null; }
       const priced = b.amount > 0 && b.basisUsd > 0 && b.unpriced === 0;
+      const disp = disposedByToken[b.token] || { disposedAmount: 0, proceedsUsd: 0, realizedUsd: 0, unpricedDisposals: 0 };
       return { ...b, amount: round(b.amount, 6), basisUsd: round(b.basisUsd), avgCostUsd: priced ? +(b.basisUsd / b.amount).toPrecision(6) : null,
-        priceNowUsd: price != null ? +Number(price).toPrecision(6) : null, valueNowUsd: price != null ? round(b.amount * price) : null,
-        unrealizedUsd: price != null && priced ? round(b.amount * price - b.basisUsd) : null,
+        priceNowUsd: price != null ? +Number(price).toPrecision(6) : null, valueNowUsd: price != null ? round(b.remainingAmount * price) : null,
+        unrealizedUsd: price != null && priced ? round(b.remainingAmount * price - b.remainingBasisUsd) : null,
+        disposedAmount: round(disp.disposedAmount, 6), proceedsUsd: disp.disposedAmount > 0 ? round(disp.proceedsUsd) : null,
+        realizedUsd: disp.disposedAmount > 0 && priced && !disp.unpricedDisposals ? round(disp.realizedUsd) : null,
+        remainingAmount: round(b.remainingAmount, 6), remainingBasisUsd: round(b.remainingBasisUsd),
         stillHeld: now ? round(now.balance, 6) : null, priceNote };
     }).sort((a, b) => (b.basisUsd || 0) - (a.basisUsd || 0));
     // Sales made at collect time (sell-v4.js, token-sales.json): those tokens never became lots; report them alongside.
@@ -340,9 +390,15 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       if (r.skipped) { b.skips++; b.lastSkipReason = r.reason; continue; }
       b.sales++; b.amountSold += Number(r.amount) || 0; b.proceedsUsd += Number(r.usd) || 0;
     }
-    return { ok: true, asOf: new Date().toISOString(), tokens: summary, lots: lots.sort((a, b) => a.t.localeCompare(b.t)),
+    return { ok: true, asOf: new Date().toISOString(), tokens: summary,
+      lots: lots.sort((a, b) => a.t.localeCompare(b.t)).map((l) => ({
+        t: l.t, wallet: l.wallet, token: l.token, amount: round(l.received, 6), usdPerToken: l.usdPerToken, usd: l.usd, basis: l.basis, reason: l.reason, tx: l.tx,
+        disposedAmount: round(l.disposedAmount, 6), remainingAmount: round(l.remainingAmount, 6), proceedsUsd: l.disposedAmount > 0 ? round(l.proceedsUsd) : null, realizedUsd: l.disposedAmount > 0 && l.usd != null ? round(l.realizedUsd) : null,
+        disposalKind: l.disposalKind, disposalTx: l.disposalTx,
+      })),
       soldAtCollect: Object.values(sales).map((b) => ({ ...b, amountSold: round(b.amountSold, 6), proceedsUsd: round(b.proceedsUsd) })),
       notes: ["A lot is one hand-back of a fee token the collector could not swap (collector.log); its basis is the USD price of that hour. Selling later realizes the gain or loss against this basis.",
+        "Disposals consume lots FIFO (token-disposals.json, from the outbound-transfer scan): a transfer into the protocol whose transaction swapped is a sale through a router (kind 'sold'); a transfer to any other address that is not one of your own wallets, the operator or the vault is 'sent'; a transfer into the protocol without a swap is a liquidity deposit and is not a disposal. Both kinds are valued at the hourly price of that hour, not at actual proceeds. realizedUsd = that value minus the disposed lots' basis; unrealized and value now cover the remaining amount only.",
         "soldAtCollect: fee tokens the collector sold in their v4 pool at collect time (token-sales.json); those proceeds are income already and never became lots.",
         "stillHeld is the wallet balance now (all sources), which can differ from the lots total if you bought, sold or moved the token.", "Tokens the collector swapped at collect time (ETH, WETH, USDG, and anything with a v3 route) are already counted as income."] };
   }
@@ -355,7 +411,86 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     return { ok: true, days, rows, note: "Hourly comparison of each position's pool fee APR against its best sibling pool (same pair, other tier or version)." };
   }
 
-  return { positionHistory, priceHistory, scoutHistory, tokenLots };
+  // ---- disposal scan (outbound ERC-20 transfers of handed-back tokens) --------
+  /**
+   * Find where handed-back fee tokens went after they arrived: outbound ERC-20
+   * Transfer events of each lot token from each wallet, via Blockscout's log
+   * query (address = the token, topic1 = the wallet), cached incrementally in
+   * token-disposals.json. A transfer to one of your own addresses (main wallet,
+   * watched wallets, the operator, the vault) is a move, not a disposal, and is
+   * skipped. Each disposal is valued at the hourly price log for that hour.
+   */
+  async function scanDisposals({ ownAddresses = [] } = {}) {
+    const bs = require("./blockscout");
+    const FILE = path.join(dir, "token-disposals.json");
+    const state = readJson(FILE, { lastBlock: {}, rows: [] });
+    if (!Array.isArray(state.rows)) state.rows = [];
+    if (!state.lastBlock || typeof state.lastBlock !== "object") state.lastBlock = {};
+    const hours = priceLog();
+    const [pos, watch, pf] = await Promise.all([get("/api/positions").catch(() => null), get("/api/watch").catch(() => null), get("/api/portfolio").catch(() => null)]);
+    // Tokens that were ever handed back, with address and decimals.
+    const tokens = new Map(); // symbol -> { address, decimals }
+    const note = (sym, addr, dec) => { if (sym && addr && addr !== ethers.ZeroAddress && !tokens.has(sym)) tokens.set(sym, { address: String(addr).toLowerCase(), decimals: dec != null ? Number(dec) : null }); };
+    for (const p of (pos && pos.positions) || []) { note(p.symbol0, p.token0 && (p.token0.address || p.token0), p.token0 && p.token0.decimals); note(p.symbol1, p.token1 && (p.token1.address || p.token1), p.token1 && p.token1.decimals); }
+    for (const w of (watch && watch.wallets) || []) for (const t of (w.holdings && w.holdings.tokens) || []) note(t.symbol, t.address, t.decimals);
+    for (const r of (pf && pf.rows) || []) note(r.symbol, r.address, r.decimals);
+    for (const r of readJson(path.join(dir, "v4-collects.json"), [])) for (const t of [r.t0, r.t1]) if (t) note(t.symbol, t.address, t.decimals);
+    const handed = new Set(handBacks().map((h) => h.token));
+    const own = new Set([String(cfg.ownerAddress || "").toLowerCase(), ...((watch && watch.wallets) || []).map((w) => String(w.address).toLowerCase()), ...ownAddresses.map((a) => String(a).toLowerCase()), String(cfg.treasuryTBA || "").toLowerCase(), String(cfg.treasuryNFT || "").toLowerCase()].filter(Boolean));
+    const wallets = [String(cfg.ownerAddress || "").toLowerCase(), ...((watch && watch.wallets) || []).map((w) => String(w.address).toLowerCase())].filter(Boolean);
+    const TRANSFER = ethers.id("Transfer(address,address,uint256)");
+    const SWAP = ethers.id("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
+    // Transfers into the protocol are liquidity deposits (a move, not a disposal)
+    // unless the same transaction swapped: then the wallet sold through a router.
+    const protocol = new Set([cfg.contracts.v4 && cfg.contracts.v4.poolManager, cfg.contracts.v4 && cfg.contracts.v4.positionManager, cfg.contracts.positionManager, cfg.contracts.swapRouter02, cfg.contracts.v4 && cfg.contracts.v4.universalRouter, cfg.contracts.v4 && cfg.contracts.v4.permit2].filter(Boolean).map((a) => String(a).toLowerCase()));
+    const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId, { staticNetwork: true });
+    const swappedIn = async (tx) => { try { const r = await provider.getTransactionReceipt(tx); return !!(r && r.logs.some((l) => l.topics[0] === SWAP)); } catch { return null; } };
+    const seen = new Set([...state.rows.map((r) => `${r.tx}:${r.logIndex}`), ...(state.deposits || [])]);
+    let added = 0, queries = 0, deposits = 0;
+    for (const sym of handed) {
+      const tk = tokens.get(sym);
+      if (!tk || tk.decimals == null) continue;
+      for (const w of wallets) {
+        const key = `${tk.address}:${w}`;
+        const from = (Number(state.lastBlock[key]) || 0) + 1;
+        const query = `module=logs&action=getLogs&fromBlock=${from}&toBlock=latest&address=${tk.address}&topic0=${TRANSFER}&topic1=${ethers.zeroPadValue(w, 32)}&topic0_1_opr=and`;
+        let d = null;
+        try { const r = await bs.bsFetch(`?${query}`, { timeoutMs: 30000 }); d = await r.json(); } catch { continue; }
+        queries++;
+        if (!d || !Array.isArray(d.result)) continue;
+        let top = Number(state.lastBlock[key]) || 0;
+        for (const l of d.result) {
+          const k = `${l.transactionHash}:${l.logIndex}`;
+          const bn = parseInt(l.blockNumber, 16);
+          if (bn > top) top = bn;
+          if (seen.has(k) || !l.topics || l.topics.length < 3) continue;
+          const to = ("0x" + l.topics[2].slice(26)).toLowerCase();
+          if (own.has(to)) continue; // a move between your own addresses
+          seen.add(k);
+          let kind = "sent";
+          if (protocol.has(to)) {
+            const sold = await swappedIn(l.transactionHash);
+            if (sold === false) { deposits++; (state.deposits || (state.deposits = [])).push(k); continue; } // liquidity deposit: still yours, inside a position
+            if (sold === null) continue; // receipt unavailable; retried next scan (not marked seen in state)
+            kind = "sold";
+          }
+          const t = l.timeStamp ? parseInt(l.timeStamp, 16) * 1000 : null;
+          const amount = Number(ethers.formatUnits(BigInt(l.data || "0x0"), tk.decimals));
+          const px = t != null ? priceAt(hours, tk.address, t) : null;
+          state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from: w, to, token: sym, tokenAddress: tk.address, amount, usd: px != null ? round(amount * px, 4) : null, kind });
+          added++;
+        }
+        state.lastBlock[key] = top;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    const tmp = FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, FILE);
+    return { ok: true, added, deposits, queries, tokens: handed.size };
+  }
+
+  return { positionHistory, priceHistory, scoutHistory, tokenLots, scanDisposals };
 }
 
 module.exports = { create };

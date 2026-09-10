@@ -746,22 +746,24 @@ function renderLots(){
   const basis = toks.reduce((s,t)=>s+(t.basisUsd||0),0), value = toks.filter(t=>t.valueNowUsd!=null).reduce((s,t)=>s+t.valueNowUsd,0);
   $('#lottotal').innerHTML = toks.length ? `basis <b>${usd(basis)}</b> · now <b>${usd(value)}</b>` : '';
   $('#lottable').innerHTML = toks.length ? `<table class="etable">
-    <tr><th>Token</th><th>Lots</th><th>Received</th><th>Basis (USD)</th><th>Avg cost</th><th>Price now</th><th>Value now</th><th>Unrealized</th><th>Still held</th><th title="Sold by the collector in the token's own v4 pool at collect time (sell-v4.js); these never became lots">Sold at collect</th><th>First · last</th></tr>
+    <tr><th>Token</th><th>Lots</th><th>Received</th><th>Basis (USD)</th><th>Avg cost</th><th>Price now</th><th>Value now</th><th>Unrealized</th><th title="Proceeds of lots disposed of (sent out of the wallet or sold later) minus their basis">Realized</th><th title="Lot tokens still held after disposals">Remaining</th><th>Still held</th><th title="Sold by the collector in the token's own v4 pool at collect time (sell-v4.js); these never became lots">Sold at collect</th><th>First · last</th></tr>
     ${toks.map(t => { const sd = sold[t.token]; return `<tr>
       <td><b>${t.token}</b></td><td class="u">${t.lots}${t.unpriced ? ` <span class="muted" title="${t.unpriced} lot(s) have no price record">(${t.unpriced} unpriced)</span>` : ''}</td>
       <td class="u">${fmtN(t.amount)}</td><td class="u">${usd(t.basisUsd)}</td>
       <td class="u">${t.avgCostUsd != null ? '$' + t.avgCostUsd : '—'}</td><td class="u">${t.priceNowUsd != null ? '$' + t.priceNowUsd : t.priceNote ? '<span class="muted" title="' + esc(t.priceNote) + '">no reliable price</span>' : '—'}</td>
       <td class="u">${t.valueNowUsd != null ? usd(t.valueNowUsd) : '—'}</td>
       <td class="u chg ${t.unrealizedUsd == null ? '' : t.unrealizedUsd >= 0 ? 'up' : 'down'}">${t.unrealizedUsd == null ? '—' : (t.unrealizedUsd >= 0 ? '+' : '') + usd(t.unrealizedUsd)}</td>
+      <td class="u chg ${t.realizedUsd == null ? '' : t.realizedUsd >= 0 ? 'up' : 'down'}" title="${t.disposedAmount ? fmtN(t.disposedAmount) + ' disposed for ' + usd(t.proceedsUsd) : ''}">${t.realizedUsd == null ? (t.disposedAmount ? '<span class="muted">unpriced</span>' : '—') : (t.realizedUsd >= 0 ? '+' : '') + usd(t.realizedUsd)}</td>
+      <td class="u">${t.remainingAmount != null ? fmtN(t.remainingAmount) : '—'}</td>
       <td class="u">${t.stillHeld != null ? fmtN(t.stillHeld) : '—'}</td>
       <td class="u">${sd ? `${fmtN(sd.amountSold)} → ${usd(sd.proceedsUsd)}${sd.skips ? ` <span class="muted" title="${esc(sd.lastSkipReason || '')}">(${sd.skips} skipped)</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td class="l muted">${t.first.slice(5,10)} · ${t.last.slice(5,10)}</td>
-    </tr>`; }).join('')}${Object.keys(sold).filter(k => !toks.some(t => t.token === k)).map(k => { const sd = sold[k]; return `<tr><td><b>${esc(k)}</b></td><td class="u muted">0</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u">${fmtN(sd.amountSold)} → ${usd(sd.proceedsUsd)}${sd.skips ? ` <span class="muted">(${sd.skips} skipped)</span>` : ''}</td><td class="l muted">sold at collect only</td></tr>`; }).join('')}</table>` : '<div class="muted">No fee tokens received unconverted yet.</div>';
+    </tr>`; }).join('')}${Object.keys(sold).filter(k => !toks.some(t => t.token === k)).map(k => { const sd = sold[k]; return `<tr><td><b>${esc(k)}</b></td><td class="u muted">0</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u">${fmtN(sd.amountSold)} → ${usd(sd.proceedsUsd)}${sd.skips ? ` <span class="muted">(${sd.skips} skipped)</span>` : ''}</td><td class="l muted">sold at collect only</td></tr>`; }).join('')}</table>` : '<div class="muted">No fee tokens received unconverted yet.</div>';
 }
 document.addEventListener('click', e => {
   if (e.target.id !== 'lotcsv' || !lotsD) return;
-  const head = 'time,wallet,tokenId,pair,token,amount,usd_per_token,usd,basis,tx';
-  const lines = lotsD.lots.map(l => [l.t, l.wallet, l.tokenId, l.pair, l.token, l.amount, l.usdPerToken ?? '', l.usd ?? '', l.basis, l.tx].map(v => String(v).includes(',') ? '"' + v + '"' : v).join(','));
+  const head = 'time,wallet,token,amount,usd_per_token,usd,basis,tx,disposed_amount,remaining_amount,proceeds_usd,realized_usd,disposal_kind,disposal_tx';
+  const lines = lotsD.lots.map(l => [l.t, l.wallet, l.token, l.amount, l.usdPerToken ?? '', l.usd ?? '', l.basis, l.tx, l.disposedAmount ?? '', l.remainingAmount ?? '', l.proceedsUsd ?? '', l.realizedUsd ?? '', l.disposalKind ?? '', l.disposalTx ?? ''].map(v => String(v).includes(',') ? '"' + v + '"' : v).join(','));
   const blob = new Blob([[head, ...lines].join('\n')], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'fee-token-lots.csv'; a.click();
 });

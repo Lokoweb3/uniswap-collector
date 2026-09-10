@@ -1123,6 +1123,7 @@ function publicHost() {
   return publicHostCache.host;
 }
 const strategy = require("./strategy").create({ cfg, dir: __dirname, port: PORT, metaFor: (id) => positionMeta(id) });
+let lastDisposalScan = 0;
 // === strategy track record (strategy-track.js): score agent proposals against what happened ===
 const strategyTrack = require("./strategy-track").create({ cfg, dir: __dirname, port: PORT });
 
@@ -2237,6 +2238,11 @@ async function backgroundTick() {
   // Not awaited: Blockscout reads are paced, a batch may take minutes.
   tokenHealth.refresh(heldTokens(), 15).then((n) => { if (n) console.log(`token health: refreshed ${n} token(s)`); }).catch((err) => console.error("token health:", err.shortMessage || err.message));
   // === end token-health-and-approvals ===
+  // === fee-token disposals === where handed-back tokens went (strategy.scanDisposals), every 6 h, paced Blockscout reads; not awaited
+  if (Date.now() - lastDisposalScan > 6 * 3600 * 1000) {
+    lastDisposalScan = Date.now();
+    strategy.scanDisposals({ ownAddresses: [OPERATOR].filter(Boolean) }).then((r) => { if (r.added) console.log(`disposals: ${r.added} outbound transfer(s) of handed-back tokens recorded`); }).catch((err) => console.error("disposals:", err.shortMessage || err.message));
+  }
   // === strategy track record === score any due, unscored proposals (one local read when something is due)
   try {
     const r = await strategyTrack.score();

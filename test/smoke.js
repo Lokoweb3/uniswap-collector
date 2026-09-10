@@ -30,11 +30,11 @@ const IGNORE = [/Password field is not contained in a form/i, /DevTools listenin
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitFor(url, ms) {
+async function waitFor(url, ms, perRequestMs = 3000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      const r = await fetch(url, { signal: AbortSignal.timeout(perRequestMs) });
       if (r.ok) return true;
     } catch {}
     await sleep(1000);
@@ -71,6 +71,12 @@ async function main() {
     if (!(await waitFor(`${base}/api/positions`, 360000))) {
       console.error("smoke: server did not answer /api/positions within 6 min (see test/.tmp/smoke-server.log)");
       process.exit(1);
+    }
+    // Warm the views the Analytics page fetches: the collect history prices its
+    // events through the RPC on a cold server, which can take minutes and would
+    // otherwise outlast the per-page Chrome limit below.
+    for (const warm of ["/api/history", "/api/strategy/lots"]) {
+      if (!(await waitFor(`${base}${warm}`, 300000, 240000))) console.error(`smoke: ${warm} did not answer within 5 min; continuing`);
     }
     for (const p of PAGES) {
       const { dom, errors, status } = loadPage(base + p.path);

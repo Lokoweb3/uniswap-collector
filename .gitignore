@@ -32,6 +32,7 @@ liquidity-ledger.json
 v4-liquidity-ledger.json
 v4-owner-collects.json
 token-sales.json
+token-disposals.json
 strategy-proposals.json
 portfolio.json
 range-log.json

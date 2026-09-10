@@ -297,8 +297,14 @@ Live snapshots are not enough to design a strategy; the agent needs what happene
 - `token_lots`: cost basis of the fee tokens the collector handed back unconverted: one lot per
   hand-back from `collector.log`, priced at that hour, with per-token totals, average cost, value
   now and unrealized gain, plus `soldAtCollect` for the tokens `sell-v4.js` sold in their own pool
-  (proceeds and skips from `token-sales.json`). Also the "Fee tokens received" table on Analytics
-  with a CSV. Tokens swapped or sold at collect time are already income.
+  (proceeds and skips from `token-sales.json`), and the realized side: outbound transfers of a
+  handed-back token are found by a Blockscout scan every 6 h (`token-disposals.json`; a transfer
+  into the protocol whose transaction swapped is a sale, any other outbound transfer not to your
+  own wallets, the operator or the vault is a send, a liquidity deposit is neither) and consume
+  lots FIFO, giving per-token disposed amount, proceeds at that hour's price, realized gain and
+  the remaining amount, which unrealized then covers. Also the "Fee tokens received" table on
+  Analytics (Realized and Remaining columns) with a per-lot CSV. Tokens swapped or sold at collect
+  time are already income.
 
 A prompt that works: "Use position_history for the last 14 days, group by pair and fee tier, rank
 by realized fee APR and net result, note time in range and how long each was held, then propose
@@ -854,6 +860,9 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Realized side of fee-token cost basis (Theo): FIFO disposals from an outbound-transfer scan,
+  telling router sales from liquidity deposits and moves between own addresses; Realized and
+  Remaining on Analytics and in the lots CSV.
 - Dashboard: v4 cards show the collectable / not approved state and a current tooltip; owner-side
   collects are tagged in the collects table (with a note when the ETH leg is unknown); the fee-tokens
   table shows sales at collect time and hides junk prices from drained pools; Memecoin Watch cards

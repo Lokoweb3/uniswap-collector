@@ -154,12 +154,13 @@ function priceLogAt(tokenAddr, quoteAddr, t) {
  * mint time when it has the token, else from their first sample (filled in by
  * the caller); closed ones are dropped from the discovered file.
  */
-async function watchList(live) {
+async function watchList(live, closedIds = new Set()) {
   const listed = Array.isArray(live.memecoins) ? live.memecoins : [];
   if (live.memecoinDiscovery === false) return listed;
   const defaults = { ...DEFAULTS, ...(live.memecoinDefaults || {}) };
   const discovered = readJson(DISCOVERED_FILE, []);
-  const have = new Set([...listed, ...discovered].map((m) => String(m.tokenId)));
+  // Ids already seen closed are never re-discovered: the dashboard's view can lag a close by a few minutes.
+  const have = new Set([...listed, ...discovered].map((m) => String(m.tokenId)).concat([...closedIds]));
   let changed = false;
   for (const p of await livePositions()) {
     if (have.has(p.tokenId)) continue;
@@ -268,7 +269,7 @@ async function closeNow(entry, reason, who = "guardian") {
 
 async function cycle() {
   const live = readJson(CONFIG_FILE, cfg);
-  const list = await watchList(live);
+  const list = await watchList(live, new Set(Object.entries(state.positions).filter(([, st]) => st.closed).map(([id]) => id)));
   const wethUsd = await ethUsd();
   const statuses = [];
   const now = Date.now();

@@ -153,7 +153,7 @@ One assistant answers the web chat panel, the Telegram bot and local scripts, fr
 the same tools the MCP server exposes (in-process), with memory on disk:
 
 - **Memory.** `agent-memory/<channel>.json` keeps the last ~40 turns per channel
-  (`web`, `telegram:<chatId>`, `loopback`); `agent-notes.md` is a short file the
+  (`web`, `telegram:<chatId>`, `loopback`); `brain/notes.md` is a short file the
   agent keeps about your standing decisions and preferences, read into every prompt
   and editable through its `update_notes` tool. Both are gitignored and in the nightly
   backup. Every alert the dashboard sends to a Telegram chat is appended to that chat's
@@ -165,11 +165,11 @@ the same tools the MCP server exposes (in-process), with memory on disk:
   included. A sale is only ever decided when the message being answered says
   approve/reject; an alert's own wording never triggers it. Nothing on any channel
   can arm, collect, close, or change rules.
-- **Telegram** (`telegram.js`): long-polls `TELEGRAM_AGENT_TOKEN`, else the alert
-  bot's `TELEGRAM_TOKEN`, answers only allowed chats, ignores strangers, `/reset`
-  and `/status`. Only one process may poll a bot token: if another agent already
-  polls it (Telegram answers 409), this one backs off a minute at a time and says so
-  in `server.log`; give it its own bot via `TELEGRAM_AGENT_TOKEN` to run both.
+- **Telegram**: incoming messages are handled by the VPS agent (LokoClawbot), which polls
+  the bot and uses the remote MCP tools; this process never calls getUpdates, so there is
+  no fight over the token. `telegram.js` keeps only the outbound side (`send`) and a
+  `handle()` for a future relay. Alerts still go out from here and are remembered on the
+  chat's transcript for whoever reads it next.
 - **Web panel** (`chat-widget.js`): every page has a 💬 button (bottom right; `/#chat`
   opens it). Through the passphrase gate it works on the phone too (`POST /api/chat`
   is the one write the gate lets through). `GET /api/chat` shows provider, channels
@@ -913,10 +913,10 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
-- Phase 2, unified brain: `agent.js` is the one assistant behind the web panel, Telegram
-  (`telegram.js`, long-polling, allowed chats only, 409-aware) and loopback scripts, with
-  transcripts per channel and a notes file on disk; alerts are remembered on the chat they
-  went to, so "approve it" needs no id; roles by channel (web read, Telegram approve,
+- Phase 2, unified brain: `agent.js` is the one assistant behind the web panel and loopback
+  scripts, with transcripts per channel and `brain/notes.md` on disk; Telegram input stays
+  with the VPS agent (no polling here, so no 409), `telegram.js` only sends; alerts are remembered on the chat they
+  went to, so "approve it" needs no id; roles by channel (web read, Telegram approve via a relay,
   loopback full); a sale is decided only on the owner's explicit word. The watchdog no
   longer reports a loop as "never reported" right after a restart.
 - One settings.json replaces config.json + wallets.json: sections `chain`, `wallets`, `tokens`

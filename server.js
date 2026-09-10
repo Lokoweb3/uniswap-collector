@@ -2340,14 +2340,15 @@ if (LOOPS) {
   server.runBackup = runBackup;
   console.log(`loops: risk guardian every 60 s, fee auto-collect every 15 min, ledger backup daily at ${String(BACKUP_HOUR).padStart(2, "0")}:00`);
 
-  // The agent's Telegram front door: the owner's chat may approve sales; extra chats from settings alerts.agentChats.
+  // Telegram: incoming messages are the VPS agent's (it polls the bot); this process only sends
+  // alerts and remembers them on the chat's transcript. telegram.js keeps the outbound side and
+  // a handle() for a future relay; nothing here calls getUpdates.
   {
     const allowed = {};
     const al = cfg.alerts || {};
     if (al.fallbackChat) allowed[String(al.fallbackChat)] = "approve";
     for (const c of (settings.read().alerts || {}).agentChats || []) if (c && c.chat) allowed[String(c.chat)] = ["read", "approve", "full"].includes(c.role) ? c.role : "read";
     telegramAgent = require("./telegram").create({ agent, allowed, log: { log: (m) => console.log(m), error: (m) => console.error(m) } });
-    telegramAgent.start().catch((err) => console.error("telegram agent:", err.message));
   }
 }
 

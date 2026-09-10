@@ -1,4 +1,4 @@
-// telegram.js: allowed chats, commands, replies and 409 back-off, with a fake Telegram API and a fake agent.
+// telegram.js: allowed chats, commands, split replies and no polling, with a fake Telegram API and a fake agent.
 const assert = require("assert");
 const T = require("../telegram");
 
@@ -11,15 +11,9 @@ const T = require("../telegram");
     status: () => ({ provider: "anthropic", model: "m", configured: true }),
     channels: () => [{ channel: "telegram:529787973", turns: 2 }],
   };
-  let getUpdatesStatus = 200, updates = [];
-  const fetchImpl = async (url, opts) => {
+    const fetchImpl = async (url, opts) => {
     const body = JSON.parse(opts.body);
     if (/sendMessage$/.test(url)) { sent.push(body); return { ok: true, status: 200, json: async () => ({ ok: true }) }; }
-    if (/getUpdates$/.test(url)) {
-      if (getUpdatesStatus !== 200) return { ok: false, status: getUpdatesStatus, json: async () => ({}) };
-      const out = updates; updates = [];
-      return { ok: true, status: 200, json: async () => ({ ok: true, result: out }) };
-    }
     throw new Error("unexpected " + url);
   };
   const log = { lines: [], log(m) { this.lines.push(m); }, error(m) { this.lines.push("E " + m); } };
@@ -41,16 +35,10 @@ const T = require("../telegram");
   agent.chat = async () => ({ reply: "x".repeat(9000) });
   await tg.handle({ chat: { id: 529787973 }, text: "long" });
   assert.strictEqual(sent.slice(-3).length, 3); assert.strictEqual(sent[sent.length - 1].text.length, 1000);
-  // no token / no chats: not started
-  assert.strictEqual(await T.create({ token: "", agent, allowed: { a: "read" }, log, fetchImpl }).start(), false);
-  assert.strictEqual(await T.create({ token: "t", agent, allowed: {}, log, fetchImpl }).start(), false);
-  // 409 from getUpdates: back off a minute, one notice per ten minutes, still running
-  getUpdatesStatus = 409;
-  const tg2 = T.create({ token: "t", agent, allowed: { "529787973": "approve" }, log, fetchImpl });
-  assert.strictEqual(await tg2.start(), true);
-  await new Promise((r) => setTimeout(r, 30));
-  assert.ok(log.lines.some((l) => /409 Conflict/.test(l)), log.lines.join("|"));
-  assert.strictEqual(tg2.health().conflict, true); assert.strictEqual(tg2.health().running, true);
-  tg2.stop();
-  console.log("telegram: allowed chats, commands, split replies, start guards and 409 back-off assertions passed");
+  // no polling: nothing in this module calls getUpdates; health says so
+  assert.strictEqual(tg.health().polling, false); assert.strictEqual(tg.health().chats, 1);
+  assert.strictEqual(typeof tg.start, "undefined", "the long-poll loop is gone");
+  // send without a token is a no-op
+  assert.strictEqual(await T.create({ token: "", agent, allowed: {}, log, fetchImpl }).send(1, "x"), false);
+  console.log("telegram: allowed chats, commands, split replies and no-polling assertions passed");
 })().catch((e) => { console.error(e); process.exit(1); });

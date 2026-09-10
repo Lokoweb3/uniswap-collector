@@ -72,3 +72,4 @@ docs/
 .collector.lock
 agent-memory/
 agent-notes.md
+brain/

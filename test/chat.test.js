@@ -42,6 +42,9 @@ const agentMod = require("../agent");
 
   // remember(): an alert lands in the Telegram channel's transcript, on disk, and survives a new agent instance
   bot.remember("telegram:123", "assistant", "💱 Sale pending #abc 28,525 Bucket ≈ $98");
+  // notes live in brain/notes.md
+  const full2 = bot.toolsFor(all, "full", { notes: () => "", writeNotes: (t) => fs.writeFileSync(path.join(dir, "brain", "notes.md"), t) });
+  await full2.run("update_notes", { text: "keep" }); assert.strictEqual(fs.readFileSync(path.join(dir, "brain", "notes.md"), "utf8"), "keep");
   const f = path.join(dir, "agent-memory", "telegram-123.json");
   assert.ok(fs.existsSync(f), "transcript persisted");
   const bot2 = agentMod.create({ port: 1, dir });

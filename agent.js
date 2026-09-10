@@ -14,7 +14,7 @@
  *
  * Memory lives on disk under agent-memory/: one transcript per channel
  * (`web`, `telegram:<chatId>`, `loopback`), last ~40 turns, and
- * agent-notes.md, a short file the agent keeps about the owner's standing
+ * brain/notes.md, a short file the agent keeps about the owner's standing
  * decisions and preferences (read into every prompt; editable by the
  * update_notes tool on approve/full channels). Alerts the dashboard sends to
  * a Telegram chat are appended to that chat's transcript (remember()), so
@@ -22,6 +22,9 @@
  *
  * Provider (from the environment, secrets stay in .env):
  *   CHAT_PROVIDER=anthropic|ollama, ANTHROPIC_API_KEY, OLLAMA_API_KEY/OLLAMA_HOST, CHAT_MODEL, CHAT_EFFORT
+ *
+ * Incoming Telegram messages are handled by the VPS agent (LokoClawbot); this
+ * module answers the web panel and loopback callers, and keeps the memory.
  */
 "use strict";
 
@@ -57,8 +60,10 @@ const ROLE_TEXT = {
 // ---- memory ----------------------------------------------------------------
 function memoryStore(dir) {
   const MEM_DIR = path.join(dir, "agent-memory");
-  const NOTES = path.join(dir, "agent-notes.md");
-  try { fs.mkdirSync(MEM_DIR, { recursive: true }); } catch {}
+  const NOTES = path.join(dir, "brain", "notes.md"); // shared with the VPS agent's brain folder
+  try { fs.mkdirSync(MEM_DIR, { recursive: true }); fs.mkdirSync(path.dirname(NOTES), { recursive: true }); } catch {}
+  // An older agent-notes.md moves into brain/notes.md once.
+  try { const old = path.join(dir, "agent-notes.md"); if (fs.existsSync(old) && !fs.existsSync(NOTES)) fs.renameSync(old, NOTES); } catch {}
   const file = (channel) => path.join(MEM_DIR, `${String(channel).replace(/[^A-Za-z0-9_.:-]/g, "_").replace(/:/g, "-")}.json`);
   const channels = new Map(); // channel -> { messages, provider, at, busy }
   function channel(name) {

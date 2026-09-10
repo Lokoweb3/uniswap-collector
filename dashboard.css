@@ -595,3 +595,10 @@ select.scope option{background:#0b1017}
 .thbadge{margin-left:6px;font-size:11px;cursor:help;vertical-align:middle}
 .thbadge.th-risk{filter:drop-shadow(0 0 4px rgba(255,77,109,.6))}
 /* === end token-health-and-approvals === */
+
+/* Memecoin Watch: per-position rules line (red past a threshold, amber within 20% of it) */
+.meme .reasons.rules{color:var(--muted)}
+.meme .reasons.rules b{font-family:var(--font-mono)}
+.meme .reasons.rules b.up{color:var(--neon-green,#39ff88)}
+.meme .reasons.rules b.warn{color:var(--neon-gold,#f5c542)}
+.meme .reasons.rules b.down{color:var(--edge,#ff4d6d)}

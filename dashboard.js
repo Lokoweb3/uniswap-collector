@@ -560,9 +560,9 @@ function renderHistoryTable(){
     ${recent.map(r => `<tr>
       <td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
       <td>${r.wallet || 'Main'}</td>
-      <td>${r.pair || '?'} <span class="mono">#${r.nftId || r.tokenId}</span>${r.version === 4 ? ' <span class="tier v4" title="Uniswap v4 position; recorded by the collector">v4</span>' : ''}${r.principal ? ' (close)' : ''}</td>
-      <td>${r.f0 != null ? amount(r.f0) + ' ' + r.sym0 + ' + ' + amount(r.f1) + ' ' + r.sym1 : '—'}</td>
-      <td class="u">${r.locked ? '' : '<span class="approx" title="No price record from the time of this collect; valued at today\'s prices">≈</span>'}${usd(r.usd)}</td>
+      <td>${r.pair || '?'} <span class="mono">#${r.nftId || r.tokenId}</span>${r.version === 4 ? ' <span class="tier v4" title="Uniswap v4 position; recorded by the collector">v4</span>' : ''}${r.src === 'owner-modify' ? ' <span class="tier" title="Collected by the owner through the position manager (an add or remove of liquidity pays out the accrued fees), not by the collector">owner</span>' : ''}${r.principal ? ' (close)' : ''}</td>
+      <td>${r.f0 != null ? amount(r.f0) + ' ' + r.sym0 + ' + ' + amount(r.f1) + ' ' + r.sym1 : '—'}${r.note ? ' <span class="muted" title="' + esc(r.note) + '">· ETH leg not recorded</span>' : ''}</td>
+      <td class="u">${r.note ? '<span class="approx" title="' + esc(r.note) + '; the USD figure covers the other leg only">≈</span>' : r.locked ? '' : '<span class="approx" title="No price record from the time of this collect; valued at today\'s prices">≈</span>'}${usd(r.usd)}</td>
       <td><a href="${histD.explorer}/tx/${r.tx}" target="_blank" rel="noopener">${r.tx.slice(0,10)}…</a></td>
     </tr>`).join('')}</table>` : '';
 }
@@ -742,19 +742,21 @@ function renderLots(){
   $('#lotsec').hidden = false;
   const fmtN = n => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: n < 100 ? 4 : 0 });
   const toks = d.tokens || [];
+  const sold = Object.fromEntries((d.soldAtCollect || []).map(x => [x.token, x]));
   const basis = toks.reduce((s,t)=>s+(t.basisUsd||0),0), value = toks.filter(t=>t.valueNowUsd!=null).reduce((s,t)=>s+t.valueNowUsd,0);
   $('#lottotal').innerHTML = toks.length ? `basis <b>${usd(basis)}</b> · now <b>${usd(value)}</b>` : '';
   $('#lottable').innerHTML = toks.length ? `<table class="etable">
-    <tr><th>Token</th><th>Lots</th><th>Received</th><th>Basis (USD)</th><th>Avg cost</th><th>Price now</th><th>Value now</th><th>Unrealized</th><th>Still held</th><th>First · last</th></tr>
-    ${toks.map(t => `<tr>
+    <tr><th>Token</th><th>Lots</th><th>Received</th><th>Basis (USD)</th><th>Avg cost</th><th>Price now</th><th>Value now</th><th>Unrealized</th><th>Still held</th><th title="Sold by the collector in the token's own v4 pool at collect time (sell-v4.js); these never became lots">Sold at collect</th><th>First · last</th></tr>
+    ${toks.map(t => { const sd = sold[t.token]; return `<tr>
       <td><b>${t.token}</b></td><td class="u">${t.lots}${t.unpriced ? ` <span class="muted" title="${t.unpriced} lot(s) have no price record">(${t.unpriced} unpriced)</span>` : ''}</td>
       <td class="u">${fmtN(t.amount)}</td><td class="u">${usd(t.basisUsd)}</td>
-      <td class="u">${t.avgCostUsd != null ? '$' + t.avgCostUsd : '—'}</td><td class="u">${t.priceNowUsd != null ? '$' + t.priceNowUsd : '—'}</td>
+      <td class="u">${t.avgCostUsd != null ? '$' + t.avgCostUsd : '—'}</td><td class="u">${t.priceNowUsd != null ? '$' + t.priceNowUsd : t.priceNote ? '<span class="muted" title="' + esc(t.priceNote) + '">no reliable price</span>' : '—'}</td>
       <td class="u">${t.valueNowUsd != null ? usd(t.valueNowUsd) : '—'}</td>
       <td class="u chg ${t.unrealizedUsd == null ? '' : t.unrealizedUsd >= 0 ? 'up' : 'down'}">${t.unrealizedUsd == null ? '—' : (t.unrealizedUsd >= 0 ? '+' : '') + usd(t.unrealizedUsd)}</td>
       <td class="u">${t.stillHeld != null ? fmtN(t.stillHeld) : '—'}</td>
+      <td class="u">${sd ? `${fmtN(sd.amountSold)} → ${usd(sd.proceedsUsd)}${sd.skips ? ` <span class="muted" title="${esc(sd.lastSkipReason || '')}">(${sd.skips} skipped)</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td class="l muted">${t.first.slice(5,10)} · ${t.last.slice(5,10)}</td>
-    </tr>`).join('')}</table>` : '<div class="muted">No fee tokens received unconverted yet.</div>';
+    </tr>`; }).join('')}${Object.keys(sold).filter(k => !toks.some(t => t.token === k)).map(k => { const sd = sold[k]; return `<tr><td><b>${esc(k)}</b></td><td class="u muted">0</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u muted">—</td><td class="u">${fmtN(sd.amountSold)} → ${usd(sd.proceedsUsd)}${sd.skips ? ` <span class="muted">(${sd.skips} skipped)</span>` : ''}</td><td class="l muted">sold at collect only</td></tr>`; }).join('')}</table>` : '<div class="muted">No fee tokens received unconverted yet.</div>';
 }
 document.addEventListener('click', e => {
   if (e.target.id !== 'lotcsv' || !lotsD) return;
@@ -1306,7 +1308,7 @@ function render(d){
         <div class="name">
           <h2>${p.pair}</h2>
           <span class="tier">${p.feeTierLabel}</span>
-          ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}. Shown read-only; the collector does not collect v4 fees.">v4</span>` : ''}
+          ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}. Collected like v3 once the wallet has approved the operator on the v4 position manager (/approve-v4).">v4</span>` : ''}
           <span class="nft mono">${nftLink(d, p, '#' + (p.nftId || p.tokenId))}</span>
           <span class="state ${p.inRange ? (near?'near':'') : 'out'}">${state}</span>
           ${p.approved === false ? '<span class="tag-noappr">not approved</span>' : ''}
@@ -1579,7 +1581,7 @@ function renderWatch(d){
           <div class="name">
             <h2>${p.pair}</h2>
             <span class="tier">${p.feeTierLabel}</span>
-            ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}">v4</span>` : ''}
+            ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}. Collected like v3 once this wallet has approved the operator on the v4 position manager (/approve-v4).">v4</span>` : ''}
             ${full ? '<span class="full" title="Liquidity across the whole price range: always earning, never idle">full range</span>' : ''}
             <span class="nft mono">${nft}</span>
             <span class="state ${p.inRange ? (near ? 'near' : '') : 'out'}">${state}</span>
@@ -1647,6 +1649,26 @@ tick(false);
 setInterval(() => tick(false), 60000);
 
 // === memecoin-guardian ===
+// Per-position rules (config memecoins entry): each part is red past its threshold, amber within 20% of it.
+function rulesLine(p){
+  const parts = [];
+  const tone = (past, near) => past ? 'down' : near ? 'warn' : 'up';
+  if (p.feeRateFloorUsdPerHour != null) {
+    const v = p.feesPerHour15m != null ? p.feesPerHour15m : p.feesPerHour;
+    const past = v != null && v < p.feeRateFloorUsdPerHour, near = v != null && v < p.feeRateFloorUsdPerHour * 1.2;
+    parts.push(`<b class="${tone(past, near)}">${v == null ? '—' : usd(v)}/h</b> vs $${p.feeRateFloorUsdPerHour} floor`);
+  }
+  if (p.collectedTargetUsd != null) {
+    const v = p.collectedUsd || 0, reached = v >= p.collectedTargetUsd, near = v >= p.collectedTargetUsd * 0.8;
+    parts.push(`collected <b class="${reached ? 'up' : near ? 'warn' : ''}">${usd(v)}</b> of $${p.collectedTargetUsd}`);
+  }
+  if (p.liqDropAlertPct != null) {
+    const v = p.liqDropFromMaxPct || 0, past = v >= p.liqDropAlertPct, near = v >= p.liqDropAlertPct * 0.8;
+    parts.push(`liquidity <b class="${tone(past, near)}">−${v.toFixed(0)}%</b> vs −${p.liqDropAlertPct}% alert`);
+  }
+  return parts.length ? `<div class="reasons rules" title="Rules from this position's config entry; alerts go to the group chat">rules: ${parts.join(' · ')}</div>` : '';
+}
+
 // Memecoin Watch: status from memecoin-guardian.js via /api/memecoins, every 30 s.
 async function loadMemecoins(){
   try {
@@ -1680,9 +1702,10 @@ async function loadMemecoins(){
           <span>Fees / hour<b>${p.feesPerHour == null ? '—' : usd(p.feesPerHour)}${p.feeRateChangePct != null ? ' <span class="' + cls(p.feeRateChangePct) + '" style="font-size:11px">' + pct(p.feeRateChangePct, 0) + '</span>' : ''}</b></span>
           <span>Pool active liquidity, 1h<b class="${cls(p.liqChange1hPct)}">${pct(p.liqChange1hPct)}</b></span>
           <span>Liquidity vs recent max<b class="${(p.liqDropFromMaxPct || 0) >= 25 ? 'down' : ''}">${p.liqDropFromMaxPct == null ? '—' : '-' + p.liqDropFromMaxPct.toFixed(0) + '%'}</b></span>
-          <span>Holdings<b>${p.amountEth == null ? '—' : amount(p.amountEth) + ' ETH · ' + fmtN(p.amountToken) + ' ' + (p.symbolToken || '')}</b></span>
+          <span>Holdings<b>${p.amountEth == null ? '—' : amount(p.amountEth) + ' ' + (p.quoteSymbol || 'ETH') + ' · ' + fmtN(p.amountToken) + ' ' + (p.symbolToken || '')}</b></span>
           <span>Auto-close<b>${p.autoClose ? 'ON · -' + p.maxDrawdownPct + '% or ' + p.outOfRangeCloseMinutes + ' min out' : 'off (alerts only)'}</b></span>
         </div>
+        ${rulesLine(p)}
         ${p.reasons && p.reasons.length ? `<div class="reasons">${p.reasons.join(' · ')}</div>` : ''}
         ${lc ? `<div class="reasons">last close attempt: ${lc.status}${lc.error ? ' — ' + lc.error : ''}</div>` : ''}
         <button class="reload closebtn" data-close="${p.tokenId}" data-pair="${p.pair}" ${READ_ONLY ? 'disabled' : ''}>Close now</button>

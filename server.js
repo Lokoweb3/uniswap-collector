@@ -758,9 +758,10 @@ async function build() {
   latestIds = ids.map((id) => id.toString());
 
   // Blanket approval short-circuits the per-token checks entirely.
-  let blanket = false;
+  let blanket = false, blanketV4 = false;
   if (OPERATOR) {
     blanket = await npm.isApprovedForAll(cfg.ownerAddress, OPERATOR).catch(() => false);
+    if (V4) blanketV4 = await V4.posm.isApprovedForAll(cfg.ownerAddress, OPERATOR).catch(() => false);
   }
 
   // v4 ids ride along with a version tag; discovery is budgeted so a build
@@ -793,14 +794,16 @@ async function build() {
         return;
       }
 
-      // The collector only handles v3, so approval and eligibility are only
-      // meaningful there; v4 positions report neither.
+      // Approval: v3 via the NPM (blanket or per token), v4 via the v4
+      // PositionManager's blanket approval (collect-v4.js needs that one).
       let approved = null; // null = unknown (no operator keystore here)
       if (OPERATOR && version !== 4) {
         approved =
           blanket ||
           (await npm.getApproved(id).catch(() => ethers.ZeroAddress)).toLowerCase() ===
             OPERATOR.toLowerCase();
+      } else if (OPERATOR && version === 4) {
+        approved = blanketV4;
       }
 
       const { usd0, usd1 } = priceSides(p, wethUsd);
@@ -832,13 +835,13 @@ async function build() {
       // least minWethPerPosition will be taken by the next collect run.
       const minWeth = Number(cfg.thresholds && cfg.thresholds.minWethPerPosition) || 0;
       const eligible =
-        version === 4 ? null : feesUsd != null && wethUsd != null ? feesUsd / wethUsd >= minWeth : null;
+        version === 4 && !(cfg.v4Collect && cfg.v4Collect.enabled) ? null : feesUsd != null && wethUsd != null ? feesUsd / wethUsd >= minWeth : null;
 
       // PnL vs HODL: everything received or held, minus holding the deposits.
       // All legs valued at current prices.
       let pnlUsd = null, pnlPct = null, pnlSince = null, pnlApprox = false, pnlLegs = null, pnlSource = null;
       // Chain-read history once it reaches the mint; Blockscout's until then.
-      const b = (version !== 4 && ledger.basis(p.tokenId)) || bf.basis[p.tokenId];
+      const b = (version !== 4 ? ledger.basis(p.tokenId) : ledgerV4 && ledgerV4.basis(id)) || bf.basis[p.tokenId];
       if (b) pnlSource = b.source || "blockscout";
       if (b && usd0 != null && usd1 != null) {
         const dec0 = p.token0.decimals, dec1 = p.token1.decimals;
@@ -1767,6 +1770,7 @@ const server = http.createServer(async (req, res) => {
         rows.push({
           t: e.t, block: e.block, tx: e.tx, tokenId: e.tokenId,
           version: isV4Key(e.tokenId) ? 4 : 3, nftId: isV4Key(e.tokenId) ? String(e.tokenId).slice(3) : String(e.tokenId),
+          src: e.src || null, note: e.note || null,
           wallet: wl.label, walletAddress: wl.address, mainWallet: wl.main,
           pair: m ? `${m.t0.symbol}/${m.t1.symbol}` : null,
           sym0: m ? m.t0.symbol : null, sym1: m ? m.t1.symbol : null,

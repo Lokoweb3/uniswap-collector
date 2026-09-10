@@ -321,12 +321,15 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     const summary = Object.values(byToken).map((b) => {
       const addr = addrOf.get(b.token);
       const now = heldNow.get(b.token);
-      const price = (now && now.price) ?? (addr && latest[String(addr).toLowerCase()]) ?? null;
+      let price = (now && now.price) ?? (addr && latest[String(addr).toLowerCase()]) ?? null;
+      let priceNote = null;
+      // A drained pool yields a price of effectively zero; that is no price, not a value.
+      if (price != null && !(price > 1e-12)) { priceNote = `pool price ${Number(price).toExponential(2)} is below any sane floor (drained pool)`; price = null; }
       const priced = b.amount > 0 && b.basisUsd > 0 && b.unpriced === 0;
       return { ...b, amount: round(b.amount, 6), basisUsd: round(b.basisUsd), avgCostUsd: priced ? +(b.basisUsd / b.amount).toPrecision(6) : null,
         priceNowUsd: price != null ? +Number(price).toPrecision(6) : null, valueNowUsd: price != null ? round(b.amount * price) : null,
         unrealizedUsd: price != null && priced ? round(b.amount * price - b.basisUsd) : null,
-        stillHeld: now ? round(now.balance, 6) : null };
+        stillHeld: now ? round(now.balance, 6) : null, priceNote };
     }).sort((a, b) => (b.basisUsd || 0) - (a.basisUsd || 0));
     // Sales made at collect time (sell-v4.js, token-sales.json): those tokens never became lots; report them alongside.
     const salesRows = readJson(path.join(dir, "token-sales.json"), []).filter((r) => !since || r.t >= since);

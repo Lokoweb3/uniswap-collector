@@ -841,6 +841,10 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Dashboard: v4 cards show the collectable / not approved state and a current tooltip; owner-side
+  collects are tagged in the collects table (with a note when the ETH leg is unknown); the fee-tokens
+  table shows sales at collect time and hides junk prices from drained pools; Memecoin Watch cards
+  label holdings with the pool's quote asset and show the per-position rules against their thresholds.
 - Strategy track record (`strategy-track.js`, Theo): agents record proposals through the MCP,
   the server scores them against the position history when the horizon passes, Analytics shows
   the outcomes and per-author averages.

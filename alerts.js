@@ -33,7 +33,9 @@ try { CHATS = require("./settings").load().alerts || {}; } catch {}
 const TREASURY_CHAT = process.env.TELEGRAM_TREASURY_CHAT_ID || CHATS.treasuryChat || "";
 const TREASURY_BALANCE_ALERT_USDG = 1000; // default; settings.json vault.withdrawAlertUsdg overrides (passed as treasury.withdrawAlertUsdg)
 
-function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEGRAM_CHAT_ID || CHATS.fallbackChat || "", treasuryChatId = TREASURY_CHAT, transport, stateFile = STATE_FILE, now = () => Date.now(), log = console } = {}) {
+function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stateFile = STATE_FILE, now = () => Date.now(), log = console } = {}) {
+  if (token === undefined && !Object.keys(arguments[0] || {}).includes('token')) token = process.env.TELEGRAM_TOKEN;
+  chatId = chatId !== undefined ? chatId : (process.env.TELEGRAM_CHAT_ID || CHATS.fallbackChat || "");
   let state = { sent: {}, outSince: {}, lastTick: 0, lastRunSeen: null };
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(stateFile, "utf8")) };
@@ -44,7 +46,7 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     } catch {}
   };
 
-  const enabled = !!(token && chatId) || !!transport;
+  const enabled = !!(token && chatId && token !== 'undefined' && chatId !== 'undefined') || !!transport;
 
   /** Deliver one message to `to` (default chat). Returns true when it was sent. */
   async function send(text, to = chatId) {
@@ -198,6 +200,7 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
           if (!state.sent[k]) await say(k, `⚠️ The ${l.label} has not reported for ${l.ageMin == null ? "ever (never started?)" : Math.round(l.ageMin) + " min"}. It should write every ${l.staleAfterMin >= 45 ? "15" : "1"} min. Check server.log.`, 0);
         } else if (state.sent[k]) {
           delete state.sent[k];
+          delete state.sent[`${k}:back:${t}`];
           save();
           await say(`${k}:back:${t}`, `✅ The ${l.label} is reporting again.`, 0);
         }

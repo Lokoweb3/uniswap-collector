@@ -142,7 +142,7 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   try { fs.unlinkSync(stateFile + ".l"); } catch {}
 
   // 8. no transport, no token => disabled and silent
-  const c = create({ token: undefined, chatId: undefined, stateFile: stateFile + ".c", now: () => clock });
+  const c = create({ token: null, chatId: null, stateFile: stateFile + ".c", now: () => clock });
   assert.strictEqual(c.enabled, false);
   assert.deepStrictEqual(await c.check({ payload: { positions: [pos(false)] }, keepalive: true }), []);
 

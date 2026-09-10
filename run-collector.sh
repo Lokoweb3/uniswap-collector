@@ -9,6 +9,9 @@
 
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Telegram credentials for the confirm-before-sell step live in ./.env; exported
+# into the collector's environment only (the 09:00 task starts without them).
+if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
 
 MODE="${1:-simulate}"
 shift || true

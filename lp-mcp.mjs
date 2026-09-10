@@ -585,6 +585,46 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "pending_sales",
+  {
+    title: "Fee-token sales awaiting approval",
+    description:
+      "With confirm-before-sell on, the collector announces each fee-token sale (token, amount, pool, quoted proceeds in USD, price impact, the vault's share and the wallet's share) and waits up to the configured minutes for a decision. This lists the sales waiting now plus the last day's decided ones, with their ids. A sale nobody approves in time is handed back unsold.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return text(await get("/api/sales/pending"));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "approve_sale",
+  {
+    title: "Approve or reject a pending fee-token sale",
+    description:
+      "Records the owner's decision on a pending sale by id (from pending_sales or the Telegram message). approve lets the collector send the swap it already quoted and dry-ran; reject hands the tokens back unsold. Only relays a decision the owner has given; never decide on your own. Writes only the local sales-pending.json; the collector does the transaction.",
+    inputSchema: {
+      id: z.string().describe("The pending sale id"),
+      decision: z.enum(["approve", "reject"]).describe("The owner's decision"),
+    },
+  },
+  async ({ id, decision }) => {
+    try {
+      const r = await fetch(BASE + "/api/sales/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, decision, by: "loko_ai" }), signal: AbortSignal.timeout(30000) });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      return text(j);
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
 return server;
 }
 

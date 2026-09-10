@@ -497,6 +497,9 @@ async function runOwner(ctx, owner) {
   // memecoinSell): the pool key per token comes from the positions collected
   // in this pass, so a token is only ever sold where it was earned.
   const seller = require("./sell-v4").create({ provider, cfg, log });
+  // Telegram for the confirm-before-sell step (alerts.js reads the token from the environment; nothing is logged).
+  let sellNotify = null;
+  try { const a = require("./alerts").create({ log: { log() {}, error() {} } }); if (a.enabled) sellNotify = (text) => a.send(text); } catch {}
   const v4KeysFor = new Map(); // token address (lower) -> [pool keys of the open v4 positions holding it]
   let v4Open = 0, v4Closed = 0;
   if (v4c) {
@@ -815,7 +818,9 @@ async function runOwner(ctx, owner) {
         return null;
       };
       const wethOf = async (cur, amt) => (cur === ethers.ZeroAddress || cur.toLowerCase() === weth.toLowerCase() ? amt : cur.toLowerCase() === target.address.toLowerCase() ? await quoteSingle(quoter, target.address, weth, amt, target.feeTier) : null);
-      const res = await seller.sell({ token: tokenAddr, symbol: info.symbol, decimals: info.decimals, amount: balance, keys: v4keys, wallet, owner, usdOf, wethOf, maxSwapWeth: maxSwap, slippageBps, recordGas: (c) => recordGas(state, c) });
+      usdOf.stable = target.kind === "token" ? target.address : null;
+      const res = await seller.sell({ token: tokenAddr, symbol: info.symbol, decimals: info.decimals, amount: balance, keys: v4keys, wallet, owner, usdOf, wethOf, maxSwapWeth: maxSwap, slippageBps, recordGas: (c) => recordGas(state, c),
+        notify: sellNotify, splitPct: treasurySettings && treasurySettings.enabled ? treasurySettings.pct : null });
       if (res.sold) {
         log(`  sold ${fmt(res.amountIn, info.decimals)} ${info.symbol} for ≈ $${res.usd.toFixed(2)} -> ${res.tx}`);
         if (res.currencyOut === ethers.ZeroAddress) soldEthWei += res.amountOut;

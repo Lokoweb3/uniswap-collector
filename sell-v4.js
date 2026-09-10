@@ -46,6 +46,7 @@ const path = require("path");
 const { ethers } = require("ethers");
 
 const SALES_FILE = path.join(__dirname, "token-sales.json");
+const PENDING_FILE = path.join(__dirname, "sales-pending.json");
 const Q96 = 2n ** 96n;
 
 // v4-periphery Actions and universal-router Commands
@@ -143,6 +144,27 @@ function appendSale(row) {
   fs.renameSync(tmp, SALES_FILE);
 }
 
+// ---- confirm-before-sell ---------------------------------------------------
+// With memecoinSell.confirm on, a sale is announced (Telegram) with the exact
+// numbers and waits for an approval written by the approve_sale MCP tool or
+// POST /api/sales/approve. No approval within confirmWaitMinutes = handed back.
+function readPending() { try { const j = JSON.parse(fs.readFileSync(PENDING_FILE, "utf8")); return Array.isArray(j) ? j : []; } catch { return []; } }
+function writePending(rows) { const tmp = PENDING_FILE + ".tmp"; fs.writeFileSync(tmp, JSON.stringify(rows, null, 1)); fs.renameSync(tmp, PENDING_FILE); }
+/** Record a decision on a pending sale; returns the row or null when unknown. */
+function decideSale(id, decision, by = "api") {
+  const rows = readPending();
+  const row = rows.find((r) => r.id === String(id));
+  if (!row) return null;
+  if (row.status === "pending") { row.status = decision === "approve" ? "approved" : "rejected"; row.decidedAt = Date.now(); row.decidedBy = by; writePending(rows); }
+  return row;
+}
+/** Pending sales (and the last few decided), for the tools and the page. */
+function pendingSales() {
+  const rows = readPending();
+  const cutoff = Date.now() - 24 * 3600 * 1000;
+  return rows.filter((r) => r.status === "pending" || (r.decidedAt || r.createdAt) > cutoff).sort((a, b) => b.createdAt - a.createdAt);
+}
+
 function settings(cfg) {
   const s = (cfg && cfg.memecoinSell) || {};
   const v4 = (cfg && cfg.contracts && cfg.contracts.v4) || {};
@@ -152,6 +174,8 @@ function settings(cfg) {
     maxImpactPct: Number(s.maxImpactPct ?? 3),
     hold: new Set((s.hold || []).map((x) => String(x).toLowerCase())),
     nativeQuoteOnly: s.nativeQuoteOnly === true, // off by default: ERC-20-quoted pools work with the router's real layout
+    confirm: s.confirm === true,
+    confirmWaitMinutes: Number(s.confirmWaitMinutes ?? 10),
     router: s.router || v4.universalRouter || null,
     quoter: s.quoter || v4.quoter || null,
     permit2: s.permit2 || v4.permit2 || PERMIT2_DEFAULT,
@@ -199,7 +223,7 @@ function create({ provider, cfg, log = console.log }) {
    * Returns { sold, amountIn, amountOut, currencyOut, tx } or { sold:false, reason, remaining }.
    * Whatever is not sold is left for the caller's hand-back.
    */
-  async function sell({ token, symbol, decimals, amount, key = null, keys = null, wallet, owner, usdOf, maxSwapWeth = null, wethOf = null, slippageBps = 100n, recordGas = () => {} }) {
+  async function sell({ token, symbol, decimals, amount, key = null, keys = null, wallet, owner, usdOf, maxSwapWeth = null, wethOf = null, slippageBps = 100n, recordGas = () => {}, notify = null, splitPct = null }) {
     const skip = async (reason, extra = {}) => {
       log(`  sell ${symbol}: skipped — ${reason}`);
       try { appendSale({ t: Date.now(), wallet: owner.label, walletAddress: owner.address, token: symbol, tokenAddress: token, amount: Number(ethers.formatUnits(amount, decimals)), skipped: true, reason, ...extra }); } catch {}
@@ -242,6 +266,36 @@ function create({ provider, cfg, log = console.log }) {
     if (maxSwapWeth != null && wethOf) {
       const w = await wethOf(currencyOut, fit.quotedOut);
       if (w != null && w > maxSwapWeth) return skip(`proceeds ${ethers.formatEther(w)} WETH over maxSwapValueWeth`);
+    }
+
+    // Confirmation: announce the sale with its numbers and wait for a decision.
+    if (st.confirm) {
+      const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+      const outSym = isNative(currencyOut) ? "ETH" : currencyOut.toLowerCase() === String((usdOf.stable || "")).toLowerCase() ? "USDG" : "the quote token";
+      const outHuman = isNative(currencyOut) ? `${Number(ethers.formatEther(fit.quotedOut)).toFixed(5)} ETH` : outSym === "USDG" ? `${Number(ethers.formatUnits(fit.quotedOut, 6)).toFixed(2)} USDG` : `${fit.quotedOut} raw`;
+      const vaultUsd = splitPct != null ? usd * splitPct / 100 : null;
+      const row = { id, createdAt: Date.now(), status: "pending", wallet: owner.label, walletAddress: owner.address, token: symbol, tokenAddress: token,
+        amount: Number(ethers.formatUnits(fit.amountIn, decimals)), ofBatch: Number(ethers.formatUnits(amount, decimals)), quotedOut: outHuman, usd: +usd.toFixed(2),
+        impactPct: +fit.impactPct.toFixed(2), pool: `${key.currency0 === ethers.ZeroAddress ? "ETH" : "USDG"}/${symbol} ${(key.fee / 10000).toFixed(2)}%`, slippageBps: Number(slippageBps),
+        vaultUsd: vaultUsd != null ? +vaultUsd.toFixed(2) : null, walletUsd: vaultUsd != null ? +(usd - vaultUsd).toFixed(2) : null, expiresAt: Date.now() + st.confirmWaitMinutes * 60000 };
+      writePending([...readPending(), row]);
+      const text = `💱 Sale pending #${id}\n${owner.label}: sell ${row.amount.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${symbol}${full ? "" : ` of ${row.ofBatch.toLocaleString("en-US", { maximumFractionDigits: 0 })} (the rest is handed back)`} in ${row.pool}\nQuote: ${outHuman} ≈ $${row.usd.toFixed(2)} · impact ${row.impactPct}% · slippage ${(Number(slippageBps) / 100).toFixed(1)}%${vaultUsd != null ? `\nAfter the ${splitPct}% vault split: ≈ $${row.walletUsd.toFixed(2)} to ${owner.label}, $${row.vaultUsd.toFixed(2)} to the vault` : ""}\nTell Loko_AI "approve sale ${id}" within ${st.confirmWaitMinutes} min, or "reject sale ${id}". Unanswered = handed back unsold.`;
+      log(`  sale #${id} awaiting approval (${row.amount.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${symbol} ≈ $${row.usd.toFixed(2)})`);
+      if (notify) { try { await notify(text); } catch (err) { log(`  ! could not send the approval request: ${err.message}`); } }
+      const deadline = Date.now() + st.confirmWaitMinutes * 60000;
+      let decision = null;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const cur = readPending().find((r) => r.id === id);
+        if (cur && cur.status !== "pending") { decision = cur.status; break; }
+      }
+      if (decision !== "approved") {
+        const rows = readPending(); const cur = rows.find((r) => r.id === id);
+        if (cur && cur.status === "pending") { cur.status = "expired"; cur.decidedAt = Date.now(); writePending(rows); }
+        if (notify) { try { await notify(decision === "rejected" ? `❌ Sale #${id} rejected — ${symbol} handed back to ${owner.label}.` : `⌛ Sale #${id} not approved in ${st.confirmWaitMinutes} min — ${symbol} handed back to ${owner.label}.`); } catch {} }
+        return skip(decision === "rejected" ? `rejected by you (#${id})` : `not approved within ${st.confirmWaitMinutes} min (#${id})`, { usd: row.usd, impactPct: row.impactPct });
+      }
+      log(`  sale #${id} approved`);
     }
 
     const minOut = (fit.quotedOut * (10000n - slippageBps)) / 10000n;
@@ -291,6 +345,7 @@ function create({ provider, cfg, log = console.log }) {
         impactPct: +fit.impactPct.toFixed(2), slippageBps: Number(slippageBps), poolId: poolIdOf(key), tx: tx.hash, skipped: false,
       };
       try { appendSale(row); } catch {}
+      if (notify && st.confirm) { try { await notify(`✅ Sold ${row.amount.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${symbol} for ≈ $${usd.toFixed(2)} — tx ${tx.hash.slice(0, 12)}… Proceeds go through the normal split this run.`); } catch {} }
       return { sold: true, amountIn: fit.amountIn, amountOut: fit.quotedOut, currencyOut, tx: tx.hash, remaining: amount - fit.amountIn, usd };
     } catch (err) {
       return skip(`swap failed (${err.shortMessage || err.message})`);
@@ -300,4 +355,4 @@ function create({ provider, cfg, log = console.log }) {
   return { ready: !!ready, settings: st, sell, quoteOut, discoverEthPools };
 }
 
-module.exports = { create, settings, buildSwapCalldata, fitSlice, spotOut, impactPct, poolIdOf, ACT, CMD_V4_SWAP };
+module.exports = { create, settings, buildSwapCalldata, fitSlice, spotOut, impactPct, poolIdOf, ACT, CMD_V4_SWAP, decideSale, pendingSales, readPending };

@@ -1652,6 +1652,32 @@ const server = http.createServer(async (req, res) => {
   }
   // === end in-site chat ===
 
+  // === confirm-before-sell (sell-v4.js) ===
+  // GET /api/sales/pending lists sales awaiting a decision; POST /api/sales/approve {id, decision}
+  // records one (loopback-only; the gate refuses the path). The collector polls the file.
+  if (url.pathname === "/api/sales/pending" || url.pathname === "/api/sales/approve") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const sv4 = require("./sell-v4");
+      if (url.pathname === "/api/sales/approve") {
+        if (req.method !== "POST") { res.writeHead(405); return res.end(JSON.stringify({ ok: false, error: "method not allowed" })); }
+        if (HOST !== "127.0.0.1" || READONLY) { res.writeHead(403); return res.end(JSON.stringify({ ok: false, error: "sale approvals are localhost-only" })); }
+        const body = JSON.parse(await readBody(req));
+        const decision = body.decision === "reject" ? "reject" : "approve";
+        const row = sv4.decideSale(String(body.id || ""), decision, String(body.by || "api").slice(0, 40));
+        if (!row) { res.writeHead(404); return res.end(JSON.stringify({ ok: false, error: "no such sale" })); }
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, sale: row }));
+      }
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, confirm: !!(cfg.memecoinSell && cfg.memecoinSell.confirm), sales: sv4.pendingSales() }));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end confirm-before-sell ===
+
   // === strategy track record (strategy-track.js) ===
   // POST /api/strategy/proposals records a proposal (loopback-only, like /api/exit-rules;
   // the gate refuses the path); GET /api/strategy/track returns the view. Scoring runs in backgroundTick.

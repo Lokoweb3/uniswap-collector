@@ -190,12 +190,14 @@
     }
   },
   "memecoinSell": {
-    "_comment": "sell-v4.js: sell fee tokens that have no v3 route (LAPTOP, Bucket, CRUMBS, ...) in the hookless v4 pool they were earned from, via the Universal Router (Permit2, exact-amount approvals, dry-run before sending). Only when the batch is worth >= minUsd; price impact vs spot capped at maxImpactPct (a batch over the cap is trimmed to the largest slice under it, and skipped if that slice is under minUsd); hold lists symbols never to sell; thresholds.maxSwapValueWeth and slippageBps still apply; every sale and skip goes to token-sales.json. Proceeds join the normal USDG -> vault split -> wallet flow. nativeQuoteOnly (default false) restricts sells to ETH-quoted pools; not needed since the router's real parameter layout (extra bytes field, read from an app swap on 2026-09-10) made ERC-20-quoted pools work.",
+    "_comment": "sell-v4.js: sell fee tokens that have no v3 route (LAPTOP, Bucket, CRUMBS, ...) in the hookless v4 pool they were earned from, via the Universal Router (Permit2, exact-amount approvals, dry-run before sending). Only when the batch is worth >= minUsd; price impact vs spot capped at maxImpactPct (a batch over the cap is trimmed to the largest slice under it, and skipped if that slice is under minUsd); hold lists symbols never to sell; thresholds.maxSwapValueWeth and slippageBps still apply; every sale and skip goes to token-sales.json. Proceeds join the normal USDG -> vault split -> wallet flow. nativeQuoteOnly (default false) restricts sells to ETH-quoted pools; not needed since the router's real parameter layout (extra bytes field, read from an app swap on 2026-09-10) made ERC-20-quoted pools work. confirm (default false): announce each sale on Telegram with the quoted proceeds, impact and the vault/wallet split, and wait confirmWaitMinutes for approval through Loko_AI's approve_sale tool (or POST /api/sales/approve); unanswered or rejected sales are handed back unsold.",
     "enabled": true,
     "minUsd": 25,
     "maxImpactPct": 3,
     "hold": [],
-    "nativeQuoteOnly": false
+    "nativeQuoteOnly": false,
+    "confirm": true,
+    "confirmWaitMinutes": 10
   },
   "dailySummary": {
     "_comment": "daily.js: one short Telegram line-up per day (arm window, 24h collects per wallet, open positions and fee rates, guardian flags, vault, gas, last run). hour is local time; chat main or group.",

@@ -70,3 +70,5 @@ settings.json
 # local notes and reviews
 docs/
 .collector.lock
+agent-memory/
+agent-notes.md

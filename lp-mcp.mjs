@@ -595,11 +595,12 @@ server.registerTool(
     inputSchema: {
       id: z.string().describe("The pending sale id"),
       decision: z.enum(["approve", "reject"]).describe("The owner's decision"),
+      by: z.string().max(40).optional().describe("Who relays it (default loko_ai)"),
     },
   },
-  async ({ id, decision }) => {
+  async ({ id, decision, by }) => {
     try {
-      const r = await fetch(BASE + "/api/sales/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, decision, by: "loko_ai" }), signal: AbortSignal.timeout(30000) });
+      const r = await fetch(BASE + "/api/sales/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, decision, by: by || "loko_ai" }), signal: AbortSignal.timeout(30000) });
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
       return text(j);

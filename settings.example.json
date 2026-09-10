@@ -149,7 +149,7 @@
     }
   },
   "alerts": {
-    "_comment": "Telegram chat ids (the bot token stays in .env as TELEGRAM_TOKEN). telegramChat: the group for position alerts; fallbackChat: your personal chat (used when the group is unset or refuses); treasuryChat: vault messages (default the group). dailySummary: the 08:00 line-up.",
+    "_comment": "Telegram chat ids (the bot token stays in .env as TELEGRAM_TOKEN). telegramChat: the group for position alerts; fallbackChat: your personal chat (used when the group is unset or refuses); treasuryChat: vault messages (default the group). dailySummary: the 08:00 line-up. agentChats: extra Telegram chats the agent answers, [{ chat, role }] with role read | approve | full (fallbackChat is always allowed with role approve).",
     "telegramChat": "-100123456789",
     "fallbackChat": "123456789",
     "treasuryChat": "",
@@ -157,7 +157,8 @@
       "enabled": true,
       "hour": 8,
       "chat": "main"
-    }
+    },
+    "agentChats": []
   },
   "dashboard": {
     "port": 8787,

@@ -9,7 +9,7 @@
     "collect": "node collector.js --mode=collect",
     "full": "node collector.js --mode=full",
     "approve": "node approve-serve.js",
-    "test": "node test/advisor.test.js && node test/alerts.test.js && node test/attribution.test.js && node test/chat.test.js && node test/digest.test.js && node test/guardian.test.js && node test/memecoin-collect.test.js && node test/ops.test.js && node test/sell-v4.test.js && node test/settings.test.js && node test/strategy.test.js && node test/strategy-track.test.js && node test/token-health.test.js && node test/smoke.js",
+    "test": "node test/advisor.test.js && node test/alerts.test.js && node test/attribution.test.js && node test/chat.test.js && node test/digest.test.js && node test/guardian.test.js && node test/memecoin-collect.test.js && node test/ops.test.js && node test/sell-v4.test.js && node test/settings.test.js && node test/strategy.test.js && node test/strategy-track.test.js && node test/telegram.test.js && node test/token-health.test.js && node test/smoke.js",
     "smoke": "node test/smoke.js",
     "guardian": "node memecoin-guardian.js --once",
     "digest": "node digest.js --print",

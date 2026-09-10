@@ -54,7 +54,7 @@ const LOOPS = PORT === MAIN_PORT && !READONLY && !process.argv.includes("--no-lo
 const SERVICES = LOOPS && !process.argv.includes("--no-services");
 const STARTED_AT = Date.now();
 const timers = { guardian: { lastAt: 0 }, autoCollect: { lastAt: 0 }, backup: { lastAt: 0, lastResult: null } };
-let guardian = null, autoCollect = null;
+let guardian = null, autoCollect = null, telegramAgent = null;
 
 const CACHE_MS = 60_000;
 let cache = { at: 0, payload: null };
@@ -1113,7 +1113,17 @@ function readBody(req, limit = 4096) {
 const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
 const armer = require("./arm");
 const treasuryLedger = require("./treasury");
-const chatbot = require("./chat").create({ port: PORT });
+// The agent (agent.js): one brain for the web panel, Telegram and loopback scripts.
+const agent = require("./agent").create({ port: PORT, dir: __dirname });
+/** Channel and role of a chat request: through the gate = web/read; a browser on this machine = web/read; a script on loopback = loopback/full (read when the dashboard is read-only). */
+function chatChannel(req, body) {
+  const viaGate = req.headers["x-lp-gate"] === "1";
+  const browser = !!(req.headers.origin || req.headers["sec-fetch-mode"] || req.headers["sec-fetch-site"]);
+  const loopback = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
+  if (viaGate || browser || !loopback || READONLY) return { channel: "web", role: "read" };
+  const channel = typeof body.channel === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(body.channel) ? body.channel : "loopback";
+  return { channel, role: "full" };
+}
 // Public hostname for phone links and QR codes: LP_PUBLIC_HOST from the
 // environment, else the node's tailnet name asked from the user-space
 // tailscaled. Resolved at runtime so no tracked file carries the real name.
@@ -1601,15 +1611,16 @@ const server = http.createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     if (req.method !== "POST") {
       res.writeHead(200);
-      return res.end(JSON.stringify(chatbot.status()));
+      return res.end(JSON.stringify({ ...agent.status(), channels: agent.channels(), telegram: telegramAgent ? telegramAgent.health() : null }));
     }
     try {
       const body = JSON.parse((await readBody(req, 16384)) || "{}");
+      const who = chatChannel(req, body);
       if (url.pathname === "/api/chat/reset") {
         res.writeHead(200);
-        return res.end(JSON.stringify(chatbot.reset(String(body.sessionId || ""))));
+        return res.end(JSON.stringify(agent.reset(who.channel)));
       }
-      const out = await chatbot.chat({ sessionId: String(body.sessionId || ""), message: body.message });
+      const out = await agent.chat({ channel: who.channel, role: who.role, message: body.message });
       res.writeHead(200);
       return res.end(JSON.stringify(out));
     } catch (err) {
@@ -1948,12 +1959,13 @@ function loopHealth() {
   // The loops are timers in this process; a timer that has not completed a
   // cycle within its window (a hung RPC read, a stuck collector) reads as stale.
   if (!LOOPS) return {};
-  const ageOf = (t) => (t ? (Date.now() - t) / 60000 : null);
+  // A timer that has not completed a cycle yet counts from process start, so a fresh restart is not "late".
+  const ageOf = (t) => (Date.now() - (t || STARTED_AT)) / 60000;
   const loops = {};
   loops.guardian = { ageMin: ageOf(timers.guardian.lastAt), staleAfterMin: 10, label: "risk guardian" };
   if (cfg.memecoinCollect && cfg.memecoinCollect.enabled !== false) loops.autoCollect = { ageMin: ageOf(timers.autoCollect.lastAt), staleAfterMin: 45, label: "fee auto-collect" };
   loops.backup = { ageMin: ageOf(timers.backup.lastAt), staleAfterMin: 26 * 60, label: "nightly backup", lastResult: timers.backup.lastResult || null };
-  for (const l of Object.values(loops)) l.stale = l.ageMin == null ? l.label !== "nightly backup" || (Date.now() - STARTED_AT) / 60000 > 26 * 60 : l.ageMin > l.staleAfterMin;
+  for (const l of Object.values(loops)) l.stale = l.ageMin > l.staleAfterMin;
   return loops;
 }
 
@@ -2020,7 +2032,10 @@ function heldTokens() {
 
 // Telegram alerts (alerts.js): token and chat id come from the environment
 // (./.env via start-all.sh); without them the module stays silent.
-const alerts = require("./alerts").create();
+const alerts = require("./alerts").create({
+  // Every alert sent to a Telegram chat is also remembered on that chat's channel, so "approve it" resolves without an id.
+  onSent: (text, to) => { try { if (to) agent.remember(`telegram:${to}`, "assistant", text); } catch {} },
+});
 console.log(`alerts: ${alerts.enabled ? "enabled" : "disabled (set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)"}`);
 
 // === pool-scout-and-IL: range advisor / IL forecast (advisor.js) and pool scout (scout.js) ===
@@ -2324,6 +2339,16 @@ if (LOOPS) {
   { const st = backupState(); if (st.lastBackupAt) { timers.backup.lastAt = Date.parse(st.lastBackupAt) || 0; timers.backup.lastResult = { at: timers.backup.lastAt, code: st.lastBackupCode ?? null }; } }
   server.runBackup = runBackup;
   console.log(`loops: risk guardian every 60 s, fee auto-collect every 15 min, ledger backup daily at ${String(BACKUP_HOUR).padStart(2, "0")}:00`);
+
+  // The agent's Telegram front door: the owner's chat may approve sales; extra chats from settings alerts.agentChats.
+  {
+    const allowed = {};
+    const al = cfg.alerts || {};
+    if (al.fallbackChat) allowed[String(al.fallbackChat)] = "approve";
+    for (const c of (settings.read().alerts || {}).agentChats || []) if (c && c.chat) allowed[String(c.chat)] = ["read", "approve", "full"].includes(c.role) ? c.role : "read";
+    telegramAgent = require("./telegram").create({ agent, allowed, log: { log: (m) => console.log(m), error: (m) => console.error(m) } });
+    telegramAgent.start().catch((err) => console.error("telegram agent:", err.message));
+  }
 }
 
 // === companion services === the passphrase gate (lp-gate.mjs), the remote MCP

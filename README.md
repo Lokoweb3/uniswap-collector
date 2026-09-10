@@ -147,13 +147,33 @@ The pool chosen per token is cached six hours in `portfolio.json`.
 
 ## Asking questions about the data
 
-### Chat panel on the site (`chat.js`, `chat-widget.js`)
+### The agent (`agent.js`): one brain, three front doors
 
-Every page has a 💬 button (bottom right; `/#chat` opens it) that answers questions
-from the same twenty tools the MCP server exposes (nineteen read-only, plus record_strategy_proposal, which only writes a note to a local ledger), driven in-process, so
-the panel and the claude.ai connector always see the same numbers. It is read-only:
-it cannot arm, collect, close, or change settings. Through the passphrase gate it
-works on the phone too (`POST /api/chat` is the one write the gate lets through).
+One assistant answers the web chat panel, the Telegram bot and local scripts, from
+the same tools the MCP server exposes (in-process), with memory on disk:
+
+- **Memory.** `agent-memory/<channel>.json` keeps the last ~40 turns per channel
+  (`web`, `telegram:<chatId>`, `loopback`); `agent-notes.md` is a short file the
+  agent keeps about your standing decisions and preferences, read into every prompt
+  and editable through its `update_notes` tool. Both are gitignored and in the nightly
+  backup. Every alert the dashboard sends to a Telegram chat is appended to that chat's
+  transcript, so "approve it" resolves to the sale it just told you about.
+- **Roles by channel, not by request.** Web panel (through the gate, or any browser)
+  = read only. Telegram from your personal chat (`alerts.fallbackChat`; more under
+  `alerts.agentChats` with a role) = read + approve/reject a pending sale + notes.
+  A script on loopback (no browser headers) = full, `record_strategy_proposal`
+  included. A sale is only ever decided when the message being answered says
+  approve/reject; an alert's own wording never triggers it. Nothing on any channel
+  can arm, collect, close, or change rules.
+- **Telegram** (`telegram.js`): long-polls `TELEGRAM_AGENT_TOKEN`, else the alert
+  bot's `TELEGRAM_TOKEN`, answers only allowed chats, ignores strangers, `/reset`
+  and `/status`. Only one process may poll a bot token: if another agent already
+  polls it (Telegram answers 409), this one backs off a minute at a time and says so
+  in `server.log`; give it its own bot via `TELEGRAM_AGENT_TOKEN` to run both.
+- **Web panel** (`chat-widget.js`): every page has a 💬 button (bottom right; `/#chat`
+  opens it). Through the passphrase gate it works on the phone too (`POST /api/chat`
+  is the one write the gate lets through). `GET /api/chat` shows provider, channels
+  and the Telegram poll health. Scripts may pass `channel` in the body.
 
 Credentials live in `.env` and pick the provider:
 
@@ -477,7 +497,7 @@ the connected wallet's signature. The header nav has an "Approvals" link.
 `memecoin-guardian.js`, `guardian-logic.js`, `close-position.js`, `memecoin-collect.js`,
 `attribution.js`, `advisor.js`, `scout.js`, `compound.js`, `token-health.js`, `approvals.js`,
 `wallet.html` (arm, approvals, vault, operator tabs), `digest.js`, `daily.js`, `qr.js`, `ops.js` (collector-log parsing for alerts),
-`chat.js` + `chat-widget.js` (in-site chat), `strategy.js` (strategy dataset), `ledger-v4.js` (v4
+`agent.js` + `telegram.js` + `chat-widget.js` (the agent and its front doors), `strategy.js` (strategy dataset), `ledger-v4.js` (v4
 liquidity ledger), `sell-v4.js` (fee-token sells), and their tests under `test/`. `npm test` runs
 every suite plus the headless smoke test. Runtime state files (`memecoin-*.json`,
 `advisor-cache.json`, `pool-scout-*.json`, `token-health.json`, `digest-state.json`,
@@ -893,6 +913,12 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Phase 2, unified brain: `agent.js` is the one assistant behind the web panel, Telegram
+  (`telegram.js`, long-polling, allowed chats only, 409-aware) and loopback scripts, with
+  transcripts per channel and a notes file on disk; alerts are remembered on the chat they
+  went to, so "approve it" needs no id; roles by channel (web read, Telegram approve,
+  loopback full); a sale is decided only on the owner's explicit word. The watchdog no
+  longer reports a loop as "never reported" right after a restart.
 - One settings.json replaces config.json + wallets.json: sections `chain`, `wallets`, `tokens`
   (USDG and WETH written once), `contracts`, `collector`, `vault`, `risk`, `alerts` (chat ids;
   the bot token stays in .env), `dashboard`, `portfolio`, `staking`. `settings.js` is the one

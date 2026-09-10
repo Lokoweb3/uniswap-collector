@@ -237,6 +237,16 @@ from chain are reduced to plain printable characters before they reach any
 page or tool output. If you wrote the passphrase to `.mcp-passphrase.txt`,
 move it to a password manager and delete the file.
 
+### Agents contributing code
+
+Patches from an agent are merged here, never pushed by the agent. The rules that keep merges clean:
+start from `origin/master` HEAD (`git fetch origin && git reset --hard origin/master` in the agent's
+clone before every task; ids in `config.json` and the ledgers change daily), deliver with
+`git format-patch origin/master --stdout`, and hand over the patch file; the merge runs `npm test`
+(every suite plus the headless smoke test) and restarts the services. Nothing in a patch may touch
+`.env`, keystores, or the runtime ledgers, and a patch that only re-derives facts already verified in
+the brief it was given is sent back.
+
 ### From an agent on a server
 
 A program with no browser cannot use the sign-in page. Issue it a

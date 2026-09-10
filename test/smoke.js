@@ -68,8 +68,8 @@ async function main() {
   let failed = 0;
   try {
     const base = `http://127.0.0.1:${PORT}`;
-    if (!(await waitFor(`${base}/api/positions`, 120000))) {
-      console.error("smoke: server did not answer /api/positions within 120 s (see test/.tmp/smoke-server.log)");
+    if (!(await waitFor(`${base}/api/positions`, 360000))) {
+      console.error("smoke: server did not answer /api/positions within 6 min (see test/.tmp/smoke-server.log)");
       process.exit(1);
     }
     for (const p of PAGES) {

@@ -61,6 +61,15 @@ function derive(cfgEntry, samples, now = samples.length ? samples[samples.length
     return (end.feeUsd - base.feeUsd) / ((end.t - base.t) / HOUR);
   };
   const feesPerHour = rateOver(now - 30 * 60000, now) ?? rateOver(now - HOUR, now);
+  // 15-minute fee rate for the per-position floor alert; only trusted once the window spans 12+ minutes.
+  const win15 = samples.filter((x) => x.t >= now - 15 * 60000 && x.t <= now && x.feeUsd != null);
+  let feesPerHour15m = null;
+  if (win15.length >= 2) {
+    let base = win15[0];
+    for (const x of win15) if (x.feeUsd < base.feeUsd) base = x;
+    const end = win15[win15.length - 1];
+    if (end.t - base.t >= 12 * 60000) feesPerHour15m = (end.feeUsd - base.feeUsd) / ((end.t - base.t) / HOUR);
+  }
   const feesPerHour30mAgo = rateOver(now - HOUR, now - 30 * 60000);
   const feeRateChangePct = feesPerHour != null && feesPerHour30mAgo > 0 ? ((feesPerHour - feesPerHour30mAgo) / feesPerHour30mAgo) * 100 : null;
 
@@ -93,7 +102,12 @@ function derive(cfgEntry, samples, now = samples.length ? samples[samples.length
     tokenId: String(cfgEntry.tokenId), pair: cfgEntry.pair, wallet: cfgEntry.wallet, walletAddress: cfgEntry.walletAddress,
     at: now, price: last.price, entryPrice: entry, priceVsEntryPct, drawdownPct, change1hPct, velocityPctPerH,
     inRange: !!last.inRange, outSince, outMinutes,
-    feeUsd: last.feeUsd, feesPerHour, feesPerHour30mAgo, feeRateChangePct,
+    feeUsd: last.feeUsd, feesPerHour, feesPerHour15m, feesPerHour30mAgo, feeRateChangePct,
+    // Per-position alert settings (config.json memecoins entry): fee-rate floor, collected-USD target, liquidity-drop alert level.
+    feeRateFloorUsdPerHour: Number(cfgEntry.feeRateFloorUsdPerHour) || null,
+    collectedTargetUsd: Number(cfgEntry.collectedTargetUsd) || null,
+    liqDropAlertPct: Number(cfgEntry.liqDropAlertPct) || null,
+    collectedUsd: cfgEntry.collectedUsd != null ? Number(cfgEntry.collectedUsd) : null,
     liq: liqNow, liqChange1hPct, liqDropFromMaxPct, valueUsd: last.valueUsd ?? null,
     status, reasons,
     autoClose: !!cfgEntry.autoClose, maxDrawdownPct: Number(cfgEntry.maxDrawdownPct) || 50,
@@ -126,6 +140,34 @@ function alertsFor(d, sent, now = d.at, cooldownMs = 60 * 60000) {
   if (d.feeRateChangePct != null && d.feeRateChangePct <= -THRESH.feeRateDropPct) say(`volume:${id}`, `⚠️ ${d.pair} volume dying (fees/h ${d.feeRateChangePct.toFixed(0)}%)`);
   if (d.liqDropFromMaxPct != null && d.liqDropFromMaxPct >= THRESH.liqDropPct) say(`liq:${id}`, `🚨 ${d.pair} LPs leaving — exit signal (active liquidity -${d.liqDropFromMaxPct.toFixed(0)}% from recent max)`);
   if (d.drawdownPct != null && d.drawdownPct >= THRESH.closeNowPct) say(`closenow:${id}`, `🚨 ${d.pair} CLOSE NOW (-${d.drawdownPct.toFixed(0)}% from entry)`);
+
+  // Per-position rules (set in the config entry). These go to the group chat; see the guardian's send().
+  const group = (text) => out.push({ text, group: true });
+  const fpH = d.feesPerHour15m;
+  if (d.feeRateFloorUsdPerHour != null && fpH != null) {
+    if (fpH < d.feeRateFloorUsdPerHour) {
+      // once per episode, and again after 6 h if it stays low
+      if (!sent[`feefloor:${id}`] || now - sent[`feefloor:${id}`] >= 6 * HOUR) {
+        sent[`feefloor:${id}`] = now;
+        group(`⚠️ ${d.pair} fees dropping — $${fpH.toFixed(2)}/hour (below $${d.feeRateFloorUsdPerHour} threshold).\nConsider closing position.`);
+      }
+    } else delete sent[`feefloor:${id}`];
+  }
+  if (d.collectedTargetUsd != null && d.collectedUsd != null && d.collectedUsd >= d.collectedTargetUsd) {
+    const key = `target:${id}:${d.collectedTargetUsd}`;
+    if (!sent[key]) {
+      sent[key] = now;
+      group(`🎯 ${d.pair} hit $${d.collectedTargetUsd} collected!\nCurrent fees/hour: $${(d.feesPerHour15m ?? d.feesPerHour ?? 0).toFixed(2)}\nConsider closing and redeploying.`);
+    }
+  }
+  if (d.liqDropAlertPct != null && d.liqDropFromMaxPct != null) {
+    if (d.liqDropFromMaxPct >= d.liqDropAlertPct) {
+      if (!sent[`liqmax:${id}`] || now - sent[`liqmax:${id}`] >= 6 * HOUR) {
+        sent[`liqmax:${id}`] = now;
+        group(`🚨 ${d.pair} pool thinning fast (-${d.liqDropFromMaxPct.toFixed(0)}% from max).\nFees may drop soon — watch closely.`);
+      }
+    } else if (d.liqDropFromMaxPct < d.liqDropAlertPct * 0.75) delete sent[`liqmax:${id}`];
+  }
   return out;
 }
 

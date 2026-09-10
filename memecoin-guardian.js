@@ -61,11 +61,11 @@ try {
   alerts = require("./alerts").create();
 } catch {}
 
-async function send(text) {
-  log(`ALERT ${text}`);
+async function send(text, { group = false } = {}) {
+  log(`ALERT ${text.replace(/\n/g, " / ")}`);
   if (alerts && alerts.enabled) {
     try {
-      await alerts.send(text);
+      if (group && alerts.sendGroup) await alerts.sendGroup(text); else await alerts.send(text);
     } catch (err) {
       log(`telegram failed: ${err.message}`);
     }
@@ -186,6 +186,18 @@ function updateDiscovered(id, patch) {
   writeJson(DISCOVERED_FILE, rows);
 }
 
+/** Cumulative USDG the collector swept for a position (fee-split-ledger.json totalCollectedUsdg), for the collected-target rule. */
+function collectedFromLedger(id) {
+  const rows = readJson(path.join(HERE, "fee-split-ledger.json"), []);
+  let sum = 0;
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const ids = Array.isArray(r.positionIds) ? r.positionIds.map(String) : [String(r.positionId)];
+    // A pass that swept several positions writes one total; share it equally between them.
+    if (ids.includes(String(id))) sum += (Number(r.totalCollectedUsdg) || 0) / Math.max(1, ids.length);
+  }
+  return sum;
+}
+
 /** One sample for a listed position: price (token per quote), pool liquidity, fee growth, uncollected fees in USD. */
 async function sample(entry, wethUsd) {
   const owner = entry.walletAddress;
@@ -285,10 +297,13 @@ async function cycle() {
     }
     st.samples.push(s);
     st.samples = st.samples.filter((x) => now - x.t <= KEEP_MS);
+    if (entry.collectedTargetUsd) entry.collectedUsd = collectedFromLedger(id);
     const d = logic.derive(entry, st.samples, now);
     Object.assign(d, { symbolToken: s.tokenSymbol, quoteSymbol: s.quoteSymbol, amountEth: s.amountEth, amountToken: s.amountToken, wethUsd, tickLower: s.tickLower, tickUpper: s.tickUpper, currentTick: s.currentTick, samples: st.samples.length,
       entrySource: entry.entrySource || "config", entryAt: entry.entryAt || null, discovered: !!entry.discovered });
-    for (const text of logic.alertsFor(d, state.sent, now)) await send(text);
+    for (const a of logic.alertsFor(d, state.sent, now)) {
+      if (typeof a === "string") await send(a); else await send(a.text, { group: !!a.group });
+    }
     // Auto-close needs the trigger to hold for CONFIRM_CYCLES consecutive
     // 60-second cycles with the pool price stable within 10% between cycles,
     // so one bad RPC read or a single-block wick cannot close a position.

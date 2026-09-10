@@ -59,4 +59,24 @@ d = derive(cfgA, s); assert.strictEqual(shouldClose(d), null);
 // 8. a gain shows positive: token worth 2x -> +100%
 d = derive(cfg, [mk(0, 500000)]); assert.strictEqual(Math.round(d.priceVsEntryPct), 100); assert.strictEqual(d.status, "green");
 
-console.log("guardian: 8 scenarios passed (steady, dump, range, volume, liquidity, close-now, auto-close, gains)");
+// 9. per-position rules: fee-rate floor, collected target, liquidity drop from max (group alerts).
+const cfgR = { ...cfg, tokenId: "9", pair: "Bucket/USDG", feeRateFloorUsdPerHour: 10, collectedTargetUsd: 500, liqDropAlertPct: 60 };
+// fees accrue at $4/h over the last 15 min -> floor alert once, not again while it stays low, re-armed after recovery
+s = []; for (let m = 0; m <= 30; m += 1) s.push(mk(m, 1000000, { feeUsd: m * (4 / 60) }));
+d = derive(cfgR, s); assert.ok(d.feesPerHour15m != null && d.feesPerHour15m < 10, "15m rate " + d.feesPerHour15m);
+let sentR = {}; let outR = alertsFor(d, sentR);
+assert.strictEqual(outR.length, 1); assert.ok(outR[0].group); assert.match(outR[0].text, /Bucket\/USDG fees dropping — \$4\.00\/hour \(below \$10 threshold\)/);
+assert.deepStrictEqual(alertsFor(d, sentR), []);
+s = []; for (let m = 0; m <= 30; m += 1) s.push(mk(m, 1000000, { feeUsd: m * (30 / 60) }));
+d = derive(cfgR, s); assert.deepStrictEqual(alertsFor(d, sentR), []); assert.ok(!sentR["feefloor:9"], "re-armed after recovery");
+// collected target: reached -> once
+d = derive({ ...cfgR, collectedUsd: 512.3 }, s); outR = alertsFor(d, sentR);
+assert.strictEqual(outR.length, 1); assert.match(outR[0].text, /hit \$500 collected!\nCurrent fees\/hour: \$30\.00/);
+assert.deepStrictEqual(alertsFor(d, sentR), []);
+// liquidity 65% below the max seen -> thinning alert (plus the built-in LPs-leaving alert at 50%)
+s = []; for (let m = 0; m <= 60; m += 5) s.push(mk(m, 1000000, { liq: 1000, feeUsd: m * 0.5 })); for (let m = 65; m <= 120; m += 5) s.push(mk(m, 1000000, { liq: 350, feeUsd: m * 0.5 }));
+d = derive(cfgR, s); outR = alertsFor(d, sentR);
+assert.ok(outR.some((a) => a.group && /pool thinning fast \(-65% from max\)/.test(a.text)), JSON.stringify(outR));
+assert.ok(!alertsFor(d, sentR).some((a) => a.group), "no repeat");
+
+console.log("guardian: 9 scenarios passed (steady, dump, range, volume, liquidity, close-now, auto-close, gains, per-position rules)");

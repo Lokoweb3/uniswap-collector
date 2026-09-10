@@ -115,7 +115,11 @@
       "maxDrawdownPct": 50,
       "autoClose": false,
       "alertOnly": true,
-      "outOfRangeCloseMinutes": 120
+      "outOfRangeCloseMinutes": 120,
+      "_rules": "optional per-position alerts, sent to TELEGRAM_GROUP_CHAT_ID (else the treasury chat, falling back to the main chat): feeRateFloorUsdPerHour (15-min fee rate below this), collectedTargetUsd (swept USDG in fee-split-ledger.json reaches this, once), liqDropAlertPct (active liquidity this far below its 24h max)",
+      "feeRateFloorUsdPerHour": 10,
+      "collectedTargetUsd": 500,
+      "liqDropAlertPct": 60
     },
     {
       "tokenId": "2151132",

@@ -339,7 +339,12 @@ position straight from the v4 pool state. It watches every v4 position in the ma
 collected watched wallets on its own (`memecoin-discovered.json`; entry price from the hourly price
 log at the mint, else the first sample; defaults from `memecoinDefaults`; `memecoinDiscovery: false`
 turns discovery off) plus anything listed under `memecoins` in config.json, whose entry price wins.
-Prices are token per quote asset (ETH, or USDG for stable-paired pools). Per position: price vs entry (token value in
+Prices are token per quote asset (ETH, or USDG for stable-paired pools). A config entry can also
+carry per-position rules, delivered to the group chat (`TELEGRAM_GROUP_CHAT_ID`, else the treasury
+chat, falling back to the main chat): `feeRateFloorUsdPerHour` (the 15-minute fee rate falls below
+it; once per episode, again after 6 h), `collectedTargetUsd` (the USDG swept for the position in
+`fee-split-ledger.json` reaches it; once), `liqDropAlertPct` (active liquidity that far below its
+24-hour max). Per position: price vs entry (token value in
 ETH), in/out of range and for how long, fees per hour, active liquidity vs its 24h high, price velocity.
 It writes `memecoin-status.json` (the "Memecoin Watch" section on the dashboard, `/api/memecoins`) and
 sends Telegram alerts, each once per episode: dump (−20% in 1h), out of range / back in range, volume
@@ -789,6 +794,8 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-09
 
+- Guardian per-position rules (fee-rate floor, collected-USD target, liquidity drop from max) with
+  group-chat delivery; first used on Bucket/USDG #2239358 ($10/h floor, $500 target, -60%).
 - Vault page: phone links come from the server at runtime (`publicHost`) instead of a hostname in
   the file; the mobile-access card is hidden until a public domain exists.
 - Strategy dataset for agents (`strategy.js`, `/api/strategy/*`, MCP tools `position_history`,

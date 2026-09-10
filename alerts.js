@@ -60,6 +60,13 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     return true;
   }
 
+  /** Group messages (per-position guardian rules) go to TELEGRAM_GROUP_CHAT_ID, else the treasury chat, falling back to the main chat. */
+  const groupChatId = process.env.TELEGRAM_GROUP_CHAT_ID || treasuryChatId;
+  async function sendGroup(text) {
+    if (groupChatId && groupChatId !== chatId && (await send(text, groupChatId))) return true;
+    return send(text, chatId);
+  }
+
   /** Treasury messages go to the treasury chat; if that chat is unreachable they fall back to the main chat. */
   async function sendTreasury(text) {
     if (treasuryChatId && treasuryChatId !== chatId && (await send(text, treasuryChatId))) return true;
@@ -219,7 +226,7 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
     return sent;
   }
 
-  return { enabled, send, check, get state() { return state; } };
+  return { enabled, send, sendGroup, sendTreasury, check, get state() { return state; } };
 }
 
 function usd(n) {

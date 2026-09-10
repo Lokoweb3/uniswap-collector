@@ -764,6 +764,36 @@ document.addEventListener('click', e => {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'fee-token-lots.csv'; a.click();
 });
 
+/* ---- analytics page: strategy track record ---- */
+let trackD = null;
+async function loadTrack(){
+  try {
+    const r = await fetch('/api/strategy/track');
+    const d = await r.json();
+    if (!d.ok) return;
+    trackD = d;
+    renderTrack();
+  } catch(e){}
+}
+function renderTrack(){
+  const d = trackD;
+  if (!d) return;
+  $('#tracksec').hidden = false;
+  const s = d.summary || {};
+  $('#tracktotal').innerHTML = s.proposals ? `proposals <b>${s.proposals}</b> · scored <b>${s.scored}</b> · avg <b>${s.avgScore != null ? s.avgScore + '%' : '—'}</b>` : '';
+  const rows = d.proposals || [];
+  $('#tracktable').innerHTML = rows.length ? `<table class="etable">
+    <tr><th>Date</th><th>Author</th><th>Horizon</th><th>Items (pair / action)</th><th>Score</th><th>Outcome</th></tr>
+    ${rows.map(p => `<tr>
+      <td class="l muted">${(p.t||'').slice(0,10)}</td>
+      <td><b>${esc(p.author)}</b></td>
+      <td class="u">${p.horizonDays}d${p.outcome ? '' : ` <span class="muted" title="Scored at ${p.dueAt}">pending</span>`}</td>
+      <td class="l">${(p.items||[]).map(i => `<span class="muted">${esc(i.pair)}</span> <b>${esc(i.action)}</b>`).join(' · ')}</td>
+      <td class="u">${p.outcome && p.outcome.score != null ? p.outcome.score + '%' : '—'}</td>
+      <td class="l">${(p.items||[]).map(i => i.verdict ? `<span class="chg ${i.verdict==='beat'?'up':i.verdict==='missed'?'down':''}" title="${esc(i.note || '')}">${i.verdict}</span>${i.delta && i.delta.feesUsd != null ? ' <span class="muted">Δ$' + i.delta.feesUsd + '</span>' : ''}` : '').join(' · ')}</td>
+    </tr>`).join('')}</table>` : '<div class="muted">No strategy proposals recorded yet. Agents record them with the record_strategy_proposal tool.</div>';
+}
+
 /* ---- analytics page: staking, performance, taxes ---- */
 let stakingD = null;
 async function loadStaking(){
@@ -1609,7 +1639,7 @@ fetch('/api/collect').then(r => r.json()).then(d => {
 const ANALYTICS = PAGE === 'analytics';
 function tick(fresh){
   load(fresh);
-  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); loadTreasury(); loadLots(); }
+  if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); loadTreasury(); loadLots(); loadTrack(); }
   else { loadRewards(); loadBalances(); loadAllSeries(); }
 }
 $('#reload').addEventListener('click', () => tick(true));

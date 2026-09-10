@@ -528,6 +528,63 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "record_strategy_proposal",
+  {
+    title: "Record a strategy proposal",
+    description:
+      "The ONE write tool on this MCP. Records a strategy proposal (a set of items, each naming a wallet + pair with an action and an expected outcome) to the local strategy-proposals.json ledger so it can be scored against what actually happens once its horizon passes. It writes ONLY to that ledger file on the dashboard machine: nothing on chain, no signing, no transactions. Use it to log the advice you give so the track record can tell which advice pays. Returns the proposal id.",
+    inputSchema: {
+      author: z.string().describe("Who is making the proposal (your model name or a label)"),
+      horizon_days: z.number().positive().describe("How many days out the proposal is scored"),
+      rationale: z.string().optional().describe("Why this proposal; free text"),
+      items: z.array(z.object({
+        wallet: z.string().describe("Wallet label or address the item applies to"),
+        pair: z.string().describe("Pair, e.g. 'ETH / LAPTOP' (order-insensitive)"),
+        token_id: z.string().optional().describe("Position token id, when the item is about a specific position"),
+        action: z.enum(["hold", "close", "open", "rebalance", "avoid"]).describe("The recommended action"),
+        range: z.object({ lower: z.number().optional(), upper: z.number().optional() }).optional().describe("Suggested price range"),
+        expected: z.object({ fee_apr_pct: z.number().optional(), fees_usd: z.number().optional(), net_result_usd: z.number().optional() }).optional().describe("Expected outcome to score against"),
+      })).min(1).describe("The items being proposed"),
+    },
+  },
+  async ({ author, horizon_days, rationale, items }) => {
+    try {
+      const body = {
+        author, horizonDays: horizon_days, rationale: rationale || "", source: "mcp",
+        items: items.map((it) => ({
+          wallet: it.wallet, pair: it.pair, tokenId: it.token_id ?? null, action: it.action,
+          range: it.range ? { lower: it.range.lower ?? null, upper: it.range.upper ?? null } : null,
+          expected: it.expected ? { feeAprPct: it.expected.fee_apr_pct ?? null, feesUsd: it.expected.fees_usd ?? null, netResultUsd: it.expected.net_result_usd ?? null } : null,
+        })),
+      };
+      const r = await fetch(BASE + "/api/strategy/proposals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      return text({ ok: true, id: j.id, t: new Date(j.t).toISOString(), horizonDays: j.horizonDays, items: j.items });
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "strategy_track_record",
+  {
+    title: "Strategy track record",
+    description:
+      "Every strategy proposal recorded (via record_strategy_proposal) with its items and, once the horizon has passed, the outcome: per-item verdict (beat / met / missed / no data) against what actually happened in the position history, and a per-proposal score (share of items met or beat). Includes a summary with the average score and a per-author breakdown. Use it to see which advice has paid off.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return text(await get("/api/strategy/track"));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
 return server;
 }
 

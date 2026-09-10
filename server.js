@@ -1099,6 +1099,8 @@ function publicHost() {
   return publicHostCache.host;
 }
 const strategy = require("./strategy").create({ cfg, dir: __dirname, port: PORT, metaFor: (id) => positionMeta(id) });
+// === strategy track record (strategy-track.js): score agent proposals against what happened ===
+const strategyTrack = require("./strategy-track").create({ cfg, dir: __dirname, port: PORT });
 
 // One portfolio refresh at a time, fed from the latest position build.
 let portfolioInFlight = null;
@@ -1617,6 +1619,31 @@ const server = http.createServer(async (req, res) => {
   }
   // === end in-site chat ===
 
+  // === strategy track record (strategy-track.js) ===
+  // POST /api/strategy/proposals records a proposal (loopback-only, like /api/exit-rules;
+  // the gate refuses the path); GET /api/strategy/track returns the view. Scoring runs in backgroundTick.
+  if (url.pathname === "/api/strategy/proposals" || url.pathname === "/api/strategy/track") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      if (url.pathname === "/api/strategy/proposals") {
+        if (req.method !== "POST") { res.writeHead(405); return res.end(JSON.stringify({ ok: false, error: "method not allowed" })); }
+        if (HOST !== "127.0.0.1" || READONLY) {
+          res.writeHead(403);
+          return res.end(JSON.stringify({ ok: false, error: "strategy proposals are localhost-only" }));
+        }
+        const body = JSON.parse(await readBody(req, 65536));
+        res.writeHead(200);
+        return res.end(JSON.stringify(strategyTrack.record(body)));
+      }
+      res.writeHead(200);
+      return res.end(JSON.stringify(strategyTrack.view()));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end strategy track record ===
+
   // === strategy dataset (strategy.js) ===
   if (url.pathname.startsWith("/api/strategy/")) {
     res.setHeader("Content-Type", "application/json");
@@ -1639,6 +1666,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end strategy dataset ===
+
 
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
@@ -2176,6 +2204,13 @@ async function backgroundTick() {
   // Not awaited: Blockscout reads are paced, a batch may take minutes.
   tokenHealth.refresh(heldTokens(), 15).then((n) => { if (n) console.log(`token health: refreshed ${n} token(s)`); }).catch((err) => console.error("token health:", err.shortMessage || err.message));
   // === end token-health-and-approvals ===
+  // === strategy track record === score any due, unscored proposals (one local read when something is due)
+  try {
+    const r = await strategyTrack.score();
+    if (r.scored) console.log("strategy track: scored due proposal(s)");
+  } catch (err) {
+    console.error("strategy track:", err.shortMessage || err.message);
+  }
 }
 backgroundTick();
 setInterval(backgroundTick, 10 * 60 * 1000);

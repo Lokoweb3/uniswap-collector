@@ -146,7 +146,7 @@ The pool chosen per token is cached six hours in `portfolio.json`.
 ### Chat panel on the site (`chat.js`, `chat-widget.js`)
 
 Every page has a 💬 button (bottom right; `/#chat` opens it) that answers questions
-from the same eighteen read-only tools the MCP server exposes, driven in-process, so
+from the same twenty tools the MCP server exposes (nineteen read-only, plus record_strategy_proposal, which only writes a note to a local ledger), driven in-process, so
 the panel and the claude.ai connector always see the same numbers. It is read-only:
 it cannot arm, collect, close, or change settings. Through the passphrase gate it
 works on the phone too (`POST /api/chat` is the one write the gate lets through).
@@ -168,7 +168,7 @@ Sessions are kept in RAM per browser (two hours, last 40 turns); `↺` starts ov
 ### MCP server (`lp-mcp.mjs`)
 
 `lp-mcp.mjs` is an MCP server that exposes the dashboard's read-only data as
-eighteen tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and thirteen added since, ending with `status_report`, `position_history`, `price_history`, `pool_scout_history`, `token_lots`) so
+twenty tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and fifteen added since, ending with `status_report`, `position_history`, `price_history`, `pool_scout_history`, `token_lots`, `record_strategy_proposal`, `strategy_track_record`) so
 Claude Code or Claude Desktop can answer questions from the live numbers. It
 fetches from the running dashboard over loopback and cannot sign, collect, or
 reach the operator key. The dashboard must be running.
@@ -194,7 +194,7 @@ used for day and month grouping (default America/New_York).
 ### From claude.ai and the Claude mobile app
 
 Those run on Anthropic's servers, so the tools have to be reachable over the
-internet. `lp-mcp-remote.mjs` serves the same read-only tools (eighteen, see
+internet. `lp-mcp-remote.mjs` serves the same tools (twenty, see
 "From an agent on a server") over HTTP behind its own OAuth login (claude.ai registers itself, you type a passphrase once, it
 gets a token that refreshes on its own). It binds to loopback; a tunnel gives
 it a public HTTPS address. Steps:
@@ -277,6 +277,13 @@ Live snapshots are not enough to design a strategy; the agent needs what happene
 - `price_history`: hourly USD (and ETH-relative) prices of a token while it was held or in a position.
 - `pool_scout_history`: the scout's hourly record of each position's pool fee APR versus its best
   sibling pool.
+- `record_strategy_proposal` and `strategy_track_record` (`strategy-track.js`): an agent records
+  the advice it gives (items: wallet, pair, action, expected fees / APR / net result, a horizon in
+  days); once the horizon passes the server scores each item against the position history (beat /
+  met / missed / no data, 5% tolerance) and the proposal gets a score, the share of items met or
+  beat. `record_strategy_proposal` is the one write on the MCP: it only appends to
+  `strategy-proposals.json` on the dashboard machine (loopback route, refused by the gate). The
+  "Strategy track record" section on Analytics shows every proposal and outcome.
 - `token_lots`: cost basis of the fee tokens the collector handed back unconverted: one lot per
   hand-back from `collector.log`, priced at that hour, with per-token totals, average cost, value
   now and unrealized gain, plus `soldAtCollect` for the tokens `sell-v4.js` sold in their own pool
@@ -834,6 +841,9 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Strategy track record (`strategy-track.js`, Theo): agents record proposals through the MCP,
+  the server scores them against the position history when the horizon passes, Analytics shows
+  the outcomes and per-author averages.
 - v4 liquidity ledger (`ledger-v4.js`): deposits, withdrawals and owner collects for v4 positions
   from PoolManager events, priced at the block; feeds PnL legs and the strategy dataset.
 - Fee tokens with no v3 route are sold in their own v4 pool at collect time (`sell-v4.js`,

@@ -223,6 +223,15 @@
   <div class="enote" id="lotnote">Cost basis of the fee tokens that were handed back unconverted (the collector swaps ETH, WETH and USDG on the spot; those are already income). Each lot is valued at the price of the hour it arrived; the basis is what a later sale is measured against.</div>
 </section>
 
+<section class="earnings analytics" id="tracksec" hidden>
+  <div class="ehead">
+    <h3>Strategy track record</h3>
+    <span class="etotal" id="tracktotal"></span>
+  </div>
+  <div class="etablewrap" id="tracktable"></div>
+  <div class="enote" id="tracknote">Every strategy proposal an agent recorded, scored against what actually happened once its horizon passed. Per item: the action and pair, the expected outcome, and a verdict (beat / met / missed / no data). The score is the share of items met or beat.</div>
+</section>
+
 
 <div class="foot">
   Rails are drawn on a log scale, matching how ticks are spaced. The centre mark is the

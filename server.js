@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("dotenv").config();
 /**
  * Local dashboard server. Reads never load a key and never send a transaction;
  * your RPC endpoint stays on this machine and is never exposed to the browser,
@@ -1395,7 +1396,25 @@ const server = http.createServer(async (req, res) => {
   // === memecoin-guardian ===
   // Memecoin Watch: status written by memecoin-guardian.js (a separate process),
   // and a loopback-only close that runs the guardian's --close (operator must be armed).
-  if (url.pathname === "/api/memecoins") {
+  // Risk: every watched position's status and rule block (GET), a rule change (POST, loopback-only).
+  if (url.pathname === "/api/risk" && req.method === "POST") {
+    res.setHeader("Content-Type", "application/json");
+    if (HOST !== "127.0.0.1" || READONLY) {
+      res.writeHead(403);
+      return res.end(JSON.stringify({ ok: false, error: "rule changes are localhost-only" }));
+    }
+    try {
+      const body = JSON.parse(await readBody(req));
+      if (!body || !/^\d+$/.test(String(body.tokenId))) throw new Error("tokenId required");
+      const rules = guardianRules(String(body.tokenId), body);
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, tokenId: String(body.tokenId), rules }));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  if (url.pathname === "/api/risk" || url.pathname === "/api/memecoins") {
     res.setHeader("Content-Type", "application/json");
     try {
       const st = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-status.json"), "utf8"));
@@ -1404,9 +1423,10 @@ const server = http.createServer(async (req, res) => {
       for (const p of st.positions || []) {
         if (p.closed) continue;
         try {
-          const m = await positionMeta(`v4-${p.tokenId}`);
+          const key = Number(p.version) === 3 ? String(p.tokenId) : `v4-${p.tokenId}`;
+          const m = await positionMeta(key);
           const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
-          p.collected = collectSummary(`v4-${p.tokenId}`, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
+          p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
         } catch { p.collected = null; }
       }
       st.configured = (cfg.memecoins || []).length;
@@ -1434,7 +1454,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = JSON.parse(await readBody(req));
       const id = String(body.tokenId || "");
-      if (!(cfg.memecoins || []).some((m) => String(m.tokenId) === id)) throw new Error("that position is not listed under memecoins in config.json");
+      if (!/^\d+$/.test(id)) throw new Error("tokenId required");
       const child = spawn("node", [path.join(__dirname, "memecoin-guardian.js"), "--close", id, "manual close from the dashboard"], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
       let out = "";
       child.stdout.on("data", (d) => { out += d.toString(); });
@@ -1449,30 +1469,6 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end memecoin-guardian ===
-  // === exit-rules ===
-  // Exit rules: config + last evaluation (GET), per-position overrides (POST, loopback-only).
-  if (url.pathname === "/api/exit-rules") {
-    res.setHeader("Content-Type", "application/json");
-    try {
-      if (req.method === "POST") {
-        if (HOST !== "127.0.0.1") {
-          res.writeHead(403);
-          return res.end(JSON.stringify({ ok: false, error: "exit rule changes are localhost-only" }));
-        }
-        const body = JSON.parse(await readBody(req));
-        if (!body || !/^\d+$/.test(String(body.tokenId))) throw new Error("tokenId required");
-        const next = exitRules.setOverride(path.join(__dirname, "config.json"), String(body.tokenId), body);
-        res.writeHead(200);
-        return res.end(JSON.stringify({ ok: true, tokenId: String(body.tokenId), override: next }));
-      }
-      res.writeHead(200);
-      return res.end(JSON.stringify(exitRules.view()));
-    } catch (err) {
-      res.writeHead(400);
-      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
-    }
-  }
-  // === end exit-rules ===
 
   // === performance-attribution === daily P&L decomposition and benchmarks
   if (url.pathname === "/api/attribution") {
@@ -1679,7 +1675,7 @@ const server = http.createServer(async (req, res) => {
   // === end confirm-before-sell ===
 
   // === strategy track record (strategy-track.js) ===
-  // POST /api/strategy/proposals records a proposal (loopback-only, like /api/exit-rules;
+  // POST /api/strategy/proposals records a proposal (loopback-only, like /api/risk;
   // the gate refuses the path); GET /api/strategy/track returns the view. Scoring runs in backgroundTick.
   if (url.pathname === "/api/strategy/proposals" || url.pathname === "/api/strategy/track") {
     res.setHeader("Content-Type", "application/json");
@@ -1985,7 +1981,7 @@ function loopHealth() {
     }
   };
   const loops = {};
-  if (Array.isArray(cfg.memecoins) && cfg.memecoins.length) loops.guardian = { ageMin: ageOf("memecoin-status.json"), staleAfterMin: 10, label: "memecoin guardian" };
+  loops.guardian = { ageMin: ageOf("memecoin-status.json"), staleAfterMin: 10, label: "risk guardian" };
   if (cfg.memecoinCollect && cfg.memecoinCollect.enabled !== false) loops.autoCollect = { ageMin: ageOf("memecoin-collect-heartbeat.json"), staleAfterMin: 45, label: "fee auto-collect" };
   for (const l of Object.values(loops)) l.stale = l.ageMin == null || l.ageMin > l.staleAfterMin;
   return loops;
@@ -2280,34 +2276,10 @@ async function backgroundTick() {
 backgroundTick();
 setInterval(backgroundTick, 10 * 60 * 1000);
 
-// === exit-rules ===
-// Risk triggers over every wallet's open positions, every five minutes (exit-rules.js).
-const exitRules = require("./exit-rules").create({
-  provider,
-  cfg,
-  alerts,
-  getPositions: () => cache.payload,
-  getWatched: () => watch.latest && watch.latest.wallets,
-  readConfig: () => {
-    try {
-      const fresh = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
-      return { ...cfg, exitRules: fresh.exitRules, exitRuleOverrides: fresh.exitRuleOverrides };
-    } catch {
-      return cfg;
-    }
-  },
-});
-async function exitRulesTick() {
-  try {
-    const sent = await exitRules.evaluate();
-    for (const m of sent) console.log("exit rule:", m.slice(0, 100));
-  } catch (err) {
-    console.error("exit-rules:", err.shortMessage || err.message);
-  }
+// Rule edits from the Risk section go through the guardian module (config.json or memecoin-discovered.json).
+function guardianRules(tokenId, patch) {
+  return require("./memecoin-guardian").create({ dir: __dirname, provider, positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets, log: () => {} }).setRule(tokenId, patch);
 }
-setTimeout(exitRulesTick, 90 * 1000); // after the first build
-setInterval(exitRulesTick, 5 * 60 * 1000);
-// === end exit-rules ===
 
 server.listen(PORT, HOST, () => {
   console.log(`Dashboard running at http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`);

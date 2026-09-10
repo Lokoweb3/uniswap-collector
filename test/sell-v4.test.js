@@ -50,5 +50,6 @@ assert.ok(Math.abs(S.impactPct(9405n, 10000n, 10000) - 5) < 0.01);
   const st = S.settings({ contracts: { v4: {} }, memecoinSell: { enabled: true, hold: ["LAPTOP"] } });
   assert.ok(st.hold.has("laptop")); assert.strictEqual(st.minUsd, 25); assert.strictEqual(st.maxImpactPct, 3);
   assert.strictEqual(S.settings({}).enabled, false);
+  assert.strictEqual(st.nativeQuoteOnly, true, "ETH-quoted pools only by default");
   console.log("sell-v4: spot, impact, slice fitting, calldata and settings assertions passed");
 })().catch((e) => { console.error(e); process.exit(1); });

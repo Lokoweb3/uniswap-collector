@@ -397,7 +397,10 @@ position itself, native ETH as address zero), through the Universal Router's V4_
 Permit2 pulling the input (exact-amount approvals, one hour). Policy: only when the batch is worth
 at least `minUsd` (25); price impact against the pool's spot price capped at `maxImpactPct` (3),
 with a batch over the cap trimmed to the largest slice under it and skipped when that slice is
-under `minUsd`; `hold` lists tokens never to sell; hooked pools are never used;
+under `minUsd`; `hold` lists tokens never to sell; hooked pools are never used; only ETH-quoted
+pools are used (`nativeQuoteOnly`), because this chain's PoolManager rejects router swaps in pools
+whose currency0 is an ERC-20 while the quoter still answers for them (verified 2026-09-10), so a
+token earned in USDG/Bucket is sold in ETH/Bucket and a token with no ETH pool is handed back;
 `thresholds.maxSwapValueWeth` and `slippageBps` apply; the exact call is dry-run from the operator
 before it is sent. Proceeds (ETH or USDG) join the normal sweep, so the vault split and the wallet
 delivery cover them. Every sale and every skip, with its reason, is written to `token-sales.json`

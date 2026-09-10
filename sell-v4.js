@@ -15,6 +15,13 @@
  *                    and if that slice is under minUsd nothing is sold this run
  *   hold             token symbols/addresses never to sell
  *   hooked pools     never, unless a dry-run proves the sell passes
+ *   ETH-quoted only  this chain's PoolManager rejects router swaps (bare revert,
+ *                    both routers, both swap forms) in pools whose currency0 is
+ *                    an ERC-20, while accepting them where currency0 is native
+ *                    ETH; the quoter answers for both, so only the router path
+ *                    is affected. A token is sold in the best ETH-quoted pool it
+ *                    was earned in; a token with only ERC-20-quoted pools is
+ *                    handed back (verified 2026-09-10, nativeQuoteOnly to relax)
  *   the collector's own maxSwapValueWeth and slippageBps still apply
  *
  * Every sale and every skip (with the reason) is appended to token-sales.json.
@@ -130,6 +137,7 @@ function settings(cfg) {
     minUsd: Number(s.minUsd ?? 25),
     maxImpactPct: Number(s.maxImpactPct ?? 3),
     hold: new Set((s.hold || []).map((x) => String(x).toLowerCase())),
+    nativeQuoteOnly: s.nativeQuoteOnly !== false,
     router: s.router || v4.universalRouter || null,
     quoter: s.quoter || v4.quoter || null,
     permit2: s.permit2 || v4.permit2 || PERMIT2_DEFAULT,
@@ -154,7 +162,7 @@ function create({ provider, cfg, log = console.log }) {
    * Returns { sold, amountIn, amountOut, currencyOut, tx } or { sold:false, reason, remaining }.
    * Whatever is not sold is left for the caller's hand-back.
    */
-  async function sell({ token, symbol, decimals, amount, key, wallet, owner, usdOf, maxSwapWeth = null, wethOf = null, slippageBps = 100n, recordGas = () => {} }) {
+  async function sell({ token, symbol, decimals, amount, key = null, keys = null, wallet, owner, usdOf, maxSwapWeth = null, wethOf = null, slippageBps = 100n, recordGas = () => {} }) {
     const skip = async (reason, extra = {}) => {
       log(`  sell ${symbol}: skipped — ${reason}`);
       try { appendSale({ t: Date.now(), wallet: owner.label, walletAddress: owner.address, token: symbol, tokenAddress: token, amount: Number(ethers.formatUnits(amount, decimals)), skipped: true, reason, ...extra }); } catch {}
@@ -162,23 +170,32 @@ function create({ provider, cfg, log = console.log }) {
     };
     if (!ready) return { sold: false, reason: "disabled", remaining: amount };
     if (st.hold.has(String(symbol).toLowerCase()) || st.hold.has(String(token).toLowerCase())) return skip("on the hold list");
-    if (!key) return skip("no v4 pool key for this token");
-    if (key.hooks && key.hooks !== ethers.ZeroAddress) return skip(`pool has a hook (${key.hooks.slice(0, 10)}…); sells not proven`);
-    const zeroForOne = key.currency0.toLowerCase() === String(token).toLowerCase();
-    if (!zeroForOne && key.currency1.toLowerCase() !== String(token).toLowerCase()) return skip("token is not in the pool key");
-    const currencyOut = zeroForOne ? key.currency1 : key.currency0;
-    const feePips = Number(key.fee);
+    const candidates = (keys && keys.length ? keys : key ? [key] : []).filter((k) => k && [k.currency0, k.currency1].some((c) => String(c).toLowerCase() === String(token).toLowerCase()));
+    if (!candidates.length) return skip("no v4 pool key for this token");
+    const usable = candidates.filter((k) => !(k.hooks && k.hooks !== ethers.ZeroAddress) && (!st.nativeQuoteOnly || isNative(k.currency0) || isNative(k.currency1)));
+    if (!usable.length) {
+      const why = candidates.every((k) => k.hooks && k.hooks !== ethers.ZeroAddress) ? "its pools have hooks; sells not proven" : "its pools are ERC-20-quoted; this chain's PoolManager rejects router swaps there (only ETH-quoted pools work)";
+      return skip(why);
+    }
 
-    let sqrtPriceX96;
-    try { sqrtPriceX96 = (await stateView.getSlot0(poolIdOf(key)))[0]; } catch (err) { return skip(`pool state unreadable (${err.shortMessage || err.message})`); }
-    const spot = (amt) => spotOut(sqrtPriceX96, zeroForOne, amt);
-    let fit;
-    try { fit = await fitSlice({ quote: (amt) => quoteOut(key, zeroForOne, amt), spot, feePips, amount, maxImpactPct: st.maxImpactPct }); } catch (err) { return skip(`quote failed (${err.shortMessage || err.message})`); }
-    if (!fit) return skip(`even a small slice moves the pool more than ${st.maxImpactPct}%`);
-
-    const usd = await usdOf(currencyOut, fit.quotedOut);
+    // Best ETH-quoted pool: fit the batch under the impact cap in each and take the highest USD proceeds.
+    let best = null;
+    for (const k of usable) {
+      const zfo = k.currency0.toLowerCase() === String(token).toLowerCase();
+      const out = zfo ? k.currency1 : k.currency0;
+      let sqrtPriceX96;
+      try { sqrtPriceX96 = (await stateView.getSlot0(poolIdOf(k)))[0]; } catch { continue; }
+      let f;
+      try { f = await fitSlice({ quote: (amt) => quoteOut(k, zfo, amt), spot: (amt) => spotOut(sqrtPriceX96, zfo, amt), feePips: Number(k.fee), amount, maxImpactPct: st.maxImpactPct }); } catch { continue; }
+      if (!f) continue;
+      const u = await usdOf(out, f.quotedOut);
+      if (u == null) continue;
+      if (!best || u > best.usd) best = { key: k, zeroForOne: zfo, currencyOut: out, fit: f, usd: u };
+    }
+    if (!best) return skip(`even a small slice moves every usable pool more than ${st.maxImpactPct}% (or no quote)`);
+    key = best.key;
+    const { zeroForOne, currencyOut, fit, usd } = best;
     const full = fit.amountIn === amount;
-    if (usd == null) return skip("cannot value the proceeds");
     if (usd < st.minUsd) return skip(`${full ? "batch" : "slice under the impact cap"} worth $${usd.toFixed(2)}, below the $${st.minUsd} threshold`, { usd: +usd.toFixed(2), impactPct: fit.impactPct != null ? +fit.impactPct.toFixed(2) : null });
     if (maxSwapWeth != null && wethOf) {
       const w = await wethOf(currencyOut, fit.quotedOut);

@@ -497,7 +497,7 @@ async function runOwner(ctx, owner) {
   // memecoinSell): the pool key per token comes from the positions collected
   // in this pass, so a token is only ever sold where it was earned.
   const seller = require("./sell-v4").create({ provider, cfg, log });
-  const v4KeyFor = new Map(); // token address (lower) -> pool key
+  const v4KeysFor = new Map(); // token address (lower) -> [pool keys of the open v4 positions holding it]
   let v4Open = 0, v4Closed = 0;
   if (v4c) {
     for (const id of v4c.knownIds(owner.main ? null : owner.address)) {
@@ -512,6 +512,12 @@ async function runOwner(ctx, owner) {
       if (!sim) continue;
       if (sim.closed) { v4Closed++; continue; }
       v4Open++;
+      for (const t of [sim.t0, sim.t1]) {
+        if (t.native || !sim.key) continue;
+        const a = t.address.toLowerCase();
+        if (!v4KeysFor.has(a)) v4KeysFor.set(a, []);
+        if (!v4KeysFor.get(a).some((k) => k.currency0 === sim.key.currency0 && k.currency1 === sim.key.currency1 && k.fee === sim.key.fee && k.tickSpacing === sim.key.tickSpacing && k.hooks === sim.key.hooks)) v4KeysFor.get(a).push(sim.key);
+      }
       // Value in WETH: native ETH counts 1:1, ERC-20s through the v3 quoter at the pool's own tier.
       const tiers = [sim.fee, target.kind === "token" ? target.feeTier : null, 100, 500, 3000, 10000];
       const val = async (t, amt) => (amt === 0n ? 0n : t.native || t.address.toLowerCase() === weth.toLowerCase() ? amt : await quoteToWethAny(quoter, t.address, amt, tiers, weth));
@@ -628,7 +634,6 @@ async function runOwner(ctx, owner) {
           if (amt > 0n && !t.native) collected.set(t.address, (collected.get(t.address) || 0n) + amt);
         }
         recordV4Collect({ sim, rcpt, owner });
-        for (const t of [sim.t0, sim.t1]) if (!t.native && sim.key && !v4KeyFor.has(t.address.toLowerCase())) v4KeyFor.set(t.address.toLowerCase(), sim.key);
       } catch (err) {
         log(`  ! v4 collect failed for #${sim.tokenId}: ${err.shortMessage || err.message}`);
       }
@@ -801,8 +806,8 @@ async function runOwner(ctx, owner) {
     }
     // No v3 route (launchpad tokens): sell in the v4 pool the fees came from,
     // under the memecoinSell policy; whatever is not sold is handed back below.
-    const v4key = v4KeyFor.get(tokenAddr.toLowerCase());
-    if (seller.ready && v4key && (feeTierFor.get(tokenAddr) === undefined || feeTierFor.get(tokenAddr) === null || !(await quoteToWethAny(quoter, tokenAddr, balance, [feeTierFor.get(tokenAddr)], weth)))) {
+    const v4keys = v4KeysFor.get(tokenAddr.toLowerCase());
+    if (seller.ready && v4keys && v4keys.length && (feeTierFor.get(tokenAddr) === undefined || feeTierFor.get(tokenAddr) === null || !(await quoteToWethAny(quoter, tokenAddr, balance, [feeTierFor.get(tokenAddr)], weth)))) {
       const usdOf = async (cur, amt) => {
         if (target.kind !== "token") return null;
         if (cur.toLowerCase() === target.address.toLowerCase()) return Number(fmt(amt, 6, 6));
@@ -810,7 +815,7 @@ async function runOwner(ctx, owner) {
         return null;
       };
       const wethOf = async (cur, amt) => (cur === ethers.ZeroAddress || cur.toLowerCase() === weth.toLowerCase() ? amt : cur.toLowerCase() === target.address.toLowerCase() ? await quoteSingle(quoter, target.address, weth, amt, target.feeTier) : null);
-      const res = await seller.sell({ token: tokenAddr, symbol: info.symbol, decimals: info.decimals, amount: balance, key: v4key, wallet, owner, usdOf, wethOf, maxSwapWeth: maxSwap, slippageBps, recordGas: (c) => recordGas(state, c) });
+      const res = await seller.sell({ token: tokenAddr, symbol: info.symbol, decimals: info.decimals, amount: balance, keys: v4keys, wallet, owner, usdOf, wethOf, maxSwapWeth: maxSwap, slippageBps, recordGas: (c) => recordGas(state, c) });
       if (res.sold) {
         log(`  sold ${fmt(res.amountIn, info.decimals)} ${info.symbol} for ≈ $${res.usd.toFixed(2)} -> ${res.tx}`);
         if (res.currencyOut === ethers.ZeroAddress) soldEthWei += res.amountOut;

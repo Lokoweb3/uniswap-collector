@@ -190,11 +190,12 @@
     }
   },
   "memecoinSell": {
-    "_comment": "sell-v4.js: sell fee tokens that have no v3 route (LAPTOP, Bucket, CRUMBS, ...) in the hookless v4 pool they were earned from, via the Universal Router (Permit2, exact-amount approvals, dry-run before sending). Only when the batch is worth >= minUsd; price impact vs spot capped at maxImpactPct (a batch over the cap is trimmed to the largest slice under it, and skipped if that slice is under minUsd); hold lists symbols never to sell; thresholds.maxSwapValueWeth and slippageBps still apply; every sale and skip goes to token-sales.json. Proceeds join the normal USDG -> vault split -> wallet flow.",
+    "_comment": "sell-v4.js: sell fee tokens that have no v3 route (LAPTOP, Bucket, CRUMBS, ...) in the hookless v4 pool they were earned from, via the Universal Router (Permit2, exact-amount approvals, dry-run before sending). Only when the batch is worth >= minUsd; price impact vs spot capped at maxImpactPct (a batch over the cap is trimmed to the largest slice under it, and skipped if that slice is under minUsd); hold lists symbols never to sell; thresholds.maxSwapValueWeth and slippageBps still apply; every sale and skip goes to token-sales.json. Proceeds join the normal USDG -> vault split -> wallet flow. nativeQuoteOnly (default true): sell only in ETH-quoted pools, because this chain's PoolManager rejects router swaps in pools whose currency0 is an ERC-20 (verified 2026-09-10); tokens with only ERC-20-quoted pools are handed back.",
     "enabled": true,
     "minUsd": 25,
     "maxImpactPct": 3,
-    "hold": []
+    "hold": [],
+    "nativeQuoteOnly": true
   },
   "dailySummary": {
     "_comment": "daily.js: one short Telegram line-up per day (arm window, 24h collects per wallet, open positions and fee rates, guardian flags, vault, gas, last run). hour is local time; chat main or group.",

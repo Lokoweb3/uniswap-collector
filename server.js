@@ -44,6 +44,16 @@ const HOST = process.env.LP_BIND || "127.0.0.1";
 // and arm endpoints refuse, and the page hides those controls. The ops strip
 // still shows the last run, from files the collector machine pushes here.
 const READONLY = process.env.LP_READONLY === "1";
+// Background loops (risk guardian, fee auto-collect, nightly backup) and the
+// companion services (gate, remote MCP, tailscale) run only in the main
+// dashboard process: the configured port, not read-only, not --no-loops. A
+// second server (the smoke test on 8799, a VM copy) is a plain viewer.
+const MAIN_PORT = (cfg.dashboard && cfg.dashboard.port) || 8787;
+const LOOPS = PORT === MAIN_PORT && !READONLY && !process.argv.includes("--no-loops");
+const SERVICES = LOOPS && !process.argv.includes("--no-services");
+const STARTED_AT = Date.now();
+const timers = { guardian: { lastAt: 0 }, autoCollect: { lastAt: 0 }, backup: { lastAt: 0, lastResult: null } };
+let guardian = null, autoCollect = null;
 
 const CACHE_MS = 60_000;
 let cache = { at: 0, payload: null };
@@ -1377,16 +1387,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/treasury") {
     res.setHeader("Content-Type", "application/json");
     try {
-      // The percentage in force is the NFT's feeSplitPct() (the vault page's slider), not config.json.
-      const ts = await treasuryLedger.effectiveSettings(cfg, provider);
-      let balanceUsdg = null;
-      if (ts.tba && cfg.usdReference && cfg.usdReference.stable) {
-        const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
-        const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
-        balanceUsdg = Number(ethers.formatUnits(raw, dec));
-      }
       res.writeHead(200);
-      return res.end(JSON.stringify({ ok: true, ...ts, balanceUsdg, ...treasuryLedger.summary(), explorer: "https://robinhoodchain.blockscout.com" }));
+      return res.end(JSON.stringify(await treasuryView()));
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -1396,6 +1398,17 @@ const server = http.createServer(async (req, res) => {
   // === memecoin-guardian ===
   // Memecoin Watch: status written by memecoin-guardian.js (a separate process),
   // and a loopback-only close that runs the guardian's --close (operator must be armed).
+  // Nightly backup on demand (loopback-only; the scheduled run is a timer in this process).
+  if (url.pathname === "/api/backup" && req.method === "POST") {
+    res.setHeader("Content-Type", "application/json");
+    if (HOST !== "127.0.0.1" || READONLY || !server.runBackup) {
+      res.writeHead(403);
+      return res.end(JSON.stringify({ ok: false, error: "backups run from the main dashboard process on this machine" }));
+    }
+    const code = await server.runBackup("manual");
+    res.writeHead(200);
+    return res.end(JSON.stringify({ ok: code === 0, code, last: timers.backup.lastResult }));
+  }
   // Risk: every watched position's status and rule block (GET), a rule change (POST, loopback-only).
   if (url.pathname === "/api/risk" && req.method === "POST") {
     res.setHeader("Content-Type", "application/json");
@@ -1417,7 +1430,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/risk" || url.pathname === "/api/memecoins") {
     res.setHeader("Content-Type", "application/json");
     try {
-      const st = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-status.json"), "utf8"));
+      const st = guardian && guardian.status && guardian.status.at ? JSON.parse(JSON.stringify(guardian.status)) : JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-status.json"), "utf8"));
       st.stale = Date.now() - (st.at || 0) > 5 * 60 * 1000; // guardian not running?
       st.watching = (st.positions || []).filter((p) => !p.closed).length;
       for (const p of st.positions || []) {
@@ -1431,13 +1444,10 @@ const server = http.createServer(async (req, res) => {
       }
       st.configured = (cfg.memecoins || []).length;
       st.discovery = cfg.memecoinDiscovery !== false;
-      // Fee auto-collect (memecoin-collect.js): settings and last activity, so status reports come from one place.
-      const mc = cfg.memecoinCollect || {};
-      let mcState = {}, mcBeat = {};
-      try { mcState = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-collect-state.json"), "utf8")); } catch {}
-      try { mcBeat = JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-collect-heartbeat.json"), "utf8")); } catch {}
-      st.autoCollect = { enabled: mc.enabled !== false, minUsd: Number(mc.minUsd ?? 20), minIntervalMinutes: Number(mc.minIntervalMinutes ?? 30),
-        lastRunAt: mcState.lastRunAt || null, lastCheckAt: mcBeat.at || null, stale: Date.now() - (mcBeat.at || 0) > 40 * 60 * 1000 };
+      // Fee auto-collect (memecoin-collect.js, a timer in this process): settings and last activity.
+      if (autoCollect) { st.autoCollect = autoCollect.summary(); st.autoCollect.stale = Date.now() - (st.autoCollect.lastCheckAt || 0) > 40 * 60 * 1000; }
+      else { const mc = cfg.memecoinCollect || {}; st.autoCollect = { enabled: mc.enabled !== false, minUsd: Number(mc.minUsd ?? 20), minIntervalMinutes: Number(mc.minIntervalMinutes ?? 30), lastRunAt: null, lastCheckAt: null, stale: true, note: "loops run in the main dashboard process only" }; }
+      st.loops = loopHealth();
       res.writeHead(200);
       return res.end(JSON.stringify(st));
     } catch {
@@ -1447,22 +1457,17 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/api/memecoins/close" && req.method === "POST") {
     res.setHeader("Content-Type", "application/json");
-    if (HOST !== "127.0.0.1" || READONLY) {
+    if (HOST !== "127.0.0.1" || READONLY || !guardian) {
       res.writeHead(403);
-      return res.end(JSON.stringify({ ok: false, error: "closing is localhost-only" }));
+      return res.end(JSON.stringify({ ok: false, error: "closing is localhost-only, from the main dashboard process" }));
     }
     try {
       const body = JSON.parse(await readBody(req));
       const id = String(body.tokenId || "");
       if (!/^\d+$/.test(id)) throw new Error("tokenId required");
-      const child = spawn("node", [path.join(__dirname, "memecoin-guardian.js"), "--close", id, "manual close from the dashboard"], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
-      let out = "";
-      child.stdout.on("data", (d) => { out += d.toString(); });
-      child.stderr.on("data", (d) => { out += d.toString(); });
-      const code = await new Promise((resolve) => child.on("close", resolve));
-      const line = out.trim().split("\n").filter((l) => l.startsWith("{")).pop();
+      const result = await guardian.closeById(id, "manual close from the dashboard", "manual");
       res.writeHead(200);
-      return res.end(JSON.stringify({ ok: code === 0, result: line ? JSON.parse(line) : null, output: out.slice(-800) }));
+      return res.end(JSON.stringify({ ok: result.status === "closed", result }));
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -1972,19 +1977,29 @@ const staking = require("./staking").create({
  * (config present and enabled) are reported.
  */
 function loopHealth() {
-  const ageOf = (file) => {
-    try {
-      const st = fs.statSync(path.join(__dirname, file));
-      return (Date.now() - st.mtimeMs) / 60000;
-    } catch {
-      return null; // never written
-    }
-  };
+  // The loops are timers in this process; a timer that has not completed a
+  // cycle within its window (a hung RPC read, a stuck collector) reads as stale.
+  if (!LOOPS) return {};
+  const ageOf = (t) => (t ? (Date.now() - t) / 60000 : null);
   const loops = {};
-  loops.guardian = { ageMin: ageOf("memecoin-status.json"), staleAfterMin: 10, label: "risk guardian" };
-  if (cfg.memecoinCollect && cfg.memecoinCollect.enabled !== false) loops.autoCollect = { ageMin: ageOf("memecoin-collect-heartbeat.json"), staleAfterMin: 45, label: "fee auto-collect" };
-  for (const l of Object.values(loops)) l.stale = l.ageMin == null || l.ageMin > l.staleAfterMin;
+  loops.guardian = { ageMin: ageOf(timers.guardian.lastAt), staleAfterMin: 10, label: "risk guardian" };
+  if (cfg.memecoinCollect && cfg.memecoinCollect.enabled !== false) loops.autoCollect = { ageMin: ageOf(timers.autoCollect.lastAt), staleAfterMin: 45, label: "fee auto-collect" };
+  loops.backup = { ageMin: ageOf(timers.backup.lastAt), staleAfterMin: 26 * 60, label: "nightly backup", lastResult: timers.backup.lastResult || null };
+  for (const l of Object.values(loops)) l.stale = l.ageMin == null ? l.label !== "nightly backup" || (Date.now() - STARTED_AT) / 60000 > 26 * 60 : l.ageMin > l.staleAfterMin;
   return loops;
+}
+
+/** The treasury view (/api/treasury): settings in force, TBA balance, ledger totals. */
+async function treasuryView() {
+  // The percentage in force is the NFT's feeSplitPct() (the vault page's slider), not config.json.
+  const ts = await treasuryLedger.effectiveSettings(cfg, provider);
+  let balanceUsdg = null;
+  if (ts.tba && cfg.usdReference && cfg.usdReference.stable) {
+    const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
+    const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
+    balanceUsdg = Number(ethers.formatUnits(raw, dec));
+  }
+  return { ok: true, ...ts, balanceUsdg, ...treasuryLedger.summary(), explorer: "https://robinhoodchain.blockscout.com" };
 }
 
 /**
@@ -2278,7 +2293,114 @@ setInterval(backgroundTick, 10 * 60 * 1000);
 
 // Rule edits from the Risk section go through the guardian module (config.json or memecoin-discovered.json).
 function guardianRules(tokenId, patch) {
-  return require("./memecoin-guardian").create({ dir: __dirname, provider, positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets, log: () => {} }).setRule(tokenId, patch);
+  return (guardian || require("./memecoin-guardian").create({ dir: __dirname, provider, positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets, log: () => {} })).setRule(tokenId, patch);
+}
+
+// === background loops === one process, one log: the risk guardian (60 s), fee
+// auto-collect (15 min) and the nightly ledger backup (02:00 local) are timers here.
+if (LOOPS) {
+  const stamp = (tag) => (m) => console.log(`${tag}: ${m}`);
+  guardian = require("./memecoin-guardian").create({ dir: __dirname, provider, alerts, log: stamp("guardian"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets });
+  let guardianBusy = false;
+  async function guardianTick() {
+    if (guardianBusy) return;
+    guardianBusy = true;
+    try { await guardian.cycle(); timers.guardian.lastAt = Date.now(); }
+    catch (err) { console.error("guardian: cycle failed:", err.shortMessage || err.message); }
+    finally { guardianBusy = false; }
+  }
+  setTimeout(guardianTick, 90 * 1000); // after the first build
+  setInterval(guardianTick, 60 * 1000);
+
+  autoCollect = require("./memecoin-collect").create({ dir: __dirname, alerts, log: stamp("auto-collect"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets,
+    treasury: () => treasuryView().catch(() => null), armUrl: `http://127.0.0.1:${PORT}/arm` });
+  async function autoCollectTick() {
+    try { await autoCollect.cycle(); timers.autoCollect.lastAt = Date.now(); }
+    catch (err) { console.error("auto-collect: cycle failed:", err.shortMessage || err.message); }
+  }
+  setTimeout(autoCollectTick, 2 * 60 * 1000);
+  setInterval(autoCollectTick, 15 * 60 * 1000);
+
+  // Nightly backup: backup-ledgers.sh once a day at 02:00 local time (checked every minute; the
+  // day is remembered in digest-state.json so a restart after 02:00 does not run it twice).
+  const BACKUP_HOUR = Number(process.env.LP_BACKUP_HOUR || 2);
+  const backupDay = (d = new Date()) => d.toLocaleDateString("en-CA");
+  function backupState() { try { return JSON.parse(fs.readFileSync(path.join(__dirname, "digest-state.json"), "utf8")); } catch { return {}; } }
+  function runBackup(reason = "scheduled") {
+    return new Promise((resolve) => {
+      const child = spawn("bash", [path.join(__dirname, "backup-ledgers.sh")], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+      let out = "";
+      child.stdout.on("data", (d) => { out += d; });
+      child.stderr.on("data", (d) => { out += d; });
+      child.on("close", (code) => {
+        const last = out.trim().split("\n").pop() || "";
+        console.log(`backup (${reason}): exit ${code}${last ? " — " + last : ""}`);
+        timers.backup.lastAt = Date.now();
+        timers.backup.lastResult = { at: Date.now(), code, line: last };
+        try { fs.writeFileSync(path.join(__dirname, "digest-state.json"), JSON.stringify({ ...backupState(), lastBackupDate: backupDay(), lastBackupAt: new Date().toISOString(), lastBackupCode: code })); } catch {}
+        if (code !== 0) alerts.send(`⚠️ Nightly ledger backup exited ${code}: ${last.slice(0, 200)}`).catch(() => {});
+        resolve(code);
+      });
+      child.on("error", (err) => { console.error("backup: could not start:", err.message); resolve(-1); });
+    });
+  }
+  let backupBusy = false;
+  setInterval(async () => {
+    if (backupBusy) return;
+    const now = new Date();
+    if (now.getHours() !== BACKUP_HOUR || backupState().lastBackupDate === backupDay(now)) return;
+    backupBusy = true;
+    try { await runBackup(); } finally { backupBusy = false; }
+  }, 60 * 1000);
+  // Recorded runs from before the fold count for the watchdog.
+  { const st = backupState(); if (st.lastBackupAt) { timers.backup.lastAt = Date.parse(st.lastBackupAt) || 0; timers.backup.lastResult = { at: timers.backup.lastAt, code: st.lastBackupCode ?? null }; } }
+  server.runBackup = runBackup;
+  console.log(`loops: risk guardian every 60 s, fee auto-collect every 15 min, ledger backup daily at ${String(BACKUP_HOUR).padStart(2, "0")}:00`);
+}
+
+// === companion services === the passphrase gate (lp-gate.mjs), the remote MCP
+// server (run-mcp-remote.sh) and the Tailscale funnel are children of this
+// process, restarted when they exit, their output in this log. --no-services skips them.
+if (SERVICES) {
+  const listening = (port) => new Promise((resolve) => { const s = require("net").createConnection({ host: "127.0.0.1", port }); s.once("connect", () => { s.destroy(); resolve(true); }); s.once("error", () => resolve(false)); });
+  const services = [
+    { name: "gate", cmd: "node", args: [path.join(__dirname, "lp-gate.mjs")], port: 8790 },
+    { name: "mcp-remote", cmd: "bash", args: [path.join(__dirname, "run-mcp-remote.sh")], port: Number(process.env.LP_MCP_PORT || 8788), needs: path.join(__dirname, ".env.mcp") },
+  ];
+  // The Robinhood LP pool scanner (a separate project) when SCANNER_DIR points at it; its chat
+  // settings come from <scanner>/.env or ~/.config/robinhood-lp.env, never printed.
+  const scannerDir = process.env.SCANNER_DIR || "";
+  if (scannerDir && fs.existsSync(path.join(scannerDir, "server.js"))) {
+    services.push({ name: "scanner", cmd: "bash", cwd: scannerDir, port: 3847, needs: path.join(scannerDir, "server.js"),
+      args: ["-c", 'set -a; [ -f "$HOME/.config/robinhood-lp.env" ] && . "$HOME/.config/robinhood-lp.env"; [ -f .env ] && . .env; set +a; mkdir -p .cache; exec node server.js'] });
+  }
+  async function startService(svc) {
+    if (svc.needs && !fs.existsSync(svc.needs)) return console.log(`${svc.name}: skipped (${path.basename(svc.needs)} missing)`);
+    if (svc.port && (await listening(svc.port))) return console.log(`${svc.name}: already running on :${svc.port}`);
+    const child = spawn(svc.cmd, svc.args, { cwd: svc.cwd || __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    svc.child = child; svc.startedAt = Date.now();
+    const relay = (d) => { for (const line of d.toString().split("\n")) if (line.trim()) console.log(`${svc.name}: ${line}`); };
+    child.stdout.on("data", relay); child.stderr.on("data", relay);
+    child.on("exit", (code) => {
+      svc.child = null;
+      const upMs = Date.now() - svc.startedAt;
+      const delay = upMs < 30000 ? 60000 : 5000; // a service that dies at once is retried a minute later
+      console.log(`${svc.name}: exited ${code}; restarting in ${delay / 1000} s`);
+      setTimeout(() => startService(svc).catch(() => {}), delay);
+    });
+    child.on("error", (err) => console.error(`${svc.name}: ${err.message}`));
+    console.log(`${svc.name}: started (pid ${child.pid})`);
+  }
+  for (const svc of services) startService(svc).catch((err) => console.error(`${svc.name}: ${err.message}`));
+  // Tailscale: a one-shot script that brings the daemon up and (re)publishes the funnels.
+  if (fs.existsSync(path.join(__dirname, "run-tailscale.sh"))) {
+    const ts = spawn("bash", [path.join(__dirname, "run-tailscale.sh")], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    let out = "";
+    ts.stdout.on("data", (d) => { out += d; }); ts.stderr.on("data", (d) => { out += d; });
+    ts.on("close", (code) => console.log(`tailscale: ${code === 0 ? "funnel on" : "exited " + code + " — " + out.trim().split("\n").pop()}`));
+  }
+  process.on("exit", () => { for (const svc of services) if (svc.child) try { svc.child.kill(); } catch {} });
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { for (const svc of services) if (svc.child) try { svc.child.kill(); } catch {} process.exit(0); });
 }
 
 server.listen(PORT, HOST, () => {

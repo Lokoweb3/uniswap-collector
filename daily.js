@@ -89,7 +89,7 @@ function build(d) {
   // Guardian
   const m = d.memecoins;
   if (m) {
-    if (m.stale) lines.push("🛡️ Guardian NOT reporting — start it with ./start-all.sh");
+    if (m.stale) lines.push("🛡️ Guardian NOT reporting — restart the dashboard (./start-all.sh)");
     else {
       const ps = (m.positions || []).filter((x) => !x.closed);
       const flagged = ps.filter((x) => x.status !== "green");

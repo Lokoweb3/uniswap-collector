@@ -1,84 +1,34 @@
 #!/usr/bin/env bash
-# After a WSL restart: bring up the dashboard, the user-space Tailscale
-# tunnel, and the remote MCP server, each only if it is not already running.
-# Logs: dashboard.log, mcp-remote.log, ~/.local/state/tailscale/tailscaled.log
+# After a WSL restart: one command, one process, one log.
+#
+#   ./start-all.sh
+#
+# server.js is the dashboard and, in the same process, the risk guardian (60 s),
+# fee auto-collect (15 min), the nightly ledger backup (02:00 local) and the
+# supervisor for the companion services: the passphrase gate (lp-gate.mjs), the
+# remote MCP server (run-mcp-remote.sh, when .env.mcp exists), the Tailscale
+# funnel (run-tailscale.sh) and the pool scanner (when SCANNER_DIR is set).
+# Everything logs to server.log. The 09:00 collector task is separate
+# (windows-task.ps1 / crontab).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
-# Secrets for the dashboard (Telegram alerts, Blockscout key) live in ./.env as
-# KEY=value lines; exported into the server's environment only, never printed.
+# Secrets (Telegram, Blockscout, chat provider) live in ./.env as KEY=value
+# lines; exported into the server's environment only, never printed.
 if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
 # In-site chat (chat.js) needs ANTHROPIC_API_KEY or OLLAMA_API_KEY. When ./.env
-# has neither, reuse the scanner's chat settings (same variable names) so one
-# key serves both chat panels. Only the chat variables are imported, never printed.
+# has neither, reuse the scanner's chat settings (same variable names).
 if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OLLAMA_API_KEY:-}" ]; then
   for f in "$HOME/.config/robinhood-lp.env" "${SCANNER_DIR:-/nonexistent}/.env"; do
     [ -f "$f" ] || continue
     set -a; . <(grep -E '^(ANTHROPIC_API_KEY|OLLAMA_API_KEY|OLLAMA_HOST|CHAT_MODEL|CHAT_PROVIDER|CHAT_EFFORT)=' "$f"); set +a
   done
 fi
+export SCANNER_DIR="${SCANNER_DIR:-}"
 
-# Process checks. `pgrep -f` would match this script's own command line (and
-# any shell that mentions the pattern), so processes are found by their exact
-# argv[0..] with pgrep -x on the command name plus an anchored full-line match
-# over /proc, and ports by ss. listening PORT -> 0 when something listens.
-listening() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":$1\$"; }
-running() { # running <regex over the full command line>, excluding this shell and its children
-  for d in /proc/[0-9]*; do
-    [ "${d#/proc/}" = "$$" ] && continue
-    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
-    case "$cmd" in *"$0"*) continue ;; esac
-    printf '%s' "$cmd" | grep -Eq "$1" && return 0
-  done
-  return 1
-}
-
-if listening 8787; then
-  echo "dashboard: running (port 8787 in use$(running '^node server\.js --port=8787 ' || echo ', by a process not started by this script'))"
-else
-  # (the scanner is also a `node server.js`, so only the port decides)
-  nohup node server.js --port=8787 > dashboard.log 2>&1 &
-  echo "dashboard: started"
+if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':8787$'; then
+  echo "dashboard: already running on :8787 (stop it first to restart: ./stop-all.sh)"
+  exit 0
 fi
-./run-tailscale.sh >/dev/null 2>&1 && echo "tailscale: funnel on" || echo "tailscale: check ~/.local/state/tailscale/tailscaled.log"
-if ! running '^node .*lp-mcp-remote\.mjs' && ! listening 8788; then
-  nohup ./run-mcp-remote.sh > mcp-remote.log 2>&1 &
-  echo "remote mcp: started"
-else echo "remote mcp: running"; fi
-if ! running '^node lp-gate\.mjs'; then
-  nohup node lp-gate.mjs > gate.log 2>&1 < /dev/null &
-  echo "gate: started"
-else echo "gate: running"; fi
-# Robinhood LP pool scanner (separate project on the Windows drive). Its chat
-# panel needs OLLAMA_API_KEY (or OLLAMA_HOST / ANTHROPIC_API_KEY); put those in
-# <scanner dir>/.env or ~/.config/robinhood-lp.env as KEY=value lines.
-SCANNER_DIR="${SCANNER_DIR:-/mnt/c/Users/<you>/Robinhood-LP}"
-if [ -f "$SCANNER_DIR/server.js" ]; then
-  if ! curl -sf http://127.0.0.1:3847/api/pools >/dev/null 2>&1; then
-    ( set -a
-      [ -f "$HOME/.config/robinhood-lp.env" ] && . "$HOME/.config/robinhood-lp.env"
-      [ -f "$SCANNER_DIR/.env" ] && . "$SCANNER_DIR/.env"
-      set +a
-      cd "$SCANNER_DIR" && mkdir -p .cache && nohup setsid node server.js >> .cache/server.log 2>&1 < /dev/null & )
-    echo "scanner: started"
-  else echo "scanner: running"; fi
-fi
-# Nightly ledger backup at 02:00 (see nightly.sh / backup-ledgers.sh).
-if ! running '^(/usr/bin/env )?bash \./nightly\.sh'; then
-  nohup ./nightly.sh > /dev/null 2>&1 < /dev/null &
-  echo "nightly: started"
-else echo "nightly: running"; fi
-# === fee-auto-collect === memecoin fee auto-collect loop (memecoin-collect.js): runs the
-# collector when a memecoin position holds more than memecoinCollect.minUsd of fees.
-if ! running '^node memecoin-collect\.js'; then
-  nohup node memecoin-collect.js >> memecoin-collect.log 2>&1 < /dev/null &
-  echo "memecoin-collect: started"
-else echo "memecoin-collect: running"; fi
-
-# === memecoin-guardian ===
-# Real-time watcher for the positions listed under `memecoins` in config.json.
-if ! running '^node memecoin-guardian\.js'; then
-  nohup node memecoin-guardian.js >> memecoin-guardian.log 2>&1 < /dev/null &
-  echo "memecoin guardian: started"
-else echo "memecoin guardian: running"; fi
-# === end memecoin-guardian ===
+nohup node server.js --port=8787 >> server.log 2>&1 < /dev/null &
+echo "dashboard: started (pid $!) — everything logs to server.log"

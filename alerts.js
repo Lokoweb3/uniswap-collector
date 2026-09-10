@@ -192,7 +192,7 @@ function create({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEG
       for (const [name, l] of Object.entries(loops)) {
         const k = `loop:${name}`;
         if (l.stale) {
-          if (!state.sent[k]) await say(k, `⚠️ The ${l.label} has not reported for ${l.ageMin == null ? "ever (never started?)" : Math.round(l.ageMin) + " min"}. It should write every ${l.staleAfterMin >= 45 ? "15" : "1"} min. Check start-all.sh / its log.`, 0);
+          if (!state.sent[k]) await say(k, `⚠️ The ${l.label} has not reported for ${l.ageMin == null ? "ever (never started?)" : Math.round(l.ageMin) + " min"}. It should write every ${l.staleAfterMin >= 45 ? "15" : "1"} min. Check server.log.`, 0);
         } else if (state.sent[k]) {
           delete state.sent[k];
           save();

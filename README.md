@@ -26,10 +26,12 @@ with a wallet signature) and `/approve-v3`, `/approve-v4` (operator approvals). 
 header switches the dashboard between the main wallet, all wallets, and each watched wallet; see
 "Watching other wallets" below.
 
-`./start-all.sh` runs everything: the dashboard server (which also hosts the 10-minute tick with
-alerts, risk guardian, pool scout, price log, backups of state and the weekly digest), the memecoin
-guardian, the fee auto-collect loop, the nightly backup loop, the public gate, the remote MCP server
-and the Tailscale tunnel. `npm test` checks all of it.
+`./start-all.sh` starts one process, `node server.js`, which is everything: the dashboard, the
+10-minute tick (alerts, pool scout, price log, state snapshots, daily summary, weekly digest), the
+risk guardian (every 60 s), fee auto-collect (every 15 min), the nightly ledger backup (02:00 local)
+and the supervisor for the companion services it starts as children and restarts if they exit: the
+public gate, the remote MCP server, the Tailscale funnel and the pool scanner. One log: `server.log`.
+`./stop-all.sh` stops it. `npm test` checks all of it.
 
 The page can also drive the collector: a Collect button runs
 `run-collector.sh collect` on this machine, and an Arm form caches the operator
@@ -368,8 +370,8 @@ operator key while the collector is armed; proceeds always go to the position's 
 
 ### Risk guardian (`memecoin-guardian.js`)
 
-The one watcher for every open position of every wallet, v3 and v4 (started by `start-all.sh`,
-`npm run guardian`). It reads each position and its pool straight from the chain, v4 every 60 s and
+The one watcher for every open position of every wallet, v3 and v4 (a 60-second timer inside
+server.js; `npm run guardian` runs one cycle by hand). It reads each position and its pool from the chain, v4 every 60 s and
 v3 every 5 min, keeps a 24-hour history and derives a status (`guardian-logic.js`). Positions listed
 under `memecoins` in config.json carry their own rule block; every other open position is discovered
 from the dashboard (`memecoin-discovered.json`; entry price from the hourly price log at the mint,
@@ -430,16 +432,17 @@ delivery cover them. Every sale and every skip, with its reason, is written to `
 
 ### Fee auto-collect (`memecoin-collect.js`)
 
-Every 15 min (`memecoinCollect` in config.json: `minUsd` 50, `minIntervalMinutes` 15; the loop re-reads config each cycle) it checks the
+Every 15 min, as a timer inside server.js (`memecoinCollect` in config.json: `minUsd` 50, `minIntervalMinutes` 15; re-read each cycle), it checks the
 memecoin positions' uncollected fees (every v4 position in the main wallet and the collected watched wallets, plus the ids in `memecoins`) and, when one exceeds the threshold and the collector is armed,
 runs the normal `./run-collector.sh full --quiet` (all wallets, vault split included), logs to
 `memecoin-collect-log.json` and reports "💰 Collected …" per position. While locked it nudges once per
 lock episode. It also verifies the first vault split (ledger entry, TBA balance, owner transfer) and
 reports it once. The 09:00 task, the Collect button and this loop all start the same script, which
 takes a lock file (`.collector.lock`, `flock`) so only one signing run happens at a time; a second
-starter logs "another collector run is in progress" and exits. The loop writes a heartbeat every cycle
-and the guardian rewrites its status every minute; the server's watchdog alerts once when either stops
-reporting (10 / 45 min) and once when it is back, and the dashboard shows a warning chip meanwhile.
+starter logs "another collector run is in progress" and exits. The server's watchdog knows when its
+own timers last completed a cycle (guardian, auto-collect, backup); it alerts once when one is late
+(10 / 45 min / 26 h) and once when it is back, and the dashboard shows a warning chip meanwhile.
+`node memecoin-collect.js --once --dry-run` evaluates the trigger once against the running dashboard.
 
 ### Analytics additions
 
@@ -635,7 +638,7 @@ LP_BACKUP_HOST=user@host                   # VPS for nightly ledger backups
 BLOCKSCOUT_API_KEY=proapi_...
 EOF2
 chmod 600 .env
-./start-all.sh                             # dashboard :8787, gate, remote MCP, tailscale, nightly backup loop
+./start-all.sh                             # one process: dashboard :8787 + guardian, auto-collect, backup, gate, remote MCP, tailscale
 npm test                                   # alert tests + headless smoke test of every page (needs Windows Chrome from WSL)
 ```
 
@@ -779,7 +782,7 @@ sets a signed cookie for 30 days; the signing secret is `gate-state.json` (delet
 Only GET/HEAD reach the dashboard and `/api/collect`, `/api/unlock`, `/api/lock` are refused outright, because
 those endpoints trust loopback and everything behind a proxy is loopback. The scanner also accepts
 `POST /api/chat` and `/api/chat/reset`. Five wrong passphrases lock an address for 15 minutes; `gate.log` records logins.
-`start-all.sh` starts the gate; `run-tailscale.sh` publishes the two Funnel ports. `/__gate/logout` signs out.
+The dashboard process starts the gate; `run-tailscale.sh` publishes the two Funnel ports. `/__gate/logout` signs out.
 
 ## Watching other wallets
 
@@ -866,6 +869,12 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- One process: the risk guardian, fee auto-collect and the nightly backup are timers inside
+  server.js; the gate, remote MCP server, Tailscale funnel and pool scanner are supervised children
+  of it. `./start-all.sh` is one command, `./stop-all.sh` its opposite, `server.log` the one log.
+  The watchdog reads its own timers instead of heartbeat files. `nightly.sh` is gone;
+  `POST /api/backup` (loopback) runs a backup on demand. A second server (the smoke test, a
+  read-only copy) runs none of this.
 - Exit rules merged into the guardian: one risk engine over every open position of every wallet
   (v3 and v4), one rule block per position (`alertPct`, `closePct`, `outOfRangeMinutes`,
   `tvlDropPct`, `feeFloorPerHour`, `autoClose`, `alertOnly`), one Telegram message per event, one

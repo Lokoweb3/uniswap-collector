@@ -2,12 +2,13 @@
 /**
  * memecoin-collect.js — collect memecoin fees as soon as they are worth it.
  *
- * Every 15 minutes: read the dashboard's /api/positions and /api/watch, find
- * memecoin positions (every v4 position in the main wallet and the collected
- * watched wallets, plus config.json `memecoins` ids) whose uncollected fees exceed `memecoinCollect.minUsd`
- * (default $20), and run `./run-collector.sh full --quiet` — the normal
- * collector, which handles every wallet and the 10% LOKOVault split — instead
- * of waiting for the 09:00 run. At most one auto run per `minIntervalMinutes`.
+ * Every 15 minutes (a timer inside server.js): from the dashboard's own
+ * position data, find memecoin positions (every v4 position in the main
+ * wallet and the collected watched wallets, plus config.json `memecoins` ids)
+ * whose uncollected fees exceed `memecoinCollect.minUsd` (default $20), and
+ * run `./run-collector.sh full --quiet` — the normal collector, which handles
+ * every wallet and the LOKOVault split — instead of waiting for the 09:00 run.
+ * At most one auto run per `minIntervalMinutes`.
  *
  * The collector only signs while armed; when it is locked this sends one
  * Telegram nudge per lock episode (then at most every 6 h) and tries again
@@ -15,10 +16,11 @@
  *
  * First-split verification: until fee-split-ledger.json holds its first "ok"
  * entry, check every cycle; then confirm the TBA's USDG balance, the owner
- * transfer in the tx receipt and /api/treasury, and send one "verified" note.
+ * transfer in the tx receipt and the treasury view, and send one "verified" note.
  *
- *   node memecoin-collect.js                # loop (started by start-all.sh)
- *   node memecoin-collect.js --once         # one evaluation
+ * In-process: create({ dir, positions, watched, treasury, alerts, log }).cycle()
+ * Standalone (reads the running dashboard over HTTP):
+ *   node memecoin-collect.js --once             # one evaluation
  *   node memecoin-collect.js --once --dry-run   # evaluate, never run the collector
  *   --port=8787   dashboard port (or LP_DASHBOARD_PORT)
  */
@@ -32,7 +34,6 @@ const HERE = __dirname;
 const LOG_FILE = path.join(HERE, "memecoin-collect-log.json");
 const STATE_FILE = path.join(HERE, "memecoin-collect-state.json");
 const LEDGER_FILE = path.join(HERE, "fee-split-ledger.json");
-const CYCLE_MS = 15 * 60 * 1000;
 const LOCKED_REPEAT_MS = 6 * 3600 * 1000;
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 const USDG_DECIMALS = 6;
@@ -183,191 +184,186 @@ function collectMessages(parsed, trigger) {
 // Runtime
 // ---------------------------------------------------------------------------
 
-async function getJson(pathname) {
-  const r = await fetch(`${BASE}${pathname}`, { signal: AbortSignal.timeout(20000) });
-  return r.json();
-}
+/**
+ * create({ dir, positions, watched, treasury, alerts, log })
+ *   positions  () => the dashboard's main-wallet payload (with `unlock`) or null
+ *   watched    () => the watched-wallet list or null
+ *   treasury   async () => the treasury view ({ ok, totalSplitUsdg }) or null
+ *   alerts     alerts.js instance or null
+ */
+function create({ dir = HERE, positions = () => null, watched = () => null, treasury = async () => null, alerts = null, log = stamp, armUrl = "the dashboard" } = {}) {
+  const LOG = path.join(dir, "memecoin-collect-log.json");
+  const STATE = path.join(dir, "memecoin-collect-state.json");
+  const LEDGER = path.join(dir, "fee-split-ledger.json");
+  const CONFIG = path.join(dir, "config.json");
+  let lastCycleAt = 0, running = false;
 
-function runCollector() {
-  return new Promise((resolve) => {
-    const child = spawn(path.join(HERE, "run-collector.sh"), ["full", "--quiet"], { cwd: HERE, env: process.env });
-    let out = "";
-    child.stdout.on("data", (d) => (out += d));
-    child.stderr.on("data", (d) => (out += d));
-    child.on("close", (code) => resolve({ code, out }));
-    child.on("error", (err) => resolve({ code: -1, out: `${out}\n${err.message}` }));
-  });
-}
-
-let telegram = null;
-async function notify(text) {
-  try {
-    if (!telegram) telegram = require("./alerts").create({ log: { error: (...a) => stamp(a.join(" ")) } });
-    if (!telegram.enabled) return false;
-    return await telegram.send(text);
-  } catch (err) {
-    stamp(`telegram: ${err.message}`);
-    return false;
+  function loadConfig() {
+    const cfg = readJson(CONFIG, {});
+    const mc = cfg.memecoinCollect || {};
+    return { cfg, enabled: mc.enabled !== false, minUsd: Number(mc.minUsd ?? 20), minIntervalMinutes: Number(mc.minIntervalMinutes ?? 30),
+      memecoins: Array.isArray(cfg.memecoins) ? cfg.memecoins : null, tradingLabel: mc.tradingWalletLabel || "Trading" };
   }
-}
-
-function appendLog(entry) {
-  const rows = readJson(LOG_FILE, []);
-  rows.push(entry);
-  while (rows.length > 2000) rows.shift();
-  writeJson(LOG_FILE, rows);
-}
-
-async function evaluate({ dryRun }) {
-  const conf = loadConfig();
-  const state = readJson(STATE_FILE, {});
-  if (!conf.enabled) return stamp("memecoinCollect.enabled is false; idle");
-  let positions, watch;
-  try {
-    [positions, watch] = await Promise.all([getJson("/api/positions"), getJson("/api/watch")]);
-  } catch (err) {
-    return stamp(`dashboard unreachable on :${PORT}: ${err.message}`);
+  function runCollector() {
+    return new Promise((resolve) => {
+      const child = spawn(path.join(dir, "run-collector.sh"), ["full", "--quiet"], { cwd: dir, env: process.env });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      child.on("close", (code) => resolve({ code, out }));
+      child.on("error", (err) => resolve({ code: -1, out: `${out}\n${err.message}` }));
+    });
   }
-  const list = memecoinPositions({ positions, watch, memecoins: conf.memecoins, tradingLabel: conf.tradingLabel });
-  const trigger = pickTrigger(list, conf.minUsd);
-  const decision = shouldRun({ trigger, lastRunAt: state.lastRunAt, minIntervalMinutes: conf.minIntervalMinutes });
-  stamp(`${list.length} memecoin position(s): ${list.map((p) => `${p.pair} $${p.feesUsd.toFixed(2)}`).join(", ") || "none"} · threshold $${conf.minUsd} · ${decision.reason}`);
-  if (!decision.run) return;
-
-  const armed = !!(positions.unlock && positions.unlock.armed);
-  if (!armed) {
-    const since = state.lockedNoticeAt || 0;
-    if (Date.now() - since > LOCKED_REPEAT_MS) {
-      const text = `💰 $${trigger.feesUsd.toFixed(2)} uncollected on ${trigger.pair} but the collector is locked — arm at ${BASE}/arm`;
-      stamp(text);
-      if (!dryRun) {
-        await notify(text);
-        state.lockedNoticeAt = Date.now();
-        writeJson(STATE_FILE, state);
-      }
-    } else stamp("collector locked; nudge already sent this episode");
-    appendLog({ timestamp: new Date().toISOString(), trigger, ranCollector: false, status: "locked", dryRun });
-    return;
+  async function notify(text) {
+    try {
+      if (!alerts || !alerts.enabled) return false;
+      return await alerts.send(text);
+    } catch (err) {
+      log(`telegram: ${err.message}`);
+      return false;
+    }
   }
-  delete state.lockedNoticeAt;
-
-  if (dryRun) {
-    stamp(`DRY RUN: would run ./run-collector.sh full --quiet now (trigger ${trigger.pair} #${trigger.tokenId}, $${trigger.feesUsd.toFixed(2)})`);
-    appendLog({ timestamp: new Date().toISOString(), trigger, ranCollector: false, status: "dry-run" });
-    return;
+  function appendLog(entry) {
+    const rows = readJson(LOG, []);
+    rows.push(entry);
+    while (rows.length > 2000) rows.shift();
+    writeJson(LOG, rows);
   }
 
-  stamp(`running the collector (trigger ${trigger.pair} #${trigger.tokenId}, $${trigger.feesUsd.toFixed(2)})`);
-  state.lastRunAt = Date.now();
-  writeJson(STATE_FILE, state);
-  const { code, out } = await runCollector();
-  const parsed = parseCollectorOutput(out);
-  const splitUsdg = parsed.splits.reduce((s, x) => s + x.usdg, 0);
-  const status = parsed.locked ? "locked" : code !== 0 ? "error" : parsed.collected.length ? "collected" : "nothing-eligible";
-  appendLog({
-    timestamp: new Date().toISOString(),
-    trigger,
-    ranCollector: true,
-    exitCode: code,
-    collected: parsed.collected,
-    splits: parsed.splits,
-    sends: parsed.sends,
-    failures: parsed.failures,
-    splitUsdg: +splitUsdg.toFixed(6),
-    status,
-    output: out.split("\n").slice(-25).join("\n"),
-  });
-  stamp(`collector finished: ${status} (${parsed.collected.length} collected, split ${splitUsdg.toFixed(2)} USDG, ${parsed.failures.length} failure line(s))`);
-  for (const m of collectMessages(parsed, trigger)) await notify(m);
-  if (status === "error") await notify(`⚠️ Auto-collect run exited with code ${code}; see memecoin-collect-log.json`);
-}
+  async function evaluate({ dryRun } = {}) {
+    const conf = loadConfig();
+    const state = readJson(STATE, {});
+    if (!conf.enabled) return log("memecoinCollect.enabled is false; idle");
+    const pos = positions(), w = watched();
+    if (!pos || !pos.ok) return log("no position data yet");
+    const list = memecoinPositions({ positions: pos, watch: w ? { ok: true, wallets: w } : null, memecoins: conf.memecoins, tradingLabel: conf.tradingLabel });
+    const trigger = pickTrigger(list, conf.minUsd);
+    const decision = shouldRun({ trigger, lastRunAt: state.lastRunAt, minIntervalMinutes: conf.minIntervalMinutes });
+    log(`${list.length} memecoin position(s): ${list.map((p) => `${p.pair} $${p.feesUsd.toFixed(2)}`).join(", ") || "none"} · threshold $${conf.minUsd} · ${decision.reason}`);
+    if (!decision.run) return;
 
-// ---------------------------------------------------------------------------
-// First vault split verification
-// ---------------------------------------------------------------------------
+    const armed = !!(pos.unlock && pos.unlock.armed);
+    if (!armed) {
+      const since = state.lockedNoticeAt || 0;
+      if (Date.now() - since > LOCKED_REPEAT_MS) {
+        const text = `💰 $${trigger.feesUsd.toFixed(2)} uncollected on ${trigger.pair} but the collector is locked — arm it from ${armUrl}`;
+        log(text);
+        if (!dryRun) {
+          await notify(text);
+          state.lockedNoticeAt = Date.now();
+          writeJson(STATE, state);
+        }
+      } else log("collector locked; nudge already sent this episode");
+      appendLog({ timestamp: new Date().toISOString(), trigger, ranCollector: false, status: "locked", dryRun });
+      return;
+    }
+    delete state.lockedNoticeAt;
 
-async function verifyFirstSplit({ dryRun }) {
-  const state = readJson(STATE_FILE, {});
-  if (state.firstSplitVerifiedAt) return;
-  const ledger = readJson(LEDGER_FILE, []);
-  const first = ledger.find((r) => r.status === "ok" && Number(r.splitUsdg) > 0);
-  if (!first) return stamp("first vault split: not recorded yet");
-  const cfg = readJson(path.join(HERE, "config.json"), {});
-  const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId));
-  const checks = {};
-  try {
-    const usdg = new ethers.Contract(USDG, ["function balanceOf(address) view returns (uint256)"], provider);
-    const bal = Number(ethers.formatUnits(await usdg.balanceOf(first.tbaAddress), USDG_DECIMALS));
-    checks.tbaBalance = { value: bal, ok: bal >= Number(first.splitUsdg) - 1e-6 };
-  } catch (err) {
-    checks.tbaBalance = { ok: false, error: err.shortMessage || err.message };
+    if (dryRun) {
+      log(`DRY RUN: would run ./run-collector.sh full --quiet now (trigger ${trigger.pair} #${trigger.tokenId}, $${trigger.feesUsd.toFixed(2)})`);
+      appendLog({ timestamp: new Date().toISOString(), trigger, ranCollector: false, status: "dry-run" });
+      return;
+    }
+
+    log(`running the collector (trigger ${trigger.pair} #${trigger.tokenId}, $${trigger.feesUsd.toFixed(2)})`);
+    state.lastRunAt = Date.now();
+    writeJson(STATE, state);
+    const { code, out } = await runCollector();
+    const parsed = parseCollectorOutput(out);
+    const splitUsdg = parsed.splits.reduce((s, x) => s + x.usdg, 0);
+    const status = parsed.locked ? "locked" : code !== 0 ? "error" : parsed.collected.length ? "collected" : "nothing-eligible";
+    appendLog({ timestamp: new Date().toISOString(), trigger, ranCollector: true, exitCode: code, collected: parsed.collected, splits: parsed.splits, sends: parsed.sends, failures: parsed.failures,
+      splitUsdg: +splitUsdg.toFixed(6), status, output: out.split("\n").slice(-25).join("\n") });
+    log(`collector finished: ${status} (${parsed.collected.length} collected, split ${splitUsdg.toFixed(2)} USDG, ${parsed.failures.length} failure line(s))`);
+    for (const m of collectMessages(parsed, trigger)) await notify(m);
+    if (status === "error") await notify(`⚠️ Auto-collect run exited with code ${code}; see memecoin-collect-log.json`);
   }
-  try {
-    const rc = first.ownerTxHash ? await provider.getTransactionReceipt(first.ownerTxHash) : null;
-    let sent = null;
-    if (rc) {
-      for (const l of rc.logs) {
-        if (l.address.toLowerCase() === USDG.toLowerCase() && l.topics[0] === TRANSFER_TOPIC) {
-          const to = ethers.getAddress("0x" + l.topics[2].slice(26));
-          if (first.walletAddress && to.toLowerCase() === String(first.walletAddress).toLowerCase()) sent = Number(ethers.formatUnits(BigInt(l.data), USDG_DECIMALS));
-          else if (!first.walletAddress && sent == null) sent = Number(ethers.formatUnits(BigInt(l.data), USDG_DECIMALS));
+
+  // First vault split verification: once, after the first "ok" ledger row.
+  async function verifyFirstSplit({ dryRun } = {}) {
+    const state = readJson(STATE, {});
+    if (state.firstSplitVerifiedAt) return;
+    const ledger = readJson(LEDGER, []);
+    const first = ledger.find((r) => r.status === "ok" && Number(r.splitUsdg) > 0);
+    if (!first) return;
+    const cfg = readJson(CONFIG, {});
+    const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId), { staticNetwork: true });
+    const checks = {};
+    try {
+      const usdg = new ethers.Contract(USDG, ["function balanceOf(address) view returns (uint256)"], provider);
+      const bal = Number(ethers.formatUnits(await usdg.balanceOf(first.tbaAddress), USDG_DECIMALS));
+      checks.tbaBalance = { value: bal, ok: bal >= Number(first.splitUsdg) - 1e-6 };
+    } catch (err) {
+      checks.tbaBalance = { ok: false, error: err.shortMessage || err.message };
+    }
+    try {
+      const rc = first.ownerTxHash ? await provider.getTransactionReceipt(first.ownerTxHash) : null;
+      let sent = null;
+      if (rc) {
+        for (const l of rc.logs) {
+          if (l.address.toLowerCase() === USDG.toLowerCase() && l.topics[0] === TRANSFER_TOPIC) {
+            const to = ethers.getAddress("0x" + l.topics[2].slice(26));
+            if (first.walletAddress && to.toLowerCase() === String(first.walletAddress).toLowerCase()) sent = Number(ethers.formatUnits(BigInt(l.data), USDG_DECIMALS));
+            else if (!first.walletAddress && sent == null) sent = Number(ethers.formatUnits(BigInt(l.data), USDG_DECIMALS));
+          }
         }
       }
+      checks.ownerTransfer = { value: sent, ok: sent != null && Math.abs(sent - Number(first.ownerReceived)) < 0.01 };
+    } catch (err) {
+      checks.ownerTransfer = { ok: false, error: err.shortMessage || err.message };
     }
-    checks.ownerTransfer = { value: sent, ok: sent != null && Math.abs(sent - Number(first.ownerReceived)) < 0.01 };
-  } catch (err) {
-    checks.ownerTransfer = { ok: false, error: err.shortMessage || err.message };
-  }
-  try {
-    const t = await getJson("/api/treasury");
-    checks.dashboard = { value: t.totalSplitUsdg, ok: t.ok && Number(t.totalSplitUsdg) >= Number(first.splitUsdg) - 1e-6 };
-  } catch (err) {
-    checks.dashboard = { ok: false, error: err.message };
-  }
-  const allOk = Object.values(checks).every((c) => c.ok);
-  const entry = { timestamp: new Date().toISOString(), firstSplit: first, checks, verified: allOk };
-  appendLog({ ...entry, type: "first-split-verification" });
-  stamp(`first vault split ${allOk ? "VERIFIED" : "check failed"}: ${JSON.stringify(checks)}`);
-  if (allOk) {
-    if (!dryRun) {
-      await notify(`✅ First vault split verified: $${Number(first.splitUsdg).toFixed(2)} to vault, $${Number(first.ownerReceived).toFixed(2)} to wallet (${first.wallet}, ${first.pair || "#" + first.positionId})`);
-      state.firstSplitVerifiedAt = Date.now();
-      writeJson(STATE_FILE, state);
+    try {
+      const t = await treasury();
+      checks.dashboard = { value: t && t.totalSplitUsdg, ok: !!t && t.ok && Number(t.totalSplitUsdg) >= Number(first.splitUsdg) - 1e-6 };
+    } catch (err) {
+      checks.dashboard = { ok: false, error: err.message };
     }
-  } else if (!dryRun && !state.firstSplitWarnedAt) {
-    await notify(`⚠️ First vault split recorded but a check failed: ${Object.entries(checks).filter(([, c]) => !c.ok).map(([k, c]) => `${k}${c.error ? " (" + c.error + ")" : ""}`).join(", ")}`);
-    state.firstSplitWarnedAt = Date.now();
-    writeJson(STATE_FILE, state);
+    const allOk = Object.values(checks).every((c) => c.ok);
+    appendLog({ timestamp: new Date().toISOString(), firstSplit: first, checks, verified: allOk, type: "first-split-verification" });
+    log(`first vault split ${allOk ? "VERIFIED" : "check failed"}: ${JSON.stringify(checks)}`);
+    if (allOk) {
+      if (!dryRun) {
+        await notify(`✅ First vault split verified: $${Number(first.splitUsdg).toFixed(2)} to vault, $${Number(first.ownerReceived).toFixed(2)} to wallet (${first.wallet}, ${first.pair || "#" + first.positionId})`);
+        writeJson(STATE, { ...readJson(STATE, {}), firstSplitVerifiedAt: Date.now() });
+      }
+    } else if (!dryRun && !state.firstSplitWarnedAt) {
+      await notify(`⚠️ First vault split recorded but a check failed: ${Object.entries(checks).filter(([, c]) => !c.ok).map(([k, c]) => `${k}${c.error ? " (" + c.error + ")" : ""}`).join(", ")}`);
+      writeJson(STATE, { ...readJson(STATE, {}), firstSplitWarnedAt: Date.now() });
+    }
   }
-}
 
-const HEARTBEAT_FILE = path.join(HERE, "memecoin-collect-heartbeat.json");
-async function cycle(opts) {
-  try {
-    await evaluate(opts);
-  } catch (err) {
-    stamp(`evaluate: ${err.message}`);
+  /** One evaluation; never runs twice at once. */
+  async function cycle(opts = {}) {
+    if (running) return log("previous cycle still running (collector in progress); skipped");
+    running = true;
+    try {
+      try { await evaluate(opts); } catch (err) { log(`evaluate: ${err.message}`); }
+      lastCycleAt = Date.now();
+      try { await verifyFirstSplit(opts); } catch (err) { log(`first-split check: ${err.message}`); }
+    } finally { running = false; }
   }
-  // Heartbeat for the dashboard's watchdog: written every cycle whatever happened.
-  try {
-    fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ at: Date.now(), pid: process.pid, dryRun: !!(opts && opts.dryRun) }));
-  } catch {}
-  try {
-    await verifyFirstSplit(opts);
-  } catch (err) {
-    stamp(`first-split check: ${err.message}`);
+
+  /** Settings and last activity for status views. */
+  function summary() {
+    const conf = loadConfig();
+    const state = readJson(STATE, {});
+    return { enabled: conf.enabled, minUsd: conf.minUsd, minIntervalMinutes: conf.minIntervalMinutes, lastRunAt: state.lastRunAt || null, lastCheckAt: lastCycleAt || null, running };
   }
+
+  return { cycle, summary, get lastCycleAt() { return lastCycleAt; } };
 }
 
 if (require.main === module) {
   const opts = { dryRun: flag("--dry-run") };
-  if (flag("--once")) {
-    cycle(opts).then(() => process.exit(0));
-  } else {
-    stamp(`memecoin auto-collect loop: every ${CYCLE_MS / 60000} min against ${BASE}${opts.dryRun ? " (dry run)" : ""}`);
-    cycle(opts);
-    setInterval(() => cycle(opts), CYCLE_MS);
-  }
+  let payload = null, wallets = null;
+  const getJson = async (p) => { const r = await fetch(`${BASE}${p}`, { signal: AbortSignal.timeout(20000) }); return r.json(); };
+  const c = create({ positions: () => payload, watched: () => wallets, treasury: () => getJson("/api/treasury"), alerts: (() => { try { return require("./alerts").create({ log: { error: (...a) => stamp(a.join(" ")) } }); } catch { return null; } })(), armUrl: `${BASE}/arm` });
+  (async () => {
+    try { [payload, wallets] = await Promise.all([getJson("/api/positions"), getJson("/api/watch").then((w) => w.wallets || [])]); } catch (err) { stamp(`dashboard unreachable on :${PORT}: ${err.message}`); process.exit(1); }
+    await c.cycle(opts);
+    if (!flag("--once")) stamp("the auto-collect loop now runs inside server.js; this command evaluates once");
+    process.exit(0);
+  })();
 }
 
-module.exports = { memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages };
+module.exports = { create, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages };

@@ -53,8 +53,8 @@ const MAIN_PORT = (cfg.dashboard && cfg.dashboard.port) || 8787;
 const LOOPS = PORT === MAIN_PORT && !READONLY && !process.argv.includes("--no-loops");
 const SERVICES = LOOPS && !process.argv.includes("--no-services");
 const STARTED_AT = Date.now();
-const timers = { guardian: { lastAt: 0 }, autoCollect: { lastAt: 0 }, backup: { lastAt: 0, lastResult: null } };
-let guardian = null, autoCollect = null, telegramAgent = null;
+const timers = { guardian: { lastAt: 0 }, autoCollect: { lastAt: 0 }, backup: { lastAt: 0, lastResult: null }, launch: { lastAt: 0 } };
+let guardian = null, autoCollect = null, telegramAgent = null, launchScanner = null;
 
 const CACHE_MS = 60_000;
 let cache = { at: 0, payload: null };
@@ -1396,6 +1396,15 @@ const server = http.createServer(async (req, res) => {
   // === memecoin-guardian ===
   // Memecoin Watch: status written by memecoin-guardian.js (a separate process),
   // and a loopback-only close that runs the guardian's --close (operator must be armed).
+  // Launch Watch: the launch scanner's last scan, candidates and recent alerts.
+  if (url.pathname === "/api/launches") {
+    res.setHeader("Content-Type", "application/json");
+    let st = null;
+    try { st = launchScanner ? launchScanner.status : JSON.parse(fs.readFileSync(path.join(__dirname, "launch-scanner-status.json"), "utf8")); } catch {}
+    const enabled = !!(cfg.launchScanner && cfg.launchScanner.enabled !== false);
+    res.writeHead(200);
+    return res.end(JSON.stringify({ ok: true, enabled, running: enabled && !!launchScanner, at: st ? st.at : 0, stale: !st || Date.now() - (st.at || 0) > 20 * 60 * 1000, ...(st || {}), settings: (launchScanner && launchScanner.settings) || cfg.launchScanner || {} }));
+  }
   // Nightly backup on demand (loopback-only; the scheduled run is a timer in this process).
   if (url.pathname === "/api/backup" && req.method === "POST") {
     res.setHeader("Content-Type", "application/json");
@@ -2039,6 +2048,7 @@ function loopHealth() {
   loops.guardian = { ageMin: ageOf(timers.guardian.lastAt), staleAfterMin: 10, label: "risk guardian" };
   if (cfg.memecoinCollect && cfg.memecoinCollect.enabled !== false) loops.autoCollect = { ageMin: ageOf(timers.autoCollect.lastAt), staleAfterMin: 45, label: "fee auto-collect" };
   loops.backup = { ageMin: ageOf(timers.backup.lastAt), staleAfterMin: 26 * 60, label: "nightly backup", lastResult: timers.backup.lastResult || null };
+  if (cfg.launchScanner && cfg.launchScanner.enabled !== false) loops.launch = { ageMin: ageOf(timers.launch.lastAt), staleAfterMin: 20, label: "launch scanner" };
   for (const l of Object.values(loops)) l.stale = l.ageMin > l.staleAfterMin;
   return loops;
 }
@@ -2413,6 +2423,21 @@ if (LOOPS) {
   { const st = backupState(); if (st.lastBackupAt) { timers.backup.lastAt = Date.parse(st.lastBackupAt) || 0; timers.backup.lastResult = { at: timers.backup.lastAt, code: st.lastBackupCode ?? null }; } }
   server.runBackup = runBackup;
   console.log(`loops: risk guardian every 60 s, fee auto-collect every 15 min, ledger backup daily at ${String(BACKUP_HOUR).padStart(2, "0")}:00`);
+
+  // Launch scanner (launch-scanner.js): new v4 pools scored every 5 minutes; alerts through the same Telegram path.
+  if (cfg.launchScanner && cfg.launchScanner.enabled !== false) {
+    launchScanner = require("./launch-scanner").create({ cfg, provider, alerts, log: stamp("launch"), dir: __dirname, wethUsd: () => (cache.payload && cache.payload.wethUsd) || lastPrices[WETH] || null });
+    let launchBusy = false;
+    async function launchTick() {
+      if (launchBusy) return;
+      launchBusy = true;
+      try { await launchScanner.scan(); timers.launch.lastAt = Date.now(); }
+      catch (err) { console.error("launch: scan failed:", err.shortMessage || err.message); }
+      finally { launchBusy = false; }
+    }
+    setTimeout(launchTick, 3 * 60 * 1000); // after the first build, off the guardian's beat
+    setInterval(launchTick, 5 * 60 * 1000);
+  }
 
   // Telegram: incoming messages are the VPS agent's (it polls the bot); this process only sends
   // alerts and remembers them on the chat's transcript. telegram.js keeps the outbound side and

@@ -453,6 +453,42 @@ before it is sent. Proceeds (ETH or USDG) join the normal sweep, so the vault sp
 delivery cover them. Every sale and every skip, with its reason, is written to `token-sales.json`
 (backed up nightly) and shows in the daily summary and the `token_lots` tool.
 
+### Launch scanner (`launch-scanner.js`) and Launch Watch
+
+Every 5 minutes (a timer in server.js, `launchScanner` in settings.json) the scanner reads every
+Uniswap v4 `Initialize` event since its last pass (the first pass looks back `maxAgeMinutes`)
+plus any pool the pool scanner's cache lists as created inside the window, keeps ETH- or
+USDG-quoted pools without hooks (or on a known launchpad hook), drops tokens that spawn more
+than 20 pools, and evaluates the newest tokens (`maxTokensPerScan` per pass, each at most every
+10 minutes):
+
+- **market cap** from Blockscout's supply × the pool's price, **pool age** from the Initialize
+  block, **token age** from the contract's creation transaction (a new pool for a token older
+  than `maxTokenAgeHours` is a listing, not a launch);
+- **LP value**: the liquidity within ±30% of the price, in USD (an estimate; the cache's TVL when
+  it has the pool), and the creator must not be the top holder;
+- **contract**: Blockscout verification and proxy status, `owner()` (renounced?), and the
+  bytecode scanned for mint / pause / blacklist / max-tx / tax setters (a flag only counts while
+  ownership is not renounced; `transferFrom` is standard ERC-20 and is not a flag);
+- **honeypot**: a real buy-and-sell round trip in one `eth_call` with a state override — a
+  keyless scratch address is given 1 ETH, Multicall3 runs the Universal Router buying 0.01 ETH of
+  the token (tokens kept in the router) then selling them back (router pays, ETH to the scratch),
+  and the ETH that comes back against the quoter's figure is the effective sell tax; USDG-quoted
+  pools go through the WETH/USDG pool both ways. A revert on the way back is a honeypot;
+- **holders**: count, top holder and creator share from Blockscout;
+- **volume**: PoolManager `Swap` events for the pool in the last 10 minutes (the trader's token
+  delta positive = a buy), buy count and buy ratio.
+
+Score 0-100: sweet-spot market cap ($75K-$200K) +20 (in range +10), verified +15, LP healthy
++20, sellable +25, holders spread +10, buy pressure +10. At `minScore` with every check
+passing, one Telegram message (group chat, fallback personal) with the numbers and the pool /
+DexScreener / Blockscout links; the same token at most once per `alertCooldownHours`, and one
+follow-up when its market cap triples. Read-only: no key, no transaction. State in
+`launch-scanner-state.json`, heartbeat and last results in `launch-scanner-status.json`
+(gitignored); `/api/launches` serves them; the dashboard's **Launch Watch** section shows the
+scanner state, today's counts, candidates scoring 50+ with their checks, and recent alerts. The
+watchdog treats a scanner that has not completed a pass in 20 minutes as late.
+
 ### Selling by hand: the Sell tab (`/wallet#sell`)
 
 For tokens that sit in a wallet outside the collector's reach (a closed position's other side,
@@ -927,6 +963,9 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Launch scanner: new v4 pools every 5 min, scored on market cap, contract, LP value, an
+  `eth_call` buy-and-sell round trip (honeypot / sell tax), holders and buy pressure; Telegram
+  alert at 70/100; Launch Watch section on the dashboard; `/api/launches`.
 - Sell tab on the Wallet page: quote and sell any token a wallet holds in its v4 pool, signed
   by the wallet in the browser (`/api/sell/tokens`, `/api/sell/quote`, `sell-v4.js quote()` and
   USDG-quoted pool discovery).

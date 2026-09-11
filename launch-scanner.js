@@ -249,7 +249,67 @@ function create({ cfg, provider, alerts = null, log = (m) => console.log(`launch
    * address funded by a state override. Returns { ok, bought, ethBack, quotedBack, sellTaxPct, error }.
    */
   async function honeypot(pool, dec) {
-    return { ok: null, error: "sell simulation not implemented yet" };
+    if (!ROUTER || !quoter || !pool.key) return { ok: null, error: "no router/quoter or pool key" };
+    const key = pool.key, token = pool.token;
+    const quoteAddr = key.currency0.toLowerCase() === token.toLowerCase() ? key.currency1 : key.currency0;
+    const buyPath = [], sellPath = [];
+    let currencyIn = ethers.ZeroAddress;
+    if (isUsdg(quoteAddr)) {
+      const eu = await ethUsdgPool();
+      if (!eu) return { ok: null, error: "no WETH/USDG pool for the USDG route" };
+      buyPath.push(hop(eu, eu.currency1)); // ETH -> USDG
+      buyPath.push(hop(key, token));       // USDG -> token
+      sellPath.push(hop(key, ethers.getAddress(USDG)), hop(eu, ethers.ZeroAddress));
+    } else {
+      buyPath.push(hop(key, token));
+      sellPath.push(hop(key, ethers.ZeroAddress));
+    }
+    const amountIn = ethers.parseEther("0.01");
+    const deadline = BigInt(Math.floor(now() / 1000) + 600);
+    const router = new ethers.Interface(ROUTER_ABI);
+    const mc = new ethers.Interface(MULTICALL_ABI);
+    const erc = new ethers.Interface(ERC20_ABI);
+    const buy = router.encodeFunctionData("execute", ["0x10", [swapInput({ currencyIn, path: buyPath, amountIn, minOut: 0n, recipient: ADDRESS_THIS, payerIsUser: true })], deadline]);
+    // Stage 1: buy, then read the router's token balance.
+    const stage1 = [
+      { target: token, allowFailure: true, value: 0n, callData: erc.encodeFunctionData("balanceOf", [ROUTER]) },
+      { target: ROUTER, allowFailure: true, value: amountIn, callData: buy },
+      { target: token, allowFailure: true, value: 0n, callData: erc.encodeFunctionData("balanceOf", [ROUTER]) },
+    ];
+    const override = { [SCRATCH]: { balance: ethers.toQuantity(ethers.parseEther("1")) } };
+    const call = async (calls) => {
+      const data = mc.encodeFunctionData("aggregate3Value", [calls]);
+      const raw = await provider.send("eth_call", [{ from: SCRATCH, to: MULTICALL3, data, value: ethers.toQuantity(calls.reduce((s, c) => s + c.value, 0n)) }, "latest", override]);
+      return mc.decodeFunctionResult("aggregate3Value", raw)[0];
+    };
+    let r1;
+    try { r1 = await call(stage1); } catch (err) { return { ok: false, error: `buy simulation failed: ${err.shortMessage || err.message}`.slice(0, 200) }; }
+    if (!r1[1].success) return { ok: false, error: "buy reverted", bought: 0 };
+    const before = r1[0].success && r1[0].returnData.length >= 66 ? BigInt(r1[0].returnData) : 0n;
+    const after = r1[2].success && r1[2].returnData.length >= 66 ? BigInt(r1[2].returnData) : 0n;
+    const bought = after - before;
+    if (bought <= 0n) return { ok: false, error: "buy delivered no tokens (transfer blocked or taxed to zero)", bought: 0 };
+    // Stage 2: buy again (fresh state), then sell what arrived, router pays, ETH to the scratch; read its ETH before and after.
+    const sell = router.encodeFunctionData("execute", ["0x10", [swapInput({ currencyIn: token, path: sellPath, amountIn: bought, minOut: 0n, recipient: SCRATCH, payerIsUser: false })], deadline]);
+    const stage2 = [
+      { target: MULTICALL3, allowFailure: true, value: 0n, callData: mc.encodeFunctionData("getEthBalance", [SCRATCH]) },
+      { target: ROUTER, allowFailure: true, value: amountIn, callData: buy },
+      { target: ROUTER, allowFailure: true, value: 0n, callData: sell },
+      { target: MULTICALL3, allowFailure: true, value: 0n, callData: mc.encodeFunctionData("getEthBalance", [SCRATCH]) },
+    ];
+    let r2;
+    try { r2 = await call(stage2); } catch (err) { return { ok: false, error: `sell simulation failed: ${err.shortMessage || err.message}`.slice(0, 200), bought: Number(ethers.formatUnits(bought, dec)) };
+    }
+    if (!r2[2].success) return { ok: false, error: "sell reverted — cannot sell back (honeypot or transfer restriction)", bought: Number(ethers.formatUnits(bought, dec)) };
+    const e0 = BigInt(r2[0].returnData), e1 = BigInt(r2[3].returnData);
+    // The 0.01 ETH left the scratch before the first balance read (msg.value), so the difference is the sell's proceeds alone.
+    const got = e1 - e0;
+    // Expected proceeds without token-side taxes: the quoter along the sell path.
+    let quotedBack = null;
+    try { const q = await quoter.quoteExactInput.staticCall({ exactCurrency: token, path: sellPath, exactAmount: bought }); quotedBack = BigInt(q[0]); } catch {}
+    const sellTaxPct = quotedBack && quotedBack > 0n ? Math.max(0, (1 - Number(got) / Number(quotedBack)) * 100) : null;
+    const roundTripPct = (Number(got) / Number(amountIn)) * 100;
+    return { ok: sellTaxPct == null ? roundTripPct > 50 : sellTaxPct <= st.maxSellTaxPct, bought: Number(ethers.formatUnits(bought, dec)), ethBack: Number(ethers.formatEther(got)), quotedBack: quotedBack != null ? Number(ethers.formatEther(quotedBack)) : null, sellTaxPct: sellTaxPct != null ? +sellTaxPct.toFixed(2) : null, roundTripPct: +roundTripPct.toFixed(1) };
   }
 
   async function volume(pool, head) {

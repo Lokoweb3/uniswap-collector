@@ -107,13 +107,18 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   clock += 10 * 60 * 1000;
   out = await w.check({ payload: mainPayload(true), watched: [lpr(true), trading], unlock: { armed: true }, keepalive: true });
   assert.strictEqual(out.length, 1); assert.match(out[0], /^🟢 LP Rewards · WETH \/ Index #972362 is back in range after 0\.5 h/);
-  // main wallet out of range alongside a watched one: two messages, main prefixed with its label; ids never collide
+  // main wallet out of range alongside a watched one: main prefixed with its label; ids never collide.
+  // The watched one flapped back out 10 min after "back in range", so its pool cool-down holds
+  // that alert until the window has passed (one message per pool per window).
   clock += 10 * 60 * 1000;
   out = await w.check({ payload: mainPayload(false), watched: [lpr(false, 1.3), trading], unlock: { armed: true }, keepalive: true });
-  assert.strictEqual(out.length, 2);
+  assert.strictEqual(out.length, 1);
   assert.ok(out.some((m) => /^🔴 Main · WETH \/ USDG #1030190 is out of range/.test(m)), "main wallet alert with owner label");
-  assert.ok(out.some((m) => /^🔴 LP Rewards · WETH \/ Index #972362 is out of range \(price above/.test(m)));
   assert.deepStrictEqual(Object.keys(w.state.outSince).sort(), ["0x0000000000000000000000000000000000000013:972362", "1030190"]);
+  clock += 25 * 60 * 1000;
+  out = await w.check({ payload: mainPayload(false), watched: [lpr(false, 1.3), trading], unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 1, "the held alert goes out once its pool's window has passed");
+  assert.match(out[0], /^🔴 LP Rewards · WETH \/ Index #972362 is out of range \(price above/);
 
   // 10. a run with failures in two wallets: one message naming both
   clock = new Date("2026-09-08T09:12:00").getTime();
@@ -146,7 +151,44 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.strictEqual(c.enabled, false);
   assert.deepStrictEqual(await c.check({ payload: { positions: [pos(false)] }, keepalive: true }), []);
 
+  // 9. One cool-down per pool, shared by every source (guardian, collect summary, range check).
+  const P = "v4:0xpool", Q = "v3:0xother";
+  const before = sent.length;
+  assert.strictEqual(await a.sendPool(P, "🛡️ guardian says something", { source: "guardian" }), true);
+  clock += 5 * 60 * 1000;
+  assert.strictEqual(await a.sendPool(P, "💰 Collected $9 from the same pool", { source: "collect" }), false, "held: the guardian spoke about this pool 5 min ago");
+  assert.strictEqual(a.state.held[P], 1);
+  assert.strictEqual(await a.sendPool(Q, "💰 Collected $9 from another pool", { source: "collect" }), true, "another pool is not affected");
+  assert.strictEqual(await a.sendPool(P, "🚨 DUMP ALERT same pool", { source: "guardian", urgent: true }), true, "urgent bypasses the window");
+  clock += 31 * 60 * 1000;
+  assert.strictEqual(await a.sendPool(P, "💰 Collected $12 from the same pool", { source: "collect" }), true, "window over");
+  assert.strictEqual(a.state.held[P], undefined, "held count clears once a message goes through");
+  assert.strictEqual(sent.length - before, 4);
+  // The range check shares it: a collect summary just went out for the pool, so the
+  // out-of-range alert is held and sent on a later tick once the window has passed.
+  const poolPos = (inRange) => ({ ...pos(inRange, inRange ? 0.5 : 1.3), tokenId: "77", nftId: "77", pool: { key: "v4:0xshared" } });
+  assert.strictEqual(await a.sendPool("v4:0xshared", "💰 Collected $30 from WETH / USDG", { source: "collect" }), true);
+  clock += 2 * 60 * 1000;
+  out = await a.check({ payload: { positions: [poolPos(false)] }, ops: run("2026-09-07T09:00:05", "collected 1 position"), unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.filter((m) => /#77 is out of range/.test(m)).length, 0, "held by the collect summary's cool-down");
+  clock += 40 * 60 * 1000;
+  out = await a.check({ payload: { positions: [poolPos(false)] }, ops: run("2026-09-07T09:00:05", "collected 1 position"), unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.filter((m) => /#77 is out of range/.test(m)).length, 1, "sent once the window passed");
+  clock += 10 * 60 * 1000;
+  out = await a.check({ payload: { positions: [poolPos(false)] }, ops: run("2026-09-07T09:00:05", "collected 1 position"), unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.filter((m) => /#77 is out of range/.test(m)).length, 0, "not repeated");
+  // Back in range closes the episode: it goes out even inside the window.
+  clock += 5 * 60 * 1000;
+  out = await a.check({ payload: { positions: [poolPos(true)] }, ops: run("2026-09-07T09:00:05", "collected 1 position"), unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.filter((m) => /#77 is back in range/.test(m)).length, 1);
+  assert.strictEqual(require("../alerts").poolKeyOf({ pool: { key: "v3:0xabc" } }), "v3:0xabc");
+  assert.strictEqual(require("../alerts").poolKeyOf({ tokenId: "v4-123" }), "pos:123");
+  assert.strictEqual(require("../alerts").poolKeyOf({ tokenId: "123", walletAddress: "0xABC" }), "pos:0xabc:123");
+  assert.strictEqual(require("../alerts").poolKeyOf({ tokenId: "123" }, "0xdef:"), "pos:0xdef:123");
+  assert.strictEqual(require("../alerts").poolKeyOf({ tokenId: "v4-9", version: 4, poolAddress: "0xABCD" }), "v4:0xabcd");
+  assert.strictEqual(require("../alerts").poolKeyOf({ poolKey: "v4:0xdef", nftId: "1" }), "v4:0xdef");
+
   for (const f of [stateFile, stateFile + ".b", stateFile + ".c"]) { try { fs.unlinkSync(f); } catch {} }
-  console.log(`alerts: ${sent.length} messages produced across 8 scenarios, all assertions passed`);
+  console.log(`alerts: ${sent.length} messages produced across 9 scenarios, all assertions passed`);
   for (const m of sent) console.log("  -", m.slice(0, 90));
 })().catch((e) => { console.error("FAIL", e.message); process.exit(1); });

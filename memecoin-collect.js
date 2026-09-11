@@ -90,7 +90,7 @@ function memecoinPositions({ positions, watch, memecoins, tradingLabel = "Tradin
   const consider = (p, wallet, walletAddress, served) => {
     const id = String(p.tokenId ?? p.nftId).replace(/^v4-/, "");
     if (!byId.has(id) && !(p.version === 4 && served)) return;
-    out.push({ tokenId: id, pair: p.pair, wallet, walletAddress, feesUsd: Number(p.feesUsd) || 0, version: p.version });
+    out.push({ tokenId: id, pair: p.pair, wallet, walletAddress, feesUsd: Number(p.feesUsd) || 0, version: p.version, poolKey: (p.pool && p.pool.key) || (p.poolAddress ? `v${Number(p.version) === 4 ? 4 : 3}:${String(p.poolAddress).toLowerCase()}` : null) });
   };
   // v4 positions count in the main wallet and in every watched wallet the collector serves
   // (settings.json wallets collect: true and approved; the payload's `collector.enabled`), the Trading wallet by name as a fallback.
@@ -101,6 +101,13 @@ function memecoinPositions({ positions, watch, memecoins, tradingLabel = "Tradin
     for (const p of w.positions || []) consider(p, w.label || w.address, w.address, served);
   }
   return out;
+}
+
+/** The pool key of a position in the memecoin list, else the position itself (same fallback as alerts.poolKeyOf). */
+function poolKeyFor(list, tokenId) {
+  const id = String(tokenId).replace(/^v4-/, "");
+  const p = (list || []).find((x) => String(x.tokenId) === id);
+  return p && p.poolKey ? p.poolKey : `pos:${id}`;
 }
 
 /** The position that triggers a run, if any: the richest one above the threshold. */
@@ -167,18 +174,20 @@ function parseCollectorOutput(text) {
 }
 
 /** Telegram lines for a run: one per collected position. */
-function collectMessages(parsed, trigger) {
-  const msgs = [];
+/** One notice per collected position: { text, tokenId, wallet } (the pool cool-down keys on the position's pool). */
+function collectNotices(parsed, trigger) {
+  const out = [];
   for (const c of parsed.collected) {
     const owner = parsed.owners.find((o) => o.wallet === c.wallet);
     const pct = parsed.splits.find((s) => s.wallet === c.wallet);
     const total = owner ? owner.splitUsdg + owner.ownerUsdg : 0;
     const pair = c.pair || (trigger && trigger.tokenId === c.tokenId ? trigger.pair : `#${c.tokenId}`);
     const share = owner && owner.collected.length > 1 ? " (whole wallet pass)" : "";
-    msgs.push(`💰 Collected $${total.toFixed(2)} from ${pair}${share} (${pct ? pct.pct : 10}% → vault${owner && owner.splitUsdg ? `, $${owner.splitUsdg.toFixed(2)}` : ""}) · ${c.wallet}`);
+    out.push({ text: `💰 Collected $${total.toFixed(2)} from ${pair}${share} (${pct ? pct.pct : 10}% → vault${owner && owner.splitUsdg ? `, $${owner.splitUsdg.toFixed(2)}` : ""}) · ${c.wallet}`, tokenId: String(c.tokenId), wallet: c.wallet });
   }
-  return msgs;
+  return out;
 }
+function collectMessages(parsed, trigger) { return collectNotices(parsed, trigger).map((n) => n.text); }
 
 // ---------------------------------------------------------------------------
 // Runtime
@@ -213,9 +222,11 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
       child.on("error", (err) => resolve({ code: -1, out: `${out}\n${err.message}` }));
     });
   }
-  async function notify(text) {
+  /** Telegram. With a pool key the message shares the per-pool cool-down with the guardian and the range check. */
+  async function notify(text, poolKey = null) {
     try {
       if (!alerts || !alerts.enabled) return false;
+      if (poolKey && alerts.sendPool) return await alerts.sendPool(poolKey, text, { source: "collect" });
       return await alerts.send(text);
     } catch (err) {
       log(`telegram: ${err.message}`);
@@ -248,7 +259,7 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
         const text = `💰 $${trigger.feesUsd.toFixed(2)} uncollected on ${trigger.pair} but the collector is locked — arm it from ${armUrl}`;
         log(text);
         if (!dryRun) {
-          await notify(text);
+          await notify(text, poolKeyFor(list, trigger.tokenId));
           state.lockedNoticeAt = Date.now();
           writeJson(STATE, state);
         }
@@ -274,7 +285,7 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     appendLog({ timestamp: new Date().toISOString(), trigger, ranCollector: true, exitCode: code, collected: parsed.collected, splits: parsed.splits, sends: parsed.sends, failures: parsed.failures,
       splitUsdg: +splitUsdg.toFixed(6), status, output: out.split("\n").slice(-25).join("\n") });
     log(`collector finished: ${status} (${parsed.collected.length} collected, split ${splitUsdg.toFixed(2)} USDG, ${parsed.failures.length} failure line(s))`);
-    for (const m of collectMessages(parsed, trigger)) await notify(m);
+    for (const n of collectNotices(parsed, trigger)) await notify(n.text, poolKeyFor(list, n.tokenId));
     if (status === "error") await notify(`⚠️ Auto-collect run exited with code ${code}; see memecoin-collect-log.json`);
   }
 
@@ -365,4 +376,4 @@ if (require.main === module) {
   })();
 }
 
-module.exports = { create, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages };
+module.exports = { create, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor };

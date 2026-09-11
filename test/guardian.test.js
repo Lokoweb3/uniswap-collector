@@ -9,6 +9,9 @@ const mk = (minutes, price, extra = {}) => ({ t: t0 + minutes * 60000, price, li
 
 // 0. rule block: entry values over defaults, bad numbers ignored, null switches a floor off
 assert.deepStrictEqual(rulesOf({}, {}), RULE_DEFAULTS);
+// The pool key (from the dashboard payload) rides along for the shared per-pool alert cool-down.
+assert.strictEqual(derive({ tokenId: "1", pair: "X/Y", poolKey: "v4:0xabc" }, [{ t: 1, price: 1, liq: 1, feeUsd: 0, inRange: true, valueUsd: 1 }]).poolKey, "v4:0xabc");
+assert.strictEqual(derive({ tokenId: "1", pair: "X/Y" }, [{ t: 1, price: 1, liq: 1, feeUsd: 0, inRange: true, valueUsd: 1 }]).poolKey, null);
 let r = rulesOf({ alertPct: 30, feeFloorPerHour: 10, closePct: "abc" }, { closePct: 40, tvlDropPct: 60 });
 assert.strictEqual(r.alertPct, 30); assert.strictEqual(r.feeFloorPerHour, 10); assert.strictEqual(r.closePct, 40, "bad number -> the configured default"); assert.strictEqual(r.tvlDropPct, 60);
 assert.strictEqual(rulesOf({ feeFloorPerHour: null }, { feeFloorPerHour: 10 }).feeFloorPerHour, null);

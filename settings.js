@@ -87,7 +87,7 @@ function toLegacy(raw) {
     memecoinSell: risk.sell || {},
     dailySummary: al.dailySummary || {},
     launchScanner: s.launchScanner || {},
-    alerts: { telegramChat: al.telegramChat || "", fallbackChat: al.fallbackChat || "", treasuryChat: al.treasuryChat || "" },
+    alerts: { telegramChat: al.telegramChat || "", fallbackChat: al.fallbackChat || "", treasuryChat: al.treasuryChat || "", poolCooldownMinutes: al.poolCooldownMinutes != null ? Number(al.poolCooldownMinutes) : null },
   };
   return cfg;
 }

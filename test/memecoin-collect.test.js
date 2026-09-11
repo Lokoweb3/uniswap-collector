@@ -1,6 +1,6 @@
 // node test/memecoin-collect.test.js — trigger logic and collector-output parsing with mocks.
 const assert = require("assert");
-const { memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages } = require("../memecoin-collect");
+const { memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor } = require("../memecoin-collect");
 
 const positions = { ok: true, owner: "0x0000000000000000000000000000000000000001", ownerLabel: "Main", positions: [
   { tokenId: "1030190", nftId: "1030190", version: 3, pair: "WETH / USDG", feesUsd: 31 },
@@ -71,6 +71,11 @@ const msgs = collectMessages(parsed, trig);
 assert.strictEqual(msgs.length, 2);
 assert.match(msgs[0], /Collected \$9\.90 from WETH\/USDG .*10% → vault, \$0\.99.*Main/);
 assert.match(msgs[1], /Collected \$25\.00 from ETH\/LAPTOP .*Trading/);
+// Each notice names its position so the shared per-pool cool-down can key on the pool.
+const notices = collectNotices(parsed, trig);
+assert.strictEqual(notices.length, 2); assert.strictEqual(notices[0].text, msgs[0]); assert.strictEqual(typeof notices[1].tokenId, "string");
+assert.strictEqual(poolKeyFor([{ tokenId: "2134854", poolKey: "v4:0xpool" }], "v4-2134854"), "v4:0xpool");
+assert.strictEqual(poolKeyFor([{ tokenId: "2134854", poolKey: null }], "2134854"), "pos:2134854");
 
 // 6. Locked run.
 const locked = parseCollectorOutput("2026-09-07T09:00:01-04:00 locked, skipping full run. Run ./unlock.sh to arm it.");

@@ -135,7 +135,7 @@ function derive(cfgEntry, samples, now = samples.length ? samples[samples.length
   }
 
   return {
-    tokenId: String(cfgEntry.tokenId), version: Number(cfgEntry.version) === 3 ? 3 : 4, pair: cfgEntry.pair, wallet: cfgEntry.wallet, walletAddress: cfgEntry.walletAddress,
+    tokenId: String(cfgEntry.tokenId), version: Number(cfgEntry.version) === 3 ? 3 : 4, pair: cfgEntry.pair, wallet: cfgEntry.wallet, walletAddress: cfgEntry.walletAddress, poolKey: cfgEntry.poolKey || null,
     at: now, price: last.price, entryPrice: entry, priceVsEntryPct, drawdownPct, change1hPct, velocityPctPerH,
     inRange: !!last.inRange, outSince, outMinutes,
     feeUsd: last.feeUsd, feesPerHour, feesPerHour15m, feesPerHour30mAgo, feeRateChangePct, feeFloorHit,

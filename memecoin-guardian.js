@@ -78,11 +78,18 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
   let status = readJson(STATUS_FILE, { ok: true, at: 0, positions: [], recent: [] });
   const liveConfig = () => { try { return settings.load(); } catch { return cfg; } };
 
-  async function send(text) {
+  /**
+   * One Telegram message. With a position it goes through the pool cool-down
+   * shared with the range check and the auto-collect summary (alerts.sendPool):
+   * a 🚨 message (dump, close-now, a close result) is urgent and always goes.
+   */
+  async function send(text, entry = null) {
     log(`ALERT ${text.replace(/\n/g, " / ")}`);
     if (alerts && alerts.enabled) {
       try {
-        if (alerts.sendGroup) await alerts.sendGroup(text); else await alerts.send(text);
+        const deliver = alerts.sendGroup || alerts.send;
+        if (entry && alerts.sendPool) await alerts.sendPool(alerts.poolKeyOf(entry), text, { source: "guardian", urgent: /^(🚨|🟢|❌)/.test(text), deliver });
+        else await deliver(text);
       } catch (err) {
         log(`telegram failed: ${err.message}`);
       }
@@ -103,7 +110,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
   function livePositions() {
     const out = [];
     const push = (p, wallet, walletAddress) => {
-      out.push({ tokenId: bareId(p), version: Number(p.version) === 4 ? 4 : 3, pair: p.pair, wallet, walletAddress,
+      out.push({ tokenId: bareId(p), version: Number(p.version) === 4 ? 4 : 3, pair: p.pair, wallet, walletAddress, poolKey: (p.pool && p.pool.key) || (p.poolAddress ? `v${Number(p.version) === 4 ? 4 : 3}:${String(p.poolAddress).toLowerCase()}` : null),
         token0: addrOf(p.token0), token1: addrOf(p.token1), since: p.pnlSince || null,
         outSince: p.range && p.range.streakInRange === false && p.range.streakSince ? p.range.streakSince : null });
     };
@@ -145,7 +152,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     const lp = livePositions();
     for (const m of listed) { // fill what a hand-written entry may lack from the live position
       const p = lp.find((x) => x.tokenId === m.tokenId);
-      if (p) { m.version = m.version || p.version; m.walletAddress = m.walletAddress || p.walletAddress; m.wallet = m.wallet || p.wallet; m.pair = m.pair || p.pair; m.outSince = p.outSince; }
+      if (p) { m.version = m.version || p.version; m.walletAddress = m.walletAddress || p.walletAddress; m.wallet = m.wallet || p.wallet; m.pair = m.pair || p.pair; m.outSince = p.outSince; m.poolKey = p.poolKey || null; }
     }
     if (live.memecoinDiscovery === false) return listed;
     const discovered = readJson(DISCOVERED_FILE, []);
@@ -168,7 +175,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     for (const d of discovered) {
       if (listed.some((m) => m.tokenId === String(d.tokenId))) continue;
       const p = lp.find((x) => x.tokenId === String(d.tokenId));
-      out.push({ ...d, tokenId: String(d.tokenId), outSince: p ? p.outSince : null });
+      out.push({ ...d, tokenId: String(d.tokenId), outSince: p ? p.outSince : null, poolKey: p ? p.poolKey : null });
     }
     return out;
   }
@@ -239,7 +246,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     if (!wallet) {
       const row = { ...base, status: "locked", error: "collector is locked; arm it first" };
       appendLog(row);
-      await send(`⚠️ ${entry.pair}: close needed (${reason}) but the collector is locked. Arm it from the dashboard — nothing was sent.`);
+      await send(`⚠️ ${entry.pair}: close needed (${reason}) but the collector is locked. Arm it from the dashboard — nothing was sent.`, entry);
       return row;
     }
     try {
@@ -256,12 +263,12 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
       appendLog(row);
       const st = state.positions[String(entry.tokenId)];
       if (st) st.closed = true;
-      await send(`🚨 ${who === "manual" ? "Closed" : "Auto-closed"} ${entry.pair} — recovered ${recovered} to ${entry.wallet} (${reason}). tx ${String(res.hash).slice(0, 12)}…`);
+      await send(`🚨 ${who === "manual" ? "Closed" : "Auto-closed"} ${entry.pair} — recovered ${recovered} to ${entry.wallet} (${reason}). tx ${String(res.hash).slice(0, 12)}…`, entry);
       return row;
     } catch (err) {
       const row = { ...base, status: "failed", error: err.shortMessage || err.message };
       appendLog(row);
-      await send(`❌ ${entry.pair}: close failed: ${row.error}`);
+      await send(`❌ ${entry.pair}: close failed: ${row.error}`, entry);
       return row;
     }
   }
@@ -363,7 +370,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
       // bad RPC read or a single-block wick cannot close a position.
       const reason = logic.shouldClose(d);
       st.confirm = st.confirm || { n: 0, lastPrice: null };
-      for (const text of logic.alertsFor(d, state.sent, t, 60 * 60000, { closing: !!reason })) { await send(text); alertsSent.push(text); }
+      for (const text of logic.alertsFor(d, state.sent, t, 60 * 60000, { closing: !!reason })) { await send(text, d); alertsSent.push(text); }
       if (reason) {
         const agrees = st.confirm.lastPrice == null || !(d.price > 0) || Math.abs(d.price - st.confirm.lastPrice) / st.confirm.lastPrice <= 0.10;
         st.confirm.n = agrees ? st.confirm.n + 1 : 1;

@@ -10,6 +10,13 @@
  *   - the Windows keepalive session is gone (WSL will stop with the last terminal)
  *   - the dashboard was down (reported on the first tick after it comes back)
  *
+ * Pool cool-down (shared across sources): the guardian, the range check here and
+ * the auto-collect summary all talk about the same pools. sendPool(poolKey, text)
+ * lets one message per pool through per POOL_COOLDOWN_MS whoever sends it; the
+ * rest are held (logged, counted in state.held). Messages marked urgent (a dump,
+ * a close-now, a close result) always go through. settings.json
+ * alerts.poolCooldownMinutes changes the window (default 30).
+ *
  * Secrets: the bot token comes from process.env.TELEGRAM_TOKEN and is used only
  * to build the request URL; it is never logged or written anywhere. Messages
  * carry short addresses (0x1234…5678) only.
@@ -21,6 +28,7 @@ const { execFileSync } = require("child_process");
 
 const STATE_FILE = path.join(__dirname, "alerts-state.json");
 const ALERT_REPEAT_MS = 6 * 3600 * 1000; // re-remind about a standing problem
+const POOL_COOLDOWN_MS = 30 * 60 * 1000; // one message per pool per window, across every source
 const DOWN_GAP_MS = 25 * 60 * 1000; // ticks are 10 min apart; a larger gap = outage
 const COLLECT_HOUR = 9; // local time of the scheduled run (windows-task.ps1)
 const WARN_HOUR = 8; // remind about a locked collector from this hour
@@ -33,10 +41,11 @@ try { CHATS = require("./settings").load().alerts || {}; } catch {}
 const TREASURY_CHAT = process.env.TELEGRAM_TREASURY_CHAT_ID || CHATS.treasuryChat || "";
 const TREASURY_BALANCE_ALERT_USDG = 1000; // default; settings.json vault.withdrawAlertUsdg overrides (passed as treasury.withdrawAlertUsdg)
 
-function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stateFile = STATE_FILE, now = () => Date.now(), log = console, onSent = null } = {}) {
+function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stateFile = STATE_FILE, now = () => Date.now(), log = console, onSent = null, poolCooldownMs = null } = {}) {
   if (token === undefined && !Object.keys(arguments[0] || {}).includes('token')) token = process.env.TELEGRAM_TOKEN;
   chatId = chatId !== undefined ? chatId : (process.env.TELEGRAM_CHAT_ID || CHATS.fallbackChat || "");
-  let state = { sent: {}, outSince: {}, lastTick: 0, lastRunSeen: null };
+  const poolWindow = poolCooldownMs != null ? Number(poolCooldownMs) : Number(CHATS.poolCooldownMinutes) > 0 ? Number(CHATS.poolCooldownMinutes) * 60000 : POOL_COOLDOWN_MS;
+  let state = { sent: {}, outSince: {}, lastTick: 0, lastRunSeen: null, pool: {}, held: {} };
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(stateFile, "utf8")) };
   } catch {}
@@ -81,6 +90,29 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
   async function sendTreasury(text) {
     if (treasuryChatId && treasuryChatId !== chatId && (await send(text, treasuryChatId))) return true;
     return send(text, chatId);
+  }
+
+  /**
+   * Send `text` about one pool unless any source already sent about that pool
+   * within the window. `urgent` bypasses the window. Returns true when sent;
+   * false when held (the caller decides whether to retry later).
+   */
+  async function sendPool(poolKey, text, { source = "?", urgent = false, every = poolWindow, deliver = send } = {}) {
+    const k = String(poolKey || "?");
+    const last = state.pool[k];
+    if (!urgent && last && now() - last.at < every) {
+      state.held[k] = (state.held[k] || 0) + 1;
+      save();
+      log.log && log.log(`alerts: held (${source}, pool cool-down ${Math.round((every - (now() - last.at)) / 60000)} min left after ${last.source}) ${text.replace(/\n/g, " / ").slice(0, 120)}`);
+      return false;
+    }
+    const ok = await deliver(text);
+    if (ok) {
+      state.pool[k] = { at: now(), source };
+      delete state.held[k];
+      save();
+    }
+    return ok;
   }
 
   /** Send `text` for `key` unless the same key was sent within `every` ms (0 = once, ever). */
@@ -149,18 +181,17 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
           const id = `${ws.prefix}${p.tokenId}`;
           seen.add(id);
           const name = `${ws.label ? ws.label + " · " : ""}${p.pair || "?"} #${p.nftId || p.tokenId}`;
+          const viaPool = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range" });
+          const viaPoolUrgent = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", urgent: true });
           if (!p.inRange) {
-            if (!state.outSince[id]) {
-              state.outSince[id] = t;
-              save();
-              const dir = p.rawPos > 1 ? "above" : "below";
-              await say(`out:${id}:${t}`, `🔴 ${name} is out of range (price ${dir} the range) — not earning. Value ${usd(p.valueUsd)}, uncollected ${usd(p.feesUsd)}.`, 0);
-            }
+            if (!state.outSince[id]) { state.outSince[id] = t; save(); }
+            // Held by the pool cool-down? The key carries the episode start, so the next tick tries again.
+            const dir = p.rawPos > 1 ? "above" : "below";
+            await say(`out:${id}:${state.outSince[id]}`, `🔴 ${name} is out of range (price ${dir} the range) — not earning. Value ${usd(p.valueUsd)}, uncollected ${usd(p.feesUsd)}.`, 0, viaPool);
           } else if (state.outSince[id]) {
-            const hrs = ((t - state.outSince[id]) / 3600000).toFixed(1);
-            delete state.outSince[id];
-            save();
-            await say(`in:${id}:${t}`, `🟢 ${name} is back in range after ${hrs} h.`, 0);
+            const since = state.outSince[id];
+            const hrs = ((t - since) / 3600000).toFixed(1);
+            if (await once(`in:${id}:${since}`, `🟢 ${name} is back in range after ${hrs} h.`, 0, viaPoolUrgent)) { sent.push(`🟢 ${name} is back in range after ${hrs} h.`); delete state.outSince[id]; save(); }
           }
         }
       }
@@ -238,7 +269,21 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
     return sent;
   }
 
-  return { enabled, send, sendGroup, sendTreasury, check, get state() { return state; } };
+  return { enabled, send, sendGroup, sendTreasury, sendPool, poolKeyOf, check, poolWindow, get state() { return state; } };
+}
+
+/**
+ * The pool a position row belongs to ("v4:0x…" / "v3:0x…" from the dashboard
+ * payload), else the position itself scoped by its wallet (v3 and v4 ids can
+ * collide across wallets; `scope` is the wallet prefix when the row lacks one).
+ */
+function poolKeyOf(p, scope = null) {
+  if (!p) return "?";
+  if (p.pool && p.pool.key) return String(p.pool.key);
+  if (p.poolKey) return String(p.poolKey);
+  if (p.poolAddress) return `v${Number(p.version) === 4 ? 4 : 3}:${String(p.poolAddress).toLowerCase()}`; // the payload's pool id / address
+  const s = scope != null ? scope : p.walletAddress ? `${String(p.walletAddress).toLowerCase()}:` : "";
+  return `pos:${s}${String(p.nftId || p.tokenId || "?").replace(/^v4-/, "")}`;
 }
 
 function usd(n) {
@@ -253,4 +298,4 @@ function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-module.exports = { create, short };
+module.exports = { create, short, poolKeyOf, POOL_COOLDOWN_MS };

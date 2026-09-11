@@ -149,7 +149,7 @@
     }
   },
   "alerts": {
-    "_comment": "Telegram chat ids (the bot token stays in .env as TELEGRAM_TOKEN). telegramChat: the group for position alerts; fallbackChat: your personal chat (used when the group is unset or refuses); treasuryChat: vault messages (default the group). dailySummary: the 08:00 line-up. agentChats: extra Telegram chats the agent answers, [{ chat, role }] with role read | approve | full (fallbackChat is always allowed with role approve).",
+    "_comment": "Telegram chat ids (the bot token stays in .env as TELEGRAM_TOKEN). telegramChat: the group for position alerts; fallbackChat: your personal chat (used when the group is unset or refuses); treasuryChat: vault messages (default the group). dailySummary: the 08:00 line-up. agentChats: extra Telegram chats the agent answers, [{ chat, role }] with role read | approve | full (fallbackChat is always allowed with role approve). poolCooldownMinutes: one Telegram message per pool per window, shared by the guardian, the range check and the auto-collect summary (default 30; urgent messages always go through).",
     "telegramChat": "-100123456789",
     "fallbackChat": "123456789",
     "treasuryChat": "",
@@ -158,7 +158,8 @@
       "hour": 8,
       "chat": "main"
     },
-    "agentChats": []
+    "agentChats": [],
+    "poolCooldownMinutes": 30
   },
   "launchScanner": {
     "_comment": "launch-scanner.js: every 5 min, new v4 pools (PoolManager Initialize events + the pool scanner's cache) are scored 0-100: market cap in range, contract clean (bytecode selectors, owner, Blockscout verification), LP value, a simulated buy-and-sell round trip (honeypot / sell tax), holder spread, buy pressure. Alert on Telegram (group, fallback personal) at minScore, once per alertCooldownHours, follow-up when the market cap triples. Read-only.",

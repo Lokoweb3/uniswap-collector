@@ -21,6 +21,8 @@
 .tabs a{font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;padding:6px 14px;border-radius:999px;border:1px solid var(--rule);background:var(--card)}
 .tabs a.here{color:var(--bright);border-color:var(--glass-border,var(--rule));background:var(--glass-strong,var(--card));box-shadow:0 0 18px var(--glow-cyan,transparent) inset}
 .tab[hidden]{display:none!important}
+select,option{color-scheme:dark}
+.tab select option{background:#0b1017;color:#e6edf3}
 .tab .secttl{font-size:20px;margin:0 0 6px;color:var(--bright)}
 .tab .mono,.tab .address-val{overflow-wrap:anywhere}
 .tab .row>span:last-child{min-width:0;overflow-wrap:anywhere}
@@ -1751,6 +1753,7 @@ loadConfig().then(async () => {
     ws.value = data.wallet.address;
     q('sl-token').innerHTML = data.rows.length ? data.rows.map((t) => `<option value="${t.address}">${t.symbol} — ${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })}${t.usd != null ? ' (≈ $' + t.usd.toFixed(2) + ')' : ''}</option>`).join('') : '<option value="">nothing to sell in this wallet</option>';
     q('sl-quotecard').hidden = true; quote = null;
+    fillMax();
     status('sl-status', data.rows.length ? `${data.rows.length} token(s) held. Pick one, set the amount, quote.` : 'This wallet holds no sellable tokens (ETH and USDG are not offered; dust under $1 is hidden).', data.rows.length ? '' : 'muted');
     updateButtons();
   }
@@ -1835,7 +1838,8 @@ loadConfig().then(async () => {
     }
   }
   q('sl-wallet').addEventListener('change', () => loadTokens(q('sl-wallet').value));
-  q('sl-token').addEventListener('change', () => { q('sl-quotecard').hidden = true; quote = null; q('sl-amount').value = ''; });
+  const fillMax = () => { const t = selectedToken(); q('sl-amount').value = t ? ethers.formatUnits(BigInt(t.raw), t.decimals) : ''; };
+  q('sl-token').addEventListener('change', () => { q('sl-quotecard').hidden = true; quote = null; fillMax(); });
   q('sl-reload').addEventListener('click', () => loadTokens(q('sl-wallet').value));
   q('sl-max').addEventListener('click', () => { const t = selectedToken(); if (t) q('sl-amount').value = ethers.formatUnits(BigInt(t.raw), t.decimals); });
   q('sl-quote').addEventListener('click', getQuote);

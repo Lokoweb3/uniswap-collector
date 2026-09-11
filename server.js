@@ -2448,6 +2448,21 @@ if (LOOPS) {
     backupBusy = true;
     try { await runBackup(); } finally { backupBusy = false; }
   }, 60 * 1000);
+  // Shared memory to the VPS every 10 minutes (sync-memory.sh: brain/notes.md, agent-memory, agent-work.log), so the VPS agent remembers the same things.
+  let memSyncBusy = false;
+  function syncMemory() {
+    if (memSyncBusy || !fs.existsSync(path.join(__dirname, "sync-memory.sh"))) return;
+    memSyncBusy = true;
+    const child = spawn("bash", [path.join(__dirname, "sync-memory.sh")], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; }); child.stderr.on("data", (d) => { out += d; });
+    child.on("close", (code) => { memSyncBusy = false; const last = out.trim().split("\n").pop(); if (code !== 0) console.error(`memory sync: exit ${code}${last ? " — " + last : ""}`); else if (last && !timers.memorySyncLogged) { console.log(last); timers.memorySyncLogged = true; } timers.memorySync = { lastAt: Date.now(), code }; });
+    child.on("error", () => { memSyncBusy = false; });
+  }
+  setTimeout(syncMemory, 4 * 60 * 1000);
+  setInterval(syncMemory, 10 * 60 * 1000);
+  server.syncMemory = syncMemory;
+
   // Recorded runs from before the fold count for the watchdog.
   { const st = backupState(); if (st.lastBackupAt) { timers.backup.lastAt = Date.parse(st.lastBackupAt) || 0; timers.backup.lastResult = { at: timers.backup.lastAt, code: st.lastBackupCode ?? null }; } }
   server.runBackup = runBackup;

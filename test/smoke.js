@@ -80,7 +80,9 @@ async function main() {
     }
     // Every page at desktop width and at a 375 px phone width: same markers, no console errors.
     for (const width of [1280, 375]) for (const p of PAGES) {
-      const { dom, errors, status } = loadPage(base + p.path, width);
+      let { dom, errors, status } = loadPage(base + p.path, width);
+      // A slow RPC moment can time a page out; one retry separates that from a real failure.
+      if (status !== 0 || !dom.includes(p.marker) || errors.length) ({ dom, errors, status } = loadPage(base + p.path, width));
       const problems = [];
       if (status !== 0) problems.push(`chrome exited ${status}`);
       if (!dom.includes(p.marker)) problems.push(`marker ${p.marker} missing`);

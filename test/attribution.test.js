@@ -104,4 +104,42 @@ assert.match(b[1].note, /only 10.0 days/);
 const none = benchmarks({ bookSeries: [], ethSeries, stakingSamples, now });
 assert.strictEqual(none[0].portfolioPct, null);
 
-console.log("attribution: decomposition sums to NET on 3 scenarios, benchmarks math ok");
+// Flows only count wallet-boundary transfers: sent (out, -) and received (in, +).
+// A transfer out of $100 on day 1 increases il by 100 (value drops but that drop is
+// not profit), keeping the sum intact.
+const sentFlow = [{ t: d0 + 4 * HOUR, key: "main", usd: -100, kind: "sent" }];
+const rSent = compute({ ...input, flows: sentFlow, valueSeries: { main: [{ t: d0, v: v0 }, { t: d1, v: v0 + 313 - 100 }, { t: d2, v: v0 + 313 - 100 - 135 }, { t: now - HOUR, v: v0 + 313 - 100 - 135 + 4 }] } }, { days: 3, now });
+const wSent = rSent.wallets[0].rows[0];
+assert.strictEqual(+wSent.flows.toFixed(6), -100);
+assert.strictEqual(+wSent.dv.toFixed(6), 213); // 313 - 100 sent
+assert.strictEqual(+wSent.il.toFixed(6), -10, "IL unchanged: the sent flow is separated out");
+assert.strictEqual(+wSent.net.toFixed(6), 211); // 213 - 2 gas
+assert.strictEqual(+(wSent.fees + wSent.price + wSent.il + wSent.staking + wSent.vault + wSent.flows + wSent.gas).toFixed(6), +wSent.net.toFixed(6));
+
+// A transfer in of $50 on day 1 (received) increases value; il drops by 50 to keep the sum.
+const recvFlow = [{ t: d0 + 4 * HOUR, key: "main", usd: 50, kind: "received" }];
+const rRecv = compute({ ...input, flows: recvFlow, valueSeries: { main: [{ t: d0, v: v0 }, { t: d1, v: v0 + 313 + 50 }, { t: d2, v: v0 + 313 + 50 - 135 }, { t: now - HOUR, v: v0 + 313 + 50 - 135 + 4 }] } }, { days: 3, now });
+const wRecv = rRecv.wallets[0].rows[0];
+assert.strictEqual(+wRecv.flows.toFixed(6), 50);
+assert.strictEqual(+wRecv.dv.toFixed(6), 363); // 313 + 50 received
+assert.strictEqual(+wRecv.il.toFixed(6), -10, "IL unchanged: the received flow is separated out");
+assert.strictEqual(+wRecv.net.toFixed(6), 361); // 363 - 2 gas
+assert.strictEqual(+(wRecv.fees + wRecv.price + wRecv.il + wRecv.staking + wRecv.vault + wRecv.flows + wRecv.gas).toFixed(6), +wRecv.net.toFixed(6));
+
+// A same-wallet sale (kind "sold") is internal: it must leave flows at 0.
+const soldFlow = [{ t: d0 + 4 * HOUR, key: "main", usd: -300, kind: "sold" }];
+const rSold = compute({ ...input, flows: soldFlow, valueSeries }, { days: 3, now });
+const wSold = rSold.wallets[0].rows[0];
+assert.strictEqual(+wSold.flows.toFixed(6), 0, "a sale is not a flow");
+assert.strictEqual(+wSold.dv.toFixed(6), 313, "value unchanged by an internal sale");
+assert.strictEqual(+wSold.il.toFixed(6), -10, "IL unchanged by an internal sale");
+
+// An LP deposit is internal (no wallet-boundary crossing): flows stay 0, value unchanged.
+const depositFlow2 = [{ t: d0 + 4 * HOUR, key: "main", usd: 500, kind: "deposit" }];
+const rDep2 = compute({ ...input, flows: depositFlow2, valueSeries }, { days: 3, now });
+const wDep2 = rDep2.wallets[0].rows[0];
+assert.strictEqual(+wDep2.flows.toFixed(6), 0, "an LP deposit is not a flow");
+assert.strictEqual(+wDep2.dv.toFixed(6), 313, "value unchanged by an internal LP deposit");
+assert.strictEqual(+wDep2.il.toFixed(6), -10, "IL unchanged by an internal LP deposit");
+
+console.log("attribution: decomposition sums to NET on 3 scenarios + transfer out/in + internal sale/deposit, benchmarks math ok");

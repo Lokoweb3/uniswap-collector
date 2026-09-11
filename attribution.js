@@ -9,12 +9,18 @@
  *   vault    = -USDG that left the wallet as LOKOVault splits (fee-split-ledger.json)   exact
  *   gas      = -operator gas that day at the ETH price (charged to the main wallet)     exact
  *   price    = current token holdings x price change over the day (price-log.json)     approximate
- *   il       = value change - fees - staking + vault - price                             residual
- *   net      = value change - gas  ( = fees + price + il + staking + vault + gas)
+ *   flows    = money that crossed the wallet boundary: transfers out (sent) and in
+ *              (received), read from token-disposals.json. LP deposits/withdrawals,
+ *              collects and sales are internal moves and are NOT flows.           approximate
+ *   il       = value change - fees - staking + vault - price - flows             residual
+ *   net      = value change - gas  ( = fees + price + il + staking + vault + flows + gas)
  * The value change comes from the hourly totals (portfolio.json for the main
- * wallet, portfolio-all.json for every wallet). Because `il` is the residual,
- * any deposit or withdrawal into a wallet lands there too; days with no value
- * sample on one side are reported with il = null.
+ * wallet, portfolio-all.json for every wallet). The decomposition is wallet
+ * balance + LP value + uncollected fees, so internal moves change nothing in dv;
+ * only transfers across the wallet boundary (a sent row at the hourly price of
+ * that hour, a received row scanned the same way) are flows. Because `il` is the
+ * residual, a day with an unpriced flow (or no value sample on one side) is
+ * reported with il = null.
  *
  * compute() is pure so the decomposition can be tested with synthetic ledgers;
  * load() assembles the inputs from the ledgers and the server's live views.
@@ -77,6 +83,10 @@ function sumHours(hours, from, to) {
  *   stakingDaily: { day: usd }              (main)
  *   vaultSplits: [{ t, key, usd }]          money that left `key`
  *   gasSpends: [{ t, wei }]                 operator gas (charged to main)
+ *   flows: [{ t, key, usd, kind }]          money across the wallet boundary: kind "sent"
+ *                                            (usd negative) or "received" (usd positive). Only
+ *                                            these two kinds count; anything else (sold,
+ *                                            deposit, move) is internal and not a flow.
  *   positions: [{ key, tokenId, pair, version, pnlUsd, pnlLegs, pnlSince, pnlApprox, valueUsd, feesUsd }]
  */
 function compute(input, { days = 30, now = Date.now() } = {}) {
@@ -100,6 +110,9 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
       const fees = sumHours((input.feesByHour || {})[w.key], d0, d1);
       const staking = w.main ? Number((input.stakingDaily || {})[dayKey(d0)] || 0) : 0;
       const vault = -(input.vaultSplits || []).filter((s) => s.key === w.key && s.t >= d0 && s.t < d1).reduce((a, s) => a + (Number(s.usd) || 0), 0);
+      // Net money across the wallet boundary today: +received, -sent. Only these two
+      // kinds are flows; anything else (sold, deposit, move) is internal.
+      const flows = (input.flows || []).filter((f) => (f.kind === "sent" || f.kind === "received") && f.key === w.key && f.t >= d0 && f.t < d1).reduce((a, f) => a + (Number(f.usd) || 0), 0);
       let gas = 0;
       if (w.main) {
         for (const g of input.gasSpends || []) {
@@ -124,31 +137,31 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
       const v0 = at(series, d0), v1 = at(series, d1);
       const haveSpan = v0 && v1 && v1.t > v0.t && v0.t >= d0 - 2 * HOUR;
       const dv = haveSpan ? v1.v - v0.v : null;
-      const il = dv != null && price != null ? dv - fees - staking + (-vault) - price : null;
-      const net = dv != null ? dv + gas : fees + staking + vault + gas + (price || 0);
-      rows.push({ day: dayKey(d0), fees, staking, vault, gas, price, il, dv, net, exact: dv != null && price != null });
+      const il = dv != null && price != null ? dv - fees - staking + (-vault) - price - flows : null;
+      const net = dv != null ? dv + gas : fees + staking + vault + gas + (price || 0) + flows;
+      rows.push({ day: dayKey(d0), fees, staking, vault, gas, price, flows, il, dv, net, exact: dv != null && price != null });
     }
-    const totals = { fees: 0, staking: 0, vault: 0, gas: 0, price: 0, il: 0, net: 0, dv: 0, incomplete: 0 };
+    const totals = { fees: 0, staking: 0, vault: 0, gas: 0, price: 0, flows: 0, il: 0, net: 0, dv: 0, incomplete: 0 };
     for (const r of rows) {
       totals.fees += r.fees; totals.staking += r.staking; totals.vault += r.vault; totals.gas += r.gas;
-      totals.price += r.price || 0; totals.il += r.il || 0; totals.net += r.net; totals.dv += r.dv || 0;
+      totals.price += r.price || 0; totals.flows += r.flows || 0; totals.il += r.il || 0; totals.net += r.net; totals.dv += r.dv || 0;
       if (!r.exact) totals.incomplete++;
     }
     perWallet[w.key] = { key: w.key, label: w.label, main: !!w.main, rows, totals };
   }
 
   // Whole book: sum of the wallets per day.
-  const book = { rows: [], totals: { fees: 0, staking: 0, vault: 0, gas: 0, price: 0, il: 0, net: 0, dv: 0, incomplete: 0 } };
+  const book = { rows: [], totals: { fees: 0, staking: 0, vault: 0, gas: 0, price: 0, flows: 0, il: 0, net: 0, dv: 0, incomplete: 0 } };
   for (let i = 0; i < dayList.length; i++) {
-    const r = { day: dayKey(dayList[i]), fees: 0, staking: 0, vault: 0, gas: 0, price: 0, il: 0, dv: 0, net: 0, exact: true };
+    const r = { day: dayKey(dayList[i]), fees: 0, staking: 0, vault: 0, gas: 0, price: 0, flows: 0, il: 0, dv: 0, net: 0, exact: true };
     for (const w of Object.values(perWallet)) {
       const x = w.rows[i];
       r.fees += x.fees; r.staking += x.staking; r.vault += x.vault; r.gas += x.gas;
-      r.price += x.price || 0; r.il += x.il || 0; r.dv += x.dv || 0; r.net += x.net;
+      r.price += x.price || 0; r.flows += x.flows || 0; r.il += x.il || 0; r.dv += x.dv || 0; r.net += x.net;
       if (!x.exact) r.exact = false;
     }
     book.rows.push(r);
-    for (const k of ["fees", "staking", "vault", "gas", "price", "il", "net", "dv"]) book.totals[k] += r[k];
+    for (const k of ["fees", "staking", "vault", "gas", "price", "flows", "il", "net", "dv"]) book.totals[k] += r[k];
     if (!r.exact) book.totals.incomplete++;
   }
 
@@ -165,7 +178,7 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
     wallets: Object.values(perWallet), book, positions,
     notes: {
       exact: ["fees", "staking", "vault", "gas"],
-      approximate: ["price (current holdings x hourly price change)", "il (residual: value change minus the other parts; deposits and withdrawals land here)"],
+      approximate: ["price (current holdings x hourly price change)", "flows (wallet-boundary transfers in/out, kind sent/received, valued at the hourly price of that hour)", "il (residual: value change minus fees, staking, vault, price and flows; a day with an unpriced flow has il = null)"],
       incompleteDays: "days without a value sample on both ends have il = null and net = the sum of the exact parts",
     },
   };
@@ -324,12 +337,36 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
     const st = readJson("state.json", {});
     const gasSpends = (st.gasSpends || []).map((g) => ({ t: g.t, wei: g.wei }));
 
+    // Flows: money that crossed the wallet boundary, and nothing else. The value series
+    // is wallet balance + LP value + uncollected fees, so LP deposits/withdrawals,
+    // collects and sales are internal moves that change nothing in dv. The only flows
+    // are transfers in/out from token-disposals.json:
+    //   out: kind "sent"   (value already USD per wallet)                        -> -
+    //   in:  kind "received" (added by strategy.scanDisposals, valued at the hourly
+    //        price of that hour like "sent")                                     -> +
+    // kind "sold" is a same-wallet swap through a router (internal); "deposit" and
+    // "move" are protocol moves (internal). None of those are flows.
+    const flows = [];
+    for (const r of readJson("token-disposals.json", { rows: [] }).rows || []) {
+      if (!r || r.usd == null || !r.t) continue;
+      if (r.kind === "received") {
+        const wkey = r.to ? r.to.toLowerCase() : (r.wallet ? r.wallet.toLowerCase() : MAIN);
+        const key = wkey === String(cfg.ownerAddress).toLowerCase() ? MAIN : wkey;
+        flows.push({ t: r.t, key, kind: "received", usd: Number(r.usd) });
+        continue;
+      }
+      if (r.kind !== "sent") continue; // sold / deposit / move: internal, not a flow
+      const wkey = r.from ? r.from.toLowerCase() : (r.wallet ? r.wallet.toLowerCase() : MAIN);
+      const key = wkey === String(cfg.ownerAddress).toLowerCase() ? MAIN : wkey;
+      flows.push({ t: r.t, key, kind: "sent", usd: -Number(r.usd) });
+    }
+
     // Positions with their PnL legs, main and watched.
     const positions = [];
     for (const p of (pos && pos.positions) || []) positions.push({ key: MAIN, tokenId: p.tokenId, pair: p.pair, version: p.version, pnlUsd: p.pnlUsd, pnlLegs: p.pnlLegs, pnlSince: p.pnlSince, pnlApprox: p.pnlApprox, valueUsd: p.valueUsd, feesUsd: p.feesUsd });
     for (const w of (wl && wl.wallets) || []) for (const p of w.positions || []) positions.push({ key: w.address.toLowerCase(), tokenId: p.tokenId, pair: p.pair, version: p.version, pnlUsd: p.pnlUsd, pnlLegs: p.pnlLegs, pnlSince: p.pnlSince, pnlApprox: p.pnlApprox, valueUsd: p.valueUsd, feesUsd: p.feesUsd });
 
-    const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, priceHours, stakingDaily, vaultSplits, gasSpends, positions };
+    const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, priceHours, stakingDaily, vaultSplits, gasSpends, positions, flows };
     const result = compute(input, { days, now });
     result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, principal, now });
     result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, principal, now });

@@ -33,6 +33,7 @@ fs.writeFileSync(path.join(dir, "token-sales.json"), JSON.stringify([{ t: Date.p
 fs.writeFileSync(path.join(dir, "token-disposals.json"), JSON.stringify({ lastBlock: {}, rows: [
   { t: Date.parse("2026-09-01T21:00:00Z"), token: "LAPTOP", tokenAddress: LAPTOP, amount: 5000, usd: 5000, tx: "0x" + "22".repeat(32), logIndex: "0x1", from: trading, to: "0x00000000000000000000000000000000000000d2", kind: "sold" }, // before any lot: other holdings, consumes nothing
   { t: Date.parse("2026-09-12T21:00:00Z"), token: "LAPTOP", tokenAddress: LAPTOP, amount: 150, usd: 450, tx: "0x" + "11".repeat(32), logIndex: "0x1", from: trading, to: "0x00000000000000000000000000000000000000d1", kind: "sent" },
+  { t: Date.parse("2026-09-05T21:00:00Z"), token: "LAPTOP", tokenAddress: LAPTOP, amount: 25, usd: 30, tx: "0x" + "33".repeat(32), logIndex: "0x1", from: "0x00000000000000000000000000000000000000e1", to: trading, kind: "received" }, // inbound flow, NOT a disposal of lots
 ] }));
 fs.writeFileSync(path.join(dir, "v4-collects.json"), JSON.stringify([{ tx: "0x1", tokenId: "v4-1", block: 1, t: 1, fee0: "0", fee1: "0", t0: { address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", symbol: "USDG", decimals: 6 }, t1: { address: "0x00000000000000000000000000000000000000B1", symbol: "Bucket", decimals: 18 } }]));
 
@@ -67,6 +68,9 @@ srv.listen(0, "127.0.0.1", async () => {
   const lot2 = out.lots.find((x) => x.token === "LAPTOP" && x.tx === "0x" + "ef".repeat(32));
   assert.strictEqual(lot1.disposedAmount, 100); assert.strictEqual(lot1.remainingAmount, 0); assert.strictEqual(lot1.realizedUsd, 200); assert.strictEqual(lot1.disposalKind, "sent");
   assert.strictEqual(lot2.disposedAmount, 50); assert.strictEqual(lot2.remainingAmount, 50); assert.strictEqual(lot2.realizedUsd, 50);
+  // A "received" row is an inbound flow (attribution), not a disposal: it must not consume lots.
+  assert.strictEqual(lap.disposedAmount, 150, "the received row did not consume any lot");
+  assert.strictEqual(out.lots.find((x) => x.token === "LAPTOP").disposalKind, "sent", "disposalKind comes from the sent row, not the received row");
   // The collect-time sale shows under soldAtCollect and consumed no lot.
   assert.strictEqual(out.soldAtCollect.find((x) => x.token === "LAPTOP").amountSold, 999);
   srv.close();

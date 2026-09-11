@@ -1811,6 +1811,7 @@ let attribD = null;
 const ATTRIB_PARTS = [
   ['fees', 'Fees', 'var(--neon-green, #39ff88)'],
   ['price', 'Price move', 'var(--neon-cyan, #22d3ee)'],
+  ['flows', 'Flows', '#6ee7b7'],
   ['il', 'Impermanent loss', '#ff7a59'],
   ['staking', 'Staking', '#a78bfa'],
   ['vault', 'Vault split', 'var(--neon-gold, #f5c542)'],

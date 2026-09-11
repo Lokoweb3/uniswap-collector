@@ -28,7 +28,10 @@ const round = (n, p = 2) => (n == null || !isFinite(n) ? null : +Number(n).toFix
  */
 function readDisposals(dir) {
   const rows = readJson(path.join(dir, "token-disposals.json"), { rows: [] }).rows;
-  return (Array.isArray(rows) ? rows : []).map((r) => ({ t: r.t, token: r.token, amount: Number(r.amount) || 0, usd: r.usd != null ? Number(r.usd) : null, tx: r.tx || null, kind: r.kind || "sent", to: r.to || null }));
+  // kind "received" rows are inbound flows (attribution), not disposals of lots.
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => (r.kind || "sent") !== "received")
+    .map((r) => ({ t: r.t, token: r.token, amount: Number(r.amount) || 0, usd: r.usd != null ? Number(r.usd) : null, tx: r.tx || null, kind: r.kind || "sent", to: r.to || null }));
 }
 
 function create({ cfg, dir = __dirname, port, metaFor = null }) {
@@ -521,6 +524,35 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
           added++;
         }
         state.lastBlock[key] = top;
+        // Inbound transfers (kind "received"): a flow into the wallet from outside our
+        // addresses and outside the protocol. topic2 = wallet (the recipient). LP deposits
+        // and collects come back from the protocol and are internal moves, not flows, so
+        // a sender that is one of our addresses or a protocol contract is skipped.
+        const inKey = `${tk.address}:${w}:in`;
+        const inFrom = (Number(state.lastBlock[inKey]) || 0) + 1;
+        const inQuery = `module=logs&action=getLogs&fromBlock=${inFrom}&toBlock=latest&address=${tk.address}&topic0=${TRANSFER}&topic2=${ethers.zeroPadValue(w, 32)}&topic0_2_opr=and`;
+        let inD = null;
+        try { const r = await bs.bsFetch(`?${inQuery}`, { timeoutMs: 30000 }); inD = await r.json(); } catch { /* retried next scan */ }
+        queries++;
+        if (inD && Array.isArray(inD.result)) {
+          let inTop = Number(state.lastBlock[inKey]) || 0;
+          for (const l of inD.result) {
+            const k = `${l.transactionHash}:${l.logIndex}`;
+            const bn = parseInt(l.blockNumber, 16);
+            if (bn > inTop) inTop = bn;
+            if (seen.has(k) || !l.topics || l.topics.length < 3) continue;
+            const from = ("0x" + l.topics[1].slice(26)).toLowerCase();
+            if (own.has(from) || protocol.has(from)) continue; // internal move / back from the protocol
+            seen.add(k);
+            const t = l.timeStamp ? parseInt(l.timeStamp, 16) * 1000 : null;
+            const raw = BigInt(l.data || "0x0");
+            const amount = Number(ethers.formatUnits(raw, tk.decimals));
+            const px = t != null ? priceAt(hours, tk.address, t) : null;
+            state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from, to: w, token: sym, tokenAddress: tk.address, amount, usd: px != null ? round(amount * px, 4) : null, kind: "received" });
+            added++;
+          }
+          state.lastBlock[inKey] = inTop;
+        }
         await new Promise((r) => setTimeout(r, 400));
       }
     }

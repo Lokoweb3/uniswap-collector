@@ -160,6 +160,24 @@
     },
     "agentChats": []
   },
+  "launchScanner": {
+    "_comment": "launch-scanner.js: every 5 min, new v4 pools (PoolManager Initialize events + the pool scanner's cache) are scored 0-100: market cap in range, contract clean (bytecode selectors, owner, Blockscout verification), LP value, a simulated buy-and-sell round trip (honeypot / sell tax), holder spread, buy pressure. Alert on Telegram (group, fallback personal) at minScore, once per alertCooldownHours, follow-up when the market cap triples. Read-only.",
+    "enabled": true,
+    "minScore": 70,
+    "minMcapUsd": 50000,
+    "maxMcapUsd": 500000,
+    "minAgeMinutes": 10,
+    "maxAgeMinutes": 240,
+    "minTvlUsd": 5000,
+    "maxTopHolderPct": 30,
+    "maxDevPct": 20,
+    "minHolders": 20,
+    "minBuys10min": 5,
+    "minBuyRatioPct": 60,
+    "maxSellTaxPct": 10,
+    "alertCooldownHours": 24,
+    "maxTokensPerScan": 12
+  },
   "dashboard": {
     "port": 8787,
     "collectMode": "full"

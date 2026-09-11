@@ -86,6 +86,7 @@ function toLegacy(raw) {
     memecoinCollect: risk.autoCollect || {},
     memecoinSell: risk.sell || {},
     dailySummary: al.dailySummary || {},
+    launchScanner: s.launchScanner || {},
     alerts: { telegramChat: al.telegramChat || "", fallbackChat: al.fallbackChat || "", treasuryChat: al.treasuryChat || "" },
   };
   return cfg;
@@ -140,6 +141,7 @@ function fromLegacy(c, w = null, chats = {}) {
       telegramChat: chats.group || "", fallbackChat: chats.main || "", treasuryChat: chats.treasury || "",
       dailySummary: strip(c.dailySummary || {}),
     },
+    launchScanner: strip(c.launchScanner || {}),
     dashboard: strip(c.dashboard || {}),
     portfolio: strip(c.portfolio || {}),
     staking: strip(c.staking || {}),

@@ -201,6 +201,9 @@ function create({ provider, npmAddress }) {
       for (const f of [V4_FILE, V4_OWNER_FILE]) {
         try { rows.push(...JSON.parse(fs.readFileSync(f, "utf8")).filter((r) => r && r.tx && r.tokenId)); } catch {}
       }
+      // The owner-collect scanner also sees the collector's own transactions: one row per tx + position, the collector's first.
+      const seen = new Set();
+      rows = rows.filter((r) => { const k = `${String(r.tx).toLowerCase()}:${String(r.tokenId).replace(/^v4-/, "")}`; if (seen.has(k)) return false; seen.add(k); return true; });
       v4 = { mtime, rows: rows.map((r) => ({ ...r, tokenId: String(r.tokenId).startsWith("v4-") ? r.tokenId : `v4-${r.tokenId}`, wallet: r.wallet ? r.wallet.toLowerCase() : null, principal: !!r.principal })) };
     }
     return v4.rows;

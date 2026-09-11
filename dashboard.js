@@ -1660,6 +1660,31 @@ $('#reload').addEventListener('click', () => tick(true));
 tick(false);
 setInterval(() => tick(false), 60000);
 
+// === launch-watch ===
+// Launch Watch: the launch scanner's status, live candidates (score >= 50) and recent alerts, from /api/launches every 60 s.
+async function loadLaunches(){
+  try {
+    const r = await fetch('/api/launches', { cache: 'no-store' });
+    const d = await r.json();
+    const sec = $('#launchsec'); if (!d.ok) return;
+    if (!d.enabled) { sec.hidden = true; return; }
+    sec.hidden = false;
+    const ago = d.at ? Math.round((Date.now() - d.at) / 60000) : null;
+    const dot = d.stale ? '🔴' : '🟢';
+    $('#launchnote').innerHTML = `${dot} ${d.stale ? 'scanner stopped or not run yet' : 'scanner running'} · last scan ${ago == null ? 'never' : ago + ' min ago'} · scanned today <b>${d.scannedToday ?? 0}</b> · alerts sent <b>${d.alertsToday ?? 0}</b>${d.tokensInWindow != null ? ` · ${d.tokensInWindow} tokens in the ${(d.settings && d.settings.maxAgeMinutes || 240) / 60}h window` : ''}`;
+    const fmtM = n => n == null ? '—' : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(0) + 'K' : '$' + n.toFixed(0);
+    const rows = (d.candidates || []).slice(0, 12);
+    const mark = (ok) => ok ? '<span class="up">✓</span>' : '<span class="down">✗</span>';
+    $('#launchtable tbody').innerHTML = rows.length ? rows.map(c => {
+      const ch = c.checks || {};
+      const checks = [['mcap','mcap'],['contract','contract'],['lp','LP'],['honeypot','sell'],['holders','holders'],['volume','buys'],['newToken','new']].map(([k,l]) => `<span title="${k}">${mark(ch[k])}${l}</span>`).join(' ');
+      return `<tr class="${c.alerted ? 'u' : ''}"><td><b>${c.symbol || '?'}</b>/${c.quoteSymbol || 'ETH'}${c.feePct != null ? ' <span class="muted">' + c.feePct + '%</span>' : ''}${c.alerted ? ' 🚀' : ''}</td><td class="u">${fmtM(c.mcapUsd)}</td><td>${c.ageMin == null ? '—' : c.ageMin < 120 ? c.ageMin + ' min' : Math.round(c.ageMin / 60) + ' h'}</td><td><b class="${c.score >= 70 ? 'up' : c.score >= 50 ? 'warn' : ''}">${c.score}</b></td><td class="muted" style="font-size:11px">${checks}${c.honeypot && c.honeypot.sellTaxPct != null ? ' · tax ' + c.honeypot.sellTaxPct + '%' : ''}${c.volume && c.volume.buys != null ? ' · ' + c.volume.buys + ' buys/' + (c.volume.sells || 0) + ' sells' : ''}</td><td>${c.pool ? `<a href="https://app.uniswap.org/explore/pools/robinhood/${c.pool}" target="_blank" rel="noopener">pool</a> · <a href="https://dexscreener.com/robinhoodchain/${c.pool}" target="_blank" rel="noopener">chart</a> · ` : ''}<a href="${(EXPLORER || 'https://robinhoodchain.blockscout.com')}/token/${c.token}" target="_blank" rel="noopener">contract</a></td></tr>`;
+    }).join('') : `<tr><td colspan="6" class="muted">No candidate scored 50 or more in the window. Criteria: mcap ${fmtM(d.settings && d.settings.minMcapUsd)}–${fmtM(d.settings && d.settings.maxMcapUsd)}, pool ${(d.settings && d.settings.minAgeMinutes) || 10}–${(d.settings && d.settings.maxAgeMinutes) || 240} min old, ≥ ${fmtM(d.settings && d.settings.minTvlUsd)} in range, sellable with tax under ${(d.settings && d.settings.maxSellTaxPct) || 10}%, ≥ ${(d.settings && d.settings.minHolders) || 20} holders, top wallet under ${(d.settings && d.settings.maxTopHolderPct) || 30}%, ≥ ${(d.settings && d.settings.minBuys10min) || 5} buys in 10 min.</td></tr>`;
+    $('#launchrecent').innerHTML = (d.recentAlerts || []).length ? 'Alerted: ' + d.recentAlerts.slice(0, 6).map(a => `${a.symbol || a.token.slice(0, 8)} ${fmtM(a.mcap)} (${a.score}) ${new Date(a.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`).join(' · ') : `Alerts go to Telegram at score ≥ ${(d.settings && d.settings.minScore) || 70}; the same token at most once per ${(d.settings && d.settings.alertCooldownHours) || 24} h, with a follow-up when its market cap triples.`;
+  } catch (e) {}
+}
+if (PAGE !== 'analytics') { loadLaunches(); setInterval(loadLaunches, 60000); }
+// === end launch-watch ===
 // === risk-guardian ===
 // Risk section: every open position the guardian watches (v3 and v4, every wallet),
 // its status, its rule block (click a threshold to change it), the auto-close

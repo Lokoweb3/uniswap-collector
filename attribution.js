@@ -122,16 +122,20 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
           }
         }
       }
-      // Price move on current holdings.
+      // Price move on current holdings. Only a real number when at least one held
+      // token has a price in both day-boundary rows; empty holdings (e.g. the live
+      // portfolio view was absent when load() built them) or no matching price means
+      // the move is UNKNOWN, not zero -- a confident 0 would fabricate a price leg.
       let price = null;
       const p0 = priceRowAt(input.priceHours || {}, d0), p1 = priceRowAt(input.priceHours || {}, d1);
       const hold = (input.holdings || {})[w.key] || {};
       if (p0 && p1 && p0.h !== p1.h) {
-        price = 0;
+        let pricedAny = false, acc = 0;
         for (const [addr, amt] of Object.entries(hold)) {
           const a = p0.row[addr], b = p1.row[addr];
-          if (a != null && b != null) price += Number(amt) * (b - a);
+          if (a != null && b != null) { pricedAny = true; acc += Number(amt) * (b - a); }
         }
+        if (pricedAny) price = acc;
       }
       // Value change from the hourly series.
       const v0 = at(series, d0), v1 = at(series, d1);

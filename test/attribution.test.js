@@ -85,8 +85,25 @@ const two = compute({
 }, { days: 3, now });
 const ww = two.wallets[1].rows[0];
 assert.strictEqual(ww.staking, 0); assert.strictEqual(ww.gas, 0); assert.strictEqual(ww.vault, -1); assert.strictEqual(ww.fees, 10);
-assert.strictEqual(+ww.il.toFixed(6), 20 - 10 + 1); // dv 20 = fees 10 - vault 1 + il 11
+// Empty holdings -> no price leg (null, previously a fabricated 0) and thus il unknown.
+assert.strictEqual(ww.price, null, "empty-holdings watched wallet prices null, not 0");
+assert.strictEqual(ww.il, null);
+assert.strictEqual(+ww.net.toFixed(6), 20); // dv 20, no gas for a watched wallet
 assert.strictEqual(+two.book.rows[0].net.toFixed(6), +(day1.net + ww.net).toFixed(6));
+
+// Price leg is UNKNOWN (null), never a fabricated 0, when no held token prices out
+// on both day-boundary rows -- empty holdings (live portfolio view absent at load()
+// time) or a key mismatch (WETH-address holding vs 'eth' price row).
+const emptyHolding = compute({ ...input, holdings: { main: {} } }, { days: 3, now });
+const e0 = emptyHolding.wallets[0].rows[0];
+assert.strictEqual(e0.price, null, "empty holdings -> price null, not 0");
+assert.strictEqual(e0.il, null, "il is null when price is unknown");
+assert.strictEqual(e0.exact, false, "day is inexact when price is unknown");
+const wethAddrHolding = compute({ ...input, holdings: { main: { "0x00000000000000000000000000000000000000ee": 3 } } }, { days: 3, now });
+assert.strictEqual(wethAddrHolding.wallets[0].rows[0].price, null, "WETH-address holding vs 'eth' price -> null, not 0");
+// But it stays EXACT (price = null) when there is genuinely no price series for the day at all.
+const noPrices = compute({ ...input, priceHours: { [String(d0)]: { eth: 2000, "0xaaa": 1.0 } } }, { days: 3, now });
+assert.strictEqual(noPrices.wallets[0].rows[0].price, null);
 
 // Benchmarks: portfolio +10% over a window where ETH went +5% and staking +2% on principal
 const bookSeries = [{ t: now - 10 * DAY, v: 1000 }, { t: now - 5 * DAY, v: 1050 }, { t: now, v: 1100 }];

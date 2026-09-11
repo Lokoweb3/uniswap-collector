@@ -1741,19 +1741,28 @@ const server = http.createServer(async (req, res) => {
       if (wallet.address.toLowerCase() === cfg.ownerAddress.toLowerCase()) held = ((portfolio.latest && portfolio.latest.rows) || []).filter((r) => !r.native && r.wallet > 0).map((r) => ({ symbol: r.symbol, address: r.address, amount: r.wallet, price: r.price }));
       else { const w = ((watch.latest && watch.latest.wallets) || []).find((x) => x.address && x.address.toLowerCase() === wallet.address.toLowerCase()); held = (((w && w.holdings && w.holdings.tokens) || [])).filter((t) => !t.native && t.amount > 0).map((t) => ({ symbol: t.symbol, address: t.address, amount: t.amount, price: t.price })); }
       const rows = [];
-      for (const h of held) {
-        if (!h.address || h.address.toLowerCase() === stable || h.address.toLowerCase() === WETH) continue; // nothing to sell there
+      // Skip known dust before touching the chain (the main wallet's portfolio lists many tiny airdrops).
+      held = held.filter((h) => h.address && !(h.price != null && h.amount * h.price < 1) && h.address.toLowerCase() !== stable && h.address.toLowerCase() !== WETH);
+      // One Multicall3 round trip for every balanceOf + decimals instead of two RPC calls per token.
+      const ercIface = new ethers.Interface(["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"]);
+      const mc = new ethers.Contract("0xcA11bde05977b3631167028862bE2a173976CA11", ["function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[] returnData)"], provider);
+      const calls = [];
+      for (const h of held) calls.push({ target: h.address, allowFailure: true, callData: ercIface.encodeFunctionData("balanceOf", [wallet.address]) }, { target: h.address, allowFailure: true, callData: ercIface.encodeFunctionData("decimals", []) });
+      let res3 = [];
+      try { res3 = await mc.aggregate3(calls); } catch (err) { throw new Error("balance read failed: " + (err.shortMessage || err.message)); }
+      held.forEach((h, i) => {
+        const b = res3[2 * i], d = res3[2 * i + 1];
+        if (!b || !b.success || b.returnData.length < 66) return;
+        const raw = BigInt(b.returnData);
+        if (raw === 0n) return;
         let meta = tokenSet.get(h.address.toLowerCase());
-        const erc = new ethers.Contract(h.address, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
-        if (!meta) { try { meta = { address: h.address, symbol: h.symbol, decimals: Number(await erc.decimals()) }; tokenSet.set(h.address.toLowerCase(), meta); } catch { continue; } }
-        const raw = await erc.balanceOf(wallet.address).catch(() => null);
-        if (raw == null || raw === 0n) continue;
+        if (!meta) { if (!d || !d.success || d.returnData.length < 66) return; meta = { address: h.address, symbol: h.symbol, decimals: Number(BigInt(d.returnData)) }; tokenSet.set(h.address.toLowerCase(), meta); }
         const balance = Number(ethers.formatUnits(raw, meta.decimals));
         const price = h.price ?? lastPrices[h.address.toLowerCase()] ?? currentPrice(h.address);
         const usd = price != null ? balance * price : null;
-        if (usd != null && usd < 1) continue; // dust
+        if (usd != null && usd < 1) return; // dust
         rows.push({ symbol: meta.symbol || h.symbol, address: meta.address, decimals: meta.decimals, raw: raw.toString(), balance, usd });
-      }
+      });
       rows.sort((a, b) => (b.usd || 0) - (a.usd || 0));
       res.writeHead(200);
       return res.end(JSON.stringify({ ok: true, wallet, wallets: ours, rows, usdg: cfg.usdReference && cfg.usdReference.stable, weth: cfg.contracts.weth }));

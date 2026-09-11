@@ -734,7 +734,22 @@ async function loadLots(){
     if (!d.ok) return;
     lotsD = d;
     renderLots();
+    loadAudit();
   } catch(e){}
+}
+let auditD = null;
+async function loadAudit(){
+  try { const r = await fetch('/api/audit', { cache: 'no-store' }); auditD = await r.json(); renderLots(); } catch {}
+}
+/** "3 rows look off" next to the lots total, with every finding in the tooltip; an accept button for unfamiliar routes. */
+function auditBadge(){
+  const a = auditD; if (!a || !a.at) return '';
+  const fs = a.findings || [];
+  const real = fs.filter(f => f.severity !== 'info'), unf = fs.filter(f => f.kind === 'unfamiliar');
+  const when = new Date(a.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const tip = fs.length ? fs.map(f => `${f.severity.toUpperCase()} ${f.token ? f.token + ' ' : ''}${f.day || ''}: ${f.note}`).join('\n') : 'Every valued row sits near its hourly price and inside what arrived on chain.';
+  const shapes = [...new Set(unf.map(f => f.shape))];
+  return ` · <span class="audit ${real.length ? (real.some(f => f.severity === 'bad') ? 'bad' : 'warn') : 'ok'}" title="${esc('Ledger audit ' + when + '\n' + tip)}">${real.length ? `${real.length} row${real.length === 1 ? '' : 's'} look${real.length === 1 ? 's' : ''} off` : 'audit clean'}</span>${shapes.length && !READ_ONLY ? ` <button class="msel" id="auditaccept" data-shapes="${esc(shapes.join(','))}" title="${esc('Routes not accepted yet: ' + shapes.join(', ') + '. Check one receipt of each, then accept.')}">accept ${shapes.length} route${shapes.length === 1 ? '' : 's'}</button>` : ''}`;
 }
 function renderLots(){
   const d = lotsD;
@@ -744,11 +759,12 @@ function renderLots(){
   const toks = d.tokens || [];
   const sold = Object.fromEntries((d.soldAtCollect || []).map(x => [x.token, x]));
   const basis = toks.reduce((s,t)=>s+(t.basisUsd||0),0), value = toks.filter(t=>t.valueNowUsd!=null).reduce((s,t)=>s+t.valueNowUsd,0);
-  $('#lottotal').innerHTML = toks.length ? `basis <b>${usd(basis)}</b> · now <b>${usd(value)}</b>` : '';
+  const flagged = new Set(((auditD && auditD.findings) || []).filter(f => f.severity !== 'info' && f.token).map(f => f.token));
+  $('#lottotal').innerHTML = toks.length ? `basis <b>${usd(basis)}</b> · now <b>${usd(value)}</b>${auditBadge()}` : '';
   $('#lottable').innerHTML = toks.length ? `<table class="etable">
     <tr><th>Token</th><th>Lots</th><th>Received</th><th>Basis (USD)</th><th>Avg cost</th><th>Price now</th><th>Value now</th><th>Unrealized</th><th title="Proceeds of lots disposed of (sent out of the wallet or sold later) minus their basis">Realized</th><th title="Lot tokens still held after disposals">Remaining</th><th>Still held</th><th title="Sold by the collector in the token's own v4 pool at collect time (sell-v4.js); these never became lots">Sold at collect</th><th>First · last</th></tr>
     ${toks.map(t => { const sd = sold[t.token]; return `<tr>
-      <td><b>${t.token}</b></td><td class="u">${t.lots}${t.unpriced ? ` <span class="muted" title="${t.unpriced} lot(s) have no price record">(${t.unpriced} unpriced)</span>` : ''}</td>
+      <td><b>${t.token}</b>${flagged.has(t.token) ? ' <span class="audit warn" title="the ledger audit flagged a row of this token; see the badge above">!</span>' : ''}</td><td class="u">${t.lots}${t.unpriced ? ` <span class="muted" title="${t.unpriced} lot(s) have no price record">(${t.unpriced} unpriced)</span>` : ''}</td>
       <td class="u">${fmtN(t.amount)}</td><td class="u">${usd(t.basisUsd)}</td>
       <td class="u">${t.avgCostUsd != null ? '$' + t.avgCostUsd : '—'}</td><td class="u">${t.priceNowUsd != null ? '$' + t.priceNowUsd : t.priceNote ? '<span class="muted" title="' + esc(t.priceNote) + '">no reliable price</span>' : '—'}</td>
       <td class="u">${t.valueNowUsd != null ? usd(t.valueNowUsd) : '—'}</td>
@@ -1807,6 +1823,12 @@ async function postRule(body){
   await loadRisk();
 }
 document.addEventListener('click', async e => {
+  if (e.target.id === 'auditaccept') {
+    const shapes = (e.target.dataset.shapes || '').split(',').filter(Boolean);
+    if (!shapes.length || !confirm('Accept these route shapes as known?\n' + shapes.join('\n'))) return;
+    try { const r = await fetch('/api/audit/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shapes }) }); if (!(await r.json()).ok) throw new Error('refused'); await loadAudit(); } catch (err) { alert('Could not accept: ' + err.message); }
+    return;
+  }
   const b = e.target.closest('button[data-close]');
   if (b) {
     if (!confirm(`Close ${b.dataset.pair} #${b.dataset.close} now? All liquidity and fees are withdrawn to the position's wallet. The collector must be armed.`)) return;

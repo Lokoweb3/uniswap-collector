@@ -34,6 +34,7 @@ v4-owner-collects.json
 token-sales.json
 sales-pending.json
 token-disposals.json
+ledger-audit.json
 strategy-proposals.json
 portfolio.json
 range-log.json

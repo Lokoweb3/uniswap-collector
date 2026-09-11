@@ -39,6 +39,8 @@ const V4_SWAP_TOPIC = ethers.id("Swap(bytes32,address,int128,int128,uint160,uint
 const V4_SWAP_IFACE = new ethers.Interface(["event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"]);
 /** Two raw amounts within 1e-9 of each other (a stored amount is a double, the log is exact). */
 const nearRaw = (a, b) => { if (a === b) return true; const [x, y] = a > b ? [a, b] : [b, a]; return x > 0n && ((x - y) * 1000000000n) / x === 0n; };
+/** A hop's input may be up to 10% under the previous hop's output: an intermediate token with a transfer tax loses a slice between pools. */
+const feedsFrom = (paid, out) => nearRaw(paid, out) || (paid <= out && paid >= (out * 90n) / 100n);
 
 /**
  * What a sale through a router actually brought back, from the receipt's logs.
@@ -59,12 +61,12 @@ function proceedsFromReceipt({ logs, wallet, tokenRaw, ethPx, weth, stable, refU
   // One transaction can move the token out of the wallet in several transfers (a sell in
   // slices); each row gets its share of what came back, and the swap chain starts from the total.
   const outTotal = tokenAddr ? xfers.filter((x) => x.token === String(tokenAddr).toLowerCase() && x.from === wallet).reduce((s, x) => s + x.amount, 0n) : 0n;
-  const share = outTotal > tokenRaw ? Number(tokenRaw) / Number(outTotal) : 1;
-  let usd = null, how = [];
+  const share = outTotal > tokenRaw && !nearRaw(outTotal, tokenRaw) ? Number(tokenRaw) / Number(outTotal) : 1;
+  let usd = null, how = [], units = { usdg: 0n, eth: 0n };
   const usdgIn = xfers.filter((x) => x.token === stable && x.to === wallet).reduce((s, x) => s + x.amount, 0n);
-  if (usdgIn > 0n) { usd = Number(ethers.formatUnits(usdgIn, 6)); how.push("usdg"); }
+  if (usdgIn > 0n) { usd = Number(ethers.formatUnits(usdgIn, 6)); how.push("usdg"); units.usdg = usdgIn; }
   const wethIn = xfers.filter((x) => x.token === weth && (x.to === wallet || x.to === ethers.ZeroAddress)).reduce((s, x) => s + x.amount, 0n);
-  if (wethIn > 0n && ethPx != null) { usd = (usd || 0) + Number(ethers.formatEther(wethIn)) * ethPx; how.push("eth"); }
+  if (wethIn > 0n && ethPx != null) { usd = (usd || 0) + Number(ethers.formatEther(wethIn)) * ethPx; how.push("eth"); units.eth = wethIn; }
   if (usd == null && ethPx != null) {
     // Follow the chain: the hop that took the token, then each hop that took the previous output.
     const legs = swaps.map((l) => { const ev = V4_SWAP_IFACE.parseLog(l); return [ev.args.amount0, ev.args.amount1]; });
@@ -72,21 +74,27 @@ function proceedsFromReceipt({ logs, wallet, tokenRaw, ethPx, weth, stable, refU
     let paid = outTotal > tokenRaw ? outTotal : tokenRaw, out = null;
     const used = new Set();
     for (let guard = 0; guard < legs.length; guard++) {
-      let i = legs.findIndex((leg, j) => !used.has(j) && ((leg[0] < 0n && nearRaw(abs(leg[0]), paid)) || (leg[1] < 0n && nearRaw(abs(leg[1]), paid))));
+      // The first hop must take the wallet's exact amount; later hops may take a taxed slice of the previous output.
+      const match = guard === 0 ? nearRaw : feedsFrom;
+      let i = legs.findIndex((leg, j) => !used.has(j) && ((leg[0] < 0n && match(abs(leg[0]), paid)) || (leg[1] < 0n && match(abs(leg[1]), paid))));
       if (i < 0 && guard === 0 && paid !== tokenRaw) { paid = tokenRaw; i = legs.findIndex((leg, j) => (leg[0] < 0n && nearRaw(abs(leg[0]), paid)) || (leg[1] < 0n && nearRaw(abs(leg[1]), paid))); }
       if (i < 0) break;
       used.add(i);
       const leg = legs[i];
-      out = leg[0] < 0n && nearRaw(abs(leg[0]), paid) ? leg[1] : leg[0];
+      out = leg[0] < 0n && match(abs(leg[0]), paid) ? leg[1] : leg[0];
       if (out <= 0n) { out = null; break; }
       paid = out;
     }
-    if (out != null && out > 0n) { usd = Number(ethers.formatEther(out)) * ethPx; how.push("eth (last hop)"); }
+    if (out != null && out > 0n) { usd = Number(ethers.formatEther(out)) * ethPx; how.push("eth (last hop)"); units.eth = out; }
   }
+  // The route's shape, for the ledger audit: a shape never seen before is worth a look before its valuation is trusted.
+  const shape = `${swaps.length}hop:${usdgIn > 0n ? "usdg" : ""}${wethIn > 0n ? "+weth" : ""}${units.eth > 0n && wethIn === 0n ? "+native" : ""}${share < 1 ? "+split" : ""}`.replace(/:\+/, ":") || null;
+  const scaled = (x) => (share < 1 ? (x * BigInt(Math.round(share * 1e9))) / 1000000000n : x);
+  const unitsOut = { usdg: scaled(units.usdg).toString(), eth: scaled(units.eth).toString() };
   if (usd != null && share < 1) { usd *= share; how.push(`${Math.round(share * 100)}% of the tx`); }
-  if (usd != null && refUsd > 0 && (usd > 3 * refUsd || usd < refUsd / 3)) return { sold: true, usd: round(refUsd, 4), priced: `hourly log (proceeds unmatched: ${how.join("+") || "none"} gave $${round(usd, 2)})` };
-  if (usd == null && refUsd != null) return { sold: true, usd: round(refUsd, 4), priced: "hourly log" };
-  return { sold: true, usd: usd != null ? round(usd, 4) : null, priced: how.join("+") || null };
+  if (usd != null && refUsd > 0 && (usd > 3 * refUsd || usd < refUsd / 3)) return { sold: true, usd: round(refUsd, 4), priced: `hourly log (proceeds unmatched: ${how.join("+") || "none"} gave $${round(usd, 2)})`, shape, units: null };
+  if (usd == null && refUsd != null) return { sold: true, usd: round(refUsd, 4), priced: "hourly log", shape, units: null };
+  return { sold: true, usd: usd != null ? round(usd, 4) : null, priced: how.join("+") || null, shape, units: usd != null ? unitsOut : null };
 }
 
 function create({ cfg, dir = __dirname, port, metaFor = null }) {
@@ -523,18 +531,19 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       const ref = t != null && tokenAddr ? priceAt(hours, tokenAddr, t) : null;
       return proceedsFromReceipt({ logs: r.logs, wallet, tokenRaw, ethPx, weth: WETH, stable, refUsd: ref != null && amount != null ? amount * ref : null, tokenAddr });
     };
-    // Rows valued before the receipt valuer learned multi-hop swaps and split transfers (rev < 3) are re-valued once.
+    // Rows valued before the receipt valuer learned multi-hop swaps, split transfers and the
+    // audit's units / shape (rev < 4) are re-valued once.
     let revalued = 0;
     for (const r of state.rows) {
-      if (r.kind !== "sold" || r.rev >= 3 || revalued >= 60) continue;
+      if (r.kind !== "sold" || r.rev >= 6 || revalued >= 60) continue;
       const tk = tokens.get(r.token);
       if (!tk || tk.decimals == null || !r.tx) continue;
       let raw; try { raw = ethers.parseUnits(Number(r.amount).toFixed(Math.min(tk.decimals, 12)), tk.decimals); } catch { continue; }
       const sp = await swapProceeds(r.tx, r.from, raw, r.t, r.tokenAddress || tk.address, r.amount);
       if (sp === null) continue;
       revalued++;
-      if (sp.sold) { if (r.usdBefore == null) r.usdBefore = r.usd; r.usd = sp.usd; r.priced = sp.priced; }
-      r.rev = 3;
+      if (sp.sold) { if (r.usdBefore == null) r.usdBefore = r.usd; r.usd = sp.usd; r.priced = sp.priced; r.shape = sp.shape; r.units = sp.units; }
+      r.rev = 6;
     }
     const seen = new Set([...state.rows.map((r) => `${r.tx}:${r.logIndex}`), ...(state.deposits || [])]);
     let added = 0, queries = 0, deposits = 0;
@@ -561,18 +570,18 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
           const t = l.timeStamp ? parseInt(l.timeStamp, 16) * 1000 : null;
           const raw = BigInt(l.data || "0x0");
           const amount = Number(ethers.formatUnits(raw, tk.decimals));
-          let kind = "sent", usd = null, priced = null;
+          let kind = "sent", usd = null, priced = null, shape = null, units = null;
           // A transfer to a contract: a swap in the same transaction (Uniswap or a launchpad's own
           // trading contract) makes it a sale, valued from the swap; into the protocol without a
           // swap it is a liquidity deposit, still yours.
           if (protocol.has(to) || (await isContract(to))) {
             const sp = await swapProceeds(l.transactionHash, w, raw, t, tk.address, amount);
             if (sp === null) continue; // receipt unavailable; retried next scan
-            if (sp.sold) { kind = "sold"; usd = sp.usd; priced = sp.priced; }
+            if (sp.sold) { kind = "sold"; usd = sp.usd; priced = sp.priced; shape = sp.shape; units = sp.units; }
             else if (protocol.has(to)) { deposits++; (state.deposits || (state.deposits = [])).push(k); continue; }
           }
           if (usd == null) { const px = t != null ? priceAt(hours, tk.address, t) : null; usd = px != null ? round(amount * px, 4) : null; }
-          state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from: w, to, token: sym, tokenAddress: tk.address, amount, usd, kind, priced, rev: 3 });
+          state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from: w, to, token: sym, tokenAddress: tk.address, amount, usd, kind, priced, shape, units, rev: 6 });
           added++;
         }
         state.lastBlock[key] = top;
@@ -608,6 +617,15 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
         await new Promise((r) => setTimeout(r, 400));
       }
     }
+    // Merge into whatever is on disk now, never overwrite: a scan holds its state for minutes
+    // (paced explorer reads) and another writer (a second scan, a re-valuation run by hand)
+    // may have landed meanwhile. Rows are keyed by tx:logIndex, the newer revision wins.
+    const cur = readJson(FILE, { lastBlock: {}, rows: [] });
+    const merged = new Map((Array.isArray(cur.rows) ? cur.rows : []).map((r) => [`${r.tx}:${r.logIndex}`, r]));
+    for (const r of state.rows) { const k = `${r.tx}:${r.logIndex}`; const have = merged.get(k); if (!have || (r.rev || 0) >= (have.rev || 0)) merged.set(k, r); }
+    state.rows = [...merged.values()].sort((a, b) => (a.t || 0) - (b.t || 0));
+    for (const [k, v] of Object.entries(cur.lastBlock || {})) if (Number(v) > (Number(state.lastBlock[k]) || 0)) state.lastBlock[k] = Number(v);
+    state.deposits = [...new Set([...(cur.deposits || []), ...(state.deposits || [])])];
     const tmp = FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(state));
     fs.renameSync(tmp, FILE);

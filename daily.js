@@ -36,12 +36,12 @@ async function gather(base = "http://127.0.0.1:8787") {
     if (!r.ok) throw new Error(`${p} -> HTTP ${r.status}`);
     return r.json();
   };
-  const [positions, watch, history, memecoins, treasury] = await Promise.all([
-    get("/api/positions"), get("/api/watch").catch(() => null), get("/api/history").catch(() => null), get("/api/memecoins").catch(() => null), get("/api/treasury").catch(() => null),
+  const [positions, watch, history, memecoins, treasury, audit] = await Promise.all([
+    get("/api/positions"), get("/api/watch").catch(() => null), get("/api/history").catch(() => null), get("/api/memecoins").catch(() => null), get("/api/treasury").catch(() => null), get("/api/audit").catch(() => null),
   ]);
   let splits = [];
   try { splits = JSON.parse(fs.readFileSync(path.join(HERE, "fee-split-ledger.json"), "utf8")); } catch {}
-  return { now: Date.now(), positions, watch, history, memecoins, treasury, splits };
+  return { now: Date.now(), positions, watch, history, memecoins, treasury, splits, audit };
 }
 
 function build(d) {
@@ -97,6 +97,9 @@ function build(d) {
     }
     if (m.autoCollect) lines.push(`⚡ Auto-collect: ≥ ${usd(m.autoCollect.minUsd)} rule${m.autoCollect.stale ? " — loop NOT running" : m.autoCollect.lastRunAt ? `, last run ${hm((now - m.autoCollect.lastRunAt) / 60000)} ago` : ", no run yet"}`);
   }
+
+  // Ledger audit (audit.js): are yesterday's valuations still plausible and covered by what arrived on chain?
+  if (d.audit && d.audit.line) lines.push(d.audit.line);
 
   // Vault, gas, last run
   if (d.treasury) lines.push(`🏦 Vault: ${(d.treasury.balanceUsdg ?? 0).toFixed(2)} USDG held, split ${d.treasury.pct}%`);

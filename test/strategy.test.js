@@ -99,6 +99,10 @@ srv.listen(0, "127.0.0.1", async () => {
   // A native-ETH last hop pays without a log: follow the chain to its output.
   const r3 = proceedsFromReceipt({ logs: [swap(-1000n, 5000n), swap(-5000n, 2n * 10n ** 17n)], wallet, tokenRaw: 1000n, ethPx: 2000, weth: W, stable: U, refUsd: 400 });
   assert.strictEqual(r3.priced, "eth (last hop)"); assert.strictEqual(r3.usd, 400);
+  // A taxed intermediate token: the next hop takes 1% less than the previous hop gave; the chain still reaches the ETH at the end.
+  const taxed = [swap(-69659322400456213956569n, 572252028945616680n), swap(57308400n, -566529508656160514n), swap(22903946609192940n, -57308400n), xfer("0x76ed1e2a8fc3873fcb5c514688ca2fe8a3600b7f", wallet, pm, 69659322400456213956569n)];
+  const r6 = proceedsFromReceipt({ logs: taxed, wallet, tokenRaw: 69659322400456213956569n, ethPx: 2485, weth: W, stable: U, refUsd: 53.74 });
+  assert.strictEqual(r6.priced, "eth (last hop)"); assert.ok(Math.abs(r6.usd - 0.02290394660919294 * 2485) < 0.01, "usd " + r6.usd);
   // The old mistake (first hop read as ETH) is caught by the 3x sanity bound: the hourly price wins.
   const r4 = proceedsFromReceipt({ logs: [swap(-lap, 6261995803353978955n)], wallet, tokenRaw: lap, ethPx: 2485, weth: W, stable: U, refUsd: 628.7 });
   assert.match(r4.priced, /^hourly log \(proceeds unmatched/); assert.strictEqual(r4.usd, 628.7);

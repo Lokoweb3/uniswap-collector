@@ -1849,6 +1849,28 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end sell tab ===
+  // === ledger audit === GET the last report; ?run=1 (loopback) runs it now; POST /api/audit/accept { shapes } accepts route shapes.
+  if (url.pathname === "/api/audit" || url.pathname === "/api/audit/accept") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      if (url.pathname === "/api/audit/accept" || url.searchParams.get("run") === "1") {
+        if (HOST !== "127.0.0.1" || READONLY) { res.writeHead(403); return res.end(JSON.stringify({ ok: false, error: "localhost-only" })); }
+        if (url.pathname === "/api/audit/accept") {
+          const b = JSON.parse(await readBody(req));
+          const out = ledgerAudit.acceptShapes((Array.isArray(b.shapes) ? b.shapes : []).map(String).slice(0, 20));
+          res.writeHead(200); return res.end(JSON.stringify({ ok: true, ...out }));
+        }
+        const { report } = await ledgerAudit.run();
+        res.writeHead(200); return res.end(JSON.stringify({ ok: true, ...report }));
+      }
+      const rep = ledgerAudit.read();
+      res.writeHead(200);
+      return res.end(JSON.stringify(rep ? { ok: true, ...rep, line: ledgerAudit.summaryLine(rep) } : { ok: true, at: null, findings: [], summary: null, line: ledgerAudit.summaryLine(null) }));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
   // === mint tab === open a v4 / v3 position or move one (mint.js): the server quotes and
   // builds the calldata, the wallet signs in Rabby. Reads only; nothing here sends.
   if (url.pathname.startsWith("/api/mint/")) {
@@ -2183,6 +2205,8 @@ const attribution = require("./attribution").create({
   getPositions: () => cache.payload,
   getStaking: () => (staking.enabled ? staking.view() : null),
 });
+// === ledger audit === (audit.js): nightly plausibility + inflow reconciliation of the valued rows
+const ledgerAudit = require("./audit").create({ cfg, port: PORT, log: (m) => console.log(m) });
 // === token-health-and-approvals ===
 // Risk read on every held token (token-health.json, refreshed in the tick) and
 // the approval audit behind /approvals.
@@ -2272,6 +2296,8 @@ async function advisorTick() {
 // Background work: refresh the view (which also snapshots fees) and advance
 // the event scan every 10 minutes, so rates and history accrue even when no
 // browser tab is open.
+const startedAt = Date.now();
+let auditRunning = false;
 async function backgroundTick() {
   try {
     if (!buildInFlight) {
@@ -2436,6 +2462,17 @@ async function backgroundTick() {
   if (Date.now() - lastDisposalScan > 6 * 3600 * 1000) {
     lastDisposalScan = Date.now();
     strategy.scanDisposals({ ownAddresses: [OPERATOR].filter(Boolean) }).then((r) => { if (r.added) console.log(`disposals: ${r.added} outbound transfer(s) of handed-back tokens recorded`); }).catch((err) => console.error("disposals:", err.shortMessage || err.message));
+  }
+  // === ledger audit === once a day (first run ~10 min after start), after the disposal scan had its turn; one Telegram line when the findings change
+  if (LOOPS) {
+    const last = (ledgerAudit.read() || {}).at || 0;
+    if (Date.now() - last > 24 * 3600 * 1000 && Date.now() - startedAt > 10 * 60 * 1000 && !auditRunning) {
+      auditRunning = true;
+      ledgerAudit.run().then(({ report, changed }) => {
+        const s = report.summary;
+        if (changed && s.bad + s.warn > 0) alerts.send(ledgerAudit.summaryLine(report)).catch(() => {});
+      }).catch((err) => console.error("audit:", err.shortMessage || err.message)).finally(() => { auditRunning = false; });
+    }
   }
   // === strategy track record === score any due, unscored proposals (one local read when something is due)
   try {

@@ -34,6 +34,61 @@ function readDisposals(dir) {
     .map((r) => ({ t: r.t, token: r.token, amount: Number(r.amount) || 0, usd: r.usd != null ? Number(r.usd) : null, tx: r.tx || null, kind: r.kind || "sent", to: r.to || null }));
 }
 
+const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
+const V4_SWAP_TOPIC = ethers.id("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
+const V4_SWAP_IFACE = new ethers.Interface(["event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"]);
+/** Two raw amounts within 1e-9 of each other (a stored amount is a double, the log is exact). */
+const nearRaw = (a, b) => { if (a === b) return true; const [x, y] = a > b ? [a, b] : [b, a]; return x > 0n && ((x - y) * 1000000000n) / x === 0n; };
+
+/**
+ * What a sale through a router actually brought back, from the receipt's logs.
+ * Only tokens the logs can name count: USDG transferred to the wallet, WETH
+ * transferred to the wallet, and WETH unwrapped (burned) for it. When none of
+ * those appear (a native-ETH v4 pool pays ETH without a log) the swap chain is
+ * followed from the token's own leg to its last hop and that output is read as
+ * ETH. A first hop's intermediate token is never taken for ETH (a multi-hop
+ * LAPTOP → X → USDG → WETH once valued 0.25 ETH of proceeds as 6 ETH). Any
+ * result more than 3x away from the hourly price is an unmatched leg and the
+ * hourly price wins. Returns { sold, usd, priced } — usd null when nothing prices.
+ */
+function proceedsFromReceipt({ logs, wallet, tokenRaw, ethPx, weth, stable, refUsd = null, tokenAddr = null }) {
+  wallet = String(wallet).toLowerCase(); weth = String(weth || "").toLowerCase(); stable = String(stable || "").toLowerCase();
+  const swaps = (logs || []).filter((l) => l.topics && l.topics[0] === V4_SWAP_TOPIC);
+  if (!swaps.length) return { sold: false };
+  const xfers = (logs || []).filter((l) => l.topics && l.topics[0] === TRANSFER_TOPIC && l.topics.length === 3).map((l) => ({ token: String(l.address).toLowerCase(), from: ("0x" + l.topics[1].slice(26)).toLowerCase(), to: ("0x" + l.topics[2].slice(26)).toLowerCase(), amount: BigInt(l.data || "0x0") }));
+  // One transaction can move the token out of the wallet in several transfers (a sell in
+  // slices); each row gets its share of what came back, and the swap chain starts from the total.
+  const outTotal = tokenAddr ? xfers.filter((x) => x.token === String(tokenAddr).toLowerCase() && x.from === wallet).reduce((s, x) => s + x.amount, 0n) : 0n;
+  const share = outTotal > tokenRaw ? Number(tokenRaw) / Number(outTotal) : 1;
+  let usd = null, how = [];
+  const usdgIn = xfers.filter((x) => x.token === stable && x.to === wallet).reduce((s, x) => s + x.amount, 0n);
+  if (usdgIn > 0n) { usd = Number(ethers.formatUnits(usdgIn, 6)); how.push("usdg"); }
+  const wethIn = xfers.filter((x) => x.token === weth && (x.to === wallet || x.to === ethers.ZeroAddress)).reduce((s, x) => s + x.amount, 0n);
+  if (wethIn > 0n && ethPx != null) { usd = (usd || 0) + Number(ethers.formatEther(wethIn)) * ethPx; how.push("eth"); }
+  if (usd == null && ethPx != null) {
+    // Follow the chain: the hop that took the token, then each hop that took the previous output.
+    const legs = swaps.map((l) => { const ev = V4_SWAP_IFACE.parseLog(l); return [ev.args.amount0, ev.args.amount1]; });
+    const abs = (x) => (x < 0n ? -x : x);
+    let paid = outTotal > tokenRaw ? outTotal : tokenRaw, out = null;
+    const used = new Set();
+    for (let guard = 0; guard < legs.length; guard++) {
+      let i = legs.findIndex((leg, j) => !used.has(j) && ((leg[0] < 0n && nearRaw(abs(leg[0]), paid)) || (leg[1] < 0n && nearRaw(abs(leg[1]), paid))));
+      if (i < 0 && guard === 0 && paid !== tokenRaw) { paid = tokenRaw; i = legs.findIndex((leg, j) => (leg[0] < 0n && nearRaw(abs(leg[0]), paid)) || (leg[1] < 0n && nearRaw(abs(leg[1]), paid))); }
+      if (i < 0) break;
+      used.add(i);
+      const leg = legs[i];
+      out = leg[0] < 0n && nearRaw(abs(leg[0]), paid) ? leg[1] : leg[0];
+      if (out <= 0n) { out = null; break; }
+      paid = out;
+    }
+    if (out != null && out > 0n) { usd = Number(ethers.formatEther(out)) * ethPx; how.push("eth (last hop)"); }
+  }
+  if (usd != null && share < 1) { usd *= share; how.push(`${Math.round(share * 100)}% of the tx`); }
+  if (usd != null && refUsd > 0 && (usd > 3 * refUsd || usd < refUsd / 3)) return { sold: true, usd: round(refUsd, 4), priced: `hourly log (proceeds unmatched: ${how.join("+") || "none"} gave $${round(usd, 2)})` };
+  if (usd == null && refUsd != null) return { sold: true, usd: round(refUsd, 4), priced: "hourly log" };
+  return { sold: true, usd: usd != null ? round(usd, 4) : null, priced: how.join("+") || null };
+}
+
 function create({ cfg, dir = __dirname, port, metaFor = null }) {
   const BASE = `http://127.0.0.1:${port}`;
   const WETH = (cfg.contracts.weth || "").toLowerCase();
@@ -448,12 +503,10 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     const own = new Set([String(cfg.ownerAddress || "").toLowerCase(), ...((watch && watch.wallets) || []).map((w) => String(w.address).toLowerCase()), ...ownAddresses.map((a) => String(a).toLowerCase()), String(cfg.treasuryTBA || "").toLowerCase(), String(cfg.treasuryNFT || "").toLowerCase()].filter(Boolean));
     const wallets = [String(cfg.ownerAddress || "").toLowerCase(), ...((watch && watch.wallets) || []).map((w) => String(w.address).toLowerCase())].filter(Boolean);
     const TRANSFER = ethers.id("Transfer(address,address,uint256)");
-    const SWAP = ethers.id("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
     // Transfers into the protocol are liquidity deposits (a move, not a disposal)
     // unless the same transaction swapped: then the wallet sold through a router.
     const protocol = new Set([cfg.contracts.v4 && cfg.contracts.v4.poolManager, cfg.contracts.v4 && cfg.contracts.v4.positionManager, cfg.contracts.positionManager, cfg.contracts.swapRouter02, cfg.contracts.v4 && cfg.contracts.v4.universalRouter, cfg.contracts.v4 && cfg.contracts.v4.permit2].filter(Boolean).map((a) => String(a).toLowerCase()));
     const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId, { staticNetwork: true });
-    const SWAP_IFACE = new ethers.Interface(["event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"]);
     const stable = String((cfg.usdReference && cfg.usdReference.stable) || "").toLowerCase();
     const codeCache = new Map();
     const isContract = async (a) => { if (!codeCache.has(a)) { try { codeCache.set(a, (await provider.getCode(a)) !== "0x"); } catch { codeCache.set(a, null); } } return codeCache.get(a); };
@@ -463,27 +516,26 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
      * when the wallet received USDG in the same transaction, else native ETH.
      * Returns { sold: true, usd } / { sold: false } / null when the receipt is unavailable.
      */
-    const swapProceeds = async (tx, wallet, tokenRaw, t) => {
+    const swapProceeds = async (tx, wallet, tokenRaw, t, tokenAddr = null, amount = null) => {
       let r; try { r = await provider.getTransactionReceipt(tx); } catch { return null; }
       if (!r) return null;
-      const swaps = r.logs.filter((l) => l.topics[0] === SWAP);
-      if (!swaps.length) return { sold: false };
-      let usd = null;
-      const usdgIn = r.logs.filter((l) => l.address.toLowerCase() === stable && l.topics[0] === TRANSFER && l.topics.length === 3 && ("0x" + l.topics[2].slice(26)).toLowerCase() === wallet).reduce((s, l) => s + BigInt(l.data), 0n);
-      if (usdgIn > 0n) usd = Number(ethers.formatUnits(usdgIn, 6));
-      else {
-        let eth = 0n;
-        for (const l of swaps) {
-          const ev = SWAP_IFACE.parseLog(l);
-          const a0 = ev.args.amount0, a1 = ev.args.amount1;
-          const abs = (x) => (x < 0n ? -x : x);
-          if (abs(a0) === tokenRaw) eth += abs(a1); else if (abs(a1) === tokenRaw) eth += abs(a0);
-        }
-        const ethPx = t != null ? priceAt(hours, ethers.ZeroAddress, t) : null;
-        if (eth > 0n && ethPx != null) usd = Number(ethers.formatEther(eth)) * ethPx;
-      }
-      return { sold: true, usd: usd != null ? round(usd, 4) : null };
+      const ethPx = t != null ? priceAt(hours, ethers.ZeroAddress, t) : null;
+      const ref = t != null && tokenAddr ? priceAt(hours, tokenAddr, t) : null;
+      return proceedsFromReceipt({ logs: r.logs, wallet, tokenRaw, ethPx, weth: WETH, stable, refUsd: ref != null && amount != null ? amount * ref : null, tokenAddr });
     };
+    // Rows valued before the receipt valuer learned multi-hop swaps and split transfers (rev < 3) are re-valued once.
+    let revalued = 0;
+    for (const r of state.rows) {
+      if (r.kind !== "sold" || r.rev >= 3 || revalued >= 60) continue;
+      const tk = tokens.get(r.token);
+      if (!tk || tk.decimals == null || !r.tx) continue;
+      let raw; try { raw = ethers.parseUnits(Number(r.amount).toFixed(Math.min(tk.decimals, 12)), tk.decimals); } catch { continue; }
+      const sp = await swapProceeds(r.tx, r.from, raw, r.t, r.tokenAddress || tk.address, r.amount);
+      if (sp === null) continue;
+      revalued++;
+      if (sp.sold) { if (r.usdBefore == null) r.usdBefore = r.usd; r.usd = sp.usd; r.priced = sp.priced; }
+      r.rev = 3;
+    }
     const seen = new Set([...state.rows.map((r) => `${r.tx}:${r.logIndex}`), ...(state.deposits || [])]);
     let added = 0, queries = 0, deposits = 0;
     for (const sym of handed) {
@@ -509,18 +561,18 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
           const t = l.timeStamp ? parseInt(l.timeStamp, 16) * 1000 : null;
           const raw = BigInt(l.data || "0x0");
           const amount = Number(ethers.formatUnits(raw, tk.decimals));
-          let kind = "sent", usd = null;
+          let kind = "sent", usd = null, priced = null;
           // A transfer to a contract: a swap in the same transaction (Uniswap or a launchpad's own
           // trading contract) makes it a sale, valued from the swap; into the protocol without a
           // swap it is a liquidity deposit, still yours.
           if (protocol.has(to) || (await isContract(to))) {
-            const sp = await swapProceeds(l.transactionHash, w, raw, t);
+            const sp = await swapProceeds(l.transactionHash, w, raw, t, tk.address, amount);
             if (sp === null) continue; // receipt unavailable; retried next scan
-            if (sp.sold) { kind = "sold"; usd = sp.usd; }
+            if (sp.sold) { kind = "sold"; usd = sp.usd; priced = sp.priced; }
             else if (protocol.has(to)) { deposits++; (state.deposits || (state.deposits = [])).push(k); continue; }
           }
           if (usd == null) { const px = t != null ? priceAt(hours, tk.address, t) : null; usd = px != null ? round(amount * px, 4) : null; }
-          state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from: w, to, token: sym, tokenAddress: tk.address, amount, usd, kind });
+          state.rows.push({ t, tx: l.transactionHash, logIndex: l.logIndex, from: w, to, token: sym, tokenAddress: tk.address, amount, usd, kind, priced, rev: 3 });
           added++;
         }
         state.lastBlock[key] = top;
@@ -559,10 +611,10 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     const tmp = FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(state));
     fs.renameSync(tmp, FILE);
-    return { ok: true, added, deposits, queries, tokens: handed.size };
+    return { ok: true, added, deposits, queries, revalued, tokens: handed.size };
   }
 
-  return { positionHistory, priceHistory, scoutHistory, tokenLots, scanDisposals };
+  return { positionHistory, priceHistory, scoutHistory, tokenLots, scanDisposals, proceedsFromReceipt };
 }
 
-module.exports = { create };
+module.exports = { create, proceedsFromReceipt };

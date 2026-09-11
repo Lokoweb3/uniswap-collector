@@ -1,5 +1,6 @@
 // node test/strategy.test.js — token lots: hand-backs parsed from collector.log, priced from the hourly log.
 const assert = require("assert");
+const { ethers } = require("ethers");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -75,5 +76,47 @@ srv.listen(0, "127.0.0.1", async () => {
   assert.strictEqual(out.soldAtCollect.find((x) => x.token === "LAPTOP").amountSold, 999);
   srv.close();
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log("strategy: token lots parsing, pricing and FIFO disposal assertions passed");
+  
+// proceedsFromReceipt: what a router sale actually brought back, from the receipt's logs.
+{
+  const { proceedsFromReceipt } = require("../strategy");
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const T = ethers.id("Transfer(address,address,uint256)"), S = ethers.id("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
+  const W = "0x0bd7d308f8e1639fab988df18a8011f41eacad73", U = "0x5fc5360d0400a0fd4f2af552add042d716f1d168", X = "0x92fd660000000000000000000000000000000000";
+  const wallet = "0xadf94a20558e1e6d64c429f8f9f017169bf3d743", router = "0x8876789976decbfcbbbe364623c63652db8c0904", pm = "0x8366a39cc670b4001a1121b8f6a443a643e40951";
+  const pad = (a) => ethers.zeroPadValue(a, 32);
+  const xfer = (token, from, to, amount) => ({ address: token, topics: [T, pad(from), pad(to)], data: ethers.toBeHex(amount, 32) });
+  const swap = (a0, a1) => ({ address: pm, topics: [S, ethers.ZeroHash, pad(router)], data: coder.encode(["int128", "int128", "uint160", "uint128", "int24", "uint24"], [a0, a1, 1n, 1n, 0, 0]) });
+  const lap = 657664157433652676245746n;
+  // The real 2026-09-08 sale: LAPTOP -> X -> USDG -> WETH, unwrapped to the wallet. Proceeds = 0.252 ETH, not the 6.26 of the first hop.
+  const logs = [swap(-lap, 6261995803353978955n), xfer(X, pm, "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044", 62619958033539789n), swap(626813128n, -6199375845320439166n), swap(252165889604076828n, -626813128n),
+    xfer("0x76ed1e2a8fc3873fcb5c514688ca2fe8a3600b7f", wallet, pm, lap), xfer(W, pm, router, 252165889604076828n), xfer(W, router, ethers.ZeroAddress, 252165889604076828n)];
+  const r = proceedsFromReceipt({ logs, wallet, tokenRaw: lap, ethPx: 2485, weth: W, stable: U, refUsd: 657664 * 0.000956 });
+  assert.strictEqual(r.sold, true); assert.strictEqual(r.priced, "eth"); assert.ok(Math.abs(r.usd - 0.252165889604076828 * 2485) < 0.01, "usd " + r.usd);
+  // USDG straight to the wallet.
+  const r2 = proceedsFromReceipt({ logs: [swap(-264128686770618665766639n, 2486048847981251505n), swap(248846659n, -2461188359501438990n), xfer(U, pm, wallet, 248846659n)], wallet, tokenRaw: 264128686770618665766639n, ethPx: 2485, weth: W, stable: U, refUsd: 264128 * 0.000956 });
+  assert.strictEqual(r2.priced, "usdg"); assert.strictEqual(r2.usd, 248.8467);
+  // A native-ETH last hop pays without a log: follow the chain to its output.
+  const r3 = proceedsFromReceipt({ logs: [swap(-1000n, 5000n), swap(-5000n, 2n * 10n ** 17n)], wallet, tokenRaw: 1000n, ethPx: 2000, weth: W, stable: U, refUsd: 400 });
+  assert.strictEqual(r3.priced, "eth (last hop)"); assert.strictEqual(r3.usd, 400);
+  // The old mistake (first hop read as ETH) is caught by the 3x sanity bound: the hourly price wins.
+  const r4 = proceedsFromReceipt({ logs: [swap(-lap, 6261995803353978955n)], wallet, tokenRaw: lap, ethPx: 2485, weth: W, stable: U, refUsd: 628.7 });
+  assert.match(r4.priced, /^hourly log \(proceeds unmatched/); assert.strictEqual(r4.usd, 628.7);
+  // A stored amount is a double: legs match within 1e-9.
+  const r5 = proceedsFromReceipt({ logs, wallet, tokenRaw: lap + 1000n, ethPx: 2485, weth: W, stable: U, refUsd: null });
+  assert.strictEqual(r5.priced, "eth");
+  // Two transfers of the token in one transaction (a sale in slices): each row gets its share of the proceeds.
+  const C = "0xc0ffee0000000000000000000000000000000000";
+  const split = [xfer(C, wallet, pm, 18616n * 10n ** 18n), xfer(C, wallet, pm, 43438n * 10n ** 18n), swap(-62054n * 10n ** 18n, 8n * 10n ** 16n), xfer(W, pm, router, 8n * 10n ** 16n), xfer(W, router, ethers.ZeroAddress, 8n * 10n ** 16n)];
+  const s1 = proceedsFromReceipt({ logs: split, wallet, tokenRaw: 18616n * 10n ** 18n, ethPx: 2500, weth: W, stable: U, tokenAddr: C });
+  const s2 = proceedsFromReceipt({ logs: split, wallet, tokenRaw: 43438n * 10n ** 18n, ethPx: 2500, weth: W, stable: U, tokenAddr: C });
+  assert.ok(Math.abs(s1.usd + s2.usd - 200) < 0.01, "shares add up to the tx's $200"); assert.ok(Math.abs(s1.usd - 200 * 18616 / 62054) < 0.01); assert.match(s1.priced, /^eth\+30% of the tx$/);
+  // The chain starts from the total when the wallet sold both slices in one hop.
+  const s3 = proceedsFromReceipt({ logs: split.slice(0, 3), wallet, tokenRaw: 43438n * 10n ** 18n, ethPx: 2500, weth: W, stable: U, tokenAddr: C });
+  assert.match(s3.priced, /^eth \(last hop\)\+70% of the tx$/); assert.ok(Math.abs(s3.usd - 140) < 0.01);
+  // No swap at all: a liquidity deposit, not a sale.
+  assert.deepStrictEqual(proceedsFromReceipt({ logs: [xfer(U, pm, wallet, 1n)], wallet, tokenRaw: 1n, ethPx: 1, weth: W, stable: U }), { sold: false });
+}
+
+console.log("strategy: token lots parsing, pricing and FIFO disposal assertions passed");
 });

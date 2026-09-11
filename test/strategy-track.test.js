@@ -93,6 +93,14 @@ srv.listen(0, "127.0.0.1", async () => {
     assert.strictEqual(v.summary.scored, 1);
     assert.strictEqual(v.summary.byAuthor[0].author, "test-agent");
     assert.strictEqual(v.summary.byAuthor[0].avgScore, 66.7);
+    // Per-author detail: 3 items (2 met/beat, but only 2 are verdict-bearing), hit rate of 66.7.
+    assert.strictEqual(v.summary.byAuthor[0].items, 3);
+    assert.strictEqual(v.summary.byAuthor[0].met + v.summary.byAuthor[0].beat, 2);
+    assert.strictEqual(v.summary.byAuthor[0].missed, 0);
+    assert.strictEqual(v.summary.byAuthor[0].hitRate, 66.7);
+    // Expected vs actual is carried on each scored item.
+    assert.strictEqual(hold.expected.feesUsd, 30);
+    assert.strictEqual(hold.actuals.collectsUsd, 40);
 
     // Scoring again is a no-op (never rescore).
     assert.strictEqual((await track.score()).scored, false, "already scored -> no change");

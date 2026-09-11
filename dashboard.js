@@ -785,17 +785,46 @@ function renderTrack(){
   $('#tracksec').hidden = false;
   const s = d.summary || {};
   $('#tracktotal').innerHTML = s.proposals ? `proposals <b>${s.proposals}</b> · scored <b>${s.scored}</b> · avg <b>${s.avgScore != null ? s.avgScore + '%' : '—'}</b>` : '';
+
+  // Per-author averages.
+  const authors = (s.byAuthor || []);
+  const authHtml = authors.length ? `<h4 class="ehead small">Per author</h4><div class="etablewrap"><table class="etable">
+    <tr><th>Author</th><th>Proposals</th><th>Scored</th><th>Avg score</th><th>Items (met / beat / missed)</th><th>Hit rate</th></tr>
+    ${authors.map(a => `<tr>
+      <td><b>${esc(a.author)}</b></td>
+      <td class="u">${a.proposals}</td>
+      <td class="u">${a.scored}</td>
+      <td class="u">${a.avgScore != null ? a.avgScore + '%' : '—'}</td>
+      <td class="l">${a.items
+        ? `<span class="chg up">${a.met || 0} met</span> · <span class="chg up">${a.beat || 0} beat</span> · <span class="chg down">${a.missed || 0} missed</span>`
+        : '<span class="muted">—</span>'}</td>
+      <td class="u">${a.hitRate != null ? a.hitRate + '%' : '—'}</td>
+    </tr>`).join('')}</table></div>` : '';
+
+  // Expected vs actual, per item.
+  const ev = i => {
+    if (i.verdict == null) return '<span class="muted">—</span>';
+    const exp = i.expected || {};
+    const act = i.actuals || {};
+    const bits = [];
+    if (exp.feesUsd != null) bits.push(`<span>exp $${exp.feesUsd}</span><span class="muted">→</span><span>${act.collectsUsd != null ? '$' + act.collectsUsd : '—'}</span>`);
+    if (exp.feeAprPct != null) bits.push(`<span>exp ${exp.feeAprPct}% APR</span><span class="muted">→</span><span>${act.feeAprPct != null ? act.feeAprPct + '%' : '—'}</span>`);
+    if (exp.netResultUsd != null) bits.push(`<span>exp $${exp.netResultUsd}</span><span class="muted">→</span><span>${act.resultVsDepositUsd != null ? '$' + act.resultVsDepositUsd : '—'}</span>`);
+    return bits.length ? '<span class="muted small">' + bits.join('&nbsp; ') + '</span>' : '<span class="muted">—</span>';
+  };
+
   const rows = d.proposals || [];
-  $('#tracktable').innerHTML = rows.length ? `<table class="etable">
-    <tr><th>Date</th><th>Author</th><th>Horizon</th><th>Items (pair / action)</th><th>Score</th><th>Outcome</th></tr>
+  $('#tracktable').innerHTML = rows.length ? `${authHtml}<div class="etablewrap"><table class="etable">
+    <tr><th>Date</th><th>Author</th><th>Horizon</th><th>Score</th><th>Items (pair / action)</th><th>Expected→Actual</th><th>Outcome</th></tr>
     ${rows.map(p => `<tr>
       <td class="l muted">${(p.t||'').slice(0,10)}</td>
       <td><b>${esc(p.author)}</b></td>
       <td class="u">${p.horizonDays}d${p.outcome ? '' : ` <span class="muted" title="Scored at ${p.dueAt}">pending</span>`}</td>
-      <td class="l">${(p.items||[]).map(i => `<span class="muted">${esc(i.pair)}</span> <b>${esc(i.action)}</b>`).join(' · ')}</td>
       <td class="u">${p.outcome && p.outcome.score != null ? p.outcome.score + '%' : '—'}</td>
+      <td class="l">${(p.items||[]).map(i => `<span class="muted">${esc(i.pair)}</span> <b>${esc(i.action)}</b>`).join(' · ')}</td>
+      <td class="l small">${(p.items||[]).map(ev).join('<br>')}</td>
       <td class="l">${(p.items||[]).map(i => i.verdict ? `<span class="chg ${i.verdict==='beat'?'up':i.verdict==='missed'?'down':''}" title="${esc(i.note || '')}">${i.verdict}</span>${i.delta && i.delta.feesUsd != null ? ' <span class="muted">Δ$' + i.delta.feesUsd + '</span>' : ''}` : '').join(' · ')}</td>
-    </tr>`).join('')}</table>` : '<div class="muted">No strategy proposals recorded yet. Agents record them with the record_strategy_proposal tool.</div>';
+    </tr>`).join('')}</table></div>` : '<div class="muted">No strategy proposals recorded yet. Agents record them with the record_strategy_proposal tool.</div>';
 }
 
 /* ---- analytics page: staking, performance, taxes ---- */

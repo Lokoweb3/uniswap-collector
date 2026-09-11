@@ -277,9 +277,18 @@ function create({ cfg, dir = __dirname, port }) {
     const rows = readProposals(FILE).slice().sort((a, b) => b.t - a.t);
     const byAuthor = {};
     for (const r of rows) {
-      const a = byAuthor[r.author] || (byAuthor[r.author] = { author: r.author, proposals: 0, scored: 0, scoreSum: 0 });
+      const a = byAuthor[r.author] || (byAuthor[r.author] = { author: r.author, proposals: 0, scored: 0, scoreSum: 0, met: 0, beat: 0, missed: 0, items: 0 });
       a.proposals++;
-      if (r.outcome) { a.scored++; a.scoreSum += r.outcome.score || 0; }
+      if (r.outcome) {
+        a.scored++;
+        a.scoreSum += r.outcome.score || 0;
+        for (const it of r.outcome.items) {
+          a.items++;
+          if (it.verdict === "beat") a.beat++;
+          else if (it.verdict === "met") a.met++;
+          else if (it.verdict === "missed") a.missed++;
+        }
+      }
     }
     const scored = rows.filter((r) => r.outcome);
     return {
@@ -302,7 +311,7 @@ function create({ cfg, dir = __dirname, port }) {
         scored: scored.length,
         pending: rows.length - scored.length,
         avgScore: scored.length ? round(scored.reduce((x, r) => x + (r.outcome.score || 0), 0) / scored.length, 1) : null,
-        byAuthor: Object.values(byAuthor).map((a) => ({ author: a.author, proposals: a.proposals, scored: a.scored, avgScore: a.scored ? round(a.scoreSum / a.scored, 1) : null })),
+        byAuthor: Object.values(byAuthor).map((a) => ({ author: a.author, proposals: a.proposals, scored: a.scored, avgScore: a.scored ? round(a.scoreSum / a.scored, 1) : null, items: a.items, met: a.met, beat: a.beat, missed: a.missed, hitRate: a.items ? round(((a.met + a.beat) / a.items) * 100, 1) : null })).sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1)),
       },
     };
   }

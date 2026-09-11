@@ -24,6 +24,7 @@ const PAGES = [
   { path: "/wallet", marker: 'id="sec-arm"' },
   { path: "/wallet#vault", marker: 'id="sec-vault"' },
   { path: "/wallet#sell", marker: 'id="sec-sell"' },
+  { path: "/wallet#mint", marker: 'id="sec-mint"' },
 ];
 // Console lines that are noise, not errors.
 const IGNORE = [/Password field is not contained in a form/i, /DevTools listening/i, /Fontconfig/i];

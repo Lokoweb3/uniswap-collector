@@ -1849,6 +1849,57 @@ const server = http.createServer(async (req, res) => {
     }
   }
   // === end sell tab ===
+  // === mint tab === open a v4 / v3 position or move one (mint.js): the server quotes and
+  // builds the calldata, the wallet signs in Rabby. Reads only; nothing here sends.
+  if (url.pathname.startsWith("/api/mint/")) {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const q = url.searchParams;
+      const ours = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main" }, ...watch.readWallets().map((w) => ({ address: w.address, label: w.label || w.address }))];
+      const walletOf = (want) => { const w = ours.find((x) => x.address.toLowerCase() === String(want || cfg.ownerAddress).toLowerCase()); if (!w) throw new Error("not one of our wallets"); return w; };
+      const mint = require("./mint").create({ provider, cfg });
+      let out;
+      if (url.pathname === "/api/mint/context") {
+        // Wallets, the chosen wallet's open positions (to move) and the tokens it could pair.
+        const wallet = walletOf(q.get("wallet"));
+        const main = wallet.address.toLowerCase() === cfg.ownerAddress.toLowerCase();
+        const src = main ? ((cache.payload && cache.payload.positions) || []) : (((watch.latest && watch.latest.wallets) || []).find((x) => x.address && x.address.toLowerCase() === wallet.address.toLowerCase()) || {}).positions || [];
+        const positions = src.filter((p) => p.version === 4 ? !p.hooks || p.hooks === ethers.ZeroAddress : true).map((p) => ({ tokenId: String(p.nftId || String(p.tokenId).replace(/^v4-/, "")), version: p.version, pair: p.pair, token0: p.token0, token1: p.token1, symbol0: p.symbol0, symbol1: p.symbol1, feeTier: p.feeTier, tickLower: p.tickLower, tickUpper: p.tickUpper, inRange: p.inRange, valueUsd: p.valueUsd, feesUsd: p.feesUsd, priceCurrent: p.priceCurrent, priceLower: p.priceLower, priceUpper: p.priceUpper }));
+        const stable = cfg.usdReference && cfg.usdReference.stable;
+        const tokens = new Map();
+        const add = (address, symbol, usd) => { if (!address) return; const k = address.toLowerCase(); if (!tokens.has(k)) tokens.set(k, { address, symbol, usd: usd ?? null }); };
+        add(ethers.ZeroAddress, "ETH", null);
+        if (stable) add(stable, "USDG", null);
+        add(cfg.contracts.weth, "WETH", null);
+        if (main) for (const r of (portfolio.latest && portfolio.latest.rows) || []) { if (!r.native && r.wallet > 0 && (r.price == null || r.wallet * r.price >= 1)) add(r.address, r.symbol, r.price != null ? r.wallet * r.price : null); }
+        else { const w = ((watch.latest && watch.latest.wallets) || []).find((x) => x.address && x.address.toLowerCase() === wallet.address.toLowerCase()); for (const t of (w && w.holdings && w.holdings.tokens) || []) if (!t.native && t.amount > 0 && (t.price == null || t.amount * t.price >= 1)) add(t.address, t.symbol, t.price != null ? t.amount * t.price : null); }
+        for (const p of positions) { add(p.token0, p.symbol0, null); add(p.token1, p.symbol1, null); }
+        out = { ok: true, wallet, wallets: ours, positions, tokens: [...tokens.values()], usdg: stable, weth: cfg.contracts.weth, permit2: cfg.contracts.v4 && cfg.contracts.v4.permit2, chainId: Number(cfg.chainId), explorer: "https://robinhoodchain.blockscout.com" };
+      } else if (url.pathname === "/api/mint/pools") {
+        out = { ok: true, ...(await mint.pools({ tokenA: q.get("tokenA"), tokenB: q.get("tokenB") })) };
+      } else if (url.pathname === "/api/mint/quote") {
+        const pool = JSON.parse(q.get("pool") || "null");
+        if (!pool || !pool.version) throw new Error("pool required (from /api/mint/pools)");
+        if (pool.version === 4 && pool.key && pool.key.hooks && pool.key.hooks !== ethers.ZeroAddress) throw new Error("hooked pools are not supported here yet");
+        out = await mint.quote({ wallet: walletOf(q.get("wallet")).address, pool, tickLower: Number(q.get("tickLower")), tickUpper: Number(q.get("tickUpper")), amount0: BigInt(q.get("amount0") || "0"), amount1: BigInt(q.get("amount1") || "0"), slippageBps: Math.min(1000, Math.max(10, Number(q.get("slippageBps") || 100))), payEth: q.get("payEth") !== "0" });
+        // USD of the deposit, from the collector's prices (null for tokens it does not price).
+        const px = (m) => (m.native || m.isWeth ? lastPrices[WETH] : lastPrices[String(m.address).toLowerCase()] ?? currentPrice(m.address));
+        const p0 = px(pool.token0), p1 = px(pool.token1);
+        out.human.usd = p0 != null && p1 != null ? +(out.human.amount0 * p0 + out.human.amount1 * p1).toFixed(2) : null;
+        out.human.usd0 = p0 ?? null; out.human.usd1 = p1 ?? null;
+      } else if (url.pathname === "/api/mint/balances") {
+        out = { ok: true, rows: await mint.balances({ wallet: walletOf(q.get("wallet")).address, tokens: String(q.get("tokens") || "").split(",").filter(Boolean) }) };
+      } else if (url.pathname === "/api/mint/close") {
+        out = await mint.closeQuote({ wallet: walletOf(q.get("wallet")).address, version: Number(q.get("version")), tokenId: String(q.get("tokenId") || ""), slippageBps: Math.min(1000, Math.max(10, Number(q.get("slippageBps") || 100))) });
+      } else throw new Error("unknown mint endpoint");
+      res.writeHead(200);
+      return res.end(JSON.stringify(out));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end mint tab ===
   if (url.pathname === "/api/balances") {
     res.setHeader("Content-Type", "application/json");
     try {

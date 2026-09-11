@@ -405,7 +405,7 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
   <nav class="pages"><a href="/" id="nav-dash">Dashboard</a><a href="/analytics" id="nav-analytics">Analytics</a><a href="/wallet" id="nav-wallet" class="here">Wallet</a></nav>
   <div class="addr"><span>Arm, approvals, vault, sell and the operator — everything that needs your wallet.</span></div>
 </header>
-<nav class="tabs" id="tabs"><a href="#arm" data-tab="arm">Arm</a><a href="#approvals" data-tab="approvals">Approvals</a><a href="#vault" data-tab="vault">Vault</a><a href="#sell" data-tab="sell">Sell</a><a href="#operator" data-tab="operator">Operator</a></nav>
+<nav class="tabs" id="tabs"><a href="#arm" data-tab="arm">Arm</a><a href="#approvals" data-tab="approvals">Approvals</a><a href="#vault" data-tab="vault">Vault</a><a href="#sell" data-tab="sell">Sell</a><a href="#mint" data-tab="mint">Mint</a><a href="#operator" data-tab="operator">Operator</a></nav>
 
 <section class="tab" id="sec-arm" hidden>
 <div class="wrap">
@@ -816,6 +816,67 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
 <div class="card" data-id="sl-history" hidden>
   <h2>Sold from this page</h2>
   <div data-id="sl-historyrows"></div>
+</div>
+</div>
+</section>
+<section class="tab" id="sec-mint" hidden>
+<div class="wrap">
+<h2 class="secttl">Mint or move a position</h2>
+<p class="sub">Open a Uniswap v4 or v3 position from one of your wallets, or move an open one to a new range. The dashboard reads the pool live and builds the transaction; your wallet signs it in Rabby. Nothing is sent by the server. v4 pools without hooks only.</p>
+<div class="card">
+  <h2>Position</h2>
+  <div class="actions">
+    <label>Wallet <select data-id="mt-wallet"></select></label>
+    <label>Do <select data-id="mt-mode"><option value="new">open a new position</option><option value="move">move an open position</option></select></label>
+    <label data-id="mt-fromwrap" hidden>Position <select data-id="mt-from"></select></label>
+  </div>
+  <div class="actions">
+    <label>Token A <select data-id="mt-tokenA"></select></label>
+    <label>Token B <select data-id="mt-tokenB"></select></label>
+    <label>Pool <select data-id="mt-pool"><option value="">pick two tokens</option></select></label>
+    <button data-id="mt-reload" title="Re-read pools and balances">↻</button>
+  </div>
+  <div class="tokinfo" data-id="mt-poolinfo"></div>
+  <div class="actions">
+    <span class="muted">Range</span>
+    <span class="pcts" data-id="mt-presets"><button data-range="5">±5%</button><button data-range="10">±10%</button><button data-range="25">±25%</button><button data-range="50">±50%</button><button data-range="full">Full</button></span>
+  </div>
+  <div class="actions amountrow">
+    <label>Min <input type="text" data-id="mt-lo" size="14" placeholder="0"></label>
+    <label>Max <input type="text" data-id="mt-hi" size="14" placeholder="∞"></label>
+    <span class="muted" data-id="mt-priceunit"></span>
+  </div>
+  <div class="actions amountrow">
+    <label><span data-id="mt-sym0">Token 0</span> <input type="text" data-id="mt-amt0" size="14" placeholder="0"></label><span class="pcts"><button data-max="0">Max</button></span>
+    <label><span data-id="mt-sym1">Token 1</span> <input type="text" data-id="mt-amt1" size="14" placeholder="0"></label><span class="pcts"><button data-max="1">Max</button></span>
+  </div>
+  <div class="actions">
+    <label>Slippage <select data-id="mt-slip"><option value="50">0.5%</option><option value="100" selected>1%</option><option value="200">2%</option><option value="500">5%</option></select></label>
+    <label data-id="mt-payethwrap" hidden><input type="checkbox" data-id="mt-payeth" checked> pay the WETH side with ETH</label>
+  </div>
+  <div data-id="mt-status"></div>
+</div>
+<div class="card quotecard" data-id="mt-quotecard" hidden>
+  <h2>You deposit <span class="qage" data-id="mq-age"></span></h2>
+  <div class="bigout"><b data-id="mq-big">—</b><span class="muted" data-id="mq-usd"></span></div>
+  <div class="row"><span class="k">Pool</span><span data-id="mq-pool">—</span></div>
+  <div class="row"><span class="k">Range</span><span data-id="mq-range">—</span></div>
+  <div class="row"><span class="k">Price now</span><span data-id="mq-price">—</span></div>
+  <div class="row"><span class="k">Share of in-range liquidity</span><span data-id="mq-share">—</span></div>
+  <div class="row"><span class="k">Position goes to</span><span data-id="mq-owner">—</span></div>
+  <div data-id="mq-warn"></div>
+  <ol class="steps" data-id="mt-steps"></ol>
+  <div class="actions">
+    <button data-id="mt-connect">Connect wallet</button>
+    <button data-id="mt-go" class="primary" disabled>Mint with wallet</button>
+    <button data-id="mt-requote" title="Re-quote now">Refresh quote</button>
+  </div>
+  <div data-id="mt-txstatus"></div>
+  <details><summary>What gets signed</summary><p class="note">The transactions from the selected wallet, in the order shown above. A v4 mint calls the PositionManager's <span class="mono">modifyLiquidities</span> (MINT_POSITION, SETTLE_PAIR, and SWEEP of unused ETH); a v3 mint calls the NonfungiblePositionManager's <span class="mono">mint</span>. The amounts carry your slippage as the maximum the pool may take; a move first returns the old position's tokens to the wallet.</p><pre class="mono" data-id="mq-calldata" style="white-space:pre-wrap;word-break:break-all;font-size:11px">—</pre></details>
+</div>
+<div class="card" data-id="mt-history" hidden>
+  <h2>Minted from this page</h2>
+  <div data-id="mt-historyrows"></div>
 </div>
 </div>
 </section>
@@ -1908,6 +1969,286 @@ loadConfig().then(async () => {
   q('sl-connect').addEventListener('click', connect);
   q('sl-sell').addEventListener('click', () => { if (quote && confirm(`Sell ${fmt(quote.amountIn, quote.token.decimals)} ${quote.token.symbol} for at least ${fmt(quote.minOut, quote.outDecimals, 4)} ${quote.outSymbol}?`)) sell(); });
   loadTokens().catch((e) => status('sl-status', `Could not load: ${e.message}`, 'bad'));
+})();
+</script>
+<script>
+(() => {
+  const root = document.getElementById('sec-mint');
+  const $ = (s) => root.querySelector(s);
+  const q = (id) => $(`[data-id="${id}"]`);
+  const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
+  const status = (el, msg, cls = '') => { q(el).innerHTML = `<span class="${cls}">${msg}</span>`; };
+  const fmt = (raw, dec, max = 6) => Number(ethers.formatUnits(BigInt(raw), dec)).toLocaleString('en-US', { maximumFractionDigits: max });
+  const num = (n, sig = 6) => n == null || !isFinite(n) ? '—' : Number(n).toLocaleString('en-US', { maximumSignificantDigits: sig });
+  const usdF = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const MIN_TICK = -887272, MAX_TICK = 887272;
+  const ERC20 = ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'];
+  const PERMIT2 = ['function allowance(address owner, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)', 'function approve(address token, address spender, uint160 amount, uint48 expiration)'];
+  let ctx = null, pools = [], pool = null, balances = [], quote = null, closeQ = null, closed = null, provider = null, signer = null, account = null, quoteTimer = null, quoteAt = 0, quoting = false, history = [];
+
+  const isEth = (a) => !a || /^0x0{40}$/i.test(a);
+  const tokOpt = (t) => `<option value="${t.address}">${t.symbol}${t.usd != null ? ' (≈ ' + usdF(t.usd) + ')' : ''}</option>`;
+  async function loadContext(wallet) {
+    status('mt-status', 'Loading…', 'muted');
+    const r = await fetch('/api/mint/context' + (wallet ? '?wallet=' + wallet : ''), { cache: 'no-store' });
+    ctx = await r.json();
+    if (!ctx.ok) { status('mt-status', ctx.error || 'failed', 'bad'); return; }
+    const ws = q('mt-wallet');
+    if (!ws.options.length) ws.innerHTML = ctx.wallets.map((w) => `<option value="${w.address}">${w.label} (${short(w.address)})</option>`).join('');
+    ws.value = ctx.wallet.address;
+    const a = q('mt-tokenA'), b = q('mt-tokenB');
+    const prevA = a.value, prevB = b.value;
+    a.innerHTML = ctx.tokens.map(tokOpt).join(''); b.innerHTML = ctx.tokens.map(tokOpt).join('');
+    a.value = ctx.tokens.some((t) => t.address === prevA) ? prevA : ctx.tokens[0].address;
+    b.value = ctx.tokens.some((t) => t.address === prevB && prevB !== a.value) ? prevB : (ctx.tokens.find((t) => t.address !== a.value) || ctx.tokens[0]).address;
+    q('mt-from').innerHTML = ctx.positions.length ? ctx.positions.map((p) => `<option value="${p.version}:${p.tokenId}">${p.pair} v${p.version} #${p.tokenId} · ${usdF(p.valueUsd)}${p.inRange ? '' : ' · out of range'}</option>`).join('') : '<option value="">no open position in this wallet</option>';
+    hideQuote(); closed = null; closeQ = null;
+    status('mt-status', '', '');
+    await loadPools();
+  }
+  const selPos = () => { const v = q('mt-from').value; if (!v) return null; const [ver, id] = v.split(':'); return (ctx.positions || []).find((p) => String(p.version) === ver && p.tokenId === id) || null; };
+  async function loadPools() {
+    pool = null; pools = []; q('mt-pool').innerHTML = '<option value="">reading pools…</option>'; q('mt-poolinfo').innerHTML = '';
+    const A = q('mt-tokenA').value, B = q('mt-tokenB').value;
+    if (!A || !B || A.toLowerCase() === B.toLowerCase()) { q('mt-pool').innerHTML = '<option value="">pick two different tokens</option>'; return; }
+    try {
+      const r = await fetch(`/api/mint/pools?tokenA=${A}&tokenB=${B}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'no pools');
+      pools = j.pools;
+      if (!pools.length) { q('mt-pool').innerHTML = '<option value="">no initialised pool for this pair</option>'; return; }
+      q('mt-pool').innerHTML = pools.map((p, i) => `<option value="${i}">${p.label}${BigInt(p.liquidity) === 0n ? ' (empty)' : ''}</option>`).join('');
+      // A move keeps its pool unless you pick another; otherwise the deepest pool.
+      const from = q('mt-mode').value === 'move' ? selPos() : null;
+      let idx = from ? pools.findIndex((p) => p.version === from.version && p.fee === from.feeTier) : pools.findIndex((p) => p.version === 4 && BigInt(p.liquidity) > 0n);
+      if (idx < 0) idx = 0;
+      q('mt-pool').value = String(idx);
+      await pickPool();
+    } catch (e) { q('mt-pool').innerHTML = `<option value="">${e.message}</option>`; }
+  }
+  async function pickPool() {
+    pool = pools[Number(q('mt-pool').value)] || null;
+    hideQuote();
+    if (!pool) return;
+    q('mt-sym0').textContent = pool.token0.symbol; q('mt-sym1').textContent = pool.token1.symbol;
+    q('mt-priceunit').textContent = `${pool.token1.symbol} per ${pool.token0.symbol}`;
+    q('mt-payethwrap').hidden = !(pool.version === 3 && (pool.token0.isWeth || pool.token1.isWeth));
+    q('mt-poolinfo').innerHTML = `<span>Price <b>${num(pool.price)}</b> ${pool.token1.symbol} per ${pool.token0.symbol}</span><span>Tick <b>${pool.tick}</b> · spacing ${pool.tickSpacing}</span><span>Liquidity <b>${BigInt(pool.liquidity) === 0n ? 'none yet' : Number(pool.liquidity).toPrecision(3)}</b></span><span>Uniswap v${pool.version} · ${pool.feePct}% fee</span>`;
+    const from = q('mt-mode').value === 'move' ? selPos() : null;
+    if (from && from.priceLower != null && from.version === pool.version) { q('mt-lo').value = num(from.priceLower, 8).replace(/,/g, ''); q('mt-hi').value = num(from.priceUpper, 8).replace(/,/g, ''); }
+    else if (!q('mt-lo').value && !q('mt-hi').value) setRange(10);
+    await loadBalances();
+    scheduleQuote(0);
+  }
+  async function loadBalances() {
+    balances = [];
+    if (!pool) return;
+    try {
+      const toks = [pool.token0, pool.token1].filter((t) => !t.native).map((t) => t.address);
+      const r = await fetch(`/api/mint/balances?wallet=${q('mt-wallet').value}&tokens=${toks.join(',')}`, { cache: 'no-store' });
+      const j = await r.json(); if (j.ok) balances = j.rows;
+    } catch {}
+  }
+  const balOf = (t) => balances.find((b) => t.native ? isEth(b.address) : b.address.toLowerCase() === t.address.toLowerCase()) || null;
+  function setRange(pct) {
+    if (!pool) return;
+    for (const b of root.querySelectorAll('[data-range]')) b.classList.toggle('on', String(pct) === b.dataset.range);
+    if (pct === 'full') { q('mt-lo').value = '0'; q('mt-hi').value = ''; }
+    else { q('mt-lo').value = num(pool.price * (1 - pct / 100), 8).replace(/,/g, ''); q('mt-hi').value = num(pool.price * (1 + pct / 100), 8).replace(/,/g, ''); }
+    scheduleQuote(0);
+  }
+  // Price (token1 per token0, human) -> tick, the same formula the server aligns to the pool's spacing.
+  function tickOf(priceText, fallback) {
+    const v = Number(String(priceText).replace(/,/g, '').trim());
+    if (!(v > 0)) return fallback;
+    const raw = v * Math.pow(10, pool.token1.decimals - pool.token0.decimals);
+    return Math.max(MIN_TICK, Math.min(MAX_TICK, Math.floor(Math.log(raw) / Math.log(1.0001))));
+  }
+  function amountRaw(i) {
+    const t = i ? pool.token1 : pool.token0;
+    const v = q(i ? 'mt-amt1' : 'mt-amt0').value.trim().replace(/,/g, '');
+    if (!v) return 0n;
+    try { return ethers.parseUnits(v, t.decimals); } catch { return 0n; }
+  }
+  function fillMax(i) {
+    const t = i ? pool.token1 : pool.token0;
+    const payEth = pool.version === 3 && t.isWeth && q('mt-payeth').checked;
+    const b = payEth || t.native ? balances.find((x) => isEth(x.address)) : balOf(t);
+    if (!b) return;
+    let raw = BigInt(b.raw);
+    if (payEth || t.native) { const keep = ethers.parseEther('0.002'); raw = raw > keep ? raw - keep : 0n; } // leave gas
+    q(i ? 'mt-amt1' : 'mt-amt0').value = ethers.formatUnits(raw, t.decimals);
+    scheduleQuote(0);
+  }
+  function hideQuote() { quote = null; q('mt-quotecard').hidden = true; clearTimeout(quoteTimer); }
+  function scheduleQuote(delay = 400) { clearTimeout(quoteTimer); quoteTimer = setTimeout(getQuote, delay); }
+  async function getQuote() {
+    if (!pool) return;
+    const a0 = amountRaw(0), a1 = amountRaw(1);
+    if (a0 <= 0n && a1 <= 0n) { hideQuote(); status('mt-status', 'Enter the amounts to deposit.', 'warn'); return; }
+    if (quoting) { scheduleQuote(1000); return; }
+    quoting = true;
+    status('mt-status', 'Quoting the pool…', 'muted');
+    try {
+      const lo = tickOf(q('mt-lo').value, MIN_TICK), hi = q('mt-hi').value.trim() ? tickOf(q('mt-hi').value, MAX_TICK) : MAX_TICK;
+      const params = new URLSearchParams({ wallet: q('mt-wallet').value, pool: JSON.stringify(pool), tickLower: lo, tickUpper: hi, amount0: a0.toString(), amount1: a1.toString(), slippageBps: q('mt-slip').value, payEth: q('mt-payeth').checked ? '1' : '0' });
+      const r = await fetch('/api/mint/quote?' + params, { cache: 'no-store' });
+      const j = await r.json();
+      if (!j.ok) { hideQuote(); status('mt-status', j.error || 'no quote', 'bad'); return; }
+      quote = j; quoteAt = Date.now();
+      const t0 = pool.token0, t1 = pool.token1;
+      q('mq-big').textContent = `${fmt(j.amount0, t0.decimals)} ${t0.symbol} + ${fmt(j.amount1, t1.decimals)} ${t1.symbol}`;
+      q('mq-usd').textContent = j.human.usd != null ? `≈ ${usdF(j.human.usd)}` : '';
+      q('mq-pool').textContent = j.label;
+      q('mq-range').innerHTML = `${num(j.human.priceLower)} – ${j.tickUpper >= MAX_TICK - pool.tickSpacing ? '∞' : num(j.human.priceUpper)} ${t1.symbol} per ${t0.symbol} <span class="muted">(ticks ${j.tickLower} to ${j.tickUpper})</span>`;
+      q('mq-price').innerHTML = `${num(j.human.price)} ${t1.symbol} per ${t0.symbol} ${j.inRange ? '<span class="ok">in range</span>' : '<span class="warn">out of range: one-sided deposit</span>'}`;
+      q('mq-share').textContent = j.shareInRangePct != null ? `${j.shareInRangePct.toFixed(3)}%` : '—';
+      q('mq-owner').textContent = q('mt-wallet').selectedOptions[0].textContent;
+      q('mq-warn').innerHTML = j.warnings.length ? j.warnings.map((w) => `<div class="warn">⚠ ${w}</div>`).join('') : '';
+      q('mq-calldata').textContent = `${j.version === 4 ? 'modifyLiquidities' : 'mint'} on ${j.tx.to}\nvalue ${j.tx.value} wei · deadline ${new Date(Number(j.deadline) * 1000).toLocaleTimeString()}\n${j.tx.data}`;
+      renderSteps();
+      q('mt-quotecard').hidden = false;
+      status('mt-status', '', '');
+      tickAge(); updateButtons();
+    } catch (e) { status('mt-status', `Quote failed: ${e.message}`, 'bad'); }
+    finally { quoting = false; clearTimeout(quoteTimer); quoteTimer = setTimeout(getQuote, 30000); }
+  }
+  function renderSteps() {
+    const li = [];
+    const from = q('mt-mode').value === 'move' ? selPos() : null;
+    if (from) li.push(`<li data-step="close" class="${closed ? 'done' : ''}">Close ${from.pair} #${from.tokenId}${closeQ ? ` <span class="muted">(returns ${fmt(closeQ.expect.amount0, closeQ.token0.decimals)} ${closeQ.token0.symbol} + ${fmt(closeQ.expect.amount1, closeQ.token1.decimals)} ${closeQ.token1.symbol}${closeQ.dryRun && !closeQ.dryRun.ok ? '; dry run failed: ' + closeQ.dryRun.error : ''})</span>` : ''}</li>`);
+    for (const a of quote.approvals) {
+      if (a.via === 'permit2') { li.push(`<li data-step="approve:${a.token}">Approve ${a.symbol} for Permit2 <span class="muted">(once per token)</span></li>`); li.push(`<li data-step="permit:${a.token}">Allow the PositionManager to take ${fmt(a.amount, (a.token.toLowerCase() === pool.token0.address.toLowerCase() ? pool.token0 : pool.token1).decimals)} ${a.symbol} <span class="muted">(1 hour)</span></li>`); }
+      else li.push(`<li data-step="approve:${a.token}">Approve ${a.symbol} for the position manager <span class="muted">(this amount)</span></li>`);
+    }
+    li.push(`<li data-step="mint">Mint the position</li>`);
+    q('mt-steps').innerHTML = li.join('');
+  }
+  function tickAge() { if (!quote) return; const s = Math.round((Date.now() - quoteAt) / 1000); q('mq-age').textContent = s < 5 ? 'live' : `${s}s ago`; }
+  setInterval(tickAge, 1000);
+  function setStep(step, state) { for (const li of root.querySelectorAll('.steps li')) if (li.dataset.step === step) li.className = state; }
+  function updateButtons() {
+    const ok = !!(quote && account && account.toLowerCase() === q('mt-wallet').value.toLowerCase());
+    q('mt-go').disabled = !ok;
+    q('mt-go').textContent = q('mt-mode').value === 'move' && !closed ? 'Close, then mint with wallet' : 'Mint with wallet';
+    if (quote && account && !ok) status('mt-txstatus', `Connected ${short(account)} is not the selected wallet; switch accounts in Rabby.`, 'warn');
+  }
+  async function connect() {
+    if (!window.ethereum) { status('mt-txstatus', 'No wallet found. Install Rabby or MetaMask.', 'bad'); return; }
+    try {
+      provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send('eth_requestAccounts', []);
+      account = ethers.getAddress(accounts[0]); signer = await provider.getSigner();
+      const net = await provider.getNetwork();
+      if (ctx && Number(net.chainId) !== Number(ctx.chainId)) {
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(ctx.chainId).toString(16) }] }); } catch { status('mt-txstatus', `Switch the wallet to Robinhood Chain (${ctx.chainId}).`, 'warn'); }
+      }
+      q('mt-connect').textContent = short(account);
+      window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
+      status('mt-txstatus', account.toLowerCase() === q('mt-wallet').value.toLowerCase() ? 'Connected. Check the numbers above, then mint.' : `Connected ${short(account)}; select that wallet above or switch accounts.`, 'ok');
+      updateButtons();
+    } catch (e) { status('mt-txstatus', `Connection failed: ${e.shortMessage || e.message}`, 'bad'); }
+  }
+  async function loadCloseQuote() {
+    closeQ = null; closed = null;
+    const from = selPos(); if (!from) return;
+    try {
+      const r = await fetch(`/api/mint/close?wallet=${q('mt-wallet').value}&version=${from.version}&tokenId=${from.tokenId}&slippageBps=${q('mt-slip').value}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (!j.ok) { status('mt-status', `Cannot close #${from.tokenId}: ${j.error}`, 'bad'); return; }
+      closeQ = j;
+      // Pre-fill the pair and the amounts the close will return.
+      q('mt-tokenA').value = j.token0.native ? ctx.tokens.find((t) => isEth(t.address)).address : j.token0.address;
+      q('mt-tokenB').value = j.token1.native ? ctx.tokens.find((t) => isEth(t.address)).address : j.token1.address;
+      if (![...q('mt-tokenA').options].some((o) => o.value === q('mt-tokenA').value)) q('mt-tokenA').insertAdjacentHTML('beforeend', tokOpt({ address: j.token0.address, symbol: j.token0.symbol }));
+      if (![...q('mt-tokenB').options].some((o) => o.value === q('mt-tokenB').value)) q('mt-tokenB').insertAdjacentHTML('beforeend', tokOpt({ address: j.token1.address, symbol: j.token1.symbol }));
+      q('mt-lo').value = ''; q('mt-hi').value = '';
+      q('mt-amt0').value = ethers.formatUnits(BigInt(j.expect.amount0), j.token0.decimals);
+      q('mt-amt1').value = ethers.formatUnits(BigInt(j.expect.amount1), j.token1.decimals);
+      await loadPools();
+    } catch (e) { status('mt-status', `Close quote failed: ${e.message}`, 'bad'); }
+  }
+  async function go() {
+    if (!quote || !signer) return;
+    const qt = quote; const from = q('mt-mode').value === 'move' ? selPos() : null;
+    q('mt-go').disabled = true; clearTimeout(quoteTimer);
+    try {
+      if (from && !closed) {
+        if (!closeQ) throw new Error('no close quote for the position to move');
+        setStep('close', 'active'); status('mt-txstatus', `Confirm in your wallet: close ${from.pair} #${from.tokenId}…`, 'warn');
+        const tx = await signer.sendTransaction({ to: closeQ.tx.to, data: closeQ.tx.data, value: 0n });
+        status('mt-txstatus', `Sent <a href="${ctx.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+        const rc = await tx.wait();
+        closed = { tx: tx.hash, block: rc.blockNumber };
+        setStep('close', 'done');
+        status('mt-txstatus', `Closed in block ${rc.blockNumber}. Re-quoting the mint with the wallet's new balances…`, 'ok');
+        await new Promise((r) => setTimeout(r, 3000));
+        await loadBalances();
+        await getQuote();
+        if (!quote) throw new Error('the mint quote failed after the close; the tokens are in the wallet — adjust the amounts and mint again');
+        return go();
+      }
+      const erc = (t) => new ethers.Contract(t, ERC20, signer);
+      const p2 = new ethers.Contract(qt.permit2, PERMIT2, signer);
+      for (const a of qt.approvals) {
+        const amt = BigInt(a.amount);
+        if (a.via === 'permit2') {
+          if ((await erc(a.token).allowance(account, qt.permit2)) < amt) {
+            setStep(`approve:${a.token}`, 'active'); status('mt-txstatus', `Confirm in your wallet: approve ${a.symbol} for Permit2…`, 'warn');
+            await (await erc(a.token).approve(qt.permit2, ethers.MaxUint256)).wait();
+          }
+          setStep(`approve:${a.token}`, 'done');
+          const [pAmt, pExp] = await p2.allowance(account, a.token, a.spender);
+          if (BigInt(pAmt) < amt || Number(pExp) < Math.floor(Date.now() / 1000) + 60) {
+            setStep(`permit:${a.token}`, 'active'); status('mt-txstatus', `Confirm in your wallet: allow the PositionManager to take ${a.symbol} (1 hour)…`, 'warn');
+            await (await p2.approve(a.token, a.spender, amt, Math.floor(Date.now() / 1000) + 3600)).wait();
+          }
+          setStep(`permit:${a.token}`, 'done');
+        } else {
+          if ((await erc(a.token).allowance(account, a.spender)) < amt) {
+            setStep(`approve:${a.token}`, 'active'); status('mt-txstatus', `Confirm in your wallet: approve ${a.symbol} for the position manager…`, 'warn');
+            await (await erc(a.token).approve(a.spender, amt)).wait();
+          }
+          setStep(`approve:${a.token}`, 'done');
+        }
+      }
+      setStep('mint', 'active');
+      status('mt-txstatus', `Confirm in your wallet: mint ${qt.label}…`, 'warn');
+      const tx = await signer.sendTransaction({ to: qt.tx.to, data: qt.tx.data, value: BigInt(qt.tx.value) });
+      status('mt-txstatus', `Sent <a href="${ctx.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+      const rc = await tx.wait();
+      setStep('mint', 'done');
+      status('mt-txstatus', `Minted in block ${rc.blockNumber}. <a href="${ctx.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a> — the dashboard picks the position up on its next refresh.`, 'ok');
+      history.unshift({ at: Date.now(), label: qt.label, text: q('mq-big').textContent, usd: qt.human.usd, tx: tx.hash });
+      renderHistory();
+      hideQuote(); closed = null; closeQ = null;
+      setTimeout(() => loadContext(q('mt-wallet').value), 5000);
+    } catch (e) {
+      const m = e.shortMessage || e.message || String(e);
+      status('mt-txstatus', /rejected|denied|4001/i.test(m) ? 'Rejected in the wallet. Nothing changed.' : `Failed: ${m}`, 'bad');
+      updateButtons(); scheduleQuote(0);
+    }
+  }
+  function renderHistory() {
+    const card = q('mt-history'); card.hidden = !history.length;
+    q('mt-historyrows').innerHTML = history.map((h) => `<div class="row"><span>${new Date(h.at).toLocaleTimeString()} · ${h.label} · ${h.text}${h.usd != null ? ' (≈ ' + usdF(h.usd) + ')' : ''}</span><span><a href="${ctx.explorer}/tx/${h.tx}" target="_blank" rel="noopener">${short(h.tx)}</a></span></div>`).join('');
+  }
+  q('mt-wallet').addEventListener('change', () => loadContext(q('mt-wallet').value));
+  q('mt-mode').addEventListener('change', async () => { const move = q('mt-mode').value === 'move'; q('mt-fromwrap').hidden = !move; closed = null; closeQ = null; if (move) await loadCloseQuote(); else { hideQuote(); scheduleQuote(0); } });
+  q('mt-from').addEventListener('change', loadCloseQuote);
+  q('mt-tokenA').addEventListener('change', () => { q('mt-lo').value = ''; q('mt-hi').value = ''; loadPools(); });
+  q('mt-tokenB').addEventListener('change', () => { q('mt-lo').value = ''; q('mt-hi').value = ''; loadPools(); });
+  q('mt-pool').addEventListener('change', pickPool);
+  q('mt-reload').addEventListener('click', () => loadContext(q('mt-wallet').value));
+  for (const b of root.querySelectorAll('[data-range]')) b.addEventListener('click', () => setRange(b.dataset.range === 'full' ? 'full' : Number(b.dataset.range)));
+  for (const b of root.querySelectorAll('[data-max]')) b.addEventListener('click', () => fillMax(Number(b.dataset.max)));
+  for (const id of ['mt-lo', 'mt-hi', 'mt-amt0', 'mt-amt1']) q(id).addEventListener('input', () => { if (id === 'mt-lo' || id === 'mt-hi') for (const b of root.querySelectorAll('[data-range]')) b.classList.remove('on'); scheduleQuote(600); });
+  q('mt-slip').addEventListener('change', () => scheduleQuote(0));
+  q('mt-payeth').addEventListener('change', () => scheduleQuote(0));
+  q('mt-requote').addEventListener('click', () => scheduleQuote(0));
+  q('mt-connect').addEventListener('click', connect);
+  q('mt-go').addEventListener('click', () => { if (!quote) return; const from = q('mt-mode').value === 'move' ? selPos() : null; if (confirm(`${from && !closed ? `Close ${from.pair} #${from.tokenId}, then m` : 'M'}int ${q('mq-big').textContent} into ${quote.label}?`)) go(); });
+  loadContext().catch((e) => status('mt-status', `Could not load: ${e.message}`, 'bad'));
 })();
 </script>
 <script src="/chat-widget.js"></script>

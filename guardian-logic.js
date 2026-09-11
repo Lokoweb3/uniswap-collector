@@ -22,13 +22,15 @@
  *   collectedTargetUsd  swept USDG reached this               -> target alert, once (optional)
  *   autoClose           close through the operator when a close trigger holds
  *   alertOnly           never close, whatever autoClose says (safety latch)
+ *   hold                the owner keeps this position by choice: the daily verdict says
+ *                       "hold" instead of asking them to close it (alerts unchanged)
  * Every event sends exactly one Telegram message, with the cool-downs in alertsFor.
  */
 "use strict";
 const tokenValue = (price) => (price > 0 ? 1 / price : null);
 
 const HOUR = 3600 * 1000;
-const RULE_DEFAULTS = { alertPct: 20, closePct: 50, outOfRangeMinutes: 120, tvlDropPct: 50, feeFloorPerHour: null, collectedTargetUsd: null, autoClose: false, alertOnly: true };
+const RULE_DEFAULTS = { alertPct: 20, closePct: 50, outOfRangeMinutes: 120, tvlDropPct: 50, feeFloorPerHour: null, collectedTargetUsd: null, autoClose: false, alertOnly: true, hold: false };
 const VOLUME_DROP_PCT = 70; // fees/h down this much vs 30 min ago -> "volume dying" status (no alert: the fee floor covers it)
 
 /** The effective rule block for one entry: its own values over the defaults, numbers checked. */
@@ -48,6 +50,7 @@ function rulesOf(entry = {}, defaults = {}) {
     feeFloorPerHour: num("feeFloorPerHour", true), collectedTargetUsd: num("collectedTargetUsd", true),
     autoClose: (entry.autoClose !== undefined ? entry.autoClose : base.autoClose) === true,
     alertOnly: (entry.alertOnly !== undefined ? entry.alertOnly : base.alertOnly) !== false,
+    hold: (entry.hold !== undefined ? entry.hold : base.hold) === true,
   };
 }
 

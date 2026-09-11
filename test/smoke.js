@@ -75,7 +75,9 @@ async function main() {
     // Warm the views the Analytics page fetches: the collect history prices its
     // events through the RPC on a cold server, which can take minutes and would
     // otherwise outlast the per-page Chrome limit below.
-    for (const warm of ["/api/history", "/api/strategy/lots"]) {
+    // The Wallet page also fetches the approval audit on load (it scans the chain
+    // for every operator the wallets ever approved), which is minutes on a cold server.
+    for (const warm of ["/api/history", "/api/strategy/lots", "/api/approvals"]) {
       if (!(await waitFor(`${base}${warm}`, 300000, 240000))) console.error(`smoke: ${warm} did not answer within 5 min; continuing`);
     }
     // Every page at desktop width and at a 375 px phone width: same markers, no console errors.

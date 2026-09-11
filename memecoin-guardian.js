@@ -298,6 +298,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     }
     if (patch.autoClose !== undefined) { next.autoClose = patch.autoClose === true; if (next.autoClose) next.alertOnly = false; }
     if (patch.alertOnly !== undefined) next.alertOnly = patch.alertOnly !== false;
+    if (patch.hold !== undefined) next.hold = patch.hold === true;
     if (patch.entryPrice !== undefined && Number(patch.entryPrice) > 0) { next.entryPrice = Number(patch.entryPrice); next.entrySource = "set by hand"; }
     const live = liveConfig();
     const i = (live.memecoins || []).findIndex((m) => String(m.tokenId) === String(id));

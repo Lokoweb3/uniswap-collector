@@ -600,6 +600,12 @@ select.scope option{background:#0b1017}
 .meme .reasons.rules .warn{color:var(--neon-gold,#f5c542)}
 .rk-toggle{font:inherit;font-size:11px;font-weight:700;padding:0 8px;border-radius:999px;border:1px solid var(--rule);background:transparent;color:var(--muted);cursor:pointer;vertical-align:1px}
 .rk-toggle.on{color:#04110a;background:var(--edge);border-color:var(--edge)}
+.rk-hold.on{color:#04110a;background:var(--neon-gold,#f5c542);border-color:var(--neon-gold,#f5c542)}
+.verdict{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:1px 8px;border-radius:999px;border:1px solid var(--rule);color:var(--muted);cursor:help}
+.verdict.keep{color:var(--live);border-color:var(--live)}
+.verdict.watch{color:var(--neon-gold,#f5c542);border-color:var(--neon-gold,#f5c542)}
+.verdict.close{color:var(--edge);border-color:var(--edge);background:rgba(255,77,109,.12)}
+.verdict.hold{color:var(--ink);border-color:var(--muted)}
 
 /* "claimed" line on position cards */
 .vals .c{font-size:12.5px;color:var(--muted);font-weight:400}

@@ -15,6 +15,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const { verdictFor, idleText } = require("./verdict");
 
 const HERE = __dirname;
 const STATE_FILE = path.join(HERE, "digest-state.json");
@@ -80,11 +81,10 @@ function build(d) {
   const uncollected = all.reduce((s, x) => s + (x.feesUsd || 0), 0);
   const out = all.filter((x) => !x.inRange);
   lines.push(`📊 ${all.length} open position${all.length === 1 ? "" : "s"}, ${usd(uncollected)} uncollected${out.length ? `, ${out.length} OUT of range (${out.map((x) => x.pair).join(", ")})` : ", all in range"}`);
-  // Fee rate per position: the dashboard's accrual for the main wallet, the guardian's rate for the rest.
-  const gRate = new Map(((d.memecoins && d.memecoins.positions) || []).filter((x) => !x.closed && x.feesPerHour != null).map((x) => [String(x.tokenId), x.feesPerHour]));
-  const rated = all.map((x) => ({ pair: x.pair, perHour: x.dailyUsd != null ? x.dailyUsd / 24 : gRate.get(String(x.nftId || String(x.tokenId).replace(/^v4-/, ""))) ?? null })).filter((x) => x.perHour != null);
-  const earners = rated.sort((a, b) => b.perHour - a.perHour).slice(0, 3);
-  if (earners.length) lines.push(`   top: ${earners.map((x) => `${x.pair} ${usd(x.perHour)}/h`).join(" · ")}`);
+  // One verdict line per open position: fees per hour, when it last earned, and
+  // keep / watch / close from the guardian's row (/api/risk carries the verdict;
+  // computed here from the same row when an older server left it out).
+  for (const line of verdictLines(all, d.memecoins, now)) lines.push(line);
 
   // Guardian
   const m = d.memecoins;
@@ -109,6 +109,27 @@ function build(d) {
     if (stale.length) lines.push(`⚠️ Stopped: ${stale.join(", ")}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * "   KEEP  ETH / USDG #2302341 (Main) · $2.25/h · earning now" per open
+ * position, worst verdict first. Positions the guardian does not watch get the
+ * dashboard's own accrual rate and no verdict.
+ */
+function verdictLines(all, memecoins, now = Date.now()) {
+  const rows = ((memecoins && memecoins.positions) || []).filter((x) => !x.closed);
+  const byId = new Map(rows.map((x) => [String(x.tokenId), x]));
+  const order = { close: 0, watch: 1, hold: 2, keep: 3 };
+  const out = [];
+  for (const x of all) {
+    const id = String(x.nftId || String(x.tokenId).replace(/^v4-/, ""));
+    const g = byId.get(id);
+    const v = g ? g.verdict || verdictFor(g, { now }) : null;
+    const perHour = v && v.feesPerHour != null ? v.feesPerHour : x.dailyUsd != null ? x.dailyUsd / 24 : null;
+    out.push({ v, text: `${v ? v.verdict.toUpperCase().padEnd(5) : "—    "} ${x.pair} #${id} (${x.wallet}) · ${usd(perHour)}/h · ${v ? idleText(v) : "not watched"}${v && v.why.length ? ` — ${v.why.join(", ")}` : ""}` });
+  }
+  out.sort((a, b) => (a.v ? order[a.v.verdict] : 4) - (b.v ? order[b.v.verdict] : 4));
+  return out.map((o) => "   " + o.text);
 }
 
 function readState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch { return {}; } }
@@ -138,7 +159,7 @@ async function maybeSend({ cfg, alerts, base, now = new Date(), log = console } 
   return !!ok;
 }
 
-module.exports = { build, gather, due, maybeSend, settings };
+module.exports = { build, gather, due, maybeSend, settings, verdictLines };
 
 if (require.main === module) {
   const port = Number((process.argv.find((a) => a.startsWith("--port=")) || "").split("=")[1] || process.env.LP_DASHBOARD_PORT || 8787);

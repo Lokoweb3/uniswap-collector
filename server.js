@@ -30,6 +30,7 @@ const univ3Path = fs.existsSync(path.join(__dirname, "lib", "univ3.js"))
 const u = require(univ3Path);
 
 const history = require("./history");
+const verdict = require("./verdict");
 
 const settings = require("./settings");
 const cfg = settings.load();
@@ -439,18 +440,22 @@ const priceKey = (e) => `${e.tx}:${e.tokenId}`;
  * price record when there is one, else at the prices given. For the cards.
  */
 function collectSummary(tokenKey, dec0, dec1, usd0, usd1) {
-  let usd = 0, count = 0, last = null, locked = 0;
+  let usd = 0, usd7d = 0, count = 0, last = null, locked = 0;
+  const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
   const events = typeof hist !== "undefined" ? [...(typeof bf !== "undefined" ? bf.events : []), ...hist.events] : [];
   for (const e of events) {
     if (e.tokenId !== String(tokenKey)) continue;
     const f0 = Number(ethers.formatUnits(e.fee0 || "0", dec0)), f1 = Number(ethers.formatUnits(e.fee1 || "0", dec1));
     const px = feePrices[priceKey(e)];
-    if (px) { usd += f0 * px.p0 + f1 * px.p1; locked++; }
-    else if (usd0 != null && usd1 != null) usd += f0 * usd0 + f1 * usd1;
+    let v = 0;
+    if (px) { v = f0 * px.p0 + f1 * px.p1; locked++; }
+    else if (usd0 != null && usd1 != null) v = f0 * usd0 + f1 * usd1;
+    usd += v;
+    if (e.t && e.t > weekAgo) usd7d += v;
     count++;
     if (e.t && (!last || e.t > last)) last = e.t;
   }
-  return count ? { usd: +usd.toFixed(2), count, last, atCollectPrices: locked, approx: locked < count } : null;
+  return count ? { usd: +usd.toFixed(2), usd7d: +usd7d.toFixed(2), count, last, atCollectPrices: locked, approx: locked < count } : null;
 }
 const STATE_DEPTH = 4500; // probed: slot0 answers at -5000 blocks, not at -50000
 
@@ -1451,12 +1456,17 @@ const server = http.createServer(async (req, res) => {
       st.watching = (st.positions || []).filter((p) => !p.closed).length;
       for (const p of st.positions || []) {
         if (p.closed) continue;
+        const key = Number(p.version) === 3 ? String(p.tokenId) : `v4-${p.tokenId}`;
         try {
-          const key = Number(p.version) === 3 ? String(p.tokenId) : `v4-${p.tokenId}`;
           const m = await positionMeta(key);
           const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
           p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
         } catch { p.collected = null; }
+        // keep / watch / close / hold, from this row plus the collect history and
+        // the hourly fee accrual (main wallet only; watched wallets accrue per wallet).
+        const feeHours = {};
+        for (const [h, per] of Object.entries(daily.hours || {})) if (per && per[key] > 0) feeHours[h] = per[key];
+        p.verdict = verdict.verdictFor(p, { feeHours });
       }
       st.configured = (cfg.memecoins || []).length;
       st.discovery = cfg.memecoinDiscovery !== false;

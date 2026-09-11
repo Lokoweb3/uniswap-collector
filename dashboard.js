@@ -1719,6 +1719,18 @@ if (PAGE !== 'analytics') { loadLaunches(); setInterval(loadLaunches, 60000); }
 // its status, its rule block (click a threshold to change it), the auto-close
 // toggle and a Close-now button. Status from /api/risk every 30 s.
 const RULE_LABELS = { alertPct: 'Alert when the token drops more than this % in 1 hour:', closePct: 'Close-now alert (or close, when auto-close is on) when the token is down this % from entry:', outOfRangeMinutes: 'Alert (or close, when auto-close is on) after the position has been out of range this many minutes:', tvlDropPct: 'Alert when the pool\'s liquidity drops more than this % from its 24h high:', feeFloorPerHour: 'Alert when the 15-minute fee rate falls under this many $ per hour (empty = off):', collectedTargetUsd: 'Alert once when the swept USDG for this position reaches this amount (empty = off):' };
+/** keep / watch / close / hold pill from the server's verdict (verdict.js), with the reasons as the tooltip. */
+function verdictBadge(p){
+  const v = p.verdict; if (!v) return '';
+  const title = { keep: 'Green, in range and earning', watch: 'Worth a look', close: 'The data says close it', hold: 'Kept by choice: the daily summary never asks you to close it' }[v.verdict] || '';
+  return `<span class="verdict ${v.verdict}" title="${esc(title + (v.why && v.why.length ? ' — ' + v.why.join(', ') : ''))}">${v.verdict}${v.why && v.why.length ? ' · ' + esc(v.why[0]) : ''}</span>`;
+}
+function lastEarnedText(v){
+  if (!v || v.idleHours == null) return 'never';
+  if (v.idleHours < 1) return 'now';
+  if (v.idleHours < 24) return Math.round(v.idleHours) + 'h ago';
+  return (v.idleHours / 24).toFixed(v.idleHours < 240 ? 1 : 0) + 'd ago';
+}
 function rulesLine(p){
   const r = p.rules || p;
   const tone = (past, near) => past ? 'down' : near ? 'warn' : 'up';
@@ -1740,7 +1752,7 @@ function rulesLine(p){
     const v = p.collectedUsd || 0;
     parts.push(`collected <b class="${v >= r.collectedTargetUsd ? 'up' : v >= r.collectedTargetUsd * 0.8 ? 'warn' : ''}">${usd(v)}</b> of ${th('collectedTargetUsd', '$' + r.collectedTargetUsd)}`);
   }
-  return `<div class="reasons rules" data-nft="${p.tokenId}" title="This position's rules; click a threshold to change it">${parts.join(' · ')} · auto-close <button class="rk-toggle ${p.canClose ? 'on' : ''}" ${READ_ONLY ? 'disabled' : ''} title="${p.canClose ? 'Auto-close is ON: the operator closes the position when a close trigger holds for 3 checks' : 'Auto-close is off: rules only alert'}">${p.canClose ? 'ON' : 'off'}</button>${p.closeConfirm ? ` <span class="warn">closing ${p.closeConfirm}</span>` : ''}</div>`;
+  return `<div class="reasons rules" data-nft="${p.tokenId}" title="This position's rules; click a threshold to change it">${parts.join(' · ')} · auto-close <button class="rk-toggle ${p.canClose ? 'on' : ''}" ${READ_ONLY ? 'disabled' : ''} title="${p.canClose ? 'Auto-close is ON: the operator closes the position when a close trigger holds for 3 checks' : 'Auto-close is off: rules only alert'}">${p.canClose ? 'ON' : 'off'}</button> · hold <button class="rk-hold ${r.hold ? 'on' : ''}" ${READ_ONLY ? 'disabled' : ''} title="${r.hold ? 'Hold is ON: you keep this position by choice; the daily verdict says hold instead of close' : 'Hold is off: the daily verdict follows the data'}">${r.hold ? 'ON' : 'off'}</button>${p.closeConfirm ? ` <span class="warn">closing ${p.closeConfirm}</span>` : ''}</div>`;
 }
 
 async function loadRisk(){
@@ -1763,7 +1775,7 @@ async function loadRisk(){
       return `<article class="pos meme ${p.status === 'red' ? 'out' : ''} ${d.stale ? 'stale' : ''}">
         <div class="top">
           <div class="name"><span class="dot ${p.status}"></span><h2>${p.pair}</h2><span class="tier">v${p.version || 4} #${p.tokenId}</span><span class="muted">${p.wallet}</span>
-            <span class="state ${p.inRange ? '' : 'out'}">${p.inRange ? 'In range' : 'Out of range · ' + Math.round(p.outMinutes) + ' min'}</span></div>
+            <span class="state ${p.inRange ? '' : 'out'}">${p.inRange ? 'In range' : 'Out of range · ' + Math.round(p.outMinutes) + ' min'}</span>${verdictBadge(p)}</div>
           <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span>${claimedLine(p)}</div>
         </div>
         <div class="grid">
@@ -1772,6 +1784,7 @@ async function loadRisk(){
           <span>vs entry (token value)<b class="${cls(p.priceVsEntryPct)}">${pct(p.priceVsEntryPct)}</b></span>
           <span>Last hour<b class="${cls(p.change1hPct)}">${pct(p.change1hPct)}</b></span>
           <span>Fees / hour<b>${p.feesPerHour == null ? '—' : usd(p.feesPerHour)}${p.feeRateChangePct != null ? ' <span class="' + cls(p.feeRateChangePct) + '" style="font-size:11px">' + pct(p.feeRateChangePct, 0) + '</span>' : ''}</b></span>
+          <span>Last earned<b>${lastEarnedText(p.verdict)}</b></span>
           <span>Pool liquidity, 1h<b class="${cls(p.liqChange1hPct)}">${pct(p.liqChange1hPct)}</b></span>
           <span>Holdings<b>${p.amountEth == null ? '—' : amount(p.amountEth) + ' ' + (p.quoteSymbol || 'ETH') + ' · ' + fmtN(p.amountToken) + ' ' + (p.symbolToken || '')}</b></span>
         </div>
@@ -1814,6 +1827,9 @@ document.addEventListener('click', async e => {
     const on = !e.target.classList.contains('on');
     if (on && !confirm('Turn ON automatic closing for #' + nftId + '?\nWhen a close trigger (drawdown or out-of-range time) holds for 3 checks, the operator removes 100% of the liquidity and sends the tokens to the position\'s owner wallet. It needs the collector to be armed.')) return;
     try { await postRule({ tokenId: nftId, autoClose: on, alertOnly: !on }); } catch(err){ alert('Could not save: ' + err.message); }
+  } else if (e.target.classList.contains('rk-hold')){
+    const on = !e.target.classList.contains('on');
+    try { await postRule({ tokenId: nftId, hold: on }); } catch(err){ alert('Could not save: ' + err.message); }
   } else if (e.target.classList.contains('rk-th')){
     const k = e.target.dataset.k;
     const cur = e.target.textContent.replace(/[^0-9.]/g, '');

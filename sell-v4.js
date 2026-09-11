@@ -212,6 +212,65 @@ function create({ provider, cfg, log = console.log }) {
     return live;
   }
 
+  /** Like discoverEthPools, plus the USDG-quoted tiers (currencies sorted as the PoolManager keys them). */
+  async function discoverPools(token) {
+    const eth = await discoverEthPools(token);
+    const stable = cfg.usdReference && cfg.usdReference.stable;
+    if (!stable || stable.toLowerCase() === String(token).toLowerCase()) return eth;
+    const ck = `usdg:${String(token).toLowerCase()}`;
+    const cached = discovered.get(ck);
+    if (cached && Date.now() - cached.at < 60 * 60 * 1000) return [...eth, ...cached.keys];
+    const [c0, c1] = [ethers.getAddress(stable), ethers.getAddress(token)].sort((x, y) => (x.toLowerCase() < y.toLowerCase() ? -1 : 1));
+    const keys = TIERS.map(([fee, tickSpacing]) => ({ currency0: c0, currency1: c1, fee, tickSpacing, hooks: ethers.ZeroAddress }));
+    const liqIface = new ethers.Interface(LIQ_ABI);
+    let live = [];
+    try {
+      const mc = new ethers.Contract(MULTICALL3, MULTICALL_ABI, provider);
+      const res = await mc.aggregate3(keys.map((k) => ({ target: st.stateView, allowFailure: true, callData: liqIface.encodeFunctionData("getLiquidity", [poolIdOf(k)]) })));
+      live = keys.filter((k, i) => res[i].success && res[i].returnData.length >= 66 && BigInt(res[i].returnData) > 0n);
+    } catch {}
+    discovered.set(ck, { at: Date.now(), keys: live });
+    return [...eth, ...live];
+  }
+
+  /**
+   * quote({ token, amount, usdOf, maxImpactPct, slippageBps, recipient }) — the
+   * best hookless pool for selling `amount` (raw) of `token`, the slice that fits
+   * under the impact cap, and the Universal Router calldata a wallet can sign
+   * itself (the Wallet page's Sell tab). Nothing is sent.
+   */
+  async function quote({ token, amount, usdOf, maxImpactPct = st.maxImpactPct, slippageBps = 100n, recipient = null, keys = [] }) {
+    if (!quoter || !stateView || !st.router) return { ok: false, error: "v4 router / quoter not configured" };
+    const candidates = [...(keys || [])];
+    for (const k of await discoverPools(token)) if (!candidates.some((c) => poolIdOf(c) === poolIdOf(k))) candidates.push(k);
+    const usable = candidates.filter((k) => !(k.hooks && k.hooks !== ethers.ZeroAddress));
+    if (!usable.length) return { ok: false, error: candidates.length ? "only hooked pools hold this token; sells there are not proven" : "no v4 pool with liquidity for this token" };
+    let best = null;
+    const tried = [];
+    for (const k of usable) {
+      const zfo = k.currency0.toLowerCase() === String(token).toLowerCase();
+      const out = zfo ? k.currency1 : k.currency0;
+      let sqrtPriceX96;
+      try { sqrtPriceX96 = (await stateView.getSlot0(poolIdOf(k)))[0]; } catch { continue; }
+      let f;
+      try { f = await fitSlice({ quote: (amt) => quoteOut(k, zfo, amt), spot: (amt) => spotOut(sqrtPriceX96, zfo, amt), feePips: Number(k.fee), amount, maxImpactPct }); } catch (e) { tried.push({ fee: Number(k.fee), error: e.shortMessage || e.message }); continue; }
+      if (!f) { tried.push({ fee: Number(k.fee), error: "over the impact cap even for a small slice" }); continue; }
+      const u = usdOf ? await usdOf(out, f.quotedOut) : null;
+      tried.push({ fee: Number(k.fee), out, amountIn: f.amountIn.toString(), quotedOut: f.quotedOut.toString(), impactPct: f.impactPct, usd: u });
+      if (!best || (u != null && (best.usd == null || u > best.usd))) best = { key: k, zeroForOne: zfo, currencyOut: out, fit: f, usd: u };
+    }
+    if (!best) return { ok: false, error: `no pool can take a slice under ${maxImpactPct}% impact`, tried };
+    const minOut = (best.fit.quotedOut * (10000n - BigInt(slippageBps))) / 10000n;
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60);
+    const call = buildSwapCalldata({ key: best.key, zeroForOne: best.zeroForOne, amountIn: best.fit.amountIn, minOut, deadline, recipient });
+    return {
+      ok: true, token, pool: { currency0: best.key.currency0, currency1: best.key.currency1, fee: Number(best.key.fee), tickSpacing: Number(best.key.tickSpacing), hooks: best.key.hooks },
+      zeroForOne: best.zeroForOne, currencyOut: best.currencyOut, amountIn: best.fit.amountIn.toString(), quotedOut: best.fit.quotedOut.toString(), minOut: minOut.toString(),
+      impactPct: best.fit.impactPct != null ? +best.fit.impactPct.toFixed(3) : null, usd: best.usd != null ? +best.usd.toFixed(2) : null, partial: best.fit.amountIn < amount,
+      slippageBps: Number(slippageBps), deadline: deadline.toString(), router: st.router, permit2: st.permit2, calldata: call.data, value: call.value.toString(), tried,
+    };
+  }
+
   async function quoteOut(key, zeroForOne, amountIn) {
     const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: key, zeroForOne, exactAmount: amountIn, hookData: "0x" });
     return BigInt(r[0]);
@@ -352,7 +411,7 @@ function create({ provider, cfg, log = console.log }) {
     }
   }
 
-  return { ready: !!ready, settings: st, sell, quoteOut, discoverEthPools };
+  return { ready: !!ready, settings: st, sell, quote, quoteOut, discoverEthPools, discoverPools };
 }
 
 module.exports = { create, settings, buildSwapCalldata, fitSlice, spotOut, impactPct, poolIdOf, ACT, CMD_V4_SWAP, decideSale, pendingSales, readPending };

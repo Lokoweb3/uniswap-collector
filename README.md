@@ -23,7 +23,8 @@ The site has three pages: the dashboard at `/` (tiles, Positions panel for every
 Portfolio), `/analytics` (income, taxes, attribution, staking, vault tile) and `/wallet`, whose tabs
 hold everything that needs your wallet: `#arm` (arm the collector with a wallet signature),
 `#approvals` (allowance and operator audit with revoke buttons, plus the v3 / v4 operator approvals),
-`#vault` (the LOKOVault page) and `#operator` (operator status and loop health). The old addresses
+`#vault` (the LOKOVault page), `#sell` (sell a token a wallet holds: the dashboard quotes its v4
+pool and builds the Universal Router swap, Rabby signs it) and `#operator` (operator status and loop health). The old addresses
 (`/arm`, `/approvals`, `/approve-v3`, `/approve-v4`, `/treasury`, `/vault`) redirect to their tab. A wallet picker in the
 header switches the dashboard between the main wallet, all wallets, and each watched wallet; see
 "Watching other wallets" below.
@@ -451,6 +452,19 @@ with no data, so `sell-v4.js` encodes the path form with that field, then SETTLE
 before it is sent. Proceeds (ETH or USDG) join the normal sweep, so the vault split and the wallet
 delivery cover them. Every sale and every skip, with its reason, is written to `token-sales.json`
 (backed up nightly) and shows in the daily summary and the `token_lots` tool.
+
+### Selling by hand: the Sell tab (`/wallet#sell`)
+
+For tokens that sit in a wallet outside the collector's reach (a closed position's other side,
+an expired confirm-before-sell batch, launchpad leftovers): pick the wallet and token,
+enter an amount, and `GET /api/sell/quote` finds the best hookless v4 pool for it (ETH- or
+USDG-quoted, every fee tier), fits the amount under the chosen impact cap (a slice when the
+whole batch would move the pool more), and returns the quoted output, the minimum after
+slippage and the exact `execute` calldata for the Universal Router. The page then walks the
+connected wallet through up to three signatures in Rabby: ERC-20 approve to Permit2 (once per
+token), Permit2 approve of the router for that amount (one hour), the swap. `GET
+/api/sell/tokens?wallet=` lists what a wallet holds (dust under $1 hidden). The server never
+signs; the proceeds go to the wallet that signs.
 
 ### Fee auto-collect (`memecoin-collect.js`)
 
@@ -913,6 +927,9 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-10
 
+- Sell tab on the Wallet page: quote and sell any token a wallet holds in its v4 pool, signed
+  by the wallet in the browser (`/api/sell/tokens`, `/api/sell/quote`, `sell-v4.js quote()` and
+  USDG-quoted pool discovery).
 - Phase 2, unified brain: `agent.js` is the one assistant behind the web panel and loopback
   scripts, with transcripts per channel and `brain/notes.md` on disk; Telegram input stays
   with the VPS agent (no polling here, so no 409), `telegram.js` only sends; alerts are remembered on the chat they

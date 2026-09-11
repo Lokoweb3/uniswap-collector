@@ -1727,6 +1727,71 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify(d ? { ...d, refreshing: watch.inFlight } : { ok: false, refreshing: true, error: "watched wallets still loading", wallets: [] }));
   }
 
+  // === sell tab (wallet.html) === tokens a wallet holds and a signable sell quote; nothing is sent by the server.
+  if (url.pathname === "/api/sell/tokens") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const want = String(url.searchParams.get("wallet") || cfg.ownerAddress);
+      const ours = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main" }, ...watch.readWallets().map((w) => ({ address: w.address, label: w.label || w.address }))];
+      const wallet = ours.find((w) => w.address.toLowerCase() === want.toLowerCase());
+      if (!wallet) throw new Error("not one of our wallets");
+      const stable = (cfg.usdReference && cfg.usdReference.stable || "").toLowerCase();
+      // Holdings as the portfolio already knows them: the main wallet from the portfolio rows, a watched wallet from its own token list.
+      let held = [];
+      if (wallet.address.toLowerCase() === cfg.ownerAddress.toLowerCase()) held = ((portfolio.latest && portfolio.latest.rows) || []).filter((r) => !r.native && r.wallet > 0).map((r) => ({ symbol: r.symbol, address: r.address, amount: r.wallet, price: r.price }));
+      else { const w = ((watch.latest && watch.latest.wallets) || []).find((x) => x.address && x.address.toLowerCase() === wallet.address.toLowerCase()); held = (((w && w.holdings && w.holdings.tokens) || [])).filter((t) => !t.native && t.amount > 0).map((t) => ({ symbol: t.symbol, address: t.address, amount: t.amount, price: t.price })); }
+      const rows = [];
+      for (const h of held) {
+        if (!h.address || h.address.toLowerCase() === stable || h.address.toLowerCase() === WETH) continue; // nothing to sell there
+        let meta = tokenSet.get(h.address.toLowerCase());
+        const erc = new ethers.Contract(h.address, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
+        if (!meta) { try { meta = { address: h.address, symbol: h.symbol, decimals: Number(await erc.decimals()) }; tokenSet.set(h.address.toLowerCase(), meta); } catch { continue; } }
+        const raw = await erc.balanceOf(wallet.address).catch(() => null);
+        if (raw == null || raw === 0n) continue;
+        const balance = Number(ethers.formatUnits(raw, meta.decimals));
+        const price = h.price ?? lastPrices[h.address.toLowerCase()] ?? currentPrice(h.address);
+        const usd = price != null ? balance * price : null;
+        if (usd != null && usd < 1) continue; // dust
+        rows.push({ symbol: meta.symbol || h.symbol, address: meta.address, decimals: meta.decimals, raw: raw.toString(), balance, usd });
+      }
+      rows.sort((a, b) => (b.usd || 0) - (a.usd || 0));
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, wallet, wallets: ours, rows, usdg: cfg.usdReference && cfg.usdReference.stable, weth: cfg.contracts.weth }));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  if (url.pathname === "/api/sell/quote") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const token = ethers.getAddress(String(url.searchParams.get("token") || ""));
+      const amount = BigInt(String(url.searchParams.get("amount") || "0"));
+      if (amount <= 0n) throw new Error("amount (raw units) required");
+      const maxImpactPct = Math.min(25, Math.max(0.1, Number(url.searchParams.get("maxImpactPct") || 3)));
+      const slippageBps = BigInt(Math.min(1000, Math.max(10, Number(url.searchParams.get("slippageBps") || 100))));
+      const recipient = url.searchParams.get("recipient") ? ethers.getAddress(url.searchParams.get("recipient")) : null;
+      const sv4 = require("./sell-v4").create({ provider, cfg, log: () => {} });
+      const stable = (cfg.usdReference && cfg.usdReference.stable || "").toLowerCase();
+      const usdOf = async (cur, amt) => {
+        const c = String(cur).toLowerCase();
+        if (c === stable) return Number(ethers.formatUnits(amt, 6));
+        if (cur === ethers.ZeroAddress || c === WETH) { const px = lastPrices[WETH]; return px != null ? Number(ethers.formatEther(amt)) * px : null; }
+        return null;
+      };
+      const keys = [];
+      for (const p of (cache.payload && cache.payload.positions) || []) if (p.version === 4 && p.poolKey && [p.token0, p.token1].some((t) => String(t).toLowerCase() === token.toLowerCase())) keys.push(p.poolKey);
+      const q = await sv4.quote({ token, amount, usdOf, maxImpactPct, slippageBps, recipient, keys });
+      const meta = tokenSet.get(token.toLowerCase());
+      const outMeta = q.ok ? (q.currencyOut === ethers.ZeroAddress ? { symbol: "ETH", decimals: 18 } : tokenSet.get(q.currencyOut.toLowerCase()) || (q.currencyOut.toLowerCase() === stable ? { symbol: "USDG", decimals: 6 } : { symbol: "?", decimals: 18 })) : null;
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ...q, tokenSymbol: meta ? meta.symbol : null, tokenDecimals: meta ? meta.decimals : null, outSymbol: outMeta && outMeta.symbol, outDecimals: outMeta && outMeta.decimals, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com" }));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // === end sell tab ===
   if (url.pathname === "/api/balances") {
     res.setHeader("Content-Type", "application/json");
     try {

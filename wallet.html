@@ -383,6 +383,19 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
 .note{font-size:13px;color:var(--muted)}
 }
 #sec-sell label{display:inline-flex;gap:6px;align-items:center;font-size:14px;flex-wrap:wrap}
+#sec-sell .tokinfo{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0 2px;font-size:13px;color:var(--muted)}
+#sec-sell .tokinfo b{color:var(--bright)}
+#sec-sell .pcts{display:inline-flex;gap:6px}
+#sec-sell .pcts button{padding:6px 10px;font-size:12px}
+#sec-sell .pcts button.on{border-color:var(--green);color:var(--green)}
+#sec-sell .quotecard .qage{font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted);margin-left:8px}
+#sec-sell .bigout{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:4px 0 12px}
+#sec-sell .bigout b{font-size:30px;font-weight:700;color:var(--green);font-family:'JetBrains Mono',ui-monospace,monospace;letter-spacing:-.02em}
+#sec-sell .steps{margin:14px 0 4px;padding-left:22px;font-size:13px;color:var(--muted)}
+#sec-sell .steps li{margin:3px 0}
+#sec-sell .steps li.active{color:var(--gold)}
+#sec-sell .steps li.done{color:var(--green)}
+#sec-sell .steps li.done::marker{content:"✓ "}
 #sec-sell .actions{align-items:center}
 </style>
 </head>
@@ -760,37 +773,49 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
 <section class="tab" id="sec-sell" hidden>
 <div class="wrap">
 <h2 class="secttl">Sell a token</h2>
-<p class="sub">Swap a token one of your wallets holds into USDG (or ETH) in its Uniswap v4 pool. The dashboard quotes the pool and builds the swap; your wallet signs it in Rabby. Nothing is sent by the server.</p>
+<p class="sub">Swap a token one of your wallets holds into USDG (or ETH) in its Uniswap v4 pool. The dashboard quotes the pool live and builds the swap; your wallet signs it in Rabby. Nothing is sent by the server.</p>
 <div class="card">
   <h2>What to sell</h2>
   <div class="actions">
     <label>Wallet <select data-id="sl-wallet"></select></label>
     <label>Token <select data-id="sl-token"><option value="">loading…</option></select></label>
-    <button data-id="sl-reload">Reload</button>
+    <button data-id="sl-reload" title="Re-read balances">↻</button>
+  </div>
+  <div class="tokinfo" data-id="sl-tokinfo"></div>
+  <div class="actions amountrow">
+    <label>Amount <input type="text" data-id="sl-amount" placeholder="0" size="18"></label>
+    <span class="pcts"><button data-pct="25">25%</button><button data-pct="50">50%</button><button data-pct="75">75%</button><button data-pct="100">Max</button></span>
   </div>
   <div class="actions">
-    <label>Amount <input type="text" data-id="sl-amount" placeholder="0" size="18"> <button data-id="sl-max">Max</button></label>
     <label>Max impact <select data-id="sl-impact"><option value="1">1%</option><option value="3" selected>3%</option><option value="5">5%</option><option value="10">10%</option></select></label>
     <label>Slippage <select data-id="sl-slip"><option value="50">0.5%</option><option value="100" selected>1%</option><option value="200">2%</option><option value="500">5%</option></select></label>
-    <button data-id="sl-quote" class="primary">Quote</button>
   </div>
   <div data-id="sl-status"></div>
 </div>
-<div class="card" data-id="sl-quotecard" hidden>
-  <h2>Quote</h2>
-  <div class="row"><span class="k">Pool</span><span data-id="q-pool">—</span></div>
+<div class="card quotecard" data-id="sl-quotecard" hidden>
+  <h2>You receive <span class="qage" data-id="q-age"></span></h2>
+  <div class="bigout"><b data-id="q-out-big">—</b><span class="muted" data-id="q-out-usd"></span></div>
   <div class="row"><span class="k">Sells</span><span data-id="q-in">—</span></div>
-  <div class="row"><span class="k">You receive (quoted)</span><span data-id="q-out">—</span></div>
-  <div class="row"><span class="k">Minimum after slippage</span><span data-id="q-min">—</span></div>
+  <div class="row"><span class="k">Pool</span><span data-id="q-pool">—</span></div>
   <div class="row"><span class="k">Price impact</span><span data-id="q-impact">—</span></div>
-  <div class="row"><span class="k">Router</span><span class="mono" data-id="q-router">—</span></div>
-  <p class="note" data-id="q-note"></p>
+  <div class="row"><span class="k">Minimum after slippage</span><span data-id="q-min">—</span></div>
+  <div class="row"><span class="k">Proceeds go to</span><span data-id="q-to">—</span></div>
+  <ol class="steps" data-id="sl-steps">
+    <li data-step="approve">Approve token for Permit2 <span class="muted">(once per token)</span></li>
+    <li data-step="permit">Allow the router for this amount <span class="muted">(1 hour)</span></li>
+    <li data-step="swap">Swap</li>
+  </ol>
   <div class="actions">
     <button data-id="sl-connect">Connect wallet</button>
     <button data-id="sl-sell" class="primary" disabled>Sell with wallet</button>
+    <button data-id="sl-requote" title="Re-quote now">Refresh quote</button>
   </div>
   <div data-id="sl-txstatus"></div>
-  <details><summary>What gets signed</summary><p class="note">Up to three transactions from the selected wallet: an ERC-20 approve of the token to Permit2 (once per token), a Permit2 approve of the Universal Router for this amount (one hour), then the router's <span class="mono">execute</span> with the swap calldata shown here, which the dashboard built and dry-quoted. The minimum output protects you from the price moving between the quote and the swap.</p><pre class="mono" data-id="q-calldata" style="white-space:pre-wrap;word-break:break-all;font-size:11px">—</pre></details>
+  <details><summary>What gets signed</summary><p class="note">Up to three transactions from the selected wallet, in the order shown above. The swap calls the Universal Router's <span class="mono">execute</span> with the calldata below, which the dashboard built and dry-quoted; the minimum output protects you from the price moving between the quote and the swap.</p><pre class="mono" data-id="q-calldata" style="white-space:pre-wrap;word-break:break-all;font-size:11px">—</pre></details>
+</div>
+<div class="card" data-id="sl-history" hidden>
+  <h2>Sold from this page</h2>
+  <div data-id="sl-historyrows"></div>
 </div>
 </div>
 </section>
@@ -1739,7 +1764,9 @@ loadConfig().then(async () => {
   const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
   const status = (el, msg, cls = '') => { q(el).innerHTML = `<span class="${cls}">${msg}</span>`; };
   const fmt = (raw, dec, max = 4) => Number(ethers.formatUnits(BigInt(raw), dec)).toLocaleString('en-US', { maximumFractionDigits: max });
-  let data = null, quote = null, provider = null, signer = null, account = null;
+  const usdF = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pctF = (n) => n == null ? '—' : `<span class="${n >= 0 ? 'ok' : 'bad'}">${n >= 0 ? '+' : ''}${n.toFixed(1)}%</span>`;
+  let data = null, quote = null, provider = null, signer = null, account = null, quoteTimer = null, quoteAt = 0, quoting = false, history = [];
   const ERC20 = ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'];
   const PERMIT2 = ['function allowance(address owner, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)', 'function approve(address token, address spender, uint160 amount, uint48 expiration)'];
 
@@ -1751,42 +1778,64 @@ loadConfig().then(async () => {
     const ws = q('sl-wallet');
     if (!ws.options.length) ws.innerHTML = data.wallets.map((w) => `<option value="${w.address}">${w.label} (${short(w.address)})</option>`).join('');
     ws.value = data.wallet.address;
-    q('sl-token').innerHTML = data.rows.length ? data.rows.map((t) => `<option value="${t.address}">${t.symbol} — ${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })}${t.usd != null ? ' (≈ $' + t.usd.toFixed(2) + ')' : ''}</option>`).join('') : '<option value="">nothing to sell in this wallet</option>';
-    q('sl-quotecard').hidden = true; quote = null;
-    fillMax();
-    status('sl-status', data.rows.length ? `${data.rows.length} token(s) held. Pick one, set the amount, quote.` : 'This wallet holds no sellable tokens (ETH and USDG are not offered; dust under $1 is hidden).', data.rows.length ? '' : 'muted');
+    q('sl-token').innerHTML = data.rows.length ? data.rows.map((t) => `<option value="${t.address}">${t.symbol} — ${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })}${t.usd != null ? ' (≈ ' + usdF(t.usd) + ')' : ''}</option>`).join('') : '<option value="">nothing to sell in this wallet</option>';
+    hideQuote();
+    fillPct(100);
+    renderTokenInfo();
+    status('sl-status', data.rows.length ? '' : 'This wallet holds no sellable tokens (ETH and USDG are not offered; dust under $1 is hidden).', 'muted');
     updateButtons();
   }
   const selectedToken = () => (data && data.rows || []).find((t) => t.address === q('sl-token').value) || null;
+  function renderTokenInfo() {
+    const t = selectedToken();
+    q('sl-tokinfo').innerHTML = !t ? '' : `<span>Price <b>${t.priceUsd == null ? '—' : '$' + Number(t.priceUsd).toLocaleString('en-US', { maximumSignificantDigits: 4 })}</b></span><span>1 h ${pctF(t.change1hPct)}</span><span>24 h ${pctF(t.change24hPct)}</span><span>Holding <b>${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${t.symbol}</b> ≈ <b>${usdF(t.usd)}</b></span>`;
+  }
+  function fillPct(pct) {
+    const t = selectedToken(); if (!t) { q('sl-amount').value = ''; return; }
+    const raw = BigInt(t.raw) * BigInt(pct) / 100n;
+    q('sl-amount').value = ethers.formatUnits(raw, t.decimals);
+    for (const b of root.querySelectorAll('.pcts button')) b.classList.toggle('on', Number(b.dataset.pct) === pct);
+    scheduleQuote();
+  }
   function amountRaw() {
     const t = selectedToken(); if (!t) return null;
     const v = q('sl-amount').value.trim().replace(/,/g, '');
     if (!v) return null;
     try { const raw = ethers.parseUnits(v, t.decimals); return raw > BigInt(t.raw) ? BigInt(t.raw) : raw; } catch { return null; }
   }
+  function hideQuote() { quote = null; q('sl-quotecard').hidden = true; clearTimeout(quoteTimer); }
+  // The quote follows the inputs: re-quoted a moment after any change, and again every 30 s while shown, so the number you sign is the number you see.
+  function scheduleQuote(delay = 400) { clearTimeout(quoteTimer); quoteTimer = setTimeout(getQuote, delay); }
   async function getQuote() {
     const t = selectedToken(); const raw = amountRaw();
-    if (!t || !raw || raw <= 0n) { status('sl-status', 'Enter an amount.', 'warn'); return; }
-    status('sl-status', 'Quoting the pool…', 'muted'); q('sl-quote').disabled = true;
+    if (!t || !raw || raw <= 0n) { hideQuote(); if (t) status('sl-status', 'Enter an amount.', 'warn'); return; }
+    if (quoting) { scheduleQuote(1000); return; }
+    quoting = true;
+    status('sl-status', 'Quoting the pool…', 'muted');
     try {
       const r = await fetch(`/api/sell/quote?token=${t.address}&amount=${raw}&maxImpactPct=${q('sl-impact').value}&slippageBps=${q('sl-slip').value}&recipient=${q('sl-wallet').value}`, { cache: 'no-store' });
       const j = await r.json();
-      if (!j.ok) { quote = null; q('sl-quotecard').hidden = true; status('sl-status', j.error || 'no quote', 'bad'); return; }
-      quote = { ...j, token: t };
-      q('q-pool').textContent = `${t.symbol} / ${j.outSymbol} ${(j.pool.fee / 10000).toFixed(2)}% (v4, no hook)`;
-      q('q-in').innerHTML = `${fmt(j.amountIn, t.decimals)} ${t.symbol}${j.partial ? ` <span class="warn">— a slice: the whole ${fmt(raw, t.decimals, 0)} would move the pool more than ${q('sl-impact').value}%; sell in a few rounds</span>` : ''}`;
-      q('q-out').textContent = `${fmt(j.quotedOut, j.outDecimals, 6)} ${j.outSymbol}${j.usd != null ? ` ≈ $${j.usd.toFixed(2)}` : ''}`;
-      q('q-min').textContent = `${fmt(j.minOut, j.outDecimals, 6)} ${j.outSymbol}`;
-      q('q-impact').innerHTML = j.impactPct == null ? '—' : `<b class="${j.impactPct > 2 ? 'warn' : 'ok'}">${j.impactPct.toFixed(2)}%</b> (pool fee included in the quote)`;
-      q('q-router').textContent = j.router;
+      if (!j.ok) { hideQuote(); status('sl-status', j.error || 'no quote', 'bad'); return; }
+      quote = { ...j, token: t }; quoteAt = Date.now();
+      q('q-out-big').textContent = `${fmt(j.quotedOut, j.outDecimals, 4)} ${j.outSymbol}`;
+      q('q-out-usd').textContent = j.usd != null ? `≈ ${usdF(j.usd)}` : '';
+      q('q-in').innerHTML = `${fmt(j.amountIn, t.decimals)} ${t.symbol}${j.partial ? ` <span class="warn">— a slice: the whole ${fmt(raw, t.decimals, 0)} would move the pool more than ${q('sl-impact').value}%; sell in a few rounds or raise the cap</span>` : ''}`;
+      q('q-pool').textContent = `${t.symbol} / ${j.outSymbol} ${(j.pool.fee / 10000).toFixed(2)}% (Uniswap v4)`;
+      q('q-impact').innerHTML = j.impactPct == null ? '—' : `<b class="${j.impactPct > 2 ? 'warn' : 'ok'}">${j.impactPct.toFixed(2)}%</b> <span class="muted">(the pool fee is already in the number above)</span>`;
+      q('q-min').textContent = `${fmt(j.minOut, j.outDecimals, 4)} ${j.outSymbol}`;
+      q('q-to').textContent = q('sl-wallet').selectedOptions[0].textContent;
       q('q-calldata').textContent = `execute(...) on ${j.router}\nvalue ${j.value} wei · deadline ${new Date(Number(j.deadline) * 1000).toLocaleTimeString()}\n${j.calldata}`;
-      q('q-note').textContent = `Proceeds go to ${q('sl-wallet').selectedOptions[0].textContent}. Quote valid for about 20 minutes.`;
       q('sl-quotecard').hidden = false;
       status('sl-status', '', '');
+      tickAge();
       updateButtons();
     } catch (e) { status('sl-status', `Quote failed: ${e.message}`, 'bad'); }
-    finally { q('sl-quote').disabled = false; }
+    finally { quoting = false; clearTimeout(quoteTimer); quoteTimer = setTimeout(getQuote, 30000); }
   }
+  function tickAge() { if (!quote) return; const s = Math.round((Date.now() - quoteAt) / 1000); q('q-age').textContent = s < 5 ? 'live' : `${s}s ago`; }
+  setInterval(tickAge, 1000);
+  function setStep(step, state) { for (const li of root.querySelectorAll('.steps li')) { if (li.dataset.step === step) li.className = state; } }
+  function resetSteps() { for (const li of root.querySelectorAll('.steps li')) li.className = ''; }
   function updateButtons() {
     const ok = !!(quote && account && account.toLowerCase() === q('sl-wallet').value.toLowerCase());
     q('sl-sell').disabled = !ok;
@@ -1804,47 +1853,60 @@ loadConfig().then(async () => {
       }
       q('sl-connect').textContent = short(account);
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
-      status('sl-txstatus', account.toLowerCase() === q('sl-wallet').value.toLowerCase() ? 'Connected. Review the quote, then sell.' : `Connected ${short(account)}; select that wallet above or switch accounts.`, 'ok');
+      status('sl-txstatus', account.toLowerCase() === q('sl-wallet').value.toLowerCase() ? 'Connected. Check the number above, then sell.' : `Connected ${short(account)}; select that wallet above or switch accounts.`, 'ok');
       updateButtons();
     } catch (e) { status('sl-txstatus', `Connection failed: ${e.shortMessage || e.message}`, 'bad'); }
   }
   async function sell() {
     if (!quote || !signer) return;
-    const t = quote.token; const amt = BigInt(quote.amountIn);
-    q('sl-sell').disabled = true;
+    const t = quote.token; const amt = BigInt(quote.amountIn); const qt = quote;
+    q('sl-sell').disabled = true; clearTimeout(quoteTimer); resetSteps();
     try {
       const erc = new ethers.Contract(t.address, ERC20, signer);
-      const p2 = new ethers.Contract(quote.permit2, PERMIT2, signer);
-      if ((await erc.allowance(account, quote.permit2)) < amt) {
-        status('sl-txstatus', `1/3 Confirm in your wallet: approve ${t.symbol} for Permit2…`, 'warn');
-        await (await erc.approve(quote.permit2, ethers.MaxUint256)).wait();
+      const p2 = new ethers.Contract(qt.permit2, PERMIT2, signer);
+      if ((await erc.allowance(account, qt.permit2)) < amt) {
+        setStep('approve', 'active'); status('sl-txstatus', `Confirm in your wallet: approve ${t.symbol} for Permit2…`, 'warn');
+        await (await erc.approve(qt.permit2, ethers.MaxUint256)).wait();
       }
-      const [pAmt, pExp] = await p2.allowance(account, t.address, quote.router);
+      setStep('approve', 'done');
+      const [pAmt, pExp] = await p2.allowance(account, t.address, qt.router);
       if (BigInt(pAmt) < amt || Number(pExp) < Math.floor(Date.now() / 1000) + 60) {
-        status('sl-txstatus', `2/3 Confirm in your wallet: Permit2 allowance for the router (${fmt(amt, t.decimals)} ${t.symbol}, 1 hour)…`, 'warn');
-        await (await p2.approve(t.address, quote.router, amt, Math.floor(Date.now() / 1000) + 3600)).wait();
+        setStep('permit', 'active'); status('sl-txstatus', `Confirm in your wallet: allow the router to take ${fmt(amt, t.decimals)} ${t.symbol} (1 hour)…`, 'warn');
+        await (await p2.approve(t.address, qt.router, amt, Math.floor(Date.now() / 1000) + 3600)).wait();
       }
-      status('sl-txstatus', `3/3 Confirm in your wallet: swap ${fmt(amt, t.decimals)} ${t.symbol} → ${quote.outSymbol}…`, 'warn');
-      const tx = await signer.sendTransaction({ to: quote.router, data: quote.calldata, value: BigInt(quote.value) });
-      status('sl-txstatus', `Sent <a href="${quote.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+      setStep('permit', 'done'); setStep('swap', 'active');
+      status('sl-txstatus', `Confirm in your wallet: swap ${fmt(amt, t.decimals)} ${t.symbol} → ${qt.outSymbol}…`, 'warn');
+      const tx = await signer.sendTransaction({ to: qt.router, data: qt.calldata, value: BigInt(qt.value) });
+      status('sl-txstatus', `Sent <a href="${qt.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
       const rc = await tx.wait();
-      status('sl-txstatus', `Sold in block ${rc.blockNumber}. <a href="${quote.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>${quote.partial ? ' — quote again to sell the next slice.' : ''}`, 'ok');
-      quote = null; q('sl-quotecard').hidden = true;
+      setStep('swap', 'done');
+      status('sl-txstatus', `Sold in block ${rc.blockNumber}. <a href="${qt.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>${qt.partial ? ' — the amount is refreshed below; quote again for the next slice.' : ''}`, 'ok');
+      // Record it like the collector's own sales (lots table, daily summary).
+      try { await fetch('/api/sell/record', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tx: tx.hash, wallet: account, walletLabel: q('sl-wallet').selectedOptions[0].textContent.replace(/ \(.*\)$/, ''), token: t.address, symbol: t.symbol, amount: Number(ethers.formatUnits(amt, t.decimals)), amountOut: Number(ethers.formatUnits(BigInt(qt.quotedOut), qt.outDecimals)), outSymbol: qt.outSymbol, usd: qt.usd, impactPct: qt.impactPct }) }); } catch {}
+      history.unshift({ at: Date.now(), symbol: t.symbol, amount: Number(ethers.formatUnits(amt, t.decimals)), out: `${fmt(qt.quotedOut, qt.outDecimals, 4)} ${qt.outSymbol}`, usd: qt.usd, tx: tx.hash, explorer: qt.explorer });
+      renderHistory();
+      hideQuote();
       setTimeout(() => loadTokens(q('sl-wallet').value), 4000);
     } catch (e) {
       const m = e.shortMessage || e.message || String(e);
       status('sl-txstatus', /rejected|denied|4001/i.test(m) ? 'Rejected in the wallet. Nothing changed.' : `Failed: ${m}`, 'bad');
-      updateButtons();
+      resetSteps(); updateButtons(); scheduleQuote(0);
     }
   }
+  function renderHistory() {
+    const card = q('sl-history'); card.hidden = !history.length;
+    q('sl-historyrows').innerHTML = history.map((h) => `<div class="row"><span>${new Date(h.at).toLocaleTimeString()} · ${h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${h.symbol} → ${h.out}${h.usd != null ? ' (≈ ' + usdF(h.usd) + ')' : ''}</span><span><a href="${h.explorer}/tx/${h.tx}" target="_blank" rel="noopener">${short(h.tx)}</a></span></div>`).join('');
+  }
   q('sl-wallet').addEventListener('change', () => loadTokens(q('sl-wallet').value));
-  const fillMax = () => { const t = selectedToken(); q('sl-amount').value = t ? ethers.formatUnits(BigInt(t.raw), t.decimals) : ''; };
-  q('sl-token').addEventListener('change', () => { q('sl-quotecard').hidden = true; quote = null; fillMax(); });
+  q('sl-token').addEventListener('change', () => { hideQuote(); renderTokenInfo(); fillPct(100); });
   q('sl-reload').addEventListener('click', () => loadTokens(q('sl-wallet').value));
-  q('sl-max').addEventListener('click', () => { const t = selectedToken(); if (t) q('sl-amount').value = ethers.formatUnits(BigInt(t.raw), t.decimals); });
-  q('sl-quote').addEventListener('click', getQuote);
+  q('sl-amount').addEventListener('input', () => { for (const b of root.querySelectorAll('.pcts button')) b.classList.remove('on'); scheduleQuote(600); });
+  q('sl-impact').addEventListener('change', () => scheduleQuote(0));
+  q('sl-slip').addEventListener('change', () => scheduleQuote(0));
+  for (const b of root.querySelectorAll('.pcts button')) b.addEventListener('click', () => fillPct(Number(b.dataset.pct)));
+  q('sl-requote').addEventListener('click', () => scheduleQuote(0));
   q('sl-connect').addEventListener('click', connect);
-  q('sl-sell').addEventListener('click', () => { if (quote && confirm(`Sell ${fmt(quote.amountIn, quote.token.decimals)} ${quote.token.symbol} for at least ${fmt(quote.minOut, quote.outDecimals, 6)} ${quote.outSymbol}?`)) sell(); });
+  q('sl-sell').addEventListener('click', () => { if (quote && confirm(`Sell ${fmt(quote.amountIn, quote.token.decimals)} ${quote.token.symbol} for at least ${fmt(quote.minOut, quote.outDecimals, 4)} ${quote.outSymbol}?`)) sell(); });
   loadTokens().catch((e) => status('sl-status', `Could not load: ${e.message}`, 'bad'));
 })();
 </script>

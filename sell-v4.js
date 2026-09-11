@@ -414,4 +414,4 @@ function create({ provider, cfg, log = console.log }) {
   return { ready: !!ready, settings: st, sell, quote, quoteOut, discoverEthPools, discoverPools };
 }
 
-module.exports = { create, settings, buildSwapCalldata, fitSlice, spotOut, impactPct, poolIdOf, ACT, CMD_V4_SWAP, decideSale, pendingSales, readPending };
+module.exports = { create, settings, buildSwapCalldata, fitSlice, spotOut, impactPct, poolIdOf, ACT, CMD_V4_SWAP, decideSale, pendingSales, readPending, appendSale };

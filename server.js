@@ -652,6 +652,15 @@ async function historyWallets() {
   return list;
 }
 /** Today's USD price for a token from whatever the server already knows: position pools, the portfolio, watched holdings. */
+let priceLogCache = { at: 0, hours: {}, sorted: [] };
+function priceLogData() {
+  if (Date.now() - priceLogCache.at > 60 * 1000) {
+    try { const pl = JSON.parse(fs.readFileSync(path.join(__dirname, "price-log.json"), "utf8")); const hours = pl.hours || {}; priceLogCache = { at: Date.now(), hours, sorted: Object.keys(hours).map(Number).sort((a, b) => a - b) }; } catch { priceLogCache.at = Date.now(); }
+  }
+  return priceLogCache;
+}
+const priceHoursSorted = () => priceLogData().sorted;
+const priceLogRow = (h) => priceLogData().hours[String(h)] || {};
 function currentPrice(addr) {
   const a = String(addr).toLowerCase();
   if (lastPrices[a] != null) return lastPrices[a];
@@ -1770,11 +1779,31 @@ const server = http.createServer(async (req, res) => {
         const price = h.price ?? lastPrices[h.address.toLowerCase()] ?? currentPrice(h.address);
         const usd = price != null ? balance * price : null;
         if (usd != null && usd < 1) return; // dust
-        rows.push({ symbol: meta.symbol || h.symbol, address: meta.address, decimals: meta.decimals, raw: raw.toString(), balance, usd });
+        // Price 1 h and 24 h ago from the hourly price log, so a drop is visible before selling.
+        const ch = (agoMs) => { const hs = priceHoursSorted(); const target = Date.now() - agoMs; let best = null; for (const hh of hs) if (Math.abs(hh - target) <= 3 * 3600 * 1000 && (best == null || Math.abs(hh - target) < Math.abs(best - target))) best = hh; const old = best != null ? priceLogRow(best)[h.address.toLowerCase()] : null; return price != null && old > 0 ? +(((price - old) / old) * 100).toFixed(1) : null; };
+        rows.push({ symbol: meta.symbol || h.symbol, address: meta.address, decimals: meta.decimals, raw: raw.toString(), balance, usd, priceUsd: price ?? null, change1hPct: ch(3600 * 1000), change24hPct: ch(24 * 3600 * 1000) });
       });
       rows.sort((a, b) => (b.usd || 0) - (a.usd || 0));
       res.writeHead(200);
       return res.end(JSON.stringify({ ok: true, wallet, wallets: ours, rows, usdg: cfg.usdReference && cfg.usdReference.stable, weth: cfg.contracts.weth }));
+    } catch (err) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  // A sale signed from the Sell tab, recorded like the collector's own (token-sales.json -> lots table, daily summary).
+  if (url.pathname === "/api/sell/record" && req.method === "POST") {
+    res.setHeader("Content-Type", "application/json");
+    if (HOST !== "127.0.0.1" || READONLY) { res.writeHead(403); return res.end(JSON.stringify({ ok: false, error: "recording is localhost-only" })); }
+    try {
+      const b = JSON.parse(await readBody(req));
+      if (!/^0x[0-9a-fA-F]{64}$/.test(String(b.tx || ""))) throw new Error("tx hash required");
+      const r = await provider.getTransactionReceipt(b.tx);
+      if (!r || r.status !== 1) throw new Error("transaction not found or failed");
+      const row = { t: Date.now(), wallet: String(b.walletLabel || "").slice(0, 40), walletAddress: ethers.getAddress(String(b.wallet || r.from)), token: String(b.symbol || "").slice(0, 20), tokenAddress: ethers.getAddress(String(b.token)), amount: Number(b.amount) || 0, amountOut: Number(b.amountOut) || null, currencyOut: b.outSymbol || null, usd: Number(b.usd) || null, impactPct: b.impactPct != null ? Number(b.impactPct) : null, tx: b.tx, block: r.blockNumber, manual: true, via: "sell tab" };
+      require("./sell-v4").appendSale(row);
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, row }));
     } catch (err) {
       res.writeHead(400);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));

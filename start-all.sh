@@ -15,7 +15,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 # Secrets (Telegram, Blockscout, chat provider) live in ./.env as KEY=value
 # lines; exported into the server's environment only, never printed.
-if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
+# A .env that does not parse (an unbalanced quote after a hand edit) must not keep the
+# dashboard down: check it in a subshell first, start without it if it is broken, and say so.
+if [ -f "$HERE/.env" ]; then
+  if envErr=$( (set -a; . "$HERE/.env") 2>&1 ); then set -a; . "$HERE/.env"; set +a;
+  else echo "start-all: .env could not be read (${envErr##*: }) — starting WITHOUT it: no Telegram, no explorer key, no VPS sync until it is fixed"; fi
+fi
 # In-site chat (chat.js) needs ANTHROPIC_API_KEY or OLLAMA_API_KEY. When ./.env
 # has neither, reuse the scanner's chat settings (same variable names).
 if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OLLAMA_API_KEY:-}" ]; then

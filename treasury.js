@@ -20,18 +20,26 @@ const LEDGER_FILE = path.join(__dirname, "fee-split-ledger.json");
  * (what the vault page's slider sets) when treasuryNFT is deployed, else
  * settings.json. Always capped by feeSplitMax.
  */
+// Last value read from each NFT: a failed read (a throttled RPC) keeps reporting the
+// percentage that is actually in force instead of falling back to settings.json,
+// which made the split "change" 20% -> 10% -> 20% in the alerts on every 403.
+const lastOnChain = new Map(); // nft address (lower) -> { pct, at }
 async function effectiveSettings(cfg, provider) {
   const s = settings(cfg);
   if (cfg.treasuryNFT && ethers.isAddress(cfg.treasuryNFT) && provider) {
+    const key = String(cfg.treasuryNFT).toLowerCase();
     try {
       const nft = new ethers.Contract(cfg.treasuryNFT, ["function feeSplitPct() view returns (uint256)"], provider);
       const onChain = Number(await nft.feeSplitPct());
       s.pct = Math.max(0, Math.min(s.max, onChain));
-      s.enabled = !!s.tba && s.pct > 0;
       s.pctSource = "on-chain";
+      lastOnChain.set(key, { pct: s.pct, at: Date.now() });
     } catch {
-      s.pctSource = "config";
+      const cached = lastOnChain.get(key);
+      if (cached) { s.pct = cached.pct; s.pctSource = "on-chain (cached)"; s.pctReadAt = cached.at; }
+      else s.pctSource = "config";
     }
+    s.enabled = !!s.tba && s.pct > 0;
   } else s.pctSource = "config";
   return s;
 }

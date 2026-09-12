@@ -138,7 +138,7 @@ function analysePositions(attr) {
   }
 
   const best = positions
-    .filter(p => p.valueUsd > 0 && ageHours(p.since) != null && ageHours(p.since) > 48)
+    .filter(p => p.valueUsd > 0 && Number.isFinite(p.fees) && ageHours(p.since) != null && ageHours(p.since) > 48) // null fees would make the ratio NaN and the sort meaningless
     .map(p => ({ ...p, feeRatio: p.fees / p.valueUsd }))
     .sort((a, b) => b.feeRatio - a.feeRatio)[0];
 

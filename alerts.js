@@ -232,8 +232,8 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
       else if (/locked/i.test(run.result || "")) await say(`runlocked:${run.t}`, `🔒 Collect run at ${run.t} was skipped: the collector was locked. Arm it (Arm collector on the dashboard, or ./unlock.sh) before tomorrow's ${COLLECT_HOUR}:00 run.`, 0);
     }
     const hour = d.getHours();
-    if (hour >= COLLECT_HOUR && hour < COLLECT_HOUR + 1 && d.getMinutes() >= 30) {
-      const ranToday = run && run.t && sameDay(parseRunTime(run.t), d) && parseRunTime(run.t).getHours() >= COLLECT_HOUR - 1;
+    if ((hour === COLLECT_HOUR && d.getMinutes() >= 30) || (hour > COLLECT_HOUR && hour < COLLECT_HOUR + 2)) {
+      const ranToday = run && run.t && sameDay(parseRunTime(run.t), d) && parseRunTime(run.t).getHours() >= COLLECT_HOUR;
       if (!ranToday) await say(`missed:${dayKey(d)}`, `⚠️ No collect run seen today after ${COLLECT_HOUR}:00. Is the Windows scheduled task 'LP fee collector' still registered?`, 0);
     }
 

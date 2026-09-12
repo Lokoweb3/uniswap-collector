@@ -48,6 +48,19 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   clock = new Date("2026-09-07T09:35:00").getTime();
   out = await b.check({ payload: { positions: [] }, ops: run("2026-09-06T09:00:04", "collected 1 position"), unlock: { armed: true }, keepalive: true });
   assert.strictEqual(out.length, 1); assert.match(out[0], /No collect run seen today/);
+  // 5b. an 08:50 run today is not the 09:00 run; the check also still fires at 10:30, once per day
+  for (const f of [stateFile + ".b2", stateFile + ".b3"]) { try { fs.unlinkSync(f); } catch {} } // no state from an earlier run
+  const b2 = create({ transport: async (t) => { sent.push(t); return true; }, stateFile: stateFile + ".b2", now: () => clock, log: { error() {} } });
+  clock = new Date("2026-09-07T10:30:00").getTime();
+  out = await b2.check({ payload: { positions: [] }, ops: run("2026-09-07T08:50:00", "collected 1 position"), unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /No collect run seen today/);
+  out = await b2.check({ payload: { positions: [] }, ops: run("2026-09-07T08:50:00", "collected 1 position"), unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 0, "once per day");
+  const b3 = create({ transport: async (t) => { sent.push(t); return true; }, stateFile: stateFile + ".b3", now: () => clock, log: { error() {} } });
+  out = await b3.check({ payload: { positions: [] }, ops: run("2026-09-07T09:00:05", "collected 1 position"), unlock: { armed: true }, keepalive: true });
+  assert.strictEqual(out.length, 0, "the 09:00 run happened");
+  try { fs.unlinkSync(stateFile + ".b2"); fs.unlinkSync(stateFile + ".b3"); } catch {}
+  clock = new Date("2026-09-07T09:35:00").getTime(); // back to where the earlier instances left off
 
   // 6. keepalive gone
   out = await b.check({ payload: { positions: [] }, ops: run("2026-09-06T09:00:04", "collected 1 position"), unlock: { armed: true }, keepalive: false });

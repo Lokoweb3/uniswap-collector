@@ -1434,6 +1434,21 @@ async function handleRequest(req, res) {
     return res.end(JSON.stringify({ ok: true, enabled, running: enabled && !!launchScanner, at: st ? st.at : 0, stale: !st || Date.now() - (st.at || 0) > 20 * 60 * 1000, ...(st || {}), settings: (launchScanner && launchScanner.settings) || cfg.launchScanner || {} }));
   }
   // Nightly backup on demand (loopback-only; the scheduled run is a timer in this process).
+  
+  // === tasks: manual trigger for run-all.sh ===
+  if (url.pathname === "/api/tasks/run" && req.method === "POST") {
+    const { spawn } = require("child_process");
+    const task = url.searchParams.get("task");
+    const script = task ? `node tasks/${task}.js` : "bash tasks/run-all.sh";
+    const child = spawn("bash", ["-c", script], {
+      cwd: __dirname, detached: true, stdio: ["ignore","pipe","pipe"],
+    });
+    const started = new Date().toISOString();
+    child.unref();
+    return res.end(JSON.stringify({ ok: true, started, script, pid: child.pid }));
+  }
+  // === end tasks ===
+
   if (url.pathname === "/api/backup" && req.method === "POST") {
     res.setHeader("Content-Type", "application/json");
     if (HOST !== "127.0.0.1" || READONLY || !server.runBackup) {

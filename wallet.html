@@ -2135,10 +2135,12 @@ loadConfig().then(async () => {
   setInterval(tickAge, 1000);
   function setStep(step, state) { for (const li of root.querySelectorAll('.steps li')) if (li.dataset.step === step) li.className = state; }
   function updateButtons() {
-    const ok = !!(quote && !quote.blocked && account && account.toLowerCase() === q('mt-wallet').value.toLowerCase());
+    const sameWallet = !!(account && account.toLowerCase() === q('mt-wallet').value.toLowerCase());
+    const ok = !!(quote && !quote.blocked && sameWallet);
     q('mt-go').disabled = !ok;
     q('mt-go').textContent = q('mt-mode').value === 'move' && !closed ? 'Close, then mint with wallet' : 'Mint with wallet';
-    if (quote && account && !ok) status('mt-txstatus', `Connected ${short(account)} is not the selected wallet; switch accounts in Rabby.`, 'warn');
+    if (quote && account && !sameWallet) status('mt-txstatus', `Connected ${short(account)} is not the selected wallet; switch accounts in Rabby.`, 'warn');
+    else if (quote && quote.blocked && sameWallet) status('mt-txstatus', 'The deposit does not fit the wallet (see the ✖ line above); lower that side or press Max on the smaller side and let the other follow.', 'warn');
   }
   async function connect() {
     if (!window.ethereum) { status('mt-txstatus', 'No wallet found. Install Rabby or MetaMask.', 'bad'); return; }

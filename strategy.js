@@ -529,8 +529,27 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       if (!r) return null;
       const ethPx = t != null ? priceAt(hours, ethers.ZeroAddress, t) : null;
       const ref = t != null && tokenAddr ? priceAt(hours, tokenAddr, t) : null;
-      return proceedsFromReceipt({ logs: r.logs, wallet, tokenRaw, ethPx, weth: WETH, stable, refUsd: ref != null && amount != null ? amount * ref : null, tokenAddr });
+      const refUsd = ref != null && amount != null ? amount * ref : null;
+      const sp = proceedsFromReceipt({ logs: r.logs, wallet, tokenRaw, ethPx, weth: WETH, stable, refUsd, tokenAddr });
+      if (sp.sold) saveFixture({ tx, wallet, tokenAddr, tokenRaw, t, ethPx, refUsd, logs: r.logs, sp });
+      return sp;
     };
+    // A route shape the audit has not accepted yet gets its receipt saved as a test fixture
+    // (test/fixtures/receipts/<tx>.json); accepting the shape stamps the valuation as the
+    // expected result and test/fixtures.test.js replays it through the valuer from then on.
+    const known = new Set((readJson(path.join(dir, "ledger-audit.json"), {}).knownShapes) || []);
+    const FIX_DIR = path.join(dir, "test", "fixtures", "receipts");
+    function saveFixture({ tx, wallet, tokenAddr, tokenRaw, t, ethPx, refUsd, logs, sp }) {
+      try {
+        if (!sp.shape || known.has(sp.shape)) return;
+        const f = path.join(FIX_DIR, `${tx}.json`);
+        if (fs.existsSync(f)) return;
+        fs.mkdirSync(FIX_DIR, { recursive: true });
+        const sym = [...tokens.entries()].find(([, v]) => v.address === String(tokenAddr).toLowerCase());
+        fs.writeFileSync(f, JSON.stringify({ tx, wallet, token: sym ? sym[0] : null, tokenAddr, tokenRaw: tokenRaw.toString(), t, ethPx, refUsd, shape: sp.shape, valuation: { usd: sp.usd, priced: sp.priced, units: sp.units }, accepted: false, expected: null,
+          logs: logs.map((l) => ({ address: l.address, topics: [...l.topics], data: l.data })) }, null, 1));
+      } catch {}
+    }
     // Rows valued before the receipt valuer learned multi-hop swaps, split transfers and the
     // audit's units / shape (rev < 4) are re-valued once.
     let revalued = 0;

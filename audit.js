@@ -195,10 +195,20 @@ function create({ cfg, dir = __dirname, port, log = console.log }) {
 
   function read() { return readJson(FILE, null); }
 
-  /** Mark route shapes as accepted (they stop being flagged). */
+  /** Mark route shapes as accepted (they stop being flagged); their saved receipts become expected-value fixtures. */
   function acceptShapes(shapes) {
     const cur = read() || { at: null, findings: [], knownShapes: [] };
     cur.knownShapes = [...new Set([...(cur.knownShapes || []), ...shapes])];
+    const fixDir = path.join(dir, "test", "fixtures", "receipts");
+    try {
+      for (const f of fs.readdirSync(fixDir)) {
+        const p = path.join(fixDir, f);
+        const fx = readJson(p, null);
+        if (!fx || fx.accepted || !shapes.includes(fx.shape)) continue;
+        fx.accepted = true; fx.acceptedAt = new Date().toISOString(); fx.expected = fx.valuation;
+        fs.writeFileSync(p, JSON.stringify(fx, null, 1));
+      }
+    } catch {}
     cur.findings = (cur.findings || []).filter((f) => !(f.kind === "unfamiliar" && cur.knownShapes.includes(f.shape)));
     cur.summary = summarise(cur.findings);
     fs.writeFileSync(FILE, JSON.stringify(cur));

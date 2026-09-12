@@ -685,14 +685,18 @@ async function runOwner(ctx, owner) {
     const splitPct = tsC.enabled ? tsC.pct : 0;
     for (const sim of eligible) {
       // In range right now? (single-sided increases are legal but the spec sweeps out-of-range fees instead)
-      let inRange = true;
+      // Unverified is treated as out of range: that path hands the fees to the
+      // owner, which is the safe side; only a successful tick read may compound.
+      let inRange = false;
       try {
         const factory = new ethers.Contract(cfg.contracts.factory, ["function getPool(address,address,uint24) view returns (address)"], provider);
         const poolAddr = await factory.getPool(sim.t0.address, sim.t1.address, sim.fee);
         const slot0 = await new ethers.Contract(poolAddr, ["function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)"], provider).slot0();
         const tick = Number(slot0.tick);
         inRange = tick >= Number(sim.pos.tickLower) && tick < Number(sim.pos.tickUpper);
-      } catch {}
+      } catch (err) {
+        log(`  ! #${sim.tokenId}: could not read the pool tick (${err.shortMessage || err.message}) — treating as out of range`);
+      }
       const pl = compound.plan({ ...sim, inRange }, splitPct);
       const f = (a, t) => `${fmt(a, t.decimals)} ${t.symbol}`;
       if (mode === "simulate" || !wallet) {

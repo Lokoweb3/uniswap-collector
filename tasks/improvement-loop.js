@@ -193,7 +193,7 @@ function analyseScout(scoutRows) {
   }
 
   for (const [tokenId, rows] of byPos) {
-    rows.sort((a, b) => a.t.localeCompare(b.t));
+    rows.sort((a, b) => String(a.t || "").localeCompare(String(b.t || ""))); // a row without a timestamp sorts first instead of throwing
     const latest = rows[rows.length - 1];
 
     if (!latest.beats) continue;

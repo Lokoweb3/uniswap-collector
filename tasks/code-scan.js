@@ -29,7 +29,8 @@ function findHardcoded(){
     {val:"8787",label:"port 8787 hardcoded"},
   ];
   return patterns.map(p=>{
-    const files=exec(`grep -rln "${p.val}" --include="*.js" --include="*.mjs" --exclude-dir={${SKIP.join(",")}} .`).split("\n").filter(Boolean);
+    // -P: the patterns use \b word boundaries, which basic grep does not understand
+    const files=exec(`grep -rPln "${p.val}" --include="*.js" --include="*.mjs" --exclude-dir={${SKIP.join(",")}} .`).split("\n").filter(Boolean);
     return files.length>2?{label:p.label,files:files.map(f=>f.replace("./","")),count:files.length}:null;
   }).filter(Boolean);
 }

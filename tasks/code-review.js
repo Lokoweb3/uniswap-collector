@@ -106,9 +106,11 @@ async function main(){
   const toReview=new Set([...changedFiles.slice(0,3),keyFile]);
 
   const fileReviews=[];
+  let failedReviews=0;
   for(const f of toReview){
     const r=await reviewFile(f,changedFiles.includes(f)?"changed in last 6h":"key-file rotation");
     if(r)fileReviews.push(r);
+    else failedReviews++;
     await new Promise(r=>setTimeout(r,500));
   }
   const diffReview=changedFiles.length>0?await reviewDiff(changedFiles):null;
@@ -125,10 +127,11 @@ async function main(){
   allIssues.sort((a,b)=>({HIGH:0,MEDIUM:1,LOW:2}[a.severity]||2)-({HIGH:0,MEDIUM:1,LOW:2}[b.severity]||2));
 
   const highCount=allIssues.filter(i=>i.severity==="HIGH").length;
-  const status=highCount>0?"🔴 CODE ISSUES":allIssues.length>0?"🟡 CODE WATCH":"🟢 CODE OK";
+  // A broken model or API must not look like clean code: no successful review at all is a failure, not CODE OK.
+  const status=failedReviews>0&&fileReviews.length===0?"⚠️ CODE REVIEW FAILED":highCount>0?"🔴 CODE ISSUES":allIssues.length>0?"🟡 CODE WATCH":"🟢 CODE OK";
 
   const lines=[``,`---`,`## Code Review — ${ts}`,
-    `**${status}** | ${allIssues.length} issues across ${fileReviews.length} files`,``];
+    `**${status}** | ${allIssues.length} issues across ${fileReviews.length} files${failedReviews?` · ${failedReviews} review(s) failed`:""}`,``];
   if(diffReview)lines.push(`### Recent changes`,`Risk: ${diffReview.riskLevel} — ${diffReview.summary}`,``);
   if(fileReviews.length){lines.push(`### File scores`);fileReviews.forEach(r=>lines.push(`- **${r.file}** — ${r.score}/10 — ${r.summary}`));lines.push(``)}
   if(allIssues.length){lines.push(`### Issues`);allIssues.forEach(i=>{lines.push(`- [${i.severity}] \`${i.source}${i.line?":"+i.line:""}\` — ${i.msg}`);if(i.fix)lines.push(`  → ${i.fix}`)});lines.push(``)}
@@ -136,13 +139,13 @@ async function main(){
   lines.push(`### Reviewed: ${[...toReview].join(", ")}`,`---`);
 
   fs.mkdirSync(OUT_DIR,{recursive:true});
-  fs.writeFileSync(OUT,JSON.stringify({ts,status,changedFiles,fileReviews,allIssues,allSuggestions},null,2));
+  fs.writeFileSync(OUT,JSON.stringify({ts,status,changedFiles,failedReviews,fileReviews,allIssues,allSuggestions},null,2));
   fs.mkdirSync(path.dirname(BRAIN),{recursive:true});
   fs.appendFileSync(BRAIN,"\n"+lines.join("\n")+"\n");
 
-  console.log(`[code-review] ${status} — ${allIssues.length} issues`);
+  console.log(`[code-review] ${status} — ${allIssues.length} issues${failedReviews?`, ${failedReviews} review(s) failed`:""}`);
   allIssues.slice(0,3).forEach(i=>console.log(`  [${i.severity}] ${i.source}: ${i.msg}`));
-  return{status,allIssues,allSuggestions,fileReviews};
+  return{status,allIssues,allSuggestions,fileReviews,failedReviews};
 }
 
 module.exports={main};

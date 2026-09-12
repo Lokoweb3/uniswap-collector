@@ -48,26 +48,34 @@ async function main(){
     m.get(key).aprs.push(p.aprPct);
     if(p.tvlUsd)m.get(key).tvls.push(p.tvlUsd);
   }
-  const seen=new Set();
+  // Every position in a pair shares one pool ranking, so group them: one block per pair, every position named.
+  const byPair=new Map();
   for(const pos of positions){
     const pairKey=typeof pos?.pair==="string"?pos.pair.trim():null;
-    if(!pairKey||seen.has(pairKey))continue;
-    seen.add(pairKey);
+    if(!pairKey)continue;
+    if(!byPair.has(pairKey))byPair.set(pairKey,[]);
+    byPair.get(pairKey).push(pos);
+  }
+  for(const [pairKey,pairPositions] of byPair){
     const pairPools=poolMap.get(pairKey);
     if(!pairPools||pairPools.size===0){console.log(`${pairKey} — no scout data yet\n`);continue}
-    const ranked=[...pairPools.values()]
-      .map(p=>({...p,avgApr:p.aprs.length?Math.round(p.aprs.reduce((a,b)=>a+b,0)/p.aprs.length):0,maxApr:p.aprs.length?Math.round(Math.max(...p.aprs)):0,avgTvl:p.tvls.length?Math.round(p.tvls.reduce((a,b)=>a+b,0)/p.tvls.length):0,maxTvl:p.tvls.length?Math.round(Math.max(...p.tvls)):0,samples:p.aprs.length}))
+    const stats=[...pairPools.values()]
+      .map(p=>({...p,avgApr:p.aprs.length?Math.round(p.aprs.reduce((a,b)=>a+b,0)/p.aprs.length):0,maxApr:p.aprs.length?Math.round(Math.max(...p.aprs)):0,avgTvl:p.tvls.length?Math.round(p.tvls.reduce((a,b)=>a+b,0)/p.tvls.length):0,maxTvl:p.tvls.length?Math.round(Math.max(...p.tvls)):0,samples:p.aprs.length}));
+    // The current pool has no TVL samples, so its score is meaningless: it is shown first, never ranked.
+    const cur=stats.find(p=>p.isCurrent);
+    const ranked=stats.filter(p=>!p.isCurrent)
       .map(p=>({...p,score:score(p.avgApr,p.avgTvl)}))
       .sort((a,b)=>b.score-a.score);
-    const cur=ranked.find(p=>p.isCurrent);
-    const curApr=cur?.avgApr||pos.aprPct||0;
+    const pos=pairPositions[0];
+    const curApr=cur?.avgApr??(num(pos.aprPct)?Number(pos.aprPct):0);
+    const totalValue=pairPositions.reduce((a,p)=>a+(num(p.valueUsd)?Number(p.valueUsd):0),0);
     console.log(`╔══════════════════════════════════════════════`);
-    console.log(`║ ${pairKey} #${pos.tokenId} (${pos.wallet||"Main"})`);
-    console.log(`║ Current APR: ${Math.round(curApr)}% | Value: $${pos.valueUsd?.toFixed(0)||"?"}`);
+    console.log(`║ ${pairKey} — ${pairPositions.map(p=>`#${p.tokenId} (${p.wallet||"Main"})`).join(", ")}`);
+    console.log(`║ Current APR: ${Math.round(curApr)}% | Value: $${totalValue.toFixed(0)}${pairPositions.length>1?` across ${pairPositions.length} positions`:""}`);
     console.log(`╚══════════════════════════════════════════════`);
+    if(cur)console.log(`  📍 CURRENT  ${cur.name}\n     APR avg:${cur.avgApr}%`);
     let rank=0;
     for(const p of ranked){
-      if(p.isCurrent){console.log(`  📍 CURRENT  ${p.name}\n     APR avg:${p.avgApr}%`);continue}
       if(p.avgApr<MIN_APR)continue;
       rank++;
       const tvlOk=p.avgTvl>=MIN_TVL,aprOk=p.avgApr>curApr*1.5;

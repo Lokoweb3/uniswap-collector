@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pushes the agent's shared memory to the VPS so the agent there (Loko_AI)
-# remembers the same things: brain/notes.md, agent-memory/*.json and
-# agent-work.log. Uses the nightly backup's SSH access (LP_BACKUP_HOST /
+# remembers the same things: brain/notes.md, brain/tasks/TASKS.md,
+# agent-memory/*.json and agent-work.log. Uses the nightly backup's SSH access (LP_BACKUP_HOST /
 # LP_BACKUP_KEY from ./.env, the same as backup-ledgers.sh) and lands in
 # $LP_MEMORY_DIR (default /home/openclaw/lp-memory). Silent no-op when
 # unconfigured. Nothing from .env is printed.
@@ -16,6 +16,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-
 [ -n "$KEY" ] && SSH_OPTS+=(-i "$KEY" -o IdentitiesOnly=yes)
 FILES=()
 [ -f "$HERE/brain/notes.md" ] && FILES+=("$HERE/brain/notes.md")
+[ -f "$HERE/brain/tasks/TASKS.md" ] && FILES+=("$HERE/brain/tasks/TASKS.md")
 [ -f "$HERE/agent-work.log" ] && FILES+=("$HERE/agent-work.log")
 [ "${#FILES[@]}" -gt 0 ] || exit 0
 ssh -q "${SSH_OPTS[@]}" "$HOST" "mkdir -p '$DIR/agent-memory'" || { echo "$(date -u +%FT%TZ) memory sync: ssh failed" >&2; exit 2; }

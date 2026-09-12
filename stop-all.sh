@@ -2,6 +2,9 @@
 # Stops the dashboard process (and with it the loops and the companion
 # services it supervises). Tailscale's daemon is left running.
 set -u
+# The watchdog first, or it would bring the dashboard straight back.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for w in $(pgrep -f "^bash $HERE/watchdog.sh$" 2>/dev/null); do kill "$w" 2>/dev/null && echo "watchdog: stopped (pid $w)"; done
 pid=$(ss -ltnp 2>/dev/null | awk '/:8787 /{print $NF}' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
 if [ -z "$pid" ]; then echo "dashboard: not running"; exit 0; fi
 kill "$pid" && echo "dashboard: stopped (pid $pid)"

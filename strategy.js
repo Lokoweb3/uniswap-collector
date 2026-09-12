@@ -514,7 +514,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
     // Transfers into the protocol are liquidity deposits (a move, not a disposal)
     // unless the same transaction swapped: then the wallet sold through a router.
     const protocol = new Set([cfg.contracts.v4 && cfg.contracts.v4.poolManager, cfg.contracts.v4 && cfg.contracts.v4.positionManager, cfg.contracts.positionManager, cfg.contracts.swapRouter02, cfg.contracts.v4 && cfg.contracts.v4.universalRouter, cfg.contracts.v4 && cfg.contracts.v4.permit2].filter(Boolean).map((a) => String(a).toLowerCase()));
-    const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId, { staticNetwork: true });
+    const provider = require("./rpc").createProvider(cfg);
     const stable = String((cfg.usdReference && cfg.usdReference.stable) || "").toLowerCase();
     const codeCache = new Map();
     const isContract = async (a) => { if (!codeCache.has(a)) { try { codeCache.set(a, (await provider.getCode(a)) !== "0x"); } catch { codeCache.set(a, null); } } return codeCache.get(a); };

@@ -61,7 +61,7 @@ const CACHE_MS = 60_000;
 let cache = { at: 0, payload: null };
 let buildInFlight = null;
 
-const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId);
+const provider = require("./rpc").createProvider(cfg); // retries throttled (429/403) answers before failing a read
 const npm = new ethers.Contract(cfg.contracts.positionManager, u.NPM_ABI, provider);
 const factory = new ethers.Contract(cfg.contracts.factory, u.FACTORY_ABI, provider);
 
@@ -2652,6 +2652,10 @@ if (SERVICES) {
   for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { for (const svc of services) if (svc.child) try { svc.child.kill(); } catch {} process.exit(0); });
 }
 
+// Brought back by watchdog.sh after the process exited: one Telegram line, so a crash never passes unnoticed.
+if (process.env.LP_RESTARTED_BY === "watchdog" && LOOPS) {
+  setTimeout(() => { alerts.send(`♻️ Dashboard restarted by the watchdog after it exited (${process.env.LP_RESTART_REASON || "process gone"}). Check server.log for the cause.`).catch(() => {}); }, 20000);
+}
 server.listen(PORT, HOST, () => {
   console.log(`Dashboard running at http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`);
   if (HOST === "0.0.0.0") console.log("Bound to all interfaces -- reachable from your network.");

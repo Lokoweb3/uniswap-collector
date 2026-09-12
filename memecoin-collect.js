@@ -297,7 +297,7 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     const first = ledger.find((r) => r.status === "ok" && Number(r.splitUsdg) > 0);
     if (!first) return;
     const cfg = loadConfig().cfg;
-    const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId), { staticNetwork: true });
+    const provider = require("./rpc").createProvider(cfg);
     const checks = {};
     try {
       const usdg = new ethers.Contract(USDG, ["function balanceOf(address) view returns (uint256)"], provider);

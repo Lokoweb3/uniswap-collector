@@ -62,7 +62,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
 
   const settings = require("./settings");
   const cfg = settings.load();
-  provider = provider || new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId), { staticNetwork: true });
+  provider = provider || require("./rpc").createProvider(cfg);
   const hasV4 = !!(cfg.contracts.v4 && cfg.contracts.v4.positionManager);
   const posm = hasV4 ? new ethers.Contract(cfg.contracts.v4.positionManager, v4.POSM_ABI, provider) : null;
   const stateView = hasV4 ? new ethers.Contract(cfg.contracts.v4.stateView, [...v4.STATE_VIEW_ABI, "function getLiquidity(bytes32) view returns (uint128)"], provider) : null;

@@ -26,6 +26,12 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OLLAMA_API_KEY:-}" ]; then
 fi
 export SCANNER_DIR="${SCANNER_DIR:-}"
 
+# The watchdog (watchdog.sh) restarts the dashboard within a minute if the process
+# exits; started here unless --no-watchdog (the watchdog's own call), stopped by stop-all.sh.
+if [ "${1:-}" != "--no-watchdog" ] && ! pgrep -f "^bash $HERE/watchdog.sh$" >/dev/null 2>&1; then
+  nohup bash "$HERE/watchdog.sh" >/dev/null 2>&1 < /dev/null &
+  echo "watchdog: started (pid $!) — restarts the dashboard if it exits; log in watchdog.log"
+fi
 if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':8787$'; then
   echo "dashboard: already running on :8787 (stop it first to restart: ./stop-all.sh)"
   exit 0

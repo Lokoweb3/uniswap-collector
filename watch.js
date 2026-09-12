@@ -297,6 +297,12 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     };
   }
 
+  // A wallet whose rebuild failed keeps its last good view (marked stale) instead of
+  // turning into an empty row for the next refresh window: the Sell / Mint tabs and
+  // the guardian go on working from data a few minutes old. Retried after a short,
+  // growing pause (90 s, 3 min, 6 min) rather than on the next 10-minute tick.
+  const RETRY_MS = [90000, 180000, 360000];
+  let retryTimer = null, retryN = 0;
   async function refresh() {
     if (inFlight) return inFlight;
     inFlight = (async () => {
@@ -304,13 +310,18 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       if (pools) await pools.refresh().catch(() => {});
       const wethUsd = wallets.length ? await getWethUsd() : null;
       const out = [];
+      const now = Date.now();
       for (const w of wallets) {
         try {
           out.push(await loadWallet(w, wethUsd));
         } catch (err) {
-          out.push({ ...w, ok: false, error: err.shortMessage || err.message, positions: [], closed: 0, errors: [], totals: null });
+          const prev = latest && (latest.wallets || []).find((x) => x.address && x.address.toLowerCase() === String(w.address).toLowerCase());
+          out.push(keepLastGood(w, prev, err.shortMessage || err.message, now, latest && latest.at));
         }
       }
+      const failed = out.filter((w) => !w.ok || w.stale).length;
+      if (failed && retryN < RETRY_MS.length) { clearTimeout(retryTimer); retryTimer = setTimeout(() => { refresh().catch(() => {}); }, RETRY_MS[retryN++]); retryTimer.unref && retryTimer.unref(); }
+      else if (!failed) retryN = 0;
       const sum = (k) => out.reduce((s, w) => s + ((w.totals && w.totals[k]) || 0), 0);
       const totals = { wallets: out.length, liquidityUsd: sum("liquidityUsd"), feesUsd: sum("feesUsd"), walletUsd: sum("walletUsd") };
       totals.totalUsd = totals.liquidityUsd + totals.feesUsd + totals.walletUsd;
@@ -327,4 +338,14 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   return { refresh, readWallets, ownerLabel, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
 }
 
-module.exports = { create };
+/**
+ * The row for a wallet whose rebuild just failed: the previous good row marked
+ * stale (with when it was built and the error), or an empty failed row when
+ * there is nothing good to keep.
+ */
+function keepLastGood(w, prev, error, now = Date.now(), prevAt = null) {
+  if (prev && prev.ok) return { ...prev, ok: true, stale: true, staleSince: prev.staleSince || prevAt || now, staleError: error };
+  return { ...w, ok: false, error, positions: [], closed: 0, errors: [], totals: null };
+}
+
+module.exports = { create, keepLastGood };

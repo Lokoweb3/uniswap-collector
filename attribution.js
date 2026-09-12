@@ -281,23 +281,26 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
 
     // Holdings (current): tokens in the wallet + inside positions + uncollected fees.
     const holdings = {};
+    const fold = (h, key, amount) => { if (amount == null) return; h[key] = (h[key] || 0) + Number(amount); };
     if (pf && pf.rows) {
-      holdings[MAIN] = {};
-      for (const r of pf.rows) {
-        const k = r.native ? "eth" : normAddr(r.address);
-        holdings[MAIN][k] = (holdings[MAIN][k] || 0) + (Number(r.total) || 0);
-      }
+      const h = (holdings[MAIN] = {});
+      for (const r of pf.rows) fold(h, r.native ? "eth" : normAddr(r.address), r.total);
+    }
+    // Disk fallback for the main wallet: the live portfolio view may be null at
+    // load() time (e.g. mid-refresh). Reconstruct current holdings from the newest
+    // persisted portfolio.json series point, which carries per-token amounts (`a`).
+    const mainHold = holdings[MAIN];
+    if (!(mainHold && Object.keys(mainHold).length) && pj.series && pj.series.length) {
+      const last = pj.series[pj.series.length - 1];
+      const h = (holdings[MAIN] = {});
+      for (const [addr, amt] of Object.entries((last && last.a) || {})) fold(h, normAddr(addr === "eth" ? "eth" : addr), amt);
     }
     for (const w of (wl && wl.wallets) || []) {
       const h = (holdings[w.address.toLowerCase()] = {});
-      for (const t of (w.holdings && w.holdings.tokens) || []) {
-        const k = t.native ? "eth" : normAddr(t.address);
-        h[k] = (h[k] || 0) + (Number(t.amount) || 0);
-      }
+      for (const t of (w.holdings && w.holdings.tokens) || []) fold(h, t.native ? "eth" : normAddr(t.address), t.amount != null ? t.amount : t.total);
       for (const p of w.positions || []) {
-        const k0 = normAddr(p.token0), k1 = normAddr(p.token1);
-        h[k0] = (h[k0] || 0) + (Number(p.amount0) || 0) + (Number(p.fee0) || 0);
-        h[k1] = (h[k1] || 0) + (Number(p.amount1) || 0) + (Number(p.fee1) || 0);
+        fold(h, normAddr(p.token0), p.amount0); fold(h, normAddr(p.token0), p.fee0);
+        fold(h, normAddr(p.token1), p.amount1); fold(h, normAddr(p.token1), p.fee1);
       }
     }
 

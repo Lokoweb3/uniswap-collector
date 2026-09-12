@@ -478,7 +478,12 @@ function create({ provider, factory, cfg, explorerApi }) {
     if (lpUsd != null && (!last || now - last.t >= SERIES_STEP_MS)) {
       const p = {};
       for (const r of rows) if (r.price != null) p[r.native ? "eth" : r.address.toLowerCase()] = +r.price.toPrecision(6);
-      state.series.push({ t: now, wallet: +walletUsd.toFixed(2), lp: +(lpUsd || 0).toFixed(2), fees: +(feesUsd || 0).toFixed(2), total: +totalUsd.toFixed(2), p });
+      // Per-token amounts (wallet + pools + uncollected fees) alongside prices, so
+      // performance-attribution can reconstruct current holdings from disk even when
+      // the live portfolio view is momentarily absent at load() time.
+      const a = {};
+      for (const r of rows) if (r.total != null) a[r.native ? "eth" : r.address.toLowerCase()] = +Number(r.total).toPrecision(6);
+      state.series.push({ t: now, wallet: +walletUsd.toFixed(2), lp: +(lpUsd || 0).toFixed(2), fees: +(feesUsd || 0).toFixed(2), total: +totalUsd.toFixed(2), p, a });
       save();
     }
 

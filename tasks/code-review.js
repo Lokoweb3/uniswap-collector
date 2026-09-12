@@ -76,6 +76,22 @@ async function callClaude(prompt){
   return data.message?.content||"";
 }
 
+// The model's JSON is untrusted: coerce the fields the report sorts and prints on, drop issues without a message.
+const SEVERITIES=new Set(["HIGH","MEDIUM","LOW"]);
+function normSeverity(s){s=String(s||"").toUpperCase();return SEVERITIES.has(s)?s:"LOW"}
+function normIssues(list){
+  if(!Array.isArray(list))return [];
+  return list.filter(i=>i&&typeof i.msg==="string"&&i.msg.trim()).map(i=>{
+    const line=Number(i.line);
+    return{...i,severity:normSeverity(i.severity),line:Number.isInteger(line)&&line>0?line:null,fix:typeof i.fix==="string"?i.fix:undefined};
+  });
+}
+function normReview(r){
+  const score=Math.round(Number(r.score));
+  return{...r,score:Number.isInteger(score)&&score>=1&&score<=10?score:null,summary:typeof r.summary==="string"?r.summary:"",
+    issues:normIssues(r.issues),suggestions:Array.isArray(r.suggestions)?r.suggestions.filter(s=>typeof s==="string"):[]};
+}
+
 async function reviewFile(filePath,reason){
   const f=readFileSafe(filePath);
   if(!f)return null;
@@ -97,7 +113,8 @@ Respond ONLY as JSON, no markdown:
   try{
     const raw=await callClaude(prompt);
     const result=JSON.parse(raw.replace(/```json|```/g,"").trim());
-    return{file:filePath,reason,...result};
+    if(!result||typeof result!=="object")throw new Error("review is not a JSON object");
+    return{file:filePath,reason,...normReview(result)};
   }catch(e){console.warn(`[code-review] parse error ${filePath}:`,e.message);return null}
 }
 
@@ -121,7 +138,11 @@ Respond ONLY as JSON:
 {"riskLevel":"HIGH|MEDIUM|LOW|NONE","summary":"one sentence","concerns":[{"severity":"HIGH|MEDIUM|LOW","msg":"concern"}],"suggestions":["improvement"]}`;
   try{
     const raw=await callClaude(prompt);
-    return JSON.parse(raw.replace(/```json|```/g,"").trim());
+    const r=JSON.parse(raw.replace(/```json|```/g,"").trim());
+    if(!r||typeof r!=="object")throw new Error("diff review is not a JSON object");
+    const risk=String(r.riskLevel||"").toUpperCase();
+    return{...r,riskLevel:["HIGH","MEDIUM","LOW","NONE"].includes(risk)?risk:"NONE",summary:typeof r.summary==="string"?r.summary:"",
+      concerns:normIssues(r.concerns),suggestions:Array.isArray(r.suggestions)?r.suggestions.filter(s=>typeof s==="string"):[]};
   }catch(e){console.warn("[code-review] diff parse error:",e.message);return null}
 }
 
@@ -168,7 +189,7 @@ async function main(){
   const lines=[``,`---`,`## Code Review — ${ts}`,
     `**${status}** | ${allIssues.length} issues across ${fileReviews.length} files${failedReviews?` · ${failedReviews} review(s) failed`:""}`,``];
   if(diffReview)lines.push(`### Recent changes`,`Risk: ${diffReview.riskLevel} — ${diffReview.summary}`,``);
-  if(fileReviews.length){lines.push(`### File scores`);fileReviews.forEach(r=>lines.push(`- **${r.file}** — ${r.score}/10 — ${r.summary}`));lines.push(``)}
+  if(fileReviews.length){lines.push(`### File scores`);fileReviews.forEach(r=>lines.push(`- **${r.file}** — ${r.score??"?"}/10 — ${r.summary}`));lines.push(``)}
   if(allIssues.length){lines.push(`### Issues`);allIssues.forEach(i=>{lines.push(`- [${i.severity}] \`${i.source}${i.line?":"+i.line:""}\` — ${i.msg}`);if(i.fix)lines.push(`  → ${i.fix}`)});lines.push(``)}
   if(allSuggestions.length){lines.push(`### Suggestions`);allSuggestions.slice(0,6).forEach((s,i)=>lines.push(`${i+1}. ${s}`));lines.push(``)}
   lines.push(`### Reviewed: ${[...toReview].join(", ")}`,`---`);

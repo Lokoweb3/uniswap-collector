@@ -7,11 +7,13 @@ async function main(){
   console.log("\n════════════════════════════════════════════");
   console.log(" Pool Scanner — best pools for your tokens");
   console.log("════════════════════════════════════════════\n");
-  const [posData,scoutData,advisorData]=await Promise.all([
-    get("/api/attribution?days=1").catch(()=>null),
-    get("/api/strategy/scout?days=3").catch(()=>null),
-    get("/api/advisor").catch(()=>null),
-  ]);
+  // A failed endpoint is reported, not hidden: a down backend must read as an error, not as an empty scan.
+  const endpoints=["/api/attribution?days=1","/api/strategy/scout?days=3","/api/advisor"];
+  const results=await Promise.allSettled(endpoints.map(get));
+  const failed=results.map((r,i)=>r.status==="rejected"?`${endpoints[i]}: ${r.reason?.message||r.reason}`:null).filter(Boolean);
+  if(failed.length===endpoints.length)throw new Error(`dashboard unreachable at ${BASE} — ${failed.join("; ")}`);
+  for(const f of failed)console.warn(`⚠️  ${f} — its data is missing from this scan`);
+  const [posData,scoutData,advisorData]=results.map(r=>r.status==="fulfilled"?r.value:null);
   const positions=posData?.positions||[];
   const scoutRows=scoutData?.rows||[];
   const advisorPools=Object.values(advisorData?.pools||{});
@@ -74,4 +76,4 @@ async function main(){
   console.log(" TVL > $100K · APR > 1.5x current · 3-day data");
   console.log("════════════════════════════════════════════\n");
 }
-main().catch(e=>console.error("FATAL:",e.message));
+main().catch(e=>{console.error("FATAL:",e.message);process.exit(1)});

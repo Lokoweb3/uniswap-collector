@@ -185,12 +185,17 @@ function alertsFor(d, sent, now = d.at, cooldownMs = 60 * 60000, { closing = fal
   }
   if (!closing && d.drawdownPct != null && d.drawdownPct >= r.closePct) say(`closenow:${id}`, `🚨 ${d.pair} CLOSE NOW (-${d.drawdownPct.toFixed(0)}% from entry, limit -${r.closePct}%)`);
   if (r.feeFloorPerHour != null && d.feesPerHour15m != null) {
+    // One alert per episode, repeated after 6 h while it holds. The episode ends only when
+    // the 15-min rate sits comfortably above the floor (1.5x) at least 2 h after the alert:
+    // a bursty pool that pops over the floor for one sample and dips again used to re-alert
+    // every time (Bucket/USDG, three alerts in three hours on 2026-09-12).
+    const k = `feefloor:${id}`;
     if (d.feesPerHour15m < r.feeFloorPerHour) {
-      if (!sent[`feefloor:${id}`] || now - sent[`feefloor:${id}`] >= 6 * HOUR) {
-        sent[`feefloor:${id}`] = now;
+      if (!sent[k] || now - sent[k] >= 6 * HOUR) {
+        sent[k] = now;
         out.push(`⚠️ ${d.pair} fees dropping — $${d.feesPerHour15m.toFixed(2)}/hour (below $${r.feeFloorPerHour} floor).\nConsider closing position.`);
       }
-    } else delete sent[`feefloor:${id}`];
+    } else if (sent[k] && d.feesPerHour15m >= r.feeFloorPerHour * 1.5 && now - sent[k] >= 2 * HOUR) delete sent[k];
   }
   if (r.collectedTargetUsd != null && d.collectedUsd != null && d.collectedUsd >= r.collectedTargetUsd) {
     const key = `target:${id}:${r.collectedTargetUsd}`;

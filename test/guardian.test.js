@@ -100,8 +100,16 @@ d = derive(cfgR, s); assert.ok(d.feesPerHour15m != null && d.feesPerHour15m < 10
 let sentR = {}; let outR = alertsFor(d, sentR);
 assert.strictEqual(outR.length, 1); assert.match(outR[0], /Bucket\/USDG fees dropping — \$4\.00\/hour \(below \$10 floor\)/);
 assert.deepStrictEqual(alertsFor(d, sentR), []);
+// A burst over the floor right away does not end the episode (no re-alert on the next dip)…
 s = []; for (let m = 0; m <= 30; m += 1) s.push(mk(m, 1000000, { feeUsd: m * (30 / 60) }));
-d = derive(cfgR, s); assert.deepStrictEqual(alertsFor(d, sentR), []); assert.ok(!sentR["feefloor:9"], "re-armed after recovery");
+d = derive(cfgR, s); assert.deepStrictEqual(alertsFor(d, sentR), []); assert.ok(sentR["feefloor:9"], "a burst over the floor keeps the episode");
+s = []; for (let m = 0; m <= 30; m += 1) s.push(mk(m, 1000000, { feeUsd: m * (4 / 60) }));
+d = derive(cfgR, s); assert.deepStrictEqual(alertsFor(d, sentR), [], "dipping again within 6 h: no repeat");
+// …a recovery held 2 h later does: the next real drop alerts again.
+s = []; for (let m = 120; m <= 150; m += 1) s.push(mk(m, 1000000, { feeUsd: (m - 120) * (30 / 60) }));
+d = derive(cfgR, s); assert.deepStrictEqual(alertsFor(d, sentR), []); assert.ok(!sentR["feefloor:9"], "re-armed after a sustained recovery");
+s = []; for (let m = 0; m <= 30; m += 1) s.push(mk(m, 1000000, { feeUsd: m * (30 / 60) }));
+d = derive(cfgR, s);
 d = derive({ ...cfgR, collectedUsd: 512.3 }, s); outR = alertsFor(d, sentR);
 assert.strictEqual(outR.length, 1); assert.match(outR[0], /hit \$500 collected!\nCurrent fees\/hour: \$30\.00/);
 assert.deepStrictEqual(alertsFor(d, sentR), []);

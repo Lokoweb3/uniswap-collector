@@ -210,7 +210,8 @@ function analyseScout(scoutRows) {
 
     const multNum = latest.ownAprPct > 0 ? latest.bestAprPct / latest.ownAprPct : Infinity;
     const mult    = Number.isFinite(multNum) ? multNum.toFixed(1) : "∞";
-    const urgency = latest.streakDays >= 3 && multNum >= 5 ? "HIGH" : "MEDIUM";
+    // Infinity (own APR unknown or zero) is incomplete data, never grounds for a HIGH move recommendation.
+    const urgency = latest.streakDays >= 3 && Number.isFinite(multNum) && multNum >= 5 ? "HIGH" : "MEDIUM";
 
     moveOpps.push({ tokenId, pair: latest.pair, wallet: latest.wallet, urgency, mult: Number.isFinite(multNum) ? +multNum.toFixed(1) : 999, bestSibling: latest.bestSibling, bestAprPct: Math.round(latest.bestAprPct), ownAprPct: Math.round(latest.ownAprPct), tvl: latest.bestTvl, streakDays: latest.streakDays, stability: Math.round(stability * 100) });
     issues.push({ severity: urgency, msg: `${latest.pair} #${tokenId}: ${latest.bestSibling} earning ${mult}x more (${Math.round(latest.bestAprPct)}% vs ${Math.round(latest.ownAprPct)}%) for ${latest.streakDays}d — ${Math.round(stability * 100)}% consistent` });

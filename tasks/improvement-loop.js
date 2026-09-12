@@ -184,10 +184,11 @@ function analyseScout(scoutRows) {
     const stability   = topSibling && beatingRows.length > 0 ? topSibling[1] / beatingRows.length : 0;
     if (stability < 0.7) continue;
 
-    const mult    = latest.ownAprPct > 0 ? (latest.bestAprPct / latest.ownAprPct).toFixed(1) : "∞";
-    const urgency = latest.streakDays >= 3 && Number(mult) >= 5 ? "HIGH" : "MEDIUM";
+    const multNum = latest.ownAprPct > 0 ? latest.bestAprPct / latest.ownAprPct : Infinity;
+    const mult    = Number.isFinite(multNum) ? multNum.toFixed(1) : "∞";
+    const urgency = latest.streakDays >= 3 && multNum >= 5 ? "HIGH" : "MEDIUM";
 
-    moveOpps.push({ tokenId, pair: latest.pair, wallet: latest.wallet, urgency, mult: Number(mult), bestSibling: latest.bestSibling, bestAprPct: Math.round(latest.bestAprPct), ownAprPct: Math.round(latest.ownAprPct), tvl: latest.bestTvl, streakDays: latest.streakDays, stability: Math.round(stability * 100) });
+    moveOpps.push({ tokenId, pair: latest.pair, wallet: latest.wallet, urgency, mult: Number.isFinite(multNum) ? +multNum.toFixed(1) : 999, bestSibling: latest.bestSibling, bestAprPct: Math.round(latest.bestAprPct), ownAprPct: Math.round(latest.ownAprPct), tvl: latest.bestTvl, streakDays: latest.streakDays, stability: Math.round(stability * 100) });
     issues.push({ severity: urgency, msg: `${latest.pair} #${tokenId}: ${latest.bestSibling} earning ${mult}x more (${Math.round(latest.bestAprPct)}% vs ${Math.round(latest.ownAprPct)}%) for ${latest.streakDays}d — ${Math.round(stability * 100)}% consistent` });
     suggestions.push(`[${urgency}] Move ${latest.pair} → ${latest.bestSibling} ($${(latest.bestTvl / 1000).toFixed(0)}K TVL, ${latest.streakDays}d streak)`);
   }

@@ -50,6 +50,8 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(stateFile, "utf8")) };
   } catch {}
+  // An older or hand-edited state file may lack a table (or hold null); every later `state.x[k] = …` needs an object.
+  for (const k of ["sent", "outSince", "pool", "held"]) if (!state[k] || typeof state[k] !== "object" || Array.isArray(state[k])) state[k] = {};
   const save = () => {
     // Write-then-rename: a crash mid-write leaves the previous state, never a truncated file.
     try {

@@ -207,6 +207,15 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.strictEqual(create({ transport: async () => true, stateFile: stateFile + ".p", now: () => clock, log: { error() {} }, poolCooldownMs: 0 }).poolWindow, 30 * 60 * 1000);
   try { fs.unlinkSync(stateFile + ".p"); } catch {}
 
+  // 9c. A state file from before `pool`/`held` existed (or with them nulled) still loads: the tables are recreated.
+  fs.writeFileSync(stateFile + ".old", JSON.stringify({ sent: { x: 1 }, outSince: null, lastTick: 5 }));
+  const old = create({ transport: async () => true, stateFile: stateFile + ".old", now: () => clock, log: { error() {} } });
+  assert.strictEqual(await old.sendPool("v3:0xold", "first", { source: "t" }), true);
+  assert.strictEqual(await old.sendPool("v3:0xold", "second", { source: "t" }), false, "held by the cool-down, no TypeError");
+  out = await old.check({ payload: { positions: [pos(false, 1.2)] }, unlock: { armed: true }, keepalive: true });
+  assert.ok(Array.isArray(out));
+  try { fs.unlinkSync(stateFile + ".old"); } catch {}
+
   // 10. A rejected fetch (DNS, timeout) is a failed delivery, not an exception: check() still finishes.
   const realFetch = global.fetch;
   global.fetch = async () => { throw new Error("getaddrinfo ENOTFOUND api.telegram.org"); };

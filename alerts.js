@@ -51,8 +51,11 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
     state = { ...state, ...JSON.parse(fs.readFileSync(stateFile, "utf8")) };
   } catch {}
   const save = () => {
+    // Write-then-rename: a crash mid-write leaves the previous state, never a truncated file.
     try {
-      fs.writeFileSync(stateFile, JSON.stringify(state));
+      const tmp = stateFile + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(state));
+      fs.renameSync(tmp, stateFile);
     } catch {}
   };
 

@@ -32,7 +32,15 @@ function appendWithRotation(filePath, content, maxBytes = 500_000) {
   fs.appendFileSync(filePath, content);
 }
 
-function exec(cmd,cwd=ROOT){try{return execSync(cmd,{cwd,encoding:"utf8",stdio:["pipe","pipe","pipe"]}).trim()}catch(e){return e.stdout?.trim()||""}}
+// A failing git command must not look like "no files changed": say what failed before returning what little it printed.
+function exec(cmd,cwd=ROOT){
+  try{return execSync(cmd,{cwd,encoding:"utf8",stdio:["pipe","pipe","pipe"]}).trim()}
+  catch(e){
+    const err=(e.stderr||e.message||"").toString().trim().split("\n")[0];
+    console.warn(`[code-review] command failed: ${cmd.slice(0,80)}${cmd.length>80?"…":""} — ${err||"no output"}`);
+    return e.stdout?.trim()||"";
+  }
+}
 
 // 300 lines was too few: alerts.js, improvement-loop.js, attribution.js and the guardian are all longer, so their tails were never reviewed.
 function readFileSafe(filePath,maxLines=800){

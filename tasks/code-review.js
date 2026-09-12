@@ -79,7 +79,9 @@ async function reviewDiff(changedFiles){
   if(!changedFiles.length)return null;
   const diffs=[];
   for(const f of changedFiles.slice(0,3)){
-    const d=exec(`git diff HEAD~1 -- "${f}" 2>/dev/null||true`);
+    // The same 6-hour window getChangedFiles() uses, not just the last commit.
+    const since=new Date(Date.now()-6*3600*1000).toISOString();
+    const d=exec(`git log --since="${since}" -p --follow -- "${f}" 2>/dev/null | head -80`);
     if(d)diffs.push(`--- ${f} ---\n${d.split("\n").slice(0,60).join("\n")}`);
   }
   if(!diffs.length)return null;

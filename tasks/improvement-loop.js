@@ -57,8 +57,10 @@ function fmt(n, prefix = "$") {
   return n < 0 ? `-${s}` : s;
 }
 
+// Hours since an epoch-ms timestamp; null when the position has no known open date
+// (attribution sets `since: pnlSince || null`), so "unknown" is never read as "old".
 function ageHours(sinceMs) {
-  return sinceMs ? (Date.now() - sinceMs) / 3600000 : 999;
+  return sinceMs ? (Date.now() - sinceMs) / 3600000 : null;
 }
 
 function analyseAttribution(attr) {
@@ -97,6 +99,7 @@ function analyseAttribution(attr) {
   const posAgeByWallet = {};
   for (const pos of (attr.positions || [])) {
     const h = ageHours(pos.since);
+    if (h == null) continue;
     if (!posAgeByWallet[pos.key] || posAgeByWallet[pos.key] < h) {
       posAgeByWallet[pos.key] = h;
     }
@@ -122,7 +125,7 @@ function analysePositions(attr) {
 
   for (const pos of positions) {
     const age = ageHours(pos.since);
-    if (age > 48 && pos.feesToday !== null && pos.feesToday < 1) {
+    if (age != null && age > 48 && pos.feesToday !== null && pos.feesToday < 1) {
       issues.push({ severity: "LOW", msg: `${pos.pair} #${pos.tokenId} earned only ${fmt(pos.feesToday)} today` });
     }
     if (pos.pnlUsd < 0) {
@@ -135,7 +138,7 @@ function analysePositions(attr) {
   }
 
   const best = positions
-    .filter(p => p.valueUsd > 0 && ageHours(p.since) > 48)
+    .filter(p => p.valueUsd > 0 && ageHours(p.since) != null && ageHours(p.since) > 48)
     .map(p => ({ ...p, feeRatio: p.fees / p.valueUsd }))
     .sort((a, b) => b.feeRatio - a.feeRatio)[0];
 

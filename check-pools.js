@@ -21,18 +21,19 @@ function tvlLabel(tvl) {
        : `$${Math.round(tvl)}`;
 }
 
-// A scout row is usable only when every field the verdict depends on is present and numeric;
-// a missing one would otherwise turn into NaN averages and a wrong verdict.
+// A scout row is usable only when every field the verdict depends on is present and already a
+// finite number: no coercion, because Number(null), Number("") and Number(false) are all 0 and
+// would let a broken row through as a 0 % / $0 reading.
 const NUM_FIELDS = ["bestAprPct", "bestTvl", "ownAprPct"];
+const STR_FIELDS = ["t", "bestSibling", "pair", "wallet"];
 function validRow(row) {
   if (!row || typeof row !== "object") return false;
-  if (row.tokenId == null || typeof row.t !== "string" || typeof row.bestSibling !== "string") return false;
-  return NUM_FIELDS.every(k => Number.isFinite(Number(row[k])));
+  if (row.tokenId == null) return false;
+  if (!STR_FIELDS.every(k => typeof row[k] === "string" && row[k].length > 0)) return false;
+  return NUM_FIELDS.every(k => typeof row[k] === "number" && Number.isFinite(row[k]));
 }
 function normalizeRow(row) {
-  const out = { ...row, beats: !!row.beats };
-  for (const k of NUM_FIELDS) out[k] = Number(row[k]);
-  return out;
+  return { ...row, beats: !!row.beats };
 }
 
 async function main() {

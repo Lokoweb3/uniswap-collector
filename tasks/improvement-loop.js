@@ -297,12 +297,16 @@ async function main() {
       lines.push("");
       allSuggestions.slice(0, 2).forEach((s, i) => lines.push(`${i + 1}. ${s}`));
       const msg = `🔄 Improvement loop — ${status}\n\n${lines.join("\n")}`;
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: chatId, text: msg }),
       });
-      console.log("[loop] Telegram sent");
+      if (!resp.ok) {
+        console.warn("[loop] Telegram send failed:", resp.status, await resp.text());
+      } else {
+        console.log("[loop] Telegram sent");
+      }
     }
   } catch(e) {
     console.warn("[loop] Telegram skipped:", e.message);

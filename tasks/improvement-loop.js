@@ -32,6 +32,20 @@ function get(endpoint) {
   });
 }
 
+// brain/proposals.md grows with every run: rotate it aside once it passes 500 KB.
+function appendWithRotation(filePath, content, maxBytes = 500_000) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > maxBytes) {
+      const backup = filePath.replace(".md", `-${Date.now()}.md`);
+      fs.renameSync(filePath, backup);
+      console.log(`[loop] rotated proposals to ${backup}`);
+    }
+  } catch(_) {}
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(filePath, content);
+}
+
 function fmt(n, prefix = "$") {
   if (n == null) return "n/a";
   const abs = Math.abs(n);
@@ -267,8 +281,7 @@ async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(path.join(OUT_DIR, "improvement-loop.json"), JSON.stringify({ ts, status, issues: allIssues, suggestions: allSuggestions, scout: scoutAnalysis.moveOpps }, null, 2));
 
-  fs.mkdirSync(path.dirname(BRAIN), { recursive: true });
-  fs.appendFileSync(BRAIN, "\n" + proposal + "\n");
+  appendWithRotation(BRAIN, "\n" + proposal + "\n");
 
   console.log(`[loop] ${status} — ${allIssues.length} issues, ${allSuggestions.length} suggestions`);
   allIssues.forEach(i => console.log(`  [${i.severity}] ${i.msg}`));

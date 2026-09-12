@@ -15,6 +15,20 @@ const KEY_FILES = [
   "tasks/improvement-loop.js",
 ];
 
+// brain/proposals.md grows with every run: rotate it aside once it passes 500 KB.
+function appendWithRotation(filePath, content, maxBytes = 500_000) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > maxBytes) {
+      const backup = filePath.replace(".md", `-${Date.now()}.md`);
+      fs.renameSync(filePath, backup);
+      console.log(`[code-review] rotated proposals to ${backup}`);
+    }
+  } catch(_) {}
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(filePath, content);
+}
+
 function exec(cmd,cwd=ROOT){try{return execSync(cmd,{cwd,encoding:"utf8",stdio:["pipe","pipe","pipe"]}).trim()}catch(e){return e.stdout?.trim()||""}}
 
 function readFileSafe(filePath,maxLines=300){
@@ -149,8 +163,7 @@ async function main(){
 
   fs.mkdirSync(OUT_DIR,{recursive:true});
   fs.writeFileSync(OUT,JSON.stringify({ts,status,changedFiles,failedReviews,fileReviews,allIssues,allSuggestions},null,2));
-  fs.mkdirSync(path.dirname(BRAIN),{recursive:true});
-  fs.appendFileSync(BRAIN,"\n"+lines.join("\n")+"\n");
+  appendWithRotation(BRAIN,"\n"+lines.join("\n")+"\n");
 
   console.log(`[code-review] ${status} — ${allIssues.length} issues${failedReviews?`, ${failedReviews} review(s) failed`:""}`);
   allIssues.slice(0,3).forEach(i=>console.log(`  [${i.severity}] ${i.source}: ${i.msg}`));

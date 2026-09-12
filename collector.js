@@ -496,10 +496,20 @@ async function runOwner(ctx, owner) {
   // Selling fee tokens in their own v4 pool (sell-v4.js, policy in config
   // memecoinSell): the pool key per token comes from the positions collected
   // in this pass, so a token is only ever sold where it was earned.
-  const seller = require("./sell-v4").create({ provider, cfg, log });
-  // Telegram for the confirm-before-sell step (alerts.js reads the token from the environment; nothing is logged).
+  // A fee token is only sold in a v4 pool it was collected from, so the seller is
+  // pointless without v4 collecting; and a broken module must cost this pass its
+  // sells, not the whole collect run.
+  let seller = { ready: false };
   let sellNotify = null;
-  try { const a = require("./alerts").create({ log: { log() {}, error() {} } }); if (a.enabled) sellNotify = (text) => a.send(text); } catch {}
+  if (v4c) {
+    try {
+      seller = require("./sell-v4").create({ provider, cfg, log });
+    } catch (err) {
+      log(`  ! sell-v4 unavailable (${err.shortMessage || err.message}); fee tokens without a v3 route are handed back unsold this pass`);
+    }
+    // Telegram for the confirm-before-sell step (alerts.js reads the token from the environment; nothing is logged).
+    try { const a = require("./alerts").create({ log: { log() {}, error() {} } }); if (a.enabled) sellNotify = (text) => a.send(text); } catch (err) { log(`  ! alerts unavailable (${err.message}); sale approval requests will not reach Telegram, approve them from the dashboard or MCP instead`); }
+  }
   const v4KeysFor = new Map(); // token address (lower) -> [pool keys of the open v4 positions holding it]
   let v4Open = 0, v4Closed = 0;
   if (v4c) {

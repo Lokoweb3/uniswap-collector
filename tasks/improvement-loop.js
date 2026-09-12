@@ -42,6 +42,10 @@ function ageHours(sinceMs) {
 
 function analyseAttribution(attr) {
   const issues = [], suggestions = [];
+  if (!attr?.book?.totals || !Array.isArray(attr.wallets)) {
+    console.warn("[loop] attribution response malformed — skipping analysis");
+    return { feeIlRatio: null, walletFees: [], totals: {}, benchmarks: null, issues, suggestions };
+  }
   const b = attr.book.totals;
 
   let feeIlRatio = null;

@@ -31,15 +31,16 @@ function getChangedFiles(hours=6){
   return [...new Set(raw.split("\n").filter(f=>(f.endsWith(".js")||f.endsWith(".mjs"))&&!f.includes("node_modules")&&!f.includes("tasks/output")))].slice(0,6);
 }
 
+let apiKey=null, model=null; // set in main() after validation
 async function callClaude(prompt){
   const res=await fetch("https://ollama.com/api/chat",{
     method:"POST",
     headers:{
       "Content-Type":"application/json",
-      "Authorization":"Bearer "+process.env.OLLAMA_API_KEY,
+      "Authorization":"Bearer "+apiKey,
     },
     body:JSON.stringify({
-      model: process.env.OLLAMA_MODEL || "llama3.1",
+      model,
       messages:[{role:"user",content:prompt}],
       stream:false,
     }),
@@ -97,7 +98,13 @@ Respond ONLY as JSON:
 }
 
 async function main(){
-  console.log("[code-review] starting AI code review...");
+  apiKey=process.env.OLLAMA_API_KEY;
+  model=process.env.OLLAMA_MODEL||"kimi-k2.7-code";
+  if(!apiKey){
+    console.error("[code-review] OLLAMA_API_KEY not set — skipping review");
+    process.exit(0); // exit 0 so run-all.sh continues
+  }
+  console.log(`[code-review] starting AI code review (${model})...`);
   const ts=new Date().toISOString();
   const changedFiles=getChangedFiles(6);
   console.log(`[code-review] ${changedFiles.length} files changed in last 6h`);

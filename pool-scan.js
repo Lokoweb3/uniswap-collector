@@ -14,9 +14,17 @@ async function main(){
   if(failed.length===endpoints.length)throw new Error(`dashboard unreachable at ${BASE} — ${failed.join("; ")}`);
   for(const f of failed)console.warn(`⚠️  ${f} — its data is missing from this scan`);
   const [posData,scoutData,advisorData]=results.map(r=>r.status==="fulfilled"?r.value:null);
-  const positions=posData?.positions||[];
-  const scoutRows=scoutData?.rows||[];
-  const advisorPools=Object.values(advisorData?.pools||{});
+  const positions=Array.isArray(posData?.positions)?posData.positions:[];
+  const rawScout=Array.isArray(scoutData?.rows)?scoutData.rows:[];
+  const rawAdvisor=Object.values(advisorData?.pools&&typeof advisorData.pools==="object"?advisorData.pools:{});
+  // Only rows with the fields the ranking reads are used; a malformed one is counted, not crashed on.
+  const num=v=>Number.isFinite(Number(v));
+  const scoutRows=rawScout.filter(r=>r&&typeof r.pair==="string"&&typeof r.bestSibling==="string"&&num(r.ownAprPct)&&num(r.bestAprPct)&&num(r.bestTvl))
+    .map(r=>({...r,ownAprPct:Number(r.ownAprPct),bestAprPct:Number(r.bestAprPct),bestTvl:Number(r.bestTvl)}));
+  // /api/advisor "pools" is mostly a per-pool coverage map; only entries that carry a pair and an APR are pool rows.
+  const advisorPools=rawAdvisor.filter(p=>p&&typeof p.pair==="string"&&num(p.aprPct)).map(p=>({...p,aprPct:Number(p.aprPct),tvlUsd:num(p.tvlUsd)?Number(p.tvlUsd):null}));
+  const skipped=rawScout.length-scoutRows.length;
+  if(skipped)console.warn(`⚠️  Skipped ${skipped} malformed scout row(s) of ${rawScout.length}`);
   const poolMap=new Map();
   for(const row of scoutRows){
     const k=row.pair.trim();
@@ -31,7 +39,7 @@ async function main(){
     m.get(sk).tvls.push(row.bestTvl);
   }
   for(const p of advisorPools){
-    if(!p.pair||!p.aprPct)continue;
+    if(!p.aprPct)continue;
     const k=p.pair.trim();
     if(!poolMap.has(k))poolMap.set(k,new Map());
     const m=poolMap.get(k);
@@ -42,7 +50,7 @@ async function main(){
   }
   const seen=new Set();
   for(const pos of positions){
-    const pairKey=pos.pair?.trim();
+    const pairKey=typeof pos?.pair==="string"?pos.pair.trim():null;
     if(!pairKey||seen.has(pairKey))continue;
     seen.add(pairKey);
     const pairPools=poolMap.get(pairKey);

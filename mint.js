@@ -85,6 +85,8 @@ function amountsForLiquidityUp(sqrtP, sqrtA, sqrtB, liquidity) {
 }
 
 const withSlippage = (x, bps, up) => (up ? (x * (10000n + BigInt(bps))) / 10000n : (x * (10000n - BigInt(bps))) / 10000n);
+/** The most a side may need so that need x (1 + slippage) still fits in `have`: the pool can then take its full headroom. */
+const boundForHeadroom = (have, bps) => (have * 10000n) / (10000n + BigInt(bps));
 
 /**
  * Trim `liquidity` until the amounts it needs (rounded up) fit inside what the wallet
@@ -142,6 +144,59 @@ function buildV3Close({ npm, tokenId, liquidity, amount0Min, amount1Min, recipie
   const dec = npmIface.encodeFunctionData("decreaseLiquidity", [{ tokenId: BigInt(tokenId), liquidity, amount0Min, amount1Min, deadline }]);
   const col = npmIface.encodeFunctionData("collect", [{ tokenId: BigInt(tokenId), recipient, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }]);
   return { to: npm, data: npmIface.encodeFunctionData("multicall", [[dec, col]]), value: 0n };
+}
+
+/* ---------- revert reasons ---------- */
+
+// Custom errors a v4 mint or a Permit2 pull can throw, named so the form can say what to do.
+const REVERT_IFACE = new ethers.Interface([
+  "error MaximumAmountExceeded(uint128 maximumAmount, uint128 amountRequested)",
+  "error MinimumAmountInsufficient(uint128 minimumAmount, uint128 amountReceived)",
+  "error DeadlinePassed(uint256 deadline)",
+  "error NotApproved(address caller)",
+  "error ContractLocked()",
+  "error PoolNotInitialized()",
+  "error InsufficientBalance()",
+  "error AllowanceExpired(uint256 deadline)",
+  "error InsufficientAllowance(uint256 amount)",
+  "error InvalidNonce()",
+  "error CurrencyNotSettled()",
+  "error DeltaNotPositive(address currency)",
+  "error DeltaNotNegative(address currency)",
+  "error TickLowerOutOfBounds(int24 tickLower)",
+  "error TickUpperOutOfBounds(int24 tickUpper)",
+  "error TicksMisordered(int24 tickLower, int24 tickUpper)",
+  "error InputLengthMismatch()",
+  "error UnsupportedAction(uint256 action)",
+]);
+const HINTS = {
+  MaximumAmountExceeded: "the price moved before the mint landed and one side needs more than its slippage maximum — re-quote (a fresh quote follows the price) or raise the slippage",
+  MinimumAmountInsufficient: "the price moved before the mint landed — re-quote or raise the slippage",
+  DeadlinePassed: "the quote is older than its deadline — re-quote",
+  NotApproved: "the PositionManager is not approved for this position — the wallet that owns it must sign",
+  AllowanceExpired: "the Permit2 allowance for the PositionManager has expired — the allow step will run again",
+  InsufficientAllowance: "the Permit2 allowance is below the amount — the allow step will run again",
+  InsufficientBalance: "the wallet does not hold enough of a token for this deposit",
+  ContractLocked: "the pool manager is busy in the same block — try again",
+  PoolNotInitialized: "this pool has not been initialised on chain",
+};
+function describeRevert(err) {
+  const data = err && (err.data || (err.info && err.info.error && err.info.error.data) || (err.error && err.error.data));
+  const raw = err && (err.shortMessage || err.message) || String(err);
+  if (typeof data === "string" && data.length >= 10) {
+    try {
+      const d = REVERT_IFACE.parseError(data);
+      if (d && d.name === "Error") return `reverted: ${d.args[0]}`; // the plain require(…, "reason") form
+      if (d && d.name === "Panic") return `panic 0x${Number(d.args[0]).toString(16)} (an arithmetic or array check failed inside the contract)`;
+      if (d) {
+        const args = d.args.length ? ` (${[...d.args].map((a) => String(a)).join(", ")})` : "";
+        return `${d.name}${args}: ${HINTS[d.name] || "the contract refused this call"}`;
+      }
+    } catch {}
+    if (data.startsWith("0x08c379a0")) { try { return "reverted: " + ethers.AbiCoder.defaultAbiCoder().decode(["string"], "0x" + data.slice(10))[0]; } catch {} }
+    return `${raw} (selector ${data.slice(0, 10)})`;
+  }
+  return raw;
 }
 
 /* ---------- chain reads ---------- */
@@ -299,29 +354,39 @@ function create({ provider, cfg }) {
       const b = ethPaid ? bal[0] : balOf(m);
       const have = b ? BigInt(b.raw) - (ethPaid ? ethers.parseEther("0.001") : 0n) : null;
       const filled = isFill ? need.amount1 : need.amount0;
-      if (have != null && have > 0n && filled > have) {
-        ({ liquidity, need } = isFill ? solve(UNBOUND, have) : solve(have, UNBOUND));
-        capped = `${m.symbol} limits this deposit: the wallet holds ${Number(ethers.formatUnits(have, m.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })}${ethPaid ? " after gas" : ""}, so the ${isFill ? pool.token0.symbol : pool.token1.symbol} side was reduced to match`;
+      const room = have != null ? boundForHeadroom(have, slippageBps) : null;
+      if (room != null && room > 0n && filled > room) {
+        ({ liquidity, need } = isFill ? solve(UNBOUND, room) : solve(room, UNBOUND));
+        capped = `${m.symbol} limits this deposit: the wallet holds ${Number(ethers.formatUnits(have, m.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })}${ethPaid ? " after gas" : ""}; ${Number(ethers.formatUnits(need[isFill ? "amount1" : "amount0"], m.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })} goes in and the rest is the ${Number(slippageBps) / 100}% slippage room, so the ${isFill ? pool.token0.symbol : pool.token1.symbol} side was reduced to match`;
       }
     }
-    let max0 = withSlippage(need.amount0, slippageBps, true), max1 = withSlippage(need.amount1, slippageBps, true);
-    const min0 = withSlippage(need.amount0, slippageBps, false), min1 = withSlippage(need.amount1, slippageBps, false);
+    let max0 = 0n, max1 = 0n, min0 = 0n, min1 = 0n;
     const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMinutes * 60);
     // What the wallet will actually pay: native ETH for a v4 ETH side, ETH for a v3 WETH side when payEth, else the token.
     // The slippage maximum is capped at the balance: the pool may then take less headroom than
     // asked and the mint reverts (nothing changes) if the price moves against it before it lands.
     // A need above the balance itself is a hard stop: that transfer can only fail.
     const ethSide = (m) => m.native || (pool.version === 3 && m.isWeth && payEth);
-    const fitBal = (m, need, max) => {
+    // A side whose slippage maximum does not fit the wallet is shrunk so that it does (the
+    // pool may take up to the maximum when the price moves before the mint lands; a maximum
+    // above the wallet can only fail). A need above the wallet itself is a hard stop.
+    for (const i of [0, 1]) {
+      const m = i ? pool.token1 : pool.token0;
       const b = ethSide(m) ? bal[0] : balOf(m);
-      if (!b) return max;
-      const have = BigInt(b.raw), gas = ethSide(m) ? ethers.parseEther("0.001") : 0n; // an ETH side leaves gas
+      if (!b) continue;
+      const have = BigInt(b.raw) - (ethSide(m) ? ethers.parseEther("0.001") : 0n);
       const fmt = (x) => Number(ethers.formatUnits(x, m.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 });
-      if (have - gas < need) { blocked = `${m.symbol}: wallet holds ${fmt(have)}${gas ? " (0.001 kept for gas)" : ""}, the deposit needs ${fmt(need)} — lower the amount`; return max; }
-      if (have - gas < max) { warnings.push(`${m.symbol}: only ${fmt(have - gas - need)} of headroom for slippage (asked ${fmt(max - need)}); the mint reverts, changing nothing, if the price moves against it before it lands`); return have - gas; }
-      return max;
-    };
-    max0 = fitBal(pool.token0, need.amount0, max0); max1 = fitBal(pool.token1, need.amount1, max1);
+      const nd = i ? need.amount1 : need.amount0;
+      if (have < nd) { blocked = `${m.symbol}: wallet holds ${fmt(have)}${ethSide(m) ? " after 0.001 kept for gas" : ""}, the deposit needs ${fmt(nd)} — lower the amount`; continue; }
+      const room = boundForHeadroom(have, slippageBps);
+      if (nd > room) {
+        ({ liquidity, need } = i ? solve(UNBOUND, room) : solve(room, UNBOUND));
+        warnings.push(`${m.symbol}: reduced to ${fmt(i ? need.amount1 : need.amount0)} so the ${Number(slippageBps) / 100}% slippage room fits inside the wallet`);
+        capped = capped || `${m.symbol} limits this deposit`;
+      }
+    }
+    max0 = withSlippage(need.amount0, slippageBps, true); max1 = withSlippage(need.amount1, slippageBps, true);
+    min0 = withSlippage(need.amount0, slippageBps, false); min1 = withSlippage(need.amount1, slippageBps, false);
     const eth0 = ethSide(pool.token0), eth1 = ethSide(pool.token1);
     let tx, approvals;
     if (pool.version === 4) {
@@ -377,7 +442,13 @@ function create({ provider, cfg }) {
     return { ok: true, version: 3, tokenId: String(tokenId), pool: poolAddr, fee: Number(pos.fee), token0: wethify(m0), token1: wethify(m1), dryRun, tickLower: Number(pos.tickLower), tickUpper: Number(pos.tickUpper), expect: { amount0: (amount0 + pos.tokensOwed0).toString(), amount1: (amount1 + pos.tokensOwed1).toString() }, tx: { to: tx.to, data: tx.data, value: "0" }, deadline: deadline.toString() };
   }
 
-  return { pools, balances, quote, closeQuote, tokenMeta };
+  /** eth_call a built mint as the wallet (after its approvals) and name the revert when there is one. */
+  async function dryRun({ wallet, to, data, value }) {
+    try { await provider.call({ from: ethers.getAddress(wallet), to, data, value: BigInt(value || 0) }); return { ok: true }; }
+    catch (err) { return { ok: false, error: describeRevert(err) }; }
+  }
+
+  return { pools, balances, quote, closeQuote, tokenMeta, dryRun };
 }
 
-module.exports = { create, alignTick, tickFromPrice, liquidityForAmounts, amountsForLiquidityUp, fitLiquidity, withSlippage, buildV4Mint, buildV4Close, buildV3Mint, buildV3Close, ACT, V4_TIERS, V3_TIERS, MIN_TICK, MAX_TICK };
+module.exports = { create, alignTick, tickFromPrice, liquidityForAmounts, amountsForLiquidityUp, fitLiquidity, withSlippage, boundForHeadroom, describeRevert, buildV4Mint, buildV4Close, buildV3Mint, buildV3Close, ACT, V4_TIERS, V3_TIERS, MIN_TICK, MAX_TICK };

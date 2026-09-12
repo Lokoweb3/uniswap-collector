@@ -2224,6 +2224,12 @@ loadConfig().then(async () => {
         }
       }
       setStep('mint', 'active');
+      // Approvals are in place: simulate the mint as the wallet first, so a revert is named here instead of failing in Rabby.
+      status('mt-txstatus', 'Checking the mint against the chain…', 'muted');
+      try {
+        const dr = await (await fetch(`/api/mint/dryrun?wallet=${account}&to=${qt.tx.to}&data=${qt.tx.data}&value=${qt.tx.value}`, { cache: 'no-store' })).json();
+        if (!dr.ok) throw new Error(dr.error || 'the mint would revert');
+      } catch (e) { setStep('mint', ''); status('mt-txstatus', `Not sent — ${e.message}`, 'bad'); updateButtons(); scheduleQuote(0); return; }
       status('mt-txstatus', `Confirm in your wallet: mint ${qt.label}…`, 'warn');
       const tx = await signer.sendTransaction({ to: qt.tx.to, data: qt.tx.data, value: BigInt(qt.tx.value) });
       status('mt-txstatus', `Sent <a href="${ctx.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');

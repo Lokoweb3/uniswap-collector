@@ -65,6 +65,18 @@ assert.strictEqual(M.withSlippage(10000n, 100, true), 10100n); assert.strictEqua
   assert.ok(need.amount1 <= usdg && need.amount1 > (usdg * 9999n) / 10000n, "USDG side binds fully");
   assert.ok(need.amount0 > 0n && need.amount0 < 10n ** 17n, "an ETH amount of the right order follows: " + need.amount0);
 }
+// Slippage room must fit inside the wallet: the bound is have / (1 + slippage).
+assert.strictEqual(M.boundForHeadroom(10100n, 100), 10000n);
+assert.strictEqual(M.withSlippage(M.boundForHeadroom(2756504616602294n, 100), 100, true) <= 2756504616602294n, true);
+// Reverts are named with a hint.
+{
+  const iface = new ethers.Interface(["error MaximumAmountExceeded(uint128 maximumAmount, uint128 amountRequested)"]);
+  const d = M.describeRevert({ data: iface.encodeErrorResult("MaximumAmountExceeded", [2756504616602294n, 2760000000000000n]) });
+  assert.match(d, /^MaximumAmountExceeded \(2756504616602294, 2760000000000000\): the price moved/);
+  assert.match(M.describeRevert({ data: "0x08c379a0" + ethers.AbiCoder.defaultAbiCoder().encode(["string"], ["TRANSFER_FROM_FAILED"]).slice(2) }), /^reverted: TRANSFER_FROM_FAILED$/);
+  assert.match(M.describeRevert({ shortMessage: "execution reverted (unknown custom error)", data: "0xdeadbeef" }), /selector 0xdeadbeef/);
+  assert.strictEqual(M.describeRevert(new Error("insufficient funds")), "insufficient funds");
+}
 // v4 mint calldata: modifyLiquidities(unlockData, deadline) with MINT_POSITION, SETTLE_PAIR, SWEEP (native side), value = amount0Max.
 const key = { currency0: ethers.ZeroAddress, currency1: USDG, fee: 10000, tickSpacing: 200, hooks: ethers.ZeroAddress };
 const mint = M.buildV4Mint({ posm: POSM, key, tickLower: -199600, tickUpper: -196000, liquidity: 123456789n, amount0Max: 10n ** 17n, amount1Max: 250n * 10n ** 6n, owner: ME, deadline: 999n });

@@ -1923,6 +1923,9 @@ async function handleRequest(req, res) {
         const p0 = px(pool.token0), p1 = px(pool.token1);
         out.human.usd = p0 != null && p1 != null ? +(out.human.amount0 * p0 + out.human.amount1 * p1).toFixed(2) : null;
         out.human.usd0 = p0 ?? null; out.human.usd1 = p1 ?? null;
+      } else if (url.pathname === "/api/mint/dryrun") {
+        out = { ok: true, ...(await mint.dryRun({ wallet: walletOf(q.get("wallet")).address, to: ethers.getAddress(String(q.get("to") || "")), data: String(q.get("data") || "0x"), value: q.get("value") || "0" })) };
+        if (out.ok && out.error) out.ok = false;
       } else if (url.pathname === "/api/mint/balances") {
         out = { ok: true, rows: await mint.balances({ wallet: walletOf(q.get("wallet")).address, tokens: String(q.get("tokens") || "").split(",").filter(Boolean) }) };
       } else if (url.pathname === "/api/mint/close") {

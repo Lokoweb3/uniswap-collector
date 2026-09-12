@@ -63,19 +63,29 @@ function getChangedFiles(hours=6){
 }
 
 let apiKey=null, model=null; // set in main() after validation
+// A stalled model call must not hang the 6-hourly cron: OLLAMA_TIMEOUT (seconds, default 120) aborts it
+// and the abort surfaces as an ordinary review failure, which the caller already counts.
+const TIMEOUT_MS=(Number(process.env.OLLAMA_TIMEOUT)>0?Number(process.env.OLLAMA_TIMEOUT):120)*1000;
 async function callClaude(prompt){
-  const res=await fetch("https://ollama.com/api/chat",{
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "Authorization":"Bearer "+apiKey,
-    },
-    body:JSON.stringify({
-      model,
-      messages:[{role:"user",content:prompt}],
-      stream:false,
-    }),
-  });
+  let res;
+  try{
+    res=await fetch("https://ollama.com/api/chat",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "Authorization":"Bearer "+apiKey,
+      },
+      body:JSON.stringify({
+        model,
+        messages:[{role:"user",content:prompt}],
+        stream:false,
+      }),
+      signal:AbortSignal.timeout(TIMEOUT_MS),
+    });
+  }catch(e){
+    if(e.name==="TimeoutError"||e.name==="AbortError")throw new Error(`Ollama Cloud timed out after ${TIMEOUT_MS/1000}s (OLLAMA_TIMEOUT)`);
+    throw e;
+  }
   if(!res.ok)throw new Error(`Ollama Cloud ${res.status}: ${await res.text()}`);
   const data=await res.json();
   return data.message?.content||"";

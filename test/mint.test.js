@@ -33,6 +33,23 @@ const back2 = u.getAmountsForLiquidity(sqrtP, sqrtA, sqrtB, L2);
 assert.ok(back2.amount1 <= 10n ** 16n && back2.amount0 < 2n * 10n ** 16n);
 // Out of range: only one side goes in.
 assert.strictEqual(u.getAmountsForLiquidity(sqrtP, u.getSqrtRatioAtTick(1000), u.getSqrtRatioAtTick(2000), M.liquidityForAmounts(sqrtP, u.getSqrtRatioAtTick(1000), u.getSqrtRatioAtTick(2000), 10n ** 18n, 0n)).amount1, 0n);
+// A deposit of a whole balance must not need one unit more than it: fitLiquidity trims until it fits.
+{
+  const bal0 = 6234n * 10n ** 12n, bal1 = 16420448n; // 0.006234 ETH + 16.420448 USDG, the real failed mint
+  const A = u.getSqrtRatioAtTick(-198547), B = u.getSqrtRatioAtTick(-197546), P = u.getSqrtRatioAtTick(-198000);
+  const L0 = M.liquidityForAmounts(P, A, B, bal0, bal1);
+  // Untrimmed, the round-up can need one unit more than the binding side holds (it did on the real mint at a
+  // different price); trimmed, it always fits, whichever side binds.
+  const L = M.fitLiquidity(P, A, B, L0, bal0, bal1);
+  const need = M.amountsForLiquidityUp(P, A, B, L);
+  assert.ok(need.amount0 <= bal0 && need.amount1 <= bal1, "trimmed liquidity fits the balance");
+  assert.ok(L > (L0 * 9999n) / 10000n, "and gives up less than 0.01% of it");
+  // Force the short-by-one-unit case: offer exactly the rounded-up need minus one unit on each side.
+  const need0 = M.amountsForLiquidityUp(P, A, B, L0);
+  const L2 = M.fitLiquidity(P, A, B, L0, need0.amount0 - 1n, need0.amount1 - 1n);
+  const need2 = M.amountsForLiquidityUp(P, A, B, L2);
+  assert.ok(L2 < L0 && need2.amount0 <= need0.amount0 - 1n && need2.amount1 <= need0.amount1 - 1n, "one unit short on both sides -> trimmed to fit");
+}
 // Rounded-up amounts never come up short.
 const up = M.amountsForLiquidityUp(sqrtP, sqrtA, sqrtB, L);
 assert.ok(up.amount0 >= back.amount0 + 1n && up.amount1 >= back.amount1 + 1n);

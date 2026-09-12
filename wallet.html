@@ -2104,7 +2104,7 @@ loadConfig().then(async () => {
       q('mq-price').innerHTML = `${num(j.human.price)} ${t1.symbol} per ${t0.symbol} ${j.inRange ? '<span class="ok">in range</span>' : '<span class="warn">out of range: one-sided deposit</span>'}`;
       q('mq-share').textContent = j.shareInRangePct != null ? `${j.shareInRangePct.toFixed(3)}%` : '—';
       q('mq-owner').textContent = q('mt-wallet').selectedOptions[0].textContent;
-      q('mq-warn').innerHTML = j.warnings.length ? j.warnings.map((w) => `<div class="warn">⚠ ${w}</div>`).join('') : '';
+      q('mq-warn').innerHTML = (j.blocked ? `<div class="bad">✖ ${j.blocked}</div>` : '') + (j.warnings.length ? j.warnings.map((w) => `<div class="warn">⚠ ${w}</div>`).join('') : '');
       q('mq-calldata').textContent = `${j.version === 4 ? 'modifyLiquidities' : 'mint'} on ${j.tx.to}\nvalue ${j.tx.value} wei · deadline ${new Date(Number(j.deadline) * 1000).toLocaleTimeString()}\n${j.tx.data}`;
       renderSteps();
       q('mt-quotecard').hidden = false;
@@ -2128,7 +2128,7 @@ loadConfig().then(async () => {
   setInterval(tickAge, 1000);
   function setStep(step, state) { for (const li of root.querySelectorAll('.steps li')) if (li.dataset.step === step) li.className = state; }
   function updateButtons() {
-    const ok = !!(quote && account && account.toLowerCase() === q('mt-wallet').value.toLowerCase());
+    const ok = !!(quote && !quote.blocked && account && account.toLowerCase() === q('mt-wallet').value.toLowerCase());
     q('mt-go').disabled = !ok;
     q('mt-go').textContent = q('mt-mode').value === 'move' && !closed ? 'Close, then mint with wallet' : 'Mint with wallet';
     if (quote && account && !ok) status('mt-txstatus', `Connected ${short(account)} is not the selected wallet; switch accounts in Rabby.`, 'warn');

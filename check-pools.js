@@ -6,7 +6,11 @@ function get(url) {
     http.get(url, res => {
       let data = "";
       res.on("data", d => data += d);
-      res.on("end", () => { try { resolve(JSON.parse(data)); } catch(e) { reject(e); } });
+      res.on("end", () => {
+        // A 4xx/5xx body is an error page, not scout data: say so instead of a cryptic JSON parse failure.
+        if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode} from ${url}: ${data.slice(0, 200)}`));
+        try { resolve(JSON.parse(data)); } catch(e) { reject(new Error(`JSON parse ${url}: ${e.message}`)); }
+      });
     }).on("error", reject);
   });
 }
@@ -17,9 +21,27 @@ function tvlLabel(tvl) {
        : `$${Math.round(tvl)}`;
 }
 
+// A scout row is usable only when every field the verdict depends on is present and numeric;
+// a missing one would otherwise turn into NaN averages and a wrong verdict.
+const NUM_FIELDS = ["bestAprPct", "bestTvl", "ownAprPct"];
+function validRow(row) {
+  if (!row || typeof row !== "object") return false;
+  if (row.tokenId == null || typeof row.t !== "string" || typeof row.bestSibling !== "string") return false;
+  return NUM_FIELDS.every(k => Number.isFinite(Number(row[k])));
+}
+function normalizeRow(row) {
+  const out = { ...row, beats: !!row.beats };
+  for (const k of NUM_FIELDS) out[k] = Number(row[k]);
+  return out;
+}
+
 async function main() {
   const data = await get("http://127.0.0.1:8787/api/strategy/scout?days=3");
-  const rows = data.rows || [];
+  const rawRows = Array.isArray(data?.rows) ? data.rows : [];
+  const rows = rawRows.filter(validRow).map(normalizeRow);
+  const skipped = rawRows.length - rows.length;
+  if (skipped) console.warn(`Skipped ${skipped} malformed scout row(s) of ${rawRows.length}`);
+  if (!rows.length) { console.log("No usable scout rows in the last 3 days."); return; }
 
   const byPos = new Map();
   for (const row of rows) {

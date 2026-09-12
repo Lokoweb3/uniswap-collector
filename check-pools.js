@@ -101,4 +101,4 @@ async function main() {
   }
 }
 
-main().catch(e => console.error("Error:", e.message));
+main().catch(e => { console.error("Error:", e.message); process.exit(1); });

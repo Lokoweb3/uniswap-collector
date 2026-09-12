@@ -188,7 +188,19 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.strictEqual(require("../alerts").poolKeyOf({ tokenId: "v4-9", version: 4, poolAddress: "0xABCD" }), "v4:0xabcd");
   assert.strictEqual(require("../alerts").poolKeyOf({ poolKey: "v4:0xdef", nftId: "1" }), "v4:0xdef");
 
-  for (const f of [stateFile, stateFile + ".b", stateFile + ".c"]) { try { fs.unlinkSync(f); } catch {} }
-  console.log(`alerts: ${sent.length} messages produced across 9 scenarios, all assertions passed`);
+  // 10. A rejected fetch (DNS, timeout) is a failed delivery, not an exception: check() still finishes.
+  const realFetch = global.fetch;
+  global.fetch = async () => { throw new Error("getaddrinfo ENOTFOUND api.telegram.org"); };
+  const errs = [];
+  const n = create({ token: "t", chatId: "1", stateFile: stateFile + ".n", now: () => clock, log: { error: (m) => errs.push(m) } });
+  assert.strictEqual(await n.send("hello"), false);
+  clock += 24 * 3600 * 1000;
+  out = await n.check({ payload: { positions: [pos(false, 1.2)] }, unlock: { armed: true }, keepalive: true });
+  assert.deepStrictEqual(out, [], "nothing delivered, nothing thrown");
+  assert.ok(errs.some((m) => /deliver error/.test(m)));
+  global.fetch = realFetch;
+
+  for (const f of [stateFile, stateFile + ".b", stateFile + ".c", stateFile + ".n"]) { try { fs.unlinkSync(f); } catch {} }
+  console.log(`alerts: ${sent.length} messages produced across 10 scenarios, all assertions passed`);
   for (const m of sent) console.log("  -", m.slice(0, 90));
 })().catch((e) => { console.error("FAIL", e.message); process.exit(1); });

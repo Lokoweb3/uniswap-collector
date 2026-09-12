@@ -71,18 +71,25 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
     if (transport) return transport(text, to);
     if (!token || !to) return false;
     if (deadChats.has(String(to))) return false;
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: to, text, disable_web_page_preview: true }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!r.ok) {
-      if (r.status === 400 || r.status === 403) { deadChats.add(String(to)); log.error(`telegram: chat ${String(to).slice(0, 4)}… refused (HTTP ${r.status}); skipping it until restart, falling back where a fallback exists`); }
-      else log.error(`telegram: sendMessage HTTP ${r.status}`);
+    // A network failure (DNS, timeout, reset) is a failed delivery, never an exception out of
+    // check(): one bad send used to abort the whole tick and every other alert in it.
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: to, text, disable_web_page_preview: true }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) {
+        if (r.status === 400 || r.status === 403) { deadChats.add(String(to)); log.error(`telegram: chat ${String(to).slice(0, 4)}… refused (HTTP ${r.status}); skipping it until restart, falling back where a fallback exists`); }
+        else log.error(`telegram: sendMessage HTTP ${r.status}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      log.error(`telegram: deliver error: ${err && (err.name === "TimeoutError" ? "timeout" : err.message)}`);
       return false;
     }
-    return true;
   }
 
   /** Group messages (per-position guardian rules) go to TELEGRAM_GROUP_CHAT_ID, else the treasury chat, falling back to the main chat. */

@@ -34,7 +34,8 @@ function appendWithRotation(filePath, content, maxBytes = 500_000) {
 
 function exec(cmd,cwd=ROOT){try{return execSync(cmd,{cwd,encoding:"utf8",stdio:["pipe","pipe","pipe"]}).trim()}catch(e){return e.stdout?.trim()||""}}
 
-function readFileSafe(filePath,maxLines=300){
+// 300 lines was too few: alerts.js, improvement-loop.js, attribution.js and the guardian are all longer, so their tails were never reviewed.
+function readFileSafe(filePath,maxLines=800){
   try{
     const abs=path.join(ROOT,filePath);
     if(!fs.existsSync(abs))return null;
@@ -75,7 +76,7 @@ async function reviewFile(filePath,reason){
 
 File: ${filePath}
 Reason: ${reason}
-${f.truncated?`(first 300 of ${f.lines} lines)`:""}
+${f.truncated?`(first ${f.content.split("\n").length} of ${f.lines} lines; the rest of the file was NOT shown to you — do not report the shown part as incomplete)`:""}
 
 \`\`\`javascript
 ${f.content}

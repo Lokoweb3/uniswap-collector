@@ -1874,6 +1874,18 @@ function pnlLine(p){
   return `<span class="rate pnl" tabindex="0">PnL vs HODL <b class="${p.pnlUsd < 0 ? 'neg' : ''}">${p.pnlUsd >= 0 ? '+' : '−'}${usd(Math.abs(p.pnlUsd))}${p.pnlPct != null ? ' (' + (p.pnlPct >= 0 ? '+' : '−') + Math.abs(p.pnlPct).toFixed(1) + '%)' : ''}</b>${p.pnlApprox ? ' ≈' : ''}${p.pnlSince ? ' · since ' + new Date(p.pnlSince).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : ''}${pnlTip(p)}</span>`;
 }
 
+// The PnL tooltip is absolutely positioned under its label; near the right edge of
+// the page it would run past the viewport and get cut off. Flip it to hang from the
+// label's right edge when that happens (phones get a fixed bottom sheet via CSS).
+document.addEventListener('mouseover', e => {
+  const pnl = e.target.closest && e.target.closest('.pnl'); if (!pnl) return;
+  const tip = pnl.querySelector('.tip'); if (!tip) return;
+  tip.classList.remove('flip');
+  const r = tip.getBoundingClientRect();
+  if (r.width && r.right > window.innerWidth - 12 && pnl.getBoundingClientRect().right - r.width >= 8) tip.classList.add('flip');
+});
+document.addEventListener('focusin', e => { const pnl = e.target.closest && e.target.closest('.pnl'); if (pnl) pnl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
+
 let attribD = null;
 const ATTRIB_PARTS = [
   ['fees', 'Fees', 'var(--neon-green, #39ff88)'],

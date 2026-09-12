@@ -180,6 +180,9 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
   background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;
   box-shadow:0 8px 24px var(--shadow);font-size:12px;color:var(--ink);white-space:nowrap}
 .pnl:hover .tip,.pnl:focus-within .tip{display:block}
+.pnl .tip.flip{left:auto;right:0}
+.pnl .tip{max-width:calc(100vw - 32px)}
+@media (max-width:640px){.pnl .tip,.pnl .tip.flip{position:fixed;left:12px;right:12px;top:auto;bottom:12px;min-width:0;max-width:none;white-space:normal;z-index:50}}
 .pnl .tip table{border-collapse:collapse;width:100%}
 .pnl .tip td{padding:2px 0;color:var(--muted)}
 .pnl .tip td.n{text-align:right;color:var(--ink);font-variant-numeric:tabular-nums;padding-left:16px}

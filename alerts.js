@@ -63,9 +63,14 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
     if (ok && onSent) { try { onSent(text, to); } catch {} } // the agent remembers what was said on that chat
     return ok;
   }
+  // A chat that answers 400 / 403 (bot removed from the group, wrong id) is skipped for the
+  // rest of the process after one log line, so every treasury / group message does not
+  // cost a failed call before its fallback to the main chat.
+  const deadChats = new Set();
   async function deliver(text, to) {
     if (transport) return transport(text, to);
     if (!token || !to) return false;
+    if (deadChats.has(String(to))) return false;
     const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -73,7 +78,8 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
       signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) {
-      log.error(`telegram: sendMessage HTTP ${r.status}`);
+      if (r.status === 400 || r.status === 403) { deadChats.add(String(to)); log.error(`telegram: chat ${String(to).slice(0, 4)}… refused (HTTP ${r.status}); skipping it until restart, falling back where a fallback exists`); }
+      else log.error(`telegram: sendMessage HTTP ${r.status}`);
       return false;
     }
     return true;

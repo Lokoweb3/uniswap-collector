@@ -177,7 +177,7 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
     // Keepalive session.
     const alive = keepalive != null ? keepalive : keepaliveAlive();
     if (!alive) await say("keepalive", "⚠️ The Windows keepalive session is not running. WSL will stop (and the dashboard with it) when the last terminal closes. Re-register 'LP Dashboard Keepalive' from PowerShell.");
-    else delete state.sent.keepalive;
+    else if (state.sent.keepalive) { delete state.sent.keepalive; save(); } // persisted, or a restart would re-suppress the next alert
 
     // Positions leaving / re-entering range: the main wallet (state keys are
     // the bare tokenId, as before) and every watched wallet (keys prefixed by

@@ -265,7 +265,7 @@ function create({ provider, cfg }) {
    * price decides how much of each is actually used (the smaller side binds).
    * Returns the position that would result and the transaction to sign.
    */
-  async function quote({ wallet, pool, tickLower, tickUpper, amount0, amount1, slippageBps = 100, deadlineMinutes = 20, payEth = true }) {
+  async function quote({ wallet, pool, tickLower, tickUpper, amount0, amount1, slippageBps = 100, deadlineMinutes = 20, payEth = true, fill = null }) {
     wallet = ethers.getAddress(wallet);
     const spacing = Number(pool.tickSpacing);
     tickLower = alignTick(Number(tickLower), spacing, -1);
@@ -273,7 +273,11 @@ function create({ provider, cfg }) {
     if (!(tickLower < tickUpper)) throw new Error("the range is empty after rounding to the pool's tick spacing");
     const { sqrtPriceX96, tick } = await slot0Of(pool);
     const sqrtA = u.getSqrtRatioAtTick(tickLower), sqrtB = u.getSqrtRatioAtTick(tickUpper);
-    const a0 = BigInt(amount0 || 0), a1 = BigInt(amount1 || 0);
+    let a0 = BigInt(amount0 || 0), a1 = BigInt(amount1 || 0);
+    // fill = 0 or 1: that side is computed from the other at the pool's price (the form
+    // fills it in), so it does not bind the liquidity.
+    const UNBOUND = (1n << 120n);
+    if (fill === 0 || fill === "0") a0 = UNBOUND; else if (fill === 1 || fill === "1") a1 = UNBOUND;
     let liquidity = liquidityForAmounts(sqrtPriceX96, sqrtA, sqrtB, a0, a1);
     if (liquidity <= 0n) throw new Error(sqrtPriceX96 <= sqrtA ? `the price is below the range: only ${pool.token0.symbol} goes in` : sqrtPriceX96 >= sqrtB ? `the price is above the range: only ${pool.token1.symbol} goes in` : "amounts too small for this range");
     liquidity = fitLiquidity(sqrtPriceX96, sqrtA, sqrtB, liquidity, a0, a1);

@@ -1917,7 +1917,7 @@ async function handleRequest(req, res) {
         const pool = JSON.parse(q.get("pool") || "null");
         if (!pool || !pool.version) throw new Error("pool required (from /api/mint/pools)");
         if (pool.version === 4 && pool.key && pool.key.hooks && pool.key.hooks !== ethers.ZeroAddress) throw new Error("hooked pools are not supported here yet");
-        out = await mint.quote({ wallet: walletOf(q.get("wallet")).address, pool, tickLower: Number(q.get("tickLower")), tickUpper: Number(q.get("tickUpper")), amount0: BigInt(q.get("amount0") || "0"), amount1: BigInt(q.get("amount1") || "0"), slippageBps: Math.min(1000, Math.max(10, Number(q.get("slippageBps") || 100))), payEth: q.get("payEth") !== "0" });
+        out = await mint.quote({ wallet: walletOf(q.get("wallet")).address, pool, tickLower: Number(q.get("tickLower")), tickUpper: Number(q.get("tickUpper")), amount0: BigInt(q.get("amount0") || "0"), amount1: BigInt(q.get("amount1") || "0"), slippageBps: Math.min(1000, Math.max(10, Number(q.get("slippageBps") || 100))), payEth: q.get("payEth") !== "0", fill: q.get("fill") === "0" ? 0 : q.get("fill") === "1" ? 1 : null });
         // USD of the deposit, from the collector's prices (null for tokens it does not price).
         const px = (m) => (m.native || m.isWeth ? lastPrices[WETH] : lastPrices[String(m.address).toLowerCase()] ?? currentPrice(m.address));
         const p0 = px(pool.token0), p1 = px(pool.token1);

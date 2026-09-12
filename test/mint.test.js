@@ -55,6 +55,16 @@ const up = M.amountsForLiquidityUp(sqrtP, sqrtA, sqrtB, L);
 assert.ok(up.amount0 >= back.amount0 + 1n && up.amount1 >= back.amount1 + 1n);
 assert.strictEqual(M.withSlippage(10000n, 100, true), 10100n); assert.strictEqual(M.withSlippage(10000n, 100, false), 9900n);
 
+// One side given, the other unbound: the liquidity comes from the given side alone and the
+// unbound side's need is what the price implies (the form fills it in).
+{
+  const A = u.getSqrtRatioAtTick(-198547), B = u.getSqrtRatioAtTick(-197546), P = u.getSqrtRatioAtTick(-197900);
+  const usdg = 16420448n, UNBOUND = 1n << 120n;
+  const L = M.liquidityForAmounts(P, A, B, UNBOUND, usdg);
+  const need = M.amountsForLiquidityUp(P, A, B, M.fitLiquidity(P, A, B, L, UNBOUND, usdg));
+  assert.ok(need.amount1 <= usdg && need.amount1 > (usdg * 9999n) / 10000n, "USDG side binds fully");
+  assert.ok(need.amount0 > 0n && need.amount0 < 10n ** 17n, "an ETH amount of the right order follows: " + need.amount0);
+}
 // v4 mint calldata: modifyLiquidities(unlockData, deadline) with MINT_POSITION, SETTLE_PAIR, SWEEP (native side), value = amount0Max.
 const key = { currency0: ethers.ZeroAddress, currency1: USDG, fee: 10000, tickSpacing: 200, hooks: ethers.ZeroAddress };
 const mint = M.buildV4Mint({ posm: POSM, key, tickLower: -199600, tickUpper: -196000, liquidity: 123456789n, amount0Max: 10n ** 17n, amount1Max: 250n * 10n ** 6n, owner: ME, deadline: 999n });

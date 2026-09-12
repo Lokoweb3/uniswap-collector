@@ -375,7 +375,7 @@ function create({ provider, cfg }) {
       const b = ethSide(m) ? bal[0] : balOf(m);
       if (!b) continue;
       const have = BigInt(b.raw) - (ethSide(m) ? ethers.parseEther("0.001") : 0n);
-      const fmt = (x) => Number(ethers.formatUnits(x, m.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 });
+      const fmt = (x) => Number(ethers.formatUnits(x < 0n ? 0n : x, m.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 });
       const nd = i ? need.amount1 : need.amount0;
       if (have < nd) { blocked = `${m.symbol}: wallet holds ${fmt(have)}${ethSide(m) ? " after 0.001 kept for gas" : ""}, the deposit needs ${fmt(nd)} — lower the amount`; continue; }
       const room = boundForHeadroom(have, slippageBps);

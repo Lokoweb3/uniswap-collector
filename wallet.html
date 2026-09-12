@@ -2239,6 +2239,8 @@ loadConfig().then(async () => {
       history.unshift({ at: Date.now(), label: qt.label, text: q('mq-big').textContent, usd: qt.human.usd, tx: tx.hash });
       renderHistory();
       hideQuote(); closed = null; closeQ = null;
+      q('mt-amt0').value = ''; q('mt-amt1').value = ''; auto[0] = auto[1] = false; // a fresh form, not a re-quote of what was just minted
+      status('mt-status', 'Minted. Enter amounts for another position, or switch to "move" to reposition one.', 'ok');
       setTimeout(() => loadContext(q('mt-wallet').value), 5000);
     } catch (e) {
       const m = e.shortMessage || e.message || String(e);

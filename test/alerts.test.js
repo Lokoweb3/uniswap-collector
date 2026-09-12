@@ -188,6 +188,12 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.strictEqual(require("../alerts").poolKeyOf({ tokenId: "v4-9", version: 4, poolAddress: "0xABCD" }), "v4:0xabcd");
   assert.strictEqual(require("../alerts").poolKeyOf({ poolKey: "v4:0xdef", nftId: "1" }), "v4:0xdef");
 
+  // 9b. A non-numeric pool cool-down falls back to 30 min instead of NaN (which would disable it).
+  const bad = create({ transport: async () => true, stateFile: stateFile + ".p", now: () => clock, log: { error() {} }, poolCooldownMs: "soon" });
+  assert.strictEqual(bad.poolWindow, 30 * 60 * 1000);
+  assert.strictEqual(create({ transport: async () => true, stateFile: stateFile + ".p", now: () => clock, log: { error() {} }, poolCooldownMs: 0 }).poolWindow, 30 * 60 * 1000);
+  try { fs.unlinkSync(stateFile + ".p"); } catch {}
+
   // 10. A rejected fetch (DNS, timeout) is a failed delivery, not an exception: check() still finishes.
   const realFetch = global.fetch;
   global.fetch = async () => { throw new Error("getaddrinfo ENOTFOUND api.telegram.org"); };

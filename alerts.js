@@ -44,7 +44,8 @@ const TREASURY_BALANCE_ALERT_USDG = 1000; // default; settings.json vault.withdr
 function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stateFile = STATE_FILE, now = () => Date.now(), log = console, onSent = null, poolCooldownMs = null } = {}) {
   if (token === undefined && !Object.keys(arguments[0] || {}).includes('token')) token = process.env.TELEGRAM_TOKEN;
   chatId = chatId !== undefined ? chatId : (process.env.TELEGRAM_CHAT_ID || CHATS.fallbackChat || "");
-  const poolWindow = poolCooldownMs != null ? Number(poolCooldownMs) : Number(CHATS.poolCooldownMinutes) > 0 ? Number(CHATS.poolCooldownMinutes) * 60000 : POOL_COOLDOWN_MS;
+  let poolWindow = poolCooldownMs != null ? Number(poolCooldownMs) : Number(CHATS.poolCooldownMinutes) > 0 ? Number(CHATS.poolCooldownMinutes) * 60000 : POOL_COOLDOWN_MS;
+  if (!Number.isFinite(poolWindow) || poolWindow <= 0) { log.error && log.error(`alerts: pool cool-down "${poolCooldownMs != null ? poolCooldownMs : CHATS.poolCooldownMinutes}" is not a positive number; using ${POOL_COOLDOWN_MS / 60000} min`); poolWindow = POOL_COOLDOWN_MS; }
   let state = { sent: {}, outSince: {}, lastTick: 0, lastRunSeen: null, pool: {}, held: {} };
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(stateFile, "utf8")) };

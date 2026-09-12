@@ -65,7 +65,7 @@ function analyseAttribution(attr) {
   const main7 = attr.mainBenchmarks?.find(bm => bm.windowDays === 7);
 
   if (main7 && main7.portfolioPct != null && main7.ethPct != null && main7.portfolioPct < main7.ethPct) {
-    issues.push({ severity: "MEDIUM", msg: `Portfolio ${main7.portfolioPct.toFixed(1)}% vs ETH ${main7.ethPct.toFixed(1)}% over ${main7.actualDays.toFixed(1)}d — LP underperforming hold` });
+    issues.push({ severity: "MEDIUM", msg: `Portfolio ${main7.portfolioPct.toFixed(1)}% vs ETH ${main7.ethPct.toFixed(1)}% over ${main7.actualDays?.toFixed(1) ?? 'n/a'}d — LP underperforming hold` });
     suggestions.push("Review which positions have negative net P&L after IL");
   }
 

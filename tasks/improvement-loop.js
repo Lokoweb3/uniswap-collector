@@ -49,7 +49,7 @@ function analyseAttribution(attr) {
   const b = attr.book.totals;
 
   let feeIlRatio = null;
-  if (b.il != null && b.il !== 0) {
+  if (b.il != null && b.il !== 0 && b.fees != null) {
     feeIlRatio = Math.abs(b.fees / b.il);
   }
 

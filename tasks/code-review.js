@@ -52,9 +52,14 @@ function readFileSafe(filePath,maxLines=800){
   }catch(_){return null}
 }
 
+// Recent commits plus whatever is edited or added in the working tree but not committed yet,
+// so LP code changed on disk is reviewed before it ever runs — not only after it lands in git.
 function getChangedFiles(hours=6){
-  const raw=exec(`git log --since="${hours} hours ago" --name-only --pretty=format: --diff-filter=AM -- "*.js" "*.mjs"`);
-  return [...new Set(raw.split("\n").filter(f=>(f.endsWith(".js")||f.endsWith(".mjs"))&&!f.includes("node_modules")&&!f.includes("tasks/output")))].slice(0,6);
+  const committed=exec(`git log --since="${hours} hours ago" --name-only --pretty=format: --diff-filter=AM -- "*.js" "*.mjs"`);
+  const uncommitted=exec(`git status --porcelain --untracked-files=all -- "*.js" "*.mjs"`)
+    .split("\n").filter(l=>l.length>3&&!l.startsWith(" D")&&!l.startsWith("D ")).map(l=>l.slice(3).trim().split(" -> ").pop());
+  const raw=[...uncommitted,...committed.split("\n")];
+  return [...new Set(raw.filter(f=>(f.endsWith(".js")||f.endsWith(".mjs"))&&!f.includes("node_modules")&&!f.includes("tasks/output")))].slice(0,6);
 }
 
 let apiKey=null, model=null; // set in main() after validation
@@ -124,7 +129,10 @@ async function reviewDiff(changedFiles){
   for(const f of changedFiles.slice(0,3)){
     // The same 6-hour window getChangedFiles() uses, not just the last commit.
     const since=new Date(Date.now()-6*3600*1000).toISOString();
-    const d=exec(`git log --since="${since}" -p --follow -- "${f}" 2>/dev/null | head -80`);
+    let d=exec(`git log --since="${since}" -p --follow -- "${f}" 2>/dev/null | head -80`);
+    // Nothing committed in the window: the change is still in the working tree (edited, or a brand-new untracked file).
+    if(!d)d=exec(`git diff HEAD -- "${f}" 2>/dev/null | head -80`);
+    if(!d&&fs.existsSync(path.join(ROOT,f)))d=exec(`git diff --no-index -- /dev/null "${f}" 2>/dev/null | head -80`);
     if(d)diffs.push(`--- ${f} ---\n${d.split("\n").slice(0,60).join("\n")}`);
   }
   if(!diffs.length)return null;

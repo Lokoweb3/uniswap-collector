@@ -123,7 +123,11 @@ function analysePositions(attr) {
 
 function analysePortfolio(portfolio) {
   const issues = [], suggestions = [];
-  const tokens = (portfolio.tokens || []).filter(t => t.valueUsd > 0);
+  // /api/portfolio returns `rows` (usd, share as a percentage, change24h as a percentage), not `tokens`.
+  const tokens = (portfolio.rows || portfolio.tokens || [])
+    .map(t => ({ symbol: t.symbol, valueUsd: t.valueUsd ?? t.usd, sharePct: t.sharePct ?? t.share, change24hPct: t.change24hPct ?? t.change24h }))
+    .filter(t => t.valueUsd > 0)
+    .sort((a, b) => b.valueUsd - a.valueUsd);
 
   const topToken = tokens[0];
   if (topToken && topToken.sharePct > 50) {

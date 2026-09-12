@@ -278,18 +278,35 @@ function create({ provider, cfg }) {
     // fills it in), so it does not bind the liquidity.
     const UNBOUND = (1n << 120n);
     if (fill === 0 || fill === "0") a0 = UNBOUND; else if (fill === 1 || fill === "1") a1 = UNBOUND;
-    let liquidity = liquidityForAmounts(sqrtPriceX96, sqrtA, sqrtB, a0, a1);
-    if (liquidity <= 0n) throw new Error(sqrtPriceX96 <= sqrtA ? `the price is below the range: only ${pool.token0.symbol} goes in` : sqrtPriceX96 >= sqrtB ? `the price is above the range: only ${pool.token1.symbol} goes in` : "amounts too small for this range");
-    liquidity = fitLiquidity(sqrtPriceX96, sqrtA, sqrtB, liquidity, a0, a1);
-    const need = amountsForLiquidityUp(sqrtPriceX96, sqrtA, sqrtB, liquidity);
-    let max0 = withSlippage(need.amount0, slippageBps, true), max1 = withSlippage(need.amount1, slippageBps, true);
-    const min0 = withSlippage(need.amount0, slippageBps, false), min1 = withSlippage(need.amount1, slippageBps, false);
-    const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMinutes * 60);
+    const solve = (x0, x1) => {
+      let L = liquidityForAmounts(sqrtPriceX96, sqrtA, sqrtB, x0, x1);
+      if (L <= 0n) throw new Error(sqrtPriceX96 <= sqrtA ? `the price is below the range: only ${pool.token0.symbol} goes in` : sqrtPriceX96 >= sqrtB ? `the price is above the range: only ${pool.token1.symbol} goes in` : "amounts too small for this range");
+      L = fitLiquidity(sqrtPriceX96, sqrtA, sqrtB, L, x0, x1);
+      return { liquidity: L, need: amountsForLiquidityUp(sqrtPriceX96, sqrtA, sqrtB, L) };
+    };
+    let { liquidity, need } = solve(a0, a1);
     const d0 = pool.token0.decimals, d1 = pool.token1.decimals;
     const bal = await balances({ wallet, tokens: [pool.token0.address, pool.token1.address] });
     const balOf = (m) => bal.find((b) => (m.native ? b.address === ethers.ZeroAddress : b.address.toLowerCase() === m.address.toLowerCase()));
     const warnings = [];
-    let blocked = null;
+    let blocked = null, capped = null;
+    // The side the form fills in must fit the wallet: when it does not, that side is capped at
+    // the wallet (minus gas for ETH) and the typed side shrinks to match instead of a dead end.
+    const isFill = fill === 0 || fill === "0" ? 0 : fill === 1 || fill === "1" ? 1 : null;
+    if (isFill != null) {
+      const m = isFill ? pool.token1 : pool.token0;
+      const ethPaid = m.native || (pool.version === 3 && m.isWeth && payEth);
+      const b = ethPaid ? bal[0] : balOf(m);
+      const have = b ? BigInt(b.raw) - (ethPaid ? ethers.parseEther("0.001") : 0n) : null;
+      const filled = isFill ? need.amount1 : need.amount0;
+      if (have != null && have > 0n && filled > have) {
+        ({ liquidity, need } = isFill ? solve(UNBOUND, have) : solve(have, UNBOUND));
+        capped = `${m.symbol} limits this deposit: the wallet holds ${Number(ethers.formatUnits(have, m.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })}${ethPaid ? " after gas" : ""}, so the ${isFill ? pool.token0.symbol : pool.token1.symbol} side was reduced to match`;
+      }
+    }
+    let max0 = withSlippage(need.amount0, slippageBps, true), max1 = withSlippage(need.amount1, slippageBps, true);
+    const min0 = withSlippage(need.amount0, slippageBps, false), min1 = withSlippage(need.amount1, slippageBps, false);
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMinutes * 60);
     // What the wallet will actually pay: native ETH for a v4 ETH side, ETH for a v3 WETH side when payEth, else the token.
     // The slippage maximum is capped at the balance: the pool may then take less headroom than
     // asked and the mint reverts (nothing changes) if the price moves against it before it lands.
@@ -322,7 +339,7 @@ function create({ provider, cfg }) {
       amount0: need.amount0.toString(), amount1: need.amount1.toString(), amount0Max: max0.toString(), amount1Max: max1.toString(),
       human: { amount0: Number(ethers.formatUnits(need.amount0, d0)), amount1: Number(ethers.formatUnits(need.amount1, d1)), price: u.priceFromSqrt(sqrtPriceX96, d0, d1), priceLower: u.priceAtTick(tickLower, d0, d1), priceUpper: u.priceAtTick(tickUpper, d0, d1) },
       shareInRangePct: inRange && poolLiq + liquidity > 0n ? Number((liquidity * 1000000n) / (poolLiq + liquidity)) / 10000 : null,
-      blocked, slippageBps: Number(slippageBps), deadline: deadline.toString(), approvals, permit2: v4c.permit2 || "0x000000000022D473030F116dDEE9F6B43aC78BA3", tx: { to: tx.to, data: tx.data, value: tx.value.toString() }, warnings, balances: bal,
+      blocked, capped, slippageBps: Number(slippageBps), deadline: deadline.toString(), approvals, permit2: v4c.permit2 || "0x000000000022D473030F116dDEE9F6B43aC78BA3", tx: { to: tx.to, data: tx.data, value: tx.value.toString() }, warnings, balances: bal,
     };
   }
 

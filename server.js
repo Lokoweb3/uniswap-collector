@@ -1185,7 +1185,20 @@ function refreshPortfolio() {
   return portfolioInFlight;
 }
 
-const server = http.createServer(async (req, res) => {
+// A route that throws ends only its own request: a 500 when no headers went out yet,
+// a closed connection otherwise. Without this, one such throw (2026-09-12: the treasury
+// route sent a 200 header, then its view failed on a 403 from the RPC) took the whole
+// dashboard down with ERR_HTTP_HEADERS_SENT.
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    console.error(`request ${req.method} ${String(req.url).slice(0, 80)} failed: ${err && (err.shortMessage || err.message || err)}`);
+    try {
+      if (!res.headersSent) { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, error: "internal error" })); }
+      else res.end();
+    } catch {}
+  });
+});
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
 
   // Arm the unlock window from the page: verify the passphrase against the
@@ -1399,8 +1412,9 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/treasury") {
     res.setHeader("Content-Type", "application/json");
     try {
+      const view = await treasuryView(); // build first: a failure after writeHead(200) cannot send a 500
       res.writeHead(200);
-      return res.end(JSON.stringify(await treasuryView()));
+      return res.end(JSON.stringify(view));
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -2131,7 +2145,7 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not found");
-});
+}
 
 // Staking rewards ledger (staking.js): hourly samples of rebasing receipts,
 // priced like the Portfolio prices them (sNET as NET).

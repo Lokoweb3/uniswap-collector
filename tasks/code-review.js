@@ -24,7 +24,10 @@ function appendWithRotation(filePath, content, maxBytes = 500_000) {
       fs.renameSync(filePath, backup);
       console.log(`[code-review] rotated proposals to ${backup}`);
     }
-  } catch(_) {}
+  } catch (e) {
+    // No file yet is normal; anything else (permissions, rename failure) would let the file grow unbounded.
+    if (e.code !== "ENOENT") console.warn(`[code-review] rotation check failed for ${filePath}: ${e.message}`);
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, content);
 }

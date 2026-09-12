@@ -216,6 +216,14 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.ok(Array.isArray(out));
   try { fs.unlinkSync(stateFile + ".old"); } catch {}
 
+  // 9d. A state file that cannot be written (here: its directory is a file) is logged, not swallowed, and check() still runs.
+  const saveErrs = [];
+  const unwritable = create({ transport: async () => true, stateFile: path.join(stateFile + ".old", "state.json"), now: () => clock, log: { error: (m) => saveErrs.push(m) } });
+  fs.writeFileSync(stateFile + ".old", "not a directory");
+  assert.strictEqual(await unwritable.sendPool("v3:0xsave", "hello", { source: "t" }), true);
+  assert.ok(saveErrs.some((m) => /could not save/.test(m)), "save failure is logged");
+  try { fs.unlinkSync(stateFile + ".old"); } catch {}
+
   // 10. A rejected fetch (DNS, timeout) is a failed delivery, not an exception: check() still finishes.
   const realFetch = global.fetch;
   global.fetch = async () => { throw new Error("getaddrinfo ENOTFOUND api.telegram.org"); };

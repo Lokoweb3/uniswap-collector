@@ -58,7 +58,10 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
       const tmp = stateFile + ".tmp";
       fs.writeFileSync(tmp, JSON.stringify(state));
       fs.renameSync(tmp, stateFile);
-    } catch {}
+    } catch (e) {
+      // A failed save means the next tick repeats alerts; say so instead of hiding disk-full / permission problems.
+      log.error && log.error(`alerts: could not save ${stateFile}: ${e.message}`);
+    }
   };
 
   const enabled = !!(token && chatId && token !== 'undefined' && chatId !== 'undefined') || !!transport;

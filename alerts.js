@@ -195,8 +195,8 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
           const id = `${ws.prefix}${p.tokenId}`;
           seen.add(id);
           const name = `${ws.label ? ws.label + " · " : ""}${p.pair || "?"} #${p.nftId || p.tokenId}`;
-          const viaPool = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range" });
-          const viaPoolUrgent = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", urgent: true });
+          const viaPool = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", deliver: sendGroup });
+          const viaPoolUrgent = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", urgent: true, deliver: sendGroup });
           if (!p.inRange) {
             if (!state.outSince[id]) { state.outSince[id] = t; save(); }
             // Held by the pool cool-down? The key carries the episode start, so the next tick tries again.

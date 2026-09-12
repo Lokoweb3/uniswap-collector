@@ -17,14 +17,18 @@ const BRAIN   = path.join(__dirname, "..", "brain", "proposals.md");
 
 function get(endpoint) {
   return new Promise((resolve, reject) => {
-    http.get(`${BASE}${endpoint}`, res => {
+    const req = http.get(`${BASE}${endpoint}`, res => {
       let data = "";
       res.on("data", d => data += d);
       res.on("end", () => {
         try { resolve(JSON.parse(data)); }
         catch(e) { reject(new Error(`JSON parse ${endpoint}: ${e.message}`)); }
       });
-    }).on("error", reject);
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error(`Timeout fetching ${endpoint}`));
+    });
+    req.on("error", reject);
   });
 }
 

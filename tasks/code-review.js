@@ -1,4 +1,5 @@
 "use strict";
+require("dotenv").config();
 const fs   = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
@@ -31,14 +32,21 @@ function getChangedFiles(hours=6){
 }
 
 async function callClaude(prompt){
-  const res=await fetch("https://api.anthropic.com/v1/messages",{
+  const res=await fetch("https://ollama.com/api/chat",{
     method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]}),
+    headers:{
+      "Content-Type":"application/json",
+      "Authorization":"Bearer "+process.env.OLLAMA_API_KEY,
+    },
+    body:JSON.stringify({
+      model: process.env.OLLAMA_MODEL || "llama3.1",
+      messages:[{role:"user",content:prompt}],
+      stream:false,
+    }),
   });
-  if(!res.ok)throw new Error(`Claude API ${res.status}`);
+  if(!res.ok)throw new Error(`Ollama Cloud ${res.status}: ${await res.text()}`);
   const data=await res.json();
-  return data.content?.find(b=>b.type==="text")?.text||"";
+  return data.message?.content||"";
 }
 
 async function reviewFile(filePath,reason){

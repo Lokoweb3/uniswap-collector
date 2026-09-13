@@ -16,6 +16,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const BASE = (process.env.LP_DASHBOARD_URL || "http://127.0.0.1:8787").replace(/\/$/, "");
@@ -610,23 +611,14 @@ server.registerTool(
   }
 );
 
-return server;
-}
-
-// Run directly: stdio transport, for Claude Code and Claude Desktop.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await createServer().connect(new StdioServerTransport());
-}
-
 // ── Task runner tools ────────────────────────────────────────────────────────
 
-server.tool("run_tasks", {
+server.registerTool("run_tasks", {
+  title: "Run the LP / code tasks",
   description: "Run LP improvement loop and code review. Pass task name to run one: improvement-loop, code-scan, code-review, pool-scan. Omit to run all.",
-  inputSchema: { type:"object", properties: { task: { type:"string", enum:["improvement-loop","code-scan","code-review","pool-scan"] } } },
+  inputSchema: { task: z.enum(["improvement-loop","code-scan","code-review","pool-scan"]).optional().describe("One task to run; omit to run all") },
 }, async ({ task } = {}) => {
-  const url = task
-    ? `http://127.0.0.1:${PORT}/api/tasks/run?task=${task}`
-    : `http://127.0.0.1:${PORT}/api/tasks/run`;
+  const url = task ? `${BASE}/api/tasks/run?task=${encodeURIComponent(task)}` : `${BASE}/api/tasks/run`;
   const r = await fetch(url, { method: "POST" });
   const d = await r.json();
   return { content: [{ type:"text", text: d.ok
@@ -634,9 +626,10 @@ server.tool("run_tasks", {
     : `❌ Failed: ${JSON.stringify(d)}` }] };
 });
 
-server.tool("get_proposals", {
+server.registerTool("get_proposals", {
+  title: "Latest improvement proposals",
   description: "Read the latest improvement proposals from brain/proposals.md.",
-  inputSchema: { type:"object", properties: { lines: { type:"number", description:"Lines from end (default 80)" } } },
+  inputSchema: { lines: z.number().int().positive().optional().describe("Lines from end (default 80)") },
 }, async ({ lines = 80 } = {}) => {
   const brainPath = new URL("brain/proposals.md", import.meta.url).pathname;
   try {
@@ -648,9 +641,10 @@ server.tool("get_proposals", {
   }
 });
 
-server.tool("get_task_output", {
+server.registerTool("get_task_output", {
+  title: "Latest task output",
   description: "Get latest JSON output from a task: improvement-loop, code-scan, code-review, pool-scan.",
-  inputSchema: { type:"object", required:["task"], properties: { task: { type:"string", enum:["improvement-loop","code-scan","code-review","pool-scan"] } } },
+  inputSchema: { task: z.enum(["improvement-loop","code-scan","code-review","pool-scan"]).describe("Which task's output to read") },
 }, async ({ task }) => {
   const outPath = new URL(`tasks/output/${task}.json`, import.meta.url).pathname;
   try {
@@ -667,3 +661,10 @@ server.tool("get_task_output", {
 
 // ── End task runner tools ─────────────────────────────────────────────────────
 
+return server;
+}
+
+// Run directly: stdio transport, for Claude Code and Claude Desktop.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await createServer().connect(new StdioServerTransport());
+}

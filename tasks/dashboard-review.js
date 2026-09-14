@@ -44,7 +44,7 @@ const KNOWN_BY_DESIGN = [
 ];
 
 // The only routes this script may read. A path outside the list throws before any request.
-const ALLOW = new Set(["/api/daily", "/api/risk", "/api/positions", "/api/attribution", "/api/sales/pending", "/api/watch"]);
+const ALLOW = new Set(["/api/daily-check", "/api/daily", "/api/risk", "/api/positions", "/api/attribution", "/api/sales/pending", "/api/watch"]);
 function assertAllowed(p) {
   const base = String(p).split("?")[0];
   if (!ALLOW.has(base)) throw new Error(`dashboard-review: ${p} is not on the read-only allow-list`);
@@ -112,7 +112,7 @@ async function contextFor(pagePath, fetchImpl) {
   const safe = async (p, pick) => { try { return pick(await get(p, fetchImpl)); } catch (e) { return `unavailable: ${e.message}`; } };
   const lines = [];
   if (pagePath === "/") {
-    lines.push("Daily text: " + (await safe("/api/daily", (d) => String(d.text || "").slice(0, 1500))));
+    lines.push("Daily text: " + (await safe("/api/daily-check", (d) => String(d.text || "").slice(0, 1500))));
     lines.push("Risk rows: " + (await safe("/api/risk", (d) => (d.positions || []).map((p) => `${p.wallet} ${p.pair} #${p.tokenId} ${p.status}${p.inRange ? "" : " out-of-range"} fees/h $${Number(p.feesPerHour || 0).toFixed(2)} verdict ${p.verdict && p.verdict.verdict}`).join("; ") || "none")));
   } else if (pagePath === "/analytics") {
     lines.push("Attribution 7 d totals: " + (await safe("/api/attribution?days=7", (d) => JSON.stringify(d.book && d.book.totals ? Object.fromEntries(Object.entries(d.book.totals).map(([k, v]) => [k, typeof v === "number" ? +v.toFixed(2) : v])) : null))));

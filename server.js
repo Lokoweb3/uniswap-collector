@@ -1705,7 +1705,10 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
     }
   }
-  if (url.pathname === "/api/daily") {
+  // The daily check text (daily.js). /api/daily itself is the fee-by-hour ledger below, which the
+  // analytics page, the MCP daily_revenue tool and the weekly digest read; the two shared one
+  // path for a week and this one shadowed the ledger.
+  if (url.pathname === "/api/daily-check") {
     res.setHeader("Content-Type", "application/json");
     try {
       const daily = require("./daily");

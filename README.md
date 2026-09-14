@@ -573,7 +573,7 @@ in `LP_TZ` local time, default 08:00, `chat` main or group): arm window and time
 the last 24 h per wallet and the vault's share, open positions with uncollected fees and the top
 fee rates, guardian flags, the auto-collect rule and its last run, vault balance and split, operator
 gas, the last collector run, and any stopped loop. Every figure is read from the dashboard at send
-time. `npm run daily` prints it; `/api/daily` previews it with the schedule state.
+time. `npm run daily` prints it; `/api/daily-check` previews it with the schedule state.
 
 ## Weekly digest
 

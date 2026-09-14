@@ -17,17 +17,7 @@ const fs = require("fs");
 
 const PORT = Number(process.env.SMOKE_PORT || 8799);
 const ROOT = path.join(__dirname, "..");
-const CHROME = process.env.CHROME || "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe";
-const PAGES = [
-  { path: "/", marker: 'id="summary"', markers: ["Fee APR", "Net return"] },
-  { path: "/analytics", marker: 'id="perfsec"' },
-  { path: "/wallet", marker: 'id="sec-arm"' },
-  { path: "/wallet#vault", marker: 'id="sec-vault"' },
-  { path: "/wallet#sell", marker: 'id="sec-sell"' },
-  { path: "/wallet#mint", marker: 'id="sec-mint"' },
-];
-// Console lines that are noise, not errors.
-const IGNORE = [/Password field is not contained in a form/i, /DevTools listening/i, /Fontconfig/i];
+const { CHROME, PAGES, loadPage } = require("./smoke-lib");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,21 +31,6 @@ async function waitFor(url, ms, perRequestMs = 3000) {
     await sleep(1000);
   }
   return false;
-}
-
-function loadPage(url, width = 1280) {
-  const r = spawnSync(
-    CHROME,
-    ["--headless=new", "--disable-gpu", "--enable-logging=stderr", "--v=0", "--virtual-time-budget=20000", `--window-size=${width},${width < 600 ? 812 : 900}`, "--dump-dom", url],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 90000 }
-  );
-  const dom = r.stdout || "";
-  const consoleLines = (r.stderr || "")
-    .split("\n")
-    .filter((l) => /CONSOLE|Uncaught/.test(l))
-    .filter((l) => !IGNORE.some((re) => re.test(l)));
-  const errors = consoleLines.filter((l) => /Uncaught|TypeError|ReferenceError|SyntaxError|:ERROR:|"error/i.test(l) || /CONSOLE\(\d+\)\] "?(Failed to load|Refused)/.test(l));
-  return { dom, errors, consoleLines, status: r.status };
 }
 
 async function main() {

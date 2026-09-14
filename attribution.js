@@ -43,24 +43,49 @@ const dayStart = (t) => {
   return d.getTime();
 };
 
-/** Latest point at or before `t` in a time-sorted [{t,…}] array, or null. */
+/** Latest point at or before `t` in a time-sorted [{t,…}] array, or null. Binary search: the
+ *  series are months of hourly rows and every day of every wallet looks up several of them. */
 function at(series, t) {
-  let best = null;
-  for (const p of series) {
-    if (p.t <= t) best = p;
-    else break;
+  let lo = 0, hi = series.length - 1, best = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (series[mid].t <= t) { best = series[mid]; lo = mid + 1; } else hi = mid - 1;
   }
   return best;
 }
 
+/** Sorted numeric hour keys of a price-log table, computed once per table object. */
+const priceKeyCache = new WeakMap();
+function priceKeys(priceHours) {
+  let keys = priceKeyCache.get(priceHours);
+  if (!keys) {
+    keys = Object.keys(priceHours).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    priceKeyCache.set(priceHours, keys);
+  }
+  return keys;
+}
+
 /** Price table for the hour at or before `t` (price-log rows), or null. */
 function priceRowAt(priceHours, t) {
-  let bestH = null;
-  for (const h of Object.keys(priceHours)) {
-    const n = Number(h);
-    if (n <= t && (bestH == null || n > bestH)) bestH = n;
+  const keys = priceKeys(priceHours);
+  let lo = 0, hi = keys.length - 1, bestH = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (keys[mid] <= t) { bestH = keys[mid]; lo = mid + 1; } else hi = mid - 1;
   }
   return bestH == null ? null : { h: bestH, row: priceHours[String(bestH)] };
+}
+
+/** A ledger timestamp as epoch ms: numbers and numeric strings as-is, ISO strings via Date.parse,
+ *  anything else NaN. Ledgers written by different tools have used all three shapes. */
+function normT(t) {
+  if (typeof t === "number") return Number.isFinite(t) ? t : NaN;
+  if (typeof t === "string" && t.trim() !== "") {
+    const n = Number(t);
+    if (Number.isFinite(n)) return n;
+    return Date.parse(t);
+  }
+  return NaN;
 }
 
 function sumHours(hours, from, to) {
@@ -333,16 +358,26 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
     }
 
     // Vault splits per wallet, gas from the operator's state file.
+    // A row whose timestamp cannot be read would silently fail every `>=` comparison and vanish
+    // from its day; say so once per ledger instead.
+    const badT = {};
+    const tOf = (ledger, raw) => { const t = normT(raw); if (Number.isNaN(t)) { if (!badT[ledger]) { badT[ledger] = true; console.warn(`attribution: ${ledger} has a row with an unreadable timestamp (${JSON.stringify(raw)}); such rows are skipped`); } return null; } return t; };
     const splits = readJson("fee-split-ledger.json", []);
     const vaultSplits = [];
     for (const r of Array.isArray(splits) ? splits : []) {
       if (r.status === "failed" || !r.splitUsdg) continue;
+      const t = tOf("fee-split-ledger.json", r.timestamp);
+      if (t == null) continue;
       const addr = String(r.walletAddress || "").toLowerCase();
       const key = !addr || addr === String(cfg.ownerAddress).toLowerCase() ? MAIN : addr;
-      vaultSplits.push({ t: Date.parse(r.timestamp), key, usd: Number(r.splitUsdg) });
+      vaultSplits.push({ t, key, usd: Number(r.splitUsdg) });
     }
     const st = readJson("state.json", {});
-    const gasSpends = (st.gasSpends || []).map((g) => ({ t: g.t, wei: g.wei }));
+    const gasSpends = [];
+    for (const g of st.gasSpends || []) {
+      const t = tOf("state.json gasSpends", g && g.t);
+      if (t != null) gasSpends.push({ t, wei: g.wei });
+    }
 
     // Flows: money that crossed the wallet boundary, and nothing else. The value series
     // is wallet balance + LP value + uncollected fees, so LP deposits/withdrawals,
@@ -356,16 +391,18 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
     const flows = [];
     for (const r of readJson("token-disposals.json", { rows: [] }).rows || []) {
       if (!r || r.usd == null || !r.t) continue;
+      if (r.kind !== "received" && r.kind !== "sent") continue; // sold / deposit / move: internal, not a flow
+      const t = tOf("token-disposals.json", r.t);
+      if (t == null) continue;
       if (r.kind === "received") {
         const wkey = r.to ? r.to.toLowerCase() : (r.wallet ? r.wallet.toLowerCase() : MAIN);
         const key = wkey === String(cfg.ownerAddress).toLowerCase() ? MAIN : wkey;
-        flows.push({ t: r.t, key, kind: "received", usd: Number(r.usd) });
+        flows.push({ t, key, kind: "received", usd: Number(r.usd) });
         continue;
       }
-      if (r.kind !== "sent") continue; // sold / deposit / move: internal, not a flow
       const wkey = r.from ? r.from.toLowerCase() : (r.wallet ? r.wallet.toLowerCase() : MAIN);
       const key = wkey === String(cfg.ownerAddress).toLowerCase() ? MAIN : wkey;
-      flows.push({ t: r.t, key, kind: "sent", usd: -Number(r.usd) });
+      flows.push({ t, key, kind: "sent", usd: -Number(r.usd) });
     }
 
     // Positions with their PnL legs, main and watched.

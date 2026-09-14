@@ -71,7 +71,7 @@ function getChangedFiles(hours=6){
 }
 
 let apiKey=null, model=null; // set in main() after validation
-// A stalled model call must not hang the 6-hourly cron: OLLAMA_TIMEOUT (seconds, default 300) is the
+// A stalled model call must not hang the 6-hourly run (server.js spawns tasks/run-all.sh): OLLAMA_TIMEOUT (seconds, default 300) is the
 // base budget; a file review adds 0.5 s per line sent (capped at 600 s) because the 2026-09-14 run lost
 // its two longest files to a flat 120 s. The abort surfaces as an ordinary review failure.
 const TIMEOUT_MS=(Number(process.env.OLLAMA_TIMEOUT)>0?Number(process.env.OLLAMA_TIMEOUT):300)*1000;

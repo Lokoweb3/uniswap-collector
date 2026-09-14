@@ -4,7 +4,7 @@
 //   #2 — explicit null check on il before feeIlRatio
 //   #3 — template literals verified correct
 //   #4 — 48h guard on zero-fee wallet flag
-//   #5 — runs every 6h via cron, API load is fine
+//   #5 — runs every 6 h from server.js (tasks/run-all.sh; cron is not running on this host), API load is fine
 
 "use strict";
 const fs   = require("fs");

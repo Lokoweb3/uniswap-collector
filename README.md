@@ -357,9 +357,11 @@ an unprivileged `lp` user, code and data, and two systemd services
 the Collect button and Arm form and refuses those endpoints. It joins the
 tailnet as `lp-dashboard`, so the connector URL and the private dashboard URL
 carry over; the script renames this machine to `lp-pc` first. After every
-collector run, `sync-to-vm.sh` (configured in `.env.sync`, called from
-`run-collector.sh`) pushes `state.json` and `collector.log` so the VM's ops
-strip stays current. Re-running the deploy script updates the code.
+collector run, `sync-to-vm.sh` (called from `run-collector.sh`) pushes
+`state.json` and `collector.log` so the VM's ops strip stays current — it is a
+silent no-op until `deploy-vm.sh` has written `.env.sync`, which has not happened
+on this machine: no VM is deployed and nothing is synced there today. Re-running
+the deploy script updates the code.
 
 ## LOKOVault treasury split
 
@@ -690,7 +692,7 @@ exposure that collect-only mode avoids entirely.
 ## Setup
 
 ```bash
-chmod +x *.sh systemd/install.sh   # exec bits are lost in transit
+chmod +x *.sh                      # exec bits are lost in transit
 npm install
 ./setup-key.sh                     # generates the operator wallet
 ```
@@ -834,7 +836,7 @@ Pass `-Distro`, `-LinuxDir`, `-Mode` or `-At` to override the defaults.
 `/etc/wsl.conf`, then `wsl --shutdown`):
 
 ```bash
-./systemd/install.sh
+./systemd-install.sh
 ```
 
 It enables lingering so the timer survives closing your terminals, and uses

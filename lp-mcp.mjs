@@ -41,7 +41,7 @@ const dayKey = (t) =>
 const monthKey = (t) => dayKey(t).slice(0, 7);
 const round = (n, d = 2) => (n == null ? null : +Number(n).toFixed(d));
 
-/** Build a server with the four tools. Each transport gets its own instance. */
+/** Build a server with the tools: 21 read tools, plus record_strategy_proposal, approve_sale and run_tasks unless role is "read". Each transport gets its own instance. */
 /**
  * role: "write" (default — the local stdio server and the in-process agent, which gate writes by
  * channel) registers every tool; "read" leaves out the three that change something

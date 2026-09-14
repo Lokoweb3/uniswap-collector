@@ -1,7 +1,7 @@
 #!/bin/bash
-# Master task runner — LP + code improvement every 6h
+# Master task runner — LP + code improvement every 6 h, spawned by server.js (cron is not running here)
 set -e
-cd ~/uniswap-collector
+cd "$(dirname "$0")/.."
 echo ""
 echo "════════════════════════════════════"
 echo " Task Runner — $(date)"

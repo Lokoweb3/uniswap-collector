@@ -619,3 +619,9 @@ select.scope option{background:#0b1017}
 .vals .c b{font-family:var(--font-mono);color:var(--neon-gold,#f5c542);font-weight:600}
 .vals .c.zero{color:var(--faint,#4a5665)}
 .vals{flex-wrap:wrap;row-gap:4px}
+/* Long-term returns (TASK-52): two stats side by side; stacked on a phone. */
+.lt{display:inline-flex;gap:14px;flex-wrap:wrap;align-items:baseline}
+.lt .ltstat{cursor:help;border-bottom:1px dotted var(--rule)}
+.lt .ltchain{font-size:11px;color:var(--muted)}
+#ltsort{font:inherit;font-size:11.5px;color:var(--muted);background:transparent;border:1px solid var(--rule);border-radius:4px;padding:1px 4px;margin-left:8px}
+@media (max-width:480px){.lt{display:flex;flex-direction:column;gap:2px}}

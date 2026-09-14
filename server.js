@@ -1110,8 +1110,8 @@ async function build() {
     const entries = positions.map((p) => ({ walletAddress: cfg.ownerAddress, p }));
     for (const w of (watch.latest && watch.latest.wallets) || []) for (const p of w.positions || []) entries.push({ walletAddress: w.address, p });
     recordPositionValues(nowT, entries);
-    const lt = longterm.compute({ open: positions.map((p) => ({ p, walletAddress: cfg.ownerAddress })), collects: ltRows, rangeLog: rangeLog.positions, values: posValues, now: nowT });
-    for (const p of positions) p.longTerm = lt.get(`${String(cfg.ownerAddress).toLowerCase()}:${longterm.idKey(p.tokenId, p.version)}`) || null;
+    const lt = longterm.compute({ open: entries, collects: ltRows, rangeLog: rangeLog.positions, values: posValues, now: nowT });
+    for (const { walletAddress, p } of entries) p.longTerm = lt.get(`${String(walletAddress).toLowerCase()}:${longterm.idKey(p.tokenId, p.version)}`) || null;
   }
 
   const liquidityUsd = positions.reduce((s, p) => s + (p.valueUsd || 0), 0);

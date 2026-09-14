@@ -19,7 +19,7 @@ const PORT = Number(process.env.SMOKE_PORT || 8799);
 const ROOT = path.join(__dirname, "..");
 const CHROME = process.env.CHROME || "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe";
 const PAGES = [
-  { path: "/", marker: 'id="summary"' },
+  { path: "/", marker: 'id="summary"', markers: ["Fee APR", "Net return"] },
   { path: "/analytics", marker: 'id="perfsec"' },
   { path: "/wallet", marker: 'id="sec-arm"' },
   { path: "/wallet#vault", marker: 'id="sec-vault"' },
@@ -89,6 +89,7 @@ async function main() {
       const problems = [];
       if (status !== 0) problems.push(`chrome exited ${status}`);
       if (!dom.includes(p.marker)) problems.push(`marker ${p.marker} missing`);
+      for (const m of p.markers || []) if (!dom.includes(m)) problems.push(`marker ${m} missing`);
       for (const e of errors) problems.push(e.trim().slice(0, 200));
       if (problems.length) {
         failed++;

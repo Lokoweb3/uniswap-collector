@@ -1312,7 +1312,8 @@ function render(d){
     return;
   }
 
-  $('#list').innerHTML = d.positions.map(p => {
+  lastRenderD = d;
+  $('#list').innerHTML = sortLT(d.positions).map(p => {
     const v = orient(p);
     const near = p.inRange && (v.toUpper < NEAR || v.toLower < NEAR);
     const cls = 'pos' + (p.inRange ? (near ? ' near' : '') : ' out');
@@ -1410,6 +1411,7 @@ function render(d){
           p.pnlPct != null ? ' (' + (p.pnlPct >= 0 ? '+' : '−') + Math.abs(p.pnlPct).toFixed(1) + '%)' : ''}</b>${
           p.pnlApprox ? ' ≈' : ''}${
           p.pnlSince ? ' · since ' + new Date(p.pnlSince).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : ''}${pnlTip(p)}</span>` : ''}
+        ${longTermLine(p)}
         ${sparkline(p.spark)}
       </div>
       ${pxChart(p, v)}
@@ -1449,6 +1451,38 @@ async function load(fresh){
 let coTimer = null;
 
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+// ---- Long-term returns (TASK-52): fee APR and net return side by side, from /api/positions
+// longTerm (longterm.js). Last 30 days on the card, since-open in the tooltip; when the
+// position is a re-mint of an earlier one in the same pool the chained figures are shown.
+const ltPref = () => pref('positions:sort') || 'default';
+function sortLT(arr){
+  const k = ltPref();
+  if (k !== 'fee' && k !== 'net') return arr;
+  const val = p => { const lt = p.longTerm; if (!lt) return null; const src = lt.chained && lt.chain ? lt.chain : lt; const m = src.d30 || src.sinceOpen; return m ? (k === 'fee' ? m.feeAprPct : m.netPct) : null; };
+  return [...arr].sort((a, b) => { const x = val(a), y = val(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return y - x; });
+}
+const ltDate = t => t ? new Date(t).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '?';
+const ltPctText = (v, signed) => v == null ? '—' : (signed ? (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) : v.toFixed(0)) + '%';
+function ltBasisText(m){ return m.basis === 'twa' ? `time-weighted value ${usd(m.basisUsd)}` : m.basis === 'open' ? `value at open ${usd(m.basisUsd)}` : 'no basis (deposit unknown)'; }
+function longTermLine(p){
+  const lt = p.longTerm;
+  if (!lt || !lt.d30 || !lt.sinceOpen) return '';
+  const src = lt.chained && lt.chain ? lt.chain : lt;
+  const d30 = src.d30, all = src.sinceOpen;
+  const win = d30.days != null && all.days != null && d30.days < all.days ? `last ${d30.days.toFixed(0)} d` : `since open (${(d30.days || 0).toFixed(1)} d)`;
+  const approx = d30.approx ? ' ≈ deposit basis taken when the dashboard first saw the position' : '';
+  const chainNote = lt.chained ? `\nChained: ${lt.members} positions in this pool counted as one (re-minted within 48 h of a close); this position alone: fee APR ${ltPctText(lt.d30 && lt.d30.feeAprPct)}, net ${ltPctText(lt.d30 && lt.d30.netPct, true)}.` : '';
+  const feeTip = `Fee APR, ${win}: fees ${usd(d30.feesUsd)} on the ${ltBasisText(d30)}, annualised over the actual days${d30.unpricedCollects ? ` (${d30.unpricedCollects} unpriced collect${d30.unpricedCollects === 1 ? '' : 's'} not counted)` : ''}.\nSince open (${(all.days || 0).toFixed(1)} d): ${ltPctText(all.feeAprPct)}, fees ${usd(all.feesUsd)}.${approx}${chainNote}`;
+  const netTip = `Net return, ${win}: fees + price move + IL = ${d30.netUsd == null ? 'unknown (a leg is missing)' : (d30.netUsd >= 0 ? '+' : '−') + usd(Math.abs(d30.netUsd))} on the ${ltBasisText(d30)}.\nSince open: ${all.netUsd == null ? 'unknown' : (all.netUsd >= 0 ? '+' : '−') + usd(Math.abs(all.netUsd)) + ' (' + ltPctText(all.netPct, true) + ')'}.${approx}${chainNote}`;
+  const chainHint = lt.chained ? ` <span class="ltchain" title="${esc(`Re-minted ${lt.members - 1}× within 48 h of a close; fees and days run from the first open`)}">⛓ since ${ltDate(lt.chainSince)}</span>` : '';
+  return `<span class="rate lt"><span class="ltstat" title="${esc(feeTip)}">Fee APR <b>${ltPctText(d30.feeAprPct)}</b></span><span class="ltstat" title="${esc(netTip)}">Net return <b class="${d30.netPct != null && d30.netPct < 0 ? 'neg' : ''}">${ltPctText(d30.netPct, true)}</b></span>${chainHint}</span>`;
+}
+let lastRenderD = null;
+{
+  const sel = document.getElementById('ltsort');
+  if (sel) { sel.value = ltPref(); sel.addEventListener('change', e => { setPref('positions:sort', e.target.value); if (lastRenderD) render(lastRenderD); if (typeof lastWatchForPf !== 'undefined' && lastWatchForPf) renderWatch(lastWatchForPf); }); }
+}
 // "claimed $X · N collects · last <date>" for a position card (main, watched and memecoin cards).
 function claimedLine(p){
   const c = p.collected;
@@ -1611,7 +1645,7 @@ function renderWatch(d){
       ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
       : '';
     if (!w.positions.length) return `<div class="watchwallet">${head}${toks}<div class="enote">No open positions.</div></div>`;
-    const cards = w.positions.map(p => {
+    const cards = sortLT(w.positions).map(p => {
       const full = p.tickLower <= -887000 && p.tickUpper >= 887000;
       const v = orient(p);
       const near = !full && p.inRange && (v.toUpper < NEAR || v.toLower < NEAR);
@@ -1669,6 +1703,7 @@ function renderWatch(d){
           ${p.feesOk ? '' : '<span class="amts">fee read unavailable</span>'}
           ${poolLine(p)}
           ${typeof pnlLine === 'function' ? pnlLine(p) : ''}
+          ${longTermLine(p)}
         </div>
       </article>`;
     }).join('');

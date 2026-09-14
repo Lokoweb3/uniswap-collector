@@ -40,7 +40,8 @@ fs.writeFileSync(path.join(dir, "v4-collects.json"), JSON.stringify([{ tx: "0x1"
 
 // Stub the dashboard: every view empty.
 const http = require("http");
-const srv = http.createServer((req, res) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ ok: true, rows: [], positions: [{ symbol0: "LAPTOP", token0: { address: LAPTOP, decimals: 18 }, symbol1: "ETH", token1: { address: "0x00000000000000000000000000000000000000ee", decimals: 18 } }], wallets: [] })); });
+const base = { ok: true, rows: [], positions: [{ symbol0: "LAPTOP", token0: { address: LAPTOP, decimals: 18 }, symbol1: "ETH", token1: { address: "0x00000000000000000000000000000000000000ee", decimals: 18 } }], wallets: [] };
+const srv = http.createServer((req, res) => { res.setHeader("Content-Type", "application/json"); if (req.url.startsWith("/api/watch")) return res.end(JSON.stringify({ ...base, wallets: [{ label: "Trading", address: trading, positions: [], holdings: { ok: true, tokens: [{ symbol: "Bucket", address: "0x00000000000000000000000000000000000000B1", amount: 700388.5, price: 0.0045 }] } }] })); res.end(JSON.stringify(base)); });
 srv.listen(0, "127.0.0.1", async () => {
   const cfg = { ownerAddress: owner, contracts: { weth: "0x00000000000000000000000000000000000000ee" }, usdReference: { stable: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168" } };
   const strategy = require("../strategy").create({ cfg, dir, port: srv.address().port });
@@ -53,6 +54,7 @@ srv.listen(0, "127.0.0.1", async () => {
   assert.strictEqual(bucket.basisUsd, 134.49); assert.strictEqual(bucket.avgCostUsd, 0.0044);
   assert.strictEqual(bucket.remainingAmount, 30566.599875, "no disposals: everything remains");
   assert.strictEqual(bucket.disposedAmount, 0); assert.strictEqual(bucket.realizedUsd, null);
+  assert.strictEqual(bucket.stillHeld, 700388.5, "still held reads the watched wallet's holdings amount");
   const filtered = await strategy.tokenLots({ token: "laptop" });
   assert.strictEqual(filtered.lots.length, 2);
 

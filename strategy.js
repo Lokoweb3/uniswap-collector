@@ -379,7 +379,9 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       return best ? { p: best.r.p, basis: `collect-time record ${round(best.d / HOUR, 1)}h away` } : null;
     };
     const heldNow = new Map();
-    for (const w of (watch && watch.wallets) || []) for (const t of (w.holdings && w.holdings.tokens) || []) { const h = heldNow.get(t.symbol) || { balance: 0, price: null }; h.balance += t.balance || 0; if (t.price != null) h.price = t.price; heldNow.set(t.symbol, h); }
+    // Watched-wallet holdings carry `amount` (the portfolio rows carry `balance`): read either,
+    // or every watched wallet's tokens count as 0 and "Still held" contradicts "Remaining".
+    for (const w of (watch && watch.wallets) || []) for (const t of (w.holdings && w.holdings.tokens) || []) { const h = heldNow.get(t.symbol) || { balance: 0, price: null }; h.balance += Number(t.amount ?? t.balance) || 0; if (t.price != null) h.price = t.price; heldNow.set(t.symbol, h); }
     for (const r of (pf && pf.rows) || []) { const h = heldNow.get(r.symbol) || { balance: 0, price: null }; h.balance += r.balance || 0; if (r.price != null) h.price = r.price; heldNow.set(r.symbol, h); }
 
     const lots = [];

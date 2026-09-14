@@ -2677,24 +2677,55 @@ if (SERVICES) {
     services.push({ name: "scanner", cmd: "bash", cwd: scannerDir, port: 3847, needs: path.join(scannerDir, "server.js"),
       args: ["-c", 'set -a; [ -f "$HOME/.config/robinhood-lp.env" ] && . "$HOME/.config/robinhood-lp.env"; [ -f .env ] && . .env; set +a; mkdir -p .cache; exec node server.js'] });
   }
+  // Supervision: a child that keeps dying at start (a bad patch, a missing module) is
+  // retried every 60 s for the first three exits, then every 15 min, and one Telegram line
+  // goes out on the third fast exit (at most hourly) so a crash loop never runs unnoticed.
+  // Ten minutes of uptime clears the counter. A service found "already running" (an orphan
+  // from a previous server) is re-checked every 60 s and started when its port goes quiet.
+  const FAST_EXIT_MS = 30000, FAST_EXITS_BEFORE_BACKOFF = 3, BACKOFF_MS = 15 * 60000, STABLE_MS = 10 * 60000;
   async function startService(svc) {
+    svc.pending = false;
     if (svc.needs && !fs.existsSync(svc.needs)) return console.log(`${svc.name}: skipped (${path.basename(svc.needs)} missing)`);
-    if (svc.port && (await listening(svc.port))) return console.log(`${svc.name}: already running on :${svc.port}`);
+    if (svc.port && (await listening(svc.port))) {
+      if (!svc.adopted) console.log(`${svc.name}: already running on :${svc.port} (not started by this process; re-checked every 60 s)`);
+      svc.adopted = true;
+      return;
+    }
+    svc.adopted = false;
     const child = spawn(svc.cmd, svc.args, { cwd: svc.cwd || __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
     svc.child = child; svc.startedAt = Date.now();
-    const relay = (d) => { for (const line of d.toString().split("\n")) if (line.trim()) console.log(`${svc.name}: ${line}`); };
-    child.stdout.on("data", relay); child.stderr.on("data", relay);
+    const relay = (isErr) => (d) => { for (const line of d.toString().split("\n")) if (line.trim()) { console.log(`${svc.name}: ${line}`); if (isErr) svc.lastErr = line.trim(); } };
+    child.stdout.on("data", relay(false)); child.stderr.on("data", relay(true));
+    const stableTimer = setTimeout(() => { if (svc.child === child && svc.fastExits) { svc.fastExits = 0; console.log(`${svc.name}: stable for 10 min, crash counter cleared`); } }, STABLE_MS);
     child.on("exit", (code) => {
+      clearTimeout(stableTimer);
       svc.child = null;
       const upMs = Date.now() - svc.startedAt;
-      const delay = upMs < 30000 ? 60000 : 5000; // a service that dies at once is retried a minute later
-      console.log(`${svc.name}: exited ${code}; restarting in ${delay / 1000} s`);
+      svc.fastExits = upMs < FAST_EXIT_MS ? (svc.fastExits || 0) + 1 : 0;
+      const backoff = svc.fastExits >= FAST_EXITS_BEFORE_BACKOFF;
+      const delay = backoff ? BACKOFF_MS : upMs < FAST_EXIT_MS ? 60000 : 5000;
+      console.log(`${svc.name}: exited ${code} after ${Math.round(upMs / 1000)} s (fast exits: ${svc.fastExits}); restarting in ${delay / 1000} s`);
+      if (backoff && Date.now() - (svc.alertedAt || 0) >= 3600000) {
+        svc.alertedAt = Date.now();
+        alerts.send(`⚠️ ${svc.name} keeps exiting (code ${code}, ${svc.fastExits} fast exits): ${svc.lastErr || "no stderr"} — retrying every 15 min; see server.log`).catch(() => {});
+      }
+      svc.pending = true;
       setTimeout(() => startService(svc).catch(() => {}), delay);
     });
     child.on("error", (err) => console.error(`${svc.name}: ${err.message}`));
     console.log(`${svc.name}: started (pid ${child.pid})`);
   }
   for (const svc of services) startService(svc).catch((err) => console.error(`${svc.name}: ${err.message}`));
+  // An adopted (orphan) service that later exits would otherwise stay dead: watch its port.
+  setInterval(async () => {
+    for (const svc of services) {
+      if (svc.child || svc.pending || !svc.adopted || !svc.port) continue;
+      if (await listening(svc.port)) continue;
+      console.log(`${svc.name}: :${svc.port} stopped listening (orphan gone); starting`);
+      svc.adopted = false;
+      startService(svc).catch((err) => console.error(`${svc.name}: ${err.message}`));
+    }
+  }, 60000).unref();
   // Tailscale: a one-shot script that brings the daemon up and (re)publishes the funnels.
   if (fs.existsSync(path.join(__dirname, "run-tailscale.sh"))) {
     const ts = spawn("bash", [path.join(__dirname, "run-tailscale.sh")], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });

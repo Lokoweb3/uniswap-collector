@@ -38,9 +38,11 @@ function loadPage(url, width = 1280, { screenshot = null } = {}) {
   const errors = consoleLines.filter((l) => /Uncaught|TypeError|ReferenceError|SyntaxError|:ERROR:|"error/i.test(l) || /CONSOLE\(\d+\)\] "?(Failed to load|Refused)/.test(l));
   let screenshotOk = null;
   if (screenshot) {
-    // Chrome on Windows writes the file from the Windows side: hand it a Windows path when the target is under /mnt/<drive>/.
-    const winPath = screenshot.replace(/^\/mnt\/([a-z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, "\\");
-    const target = /^\/mnt\/[a-z]\//.test(screenshot) ? winPath : screenshot;
+    // Chrome runs on the Windows side, so it needs a Windows path: <drive>:\ for /mnt/<drive>/…,
+    // else the distro's UNC share (\\wsl.localhost\<distro>\…). Both were verified to land the file.
+    const target = /^\/mnt\/[a-z]\//.test(screenshot)
+      ? screenshot.replace(/^\/mnt\/([a-z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, "\\")
+      : `\\\\wsl.localhost\\${process.env.WSL_DISTRO_NAME || "Ubuntu"}${screenshot.replace(/\//g, "\\")}`;
     const s = spawnSync(CHROME, chromeArgs(width, [`--screenshot=${target}`, "--hide-scrollbars"], url), { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 90000 });
     screenshotOk = s.status === 0 && fs.existsSync(screenshot);
   }

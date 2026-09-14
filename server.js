@@ -1128,6 +1128,7 @@ function readBody(req, limit = 4096) {
 
 const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
 const armer = require("./arm");
+const csrf = require("./csrf");
 const treasuryLedger = require("./treasury");
 // The agent (agent.js): one brain for the web panel, Telegram and loopback scripts.
 const agent = require("./agent").create({ port: PORT, dir: __dirname });
@@ -1202,6 +1203,22 @@ const server = http.createServer((req, res) => {
 });
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
+
+  // Cross-site guard for every state-changing /api route (csrf.js): a browser
+  // page from another site cannot lock, collect, close, approve or change rules
+  // through loopback trust. Scripts carry no Origin and pass; the owner's own
+  // page and the gate / tailnet name are same-origin.
+  if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS" && url.pathname.startsWith("/api/")) {
+    const h = req.headers;
+    if (csrf.isCrossSite({ origin: h.origin, host: h.host, secFetchSite: h["sec-fetch-site"], viaGate: h["x-lp-gate"] === "1", publicHost })) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: false, error: "cross-site request" }));
+    }
+    if (csrf.needsJson({ origin: h.origin, contentType: h["content-type"], contentLength: h["content-length"], transferEncoding: h["transfer-encoding"] })) {
+      res.writeHead(415, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: false, error: "send application/json" }));
+    }
+  }
 
   // Arm the unlock window from the page: verify the passphrase against the
   // keystore (same check as unlock.sh), then cache it in RAM with a TTL.

@@ -1435,17 +1435,31 @@ async function handleRequest(req, res) {
   }
   // Nightly backup on demand (loopback-only; the scheduled run is a timer in this process).
   
-  // === tasks: manual trigger for run-all.sh ===
+  // === tasks: manual trigger for run-all.sh or one task script ===
+  // Only the four known names, spawned from an argument array (never a shell: the route is reachable
+  // through the gate, so the task value is untrusted); output goes to run-all.log like the scheduler.
   if (url.pathname === "/api/tasks/run" && req.method === "POST") {
+    res.setHeader("Content-Type", "application/json");
+    const plan = require("./tasks-route").planTaskRun(url.searchParams.get("task"));
+    if (plan.error) { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: plan.error })); }
+    if (HOST !== "127.0.0.1" || READONLY || !server.runTasks) {
+      res.writeHead(403);
+      return res.end(JSON.stringify({ ok: false, error: "tasks run from the main dashboard process on this machine" }));
+    }
+    if (plan.all && server.tasksBusy && server.tasksBusy()) {
+      res.writeHead(409);
+      return res.end(JSON.stringify({ ok: false, error: "run-all is already in progress" }));
+    }
     const { spawn } = require("child_process");
-    const task = url.searchParams.get("task");
-    const script = task ? `node tasks/${task}.js` : "bash tasks/run-all.sh";
-    const child = spawn("bash", ["-c", script], {
-      cwd: __dirname, detached: true, stdio: ["ignore","pipe","pipe"],
-    });
+    let logFd = null;
+    try { fs.mkdirSync(path.join(__dirname, "tasks", "output"), { recursive: true }); logFd = fs.openSync(path.join(__dirname, "tasks", "output", "run-all.log"), "a"); } catch (err) { console.error(`tasks: cannot open run-all.log: ${err.message}`); }
+    const child = spawn(plan.cmd, plan.args, { cwd: __dirname, detached: true, stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"], env: process.env });
+    child.on("close", () => { if (logFd != null) { try { fs.closeSync(logFd); } catch {} } });
+    child.on("error", (err) => { if (logFd != null) { try { fs.closeSync(logFd); } catch {} } console.error(`tasks: ${plan.args[0]} failed to start: ${err.message}`); });
     const started = new Date().toISOString();
     child.unref();
-    return res.end(JSON.stringify({ ok: true, started, script, pid: child.pid }));
+    res.writeHead(200);
+    return res.end(JSON.stringify({ ok: true, started, script: [plan.cmd === process.execPath ? "node" : plan.cmd, ...plan.args].join(" "), pid: child.pid }));
   }
   // === end tasks ===
 
@@ -2611,6 +2625,7 @@ if (LOOPS) {
   setTimeout(runTasks, 10 * 60 * 1000);
   setInterval(runTasks, 6 * 60 * 60 * 1000);
   server.runTasks = runTasks;
+  server.tasksBusy = () => tasksBusy;
 
   // Recorded runs from before the fold count for the watchdog.
   { const st = backupState(); if (st.lastBackupAt) { timers.backup.lastAt = Date.parse(st.lastBackupAt) || 0; timers.backup.lastResult = { at: timers.backup.lastAt, code: st.lastBackupCode ?? null }; } }

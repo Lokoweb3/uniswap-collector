@@ -4,7 +4,7 @@ const assert = require("assert");
 const fs = require("fs"), path = require("path");
 const { TASKS, SCRIPTS, planTaskRun } = require("../tasks-route");
 
-assert.deepEqual(TASKS, ["improvement-loop", "code-scan", "code-review", "pool-scan"]);
+assert.deepEqual(TASKS, ["improvement-loop", "code-scan", "code-review", "pool-scan", "dashboard-review"]);
 
 // Shell metacharacters, path traversal and unknown names never produce a command.
 for (const bad of ["pool-scan;id", "../server", "pool-scan.js", "$(id)", "pool-scan && rm x", "", null, 42, "IMPROVEMENT-LOOP", "toString", "__proto__"]) {

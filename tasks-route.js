@@ -7,6 +7,7 @@ const SCRIPTS = {
   "code-scan": "tasks/code-scan.js",
   "code-review": "tasks/code-review.js",
   "pool-scan": "pool-scan.js",
+  "dashboard-review": "tasks/dashboard-review.js",
 };
 const TASKS = Object.keys(SCRIPTS);
 

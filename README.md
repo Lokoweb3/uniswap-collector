@@ -843,6 +843,26 @@ It enables lingering so the timer survives closing your terminals, and uses
 `Persistent=true` to catch up a run missed while WSL was down. Fees keep
 accruing regardless of when you sweep, so a late run costs nothing.
 
+### The 6-hourly task loop (`tasks/run-all.sh`)
+
+server.js spawns `tasks/run-all.sh` ten minutes after it starts and every six hours after that
+(cron is not running here; the cadence survives restarts). It runs four scripts, each non-fatal
+for the next, and appends what they found to `brain/proposals.md`:
+
+- `tasks/improvement-loop.js` — LP analysis from attribution, the portfolio and the pool scout.
+- `tasks/code-scan.js` — TODO markers, untested modules, hardcoded values.
+- `tasks/code-review.js` — the review model reads the files changed in the last six hours plus one
+  rotating key file (Ollama Cloud, `OLLAMA_API_KEY`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`).
+- `tasks/dashboard-review.js` — the dashboard reviewed as a product: every page at 1280 and
+  375 px is captured from the live server through the smoke test's Chrome, reduced to a text
+  skeleton, and sent to the model with the data the page is built from; at most six element-tied
+  findings per page-width, fingerprinted across runs so only new ones count. Screenshots land in
+  `tasks/output/screens/`. It is read-only by construction: an allow-list of GET routes is checked
+  before any request and nothing is clicked.
+
+Outputs are in `tasks/output/` (git-ignored). `POST /api/tasks/run?task=<name>` and the MCP
+`run_tasks` / `get_task_output` tools start one script or all of them and read the results.
+
 ## Output
 
 Everything goes to `collector.log` with transaction hashes. `state.json` holds

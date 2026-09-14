@@ -621,8 +621,8 @@ if (canWrite) server.registerTool(
 
 if (canWrite) server.registerTool("run_tasks", {
   title: "Run the LP / code tasks",
-  description: "Run LP improvement loop and code review. Pass task name to run one: improvement-loop, code-scan, code-review, pool-scan. Omit to run all.",
-  inputSchema: { task: z.enum(["improvement-loop","code-scan","code-review","pool-scan"]).optional().describe("One task to run; omit to run all") },
+  description: "Run the LP improvement loop, the code review and the dashboard review. Pass task name to run one: improvement-loop, code-scan, code-review, pool-scan, dashboard-review. Omit to run all.",
+  inputSchema: { task: z.enum(["improvement-loop","code-scan","code-review","pool-scan","dashboard-review"]).optional().describe("One task to run; omit to run all") },
 }, async ({ task } = {}) => {
   const url = task ? `${BASE}/api/tasks/run?task=${encodeURIComponent(task)}` : `${BASE}/api/tasks/run`;
   const r = await fetch(url, { method: "POST" });
@@ -649,8 +649,8 @@ server.registerTool("get_proposals", {
 
 server.registerTool("get_task_output", {
   title: "Latest task output",
-  description: "Get latest JSON output from a task: improvement-loop, code-scan, code-review, pool-scan.",
-  inputSchema: { task: z.enum(["improvement-loop","code-scan","code-review","pool-scan"]).describe("Which task's output to read") },
+  description: "Get latest JSON output from a task: improvement-loop, code-scan, code-review, pool-scan, dashboard-review (page scores and the findings new since the previous run).",
+  inputSchema: { task: z.enum(["improvement-loop","code-scan","code-review","pool-scan","dashboard-review"]).describe("Which task's output to read") },
 }, async ({ task }) => {
   const outPath = new URL(`tasks/output/${task}.json`, import.meta.url).pathname;
   try {
@@ -659,6 +659,9 @@ server.registerTool("get_task_output", {
     if (d.issues?.length) { lines.push(`\nIssues (${d.issues.length}):`); d.issues.slice(0,10).forEach(i=>lines.push(`  [${i.severity}] ${i.msg}`)); }
     if (d.suggestions?.length) { lines.push(`\nSuggestions:`); d.suggestions.slice(0,5).forEach((s,i)=>lines.push(`  ${i+1}. ${s}`)); }
     if (d.scout?.length) { lines.push(`\nPool moves:`); d.scout.forEach(m=>lines.push(`  [${m.urgency}] ${m.pair} → ${m.bestSibling} (${m.mult}x)`)); }
+    if (d.pages?.length) { lines.push(`\nPage scores:`); d.pages.forEach(p=>lines.push(`  ${p.page}@${p.width}: ${p.score??"?"}/10 (${p.findings?.length||0} findings)`)); }
+    if (d.allFindings?.length) { const fresh=d.allFindings.filter(f=>f.isNew); lines.push(`\nFindings: ${d.allFindings.length} (${fresh.length} new)`); (fresh.length?fresh:d.allFindings).slice(0,10).forEach(f=>lines.push(`  [${f.severity}] ${f.page}@${f.width} · ${f.element}: ${f.msg}${f.fix?` → ${f.fix}`:""}`)); }
+    if (d.failedPages?.length) lines.push(`\nSkipped page-widths: ${d.failedPages.map(f=>`${f.page}@${f.width} (${f.reason})`).join(", ")}`);
     return { content: [{ type:"text", text: lines.join("\n") }] };
   } catch(e) {
     return { content: [{ type:"text", text: `No output for ${task} yet. Run it first.` }] };

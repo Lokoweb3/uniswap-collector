@@ -77,3 +77,4 @@ brain/
 launch-scanner-state.json
 launch-scanner-status.json
 tasks/output/
+watchdog-state.json

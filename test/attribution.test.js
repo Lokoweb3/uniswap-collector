@@ -105,11 +105,20 @@ assert.strictEqual(wethAddrHolding.wallets[0].rows[0].price, null, "WETH-address
 const noPrices = compute({ ...input, priceHours: { [String(d0)]: { eth: 2000, "0xaaa": 1.0 } } }, { days: 3, now });
 assert.strictEqual(noPrices.wallets[0].rows[0].price, null);
 
-// Benchmarks: portfolio +10% over a window where ETH went +5% and staking +2% on principal
+// Benchmarks: portfolio +10% over a window where ETH went +5% and staking earned 0.06 on a 3.0 principal (+2%).
+// A 5-token stake deposit mid-window moves the balance 3.0 -> 8.06 but is not a return: only the rebase
+// rewards count, so stakingPct is 2%, not 168%.
 const bookSeries = [{ t: now - 10 * DAY, v: 1000 }, { t: now - 5 * DAY, v: 1050 }, { t: now, v: 1100 }];
 const ethSeries = [{ t: now - 10 * DAY, p: 2000 }, { t: now, p: 2100 }];
-const stakingSamples = [{ t: now - 10 * DAY, bal: 3.0 }, { t: now, bal: 3.06 }];
-const b = benchmarks({ bookSeries, ethSeries, stakingSamples, principal: 3.0, now, windows: [7, 30] });
+const stakingSamples = [{ t: now - 10 * DAY, bal: 3.0 }, { t: now - 4 * DAY, bal: 8.03 }, { t: now, bal: 8.06 }];
+const stakingRewards = [{ t: now - 6 * DAY, amount: 0.03 }, { t: now - 2 * DAY, amount: 0.03 }];
+const b = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal: 3.0, now, windows: [7, 30] });
+assert.strictEqual(+b[0].stakingPct.toFixed(6), 1, "7d window counts only the reward inside it (0.03 / 3.0)");
+const noPrincipal = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal: null, now, windows: [30] });
+assert.strictEqual(+noPrincipal[0].stakingPct.toFixed(6), 2, "no principal: base is the balance at the window start");
+const noRewardsYet = benchmarks({ bookSeries, ethSeries, stakingSamples: [{ t: now - 2 * DAY, bal: 8.0 }, { t: now, bal: 8.06 }], stakingRewards: [{ t: now - DAY, amount: 0.06 }], principal: 3.0, now, windows: [30] });
+assert.strictEqual(noRewardsYet[0].stakingPct, null, "staking history that starts inside the window gives no benchmark");
+assert.match(noRewardsYet[0].note, /staking history starts/);
 assert.strictEqual(b[0].windowDays, 7);
 assert.ok(Math.abs(b[0].portfolioPct - (1100 / 1050 - 1) * 100) < 1e-9, "7d window starts at the first point inside it");
 assert.strictEqual(+b[1].portfolioPct.toFixed(6), 10);

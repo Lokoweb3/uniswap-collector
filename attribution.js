@@ -221,7 +221,7 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
  * `principal`. When the history is shorter than the window, the earliest
  * sample is used and `actualDays` says so.
  */
-function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], principal = null, now = Date.now(), windows = [7, 30, 90] }) {
+function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stakingRewards = null, principal = null, now = Date.now(), windows = [7, 30, 90] }) {
   const out = [];
   for (const w of windows) {
     const from = now - w * DAY;
@@ -236,17 +236,34 @@ function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], prin
     const e0 = ethSeries.find((p) => p.t >= startPt.t - HOUR) || ethSeries[0];
     const e1 = ethSeries.length ? ethSeries[ethSeries.length - 1] : null;
     const ethPct = e0 && e1 && e0.p > 0 && e1.t > e0.t ? (e1.p / e0.p - 1) * 100 : null;
-    let stakingPct = null;
-    if (stakingSamples.length >= 2) {
+    // Staking: rebase rewards only, never the balance change (a stake deposit is not a
+    // return). `stakingRewards` is the deposit-netted list from staking.rewards(); the balance
+    // samples only supply the base when no principal is known.
+    let stakingPct = null, stakingNote = null;
+    if (Array.isArray(stakingRewards)) {
+      const s0 = stakingSamples.find((s) => s.t >= startPt.t - HOUR) || stakingSamples[0];
+      const base = principal != null && principal > 0 ? principal : s0 && s0.bal > 0 ? s0.bal : null;
+      const covered = stakingSamples.length ? stakingSamples[0].t <= startPt.t + DAY : stakingRewards.length > 0;
+      if (base != null && covered) {
+        const earned = stakingRewards.filter((r) => r.t >= startPt.t - HOUR && r.t <= endPt.t + HOUR).reduce((a, r) => a + (Number(r.amount) || 0), 0);
+        stakingPct = (earned / base) * 100;
+      } else if (base != null && stakingSamples.length) {
+        stakingNote = `staking history starts ${new Date(stakingSamples[0].t).toISOString().slice(0, 10)}`;
+      }
+    } else if (stakingSamples.length >= 2) {
+      // No reward list supplied: balance delta over principal, which counts deposits as return.
       const s0 = stakingSamples.find((s) => s.t >= startPt.t - HOUR) || stakingSamples[0];
       const s1 = stakingSamples[stakingSamples.length - 1];
       const base = principal != null && principal > 0 ? principal : s0.bal;
       if (base > 0 && s1.t > s0.t) stakingPct = ((s1.bal - s0.bal) / base) * 100;
     }
+    const notes = [];
+    if (actualDays < w - 0.5) notes.push(`only ${actualDays.toFixed(1)} days of history`);
+    if (stakingNote) notes.push(stakingNote);
     out.push({
       windowDays: w, actualDays: +actualDays.toFixed(2), since: startPt.t,
       portfolioPct, ethPct, usdgPct: 0, stakingPct,
-      note: actualDays < w - 0.5 ? `only ${actualDays.toFixed(1)} days of history` : null,
+      note: notes.length ? notes.join("; ") : null,
     });
   }
   return out;
@@ -355,11 +372,13 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
 
     // Staking rewards per day (main), from the staking view.
     const stakingDaily = {};
-    let stakingSamples = [], principal = null;
+    let stakingSamples = [], stakingRewards = null, principal = null;
     if (stk && stk.tokens && stk.tokens[0]) {
       for (const d of stk.tokens[0].daily || []) stakingDaily[d.day] = (stakingDaily[d.day] || 0) + (Number(d.usd) || 0);
       stakingSamples = (stk.tokens[0].series || []).map((s) => ({ t: s.t, bal: s.bal }));
       principal = stk.tokens[0].principal;
+      // Deposit-netted rebase rewards per local day (staking.view() `daily`), placed at that day's noon.
+      stakingRewards = (stk.tokens[0].daily || []).map((d) => ({ t: new Date(`${d.day}T12:00:00`).getTime(), amount: Number(d.amount) || 0 })).filter((r) => Number.isFinite(r.t));
     }
 
     // Vault splits per wallet, gas from the operator's state file.
@@ -417,8 +436,8 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
 
     const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, priceHours, stakingDaily, vaultSplits, gasSpends, positions, flows };
     const result = compute(input, { days, now });
-    result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, principal, now });
-    result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, principal, now });
+    result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal, now });
+    result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, stakingRewards, principal, now });
     result.history = { bookSince: bookSeries.length ? bookSeries[0].t : null, mainSince: valueSeries[MAIN].length ? valueSeries[MAIN][0].t : null, priceSince: ethSeries.length ? ethSeries[0].t : null };
     return result;
   }

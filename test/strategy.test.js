@@ -124,3 +124,17 @@ srv.listen(0, "127.0.0.1", async () => {
 
 console.log("strategy: token lots parsing, pricing and FIFO disposal assertions passed");
 });
+
+// ---- realised fee APR floor (TASK-63): nothing is annualised under 72 h ----
+{
+  const { realizedFeeApr, MIN_APR_HOURS } = require("../strategy");
+  assert.equal(MIN_APR_HOURS, 72);
+  const young = realizedFeeApr({ collectedUsd: 3, depositedUsd: 500, hoursOpen: 4 });
+  assert.equal(young.realizedAprPct, null, "a 4-hour position has no annualised APR");
+  assert.ok(Math.abs(young.collectedPctOfDeposit - 0.6) < 1e-9, "but its collected % of deposit is reported");
+  const old = realizedFeeApr({ collectedUsd: 30, depositedUsd: 1000, hoursOpen: 8760 });
+  assert.ok(Math.abs(old.realizedAprPct - 3) < 1e-9, "a year-old position annualises to itself");
+  assert.equal(realizedFeeApr({ collectedUsd: 30, depositedUsd: 0, hoursOpen: 100 }).realizedAprPct, null, "no deposit basis, no APR");
+  assert.equal(realizedFeeApr({ collectedUsd: 30, depositedUsd: 1000, hoursOpen: 72 }).realizedAprPct == null, false, "exactly 72 h qualifies");
+}
+console.log("strategy: realised fee APR floor assertions passed");

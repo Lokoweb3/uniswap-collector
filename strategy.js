@@ -247,7 +247,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
         }
         const end = open ? now : closedAt;
         const hoursOpen = openedAt && end ? (end - openedAt) / HOUR : null;
-        const realizedAprPct = depositedUsd > 0 && hoursOpen > 0 ? (collectedUsd / depositedUsd) * (8760 / hoursOpen) * 100 : null;
+        const { realizedAprPct, collectedPctOfDeposit } = realizedFeeApr({ collectedUsd, depositedUsd, hoursOpen });
         const rec = {
           wallet: w.label, walletAddress: w.address, tokenId: nftId(id), version: isV4(id) ? 4 : 3,
           pair: (open && open.pair) || (meta && meta.pair) || (rows[0] && rows[0].pair) || null,
@@ -263,6 +263,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
             last: rows.length ? new Date(Math.max(...rows.map((r) => r.t || 0))).toISOString() : null,
             perDayUsd: hoursOpen > 0 ? round(collectedUsd / (hoursOpen / 24)) : null },
           realizedFeeAprPct: round(realizedAprPct, 1),
+          collectedPctOfDeposit: round(collectedPctOfDeposit, 2),
           open: open ? { valueUsd: round(open.valueUsd), uncollectedUsd: round(open.feesUsd), accrualUsdPerDay: round(open.dailyUsd), currentAprPct: round(open.aprPct, 1),
             pnlVsHoldUsd: round(open.pnlUsd), pnlVsHoldPct: round(open.pnlPct, 1), pnlApprox: !!open.pnlApprox, pnlSource: open.pnlSource || null, pnlLegs: open.pnlLegs || null,
             pool: open.pool ? { name: open.pool.name, tvl: round(open.pool.tvl), vol24h: round(open.pool.vol24h), fees24h: round(open.pool.fees24h), aprPct: round(open.pool.aprPct, 1) } : null } : null,
@@ -281,7 +282,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
       byWallet: Object.values(out.reduce((m, p) => { const k = p.wallet; m[k] = m[k] || { wallet: k, positions: 0, collectedUsd: 0 }; m[k].positions++; m[k].collectedUsd += p.collects.usd || 0; return m; }, {})).map((x) => ({ ...x, collectedUsd: round(x.collectedUsd) })),
     };
     return { ok: true, asOf: new Date(now).toISOString(), summary, positions: out,
-      notes: ["collects.usd is valued at collect time when a price record exists (see unpricedRows).", "pnlApprox: the deposit basis was taken when the dashboard first saw the position, not at the mint; treat that PnL as indicative.", "realizedFeeAprPct = collected fees / deposited, annualised over hoursOpen.", "Closed v4 positions have no deposit ledger yet; their fees and collects are exact, PnL needs the deposit."] };
+      notes: ["collects.usd is valued at collect time when a price record exists (see unpricedRows).", "pnlApprox: the deposit basis was taken when the dashboard first saw the position, not at the mint; treat that PnL as indicative.", "realizedFeeAprPct = collected fees / deposited, annualised over hoursOpen; null under 72 h open (a 4-hour position would annualise to tens of thousands of percent) — collectedPctOfDeposit is the un-annualised figure for young positions.", "Closed v4 positions have no deposit ledger yet; their fees and collects are exact, PnL needs the deposit."] };
   }
 
   // ---- prices ----------------------------------------------------------------
@@ -654,4 +655,15 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
   return { positionHistory, priceHistory, scoutHistory, tokenLots, scanDisposals, proceedsFromReceipt };
 }
 
-module.exports = { create, proceedsFromReceipt };
+// Realised fee APR: collected / deposited, annualised over the hours open — but only once the
+// position has been open MIN_APR_HOURS; annualising a few hours turns $3 of fees on $500 into
+// five-figure percentages that then get averaged into the strategy track record.
+const MIN_APR_HOURS = 72;
+function realizedFeeApr({ collectedUsd, depositedUsd, hoursOpen }) {
+  const dep = Number(depositedUsd), h = Number(hoursOpen), col = Number(collectedUsd) || 0;
+  const collectedPctOfDeposit = dep > 0 ? (col / dep) * 100 : null;
+  const realizedAprPct = dep > 0 && h >= MIN_APR_HOURS ? (col / dep) * (8760 / h) * 100 : null;
+  return { realizedAprPct, collectedPctOfDeposit };
+}
+
+module.exports = { create, proceedsFromReceipt, realizedFeeApr, MIN_APR_HOURS };

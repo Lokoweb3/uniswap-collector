@@ -2,7 +2,7 @@
 require("dotenv").config();
 const fs   = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
 const ROOT    = path.join(__dirname, "..");
 const OUT_DIR = path.join(__dirname, "output");
@@ -33,13 +33,21 @@ function appendWithRotation(filePath, content, maxBytes = 500_000) {
 }
 
 // A failing git command must not look like "no files changed": say what failed before returning what little it printed.
-function exec(cmd,cwd=ROOT){
-  try{return execSync(cmd,{cwd,encoding:"utf8",stdio:["pipe","pipe","pipe"]}).trim()}
+
+// git through execFileSync with an argument array: file names from the working tree never pass through a shell.
+// `okStatus` lists exit codes that still carry a useful stdout (git diff --no-index exits 1 whenever the files differ).
+function git(args,{okStatus=[0],maxLines=null}={}){
+  let out="";
+  try{out=execFileSync("git",args,{cwd:ROOT,encoding:"utf8",stdio:["pipe","pipe","pipe"]})}
   catch(e){
-    const err=(e.stderr||e.message||"").toString().trim().split("\n")[0];
-    console.warn(`[code-review] command failed: ${cmd.slice(0,80)}${cmd.length>80?"…":""} — ${err||"no output"}`);
-    return e.stdout?.trim()||"";
+    if(!okStatus.includes(e.status)){
+      const err=(e.stderr||e.message||"").toString().trim().split("\n")[0];
+      console.warn(`[code-review] git ${args.slice(0,2).join(" ")} failed — ${err||"no output"}`);
+    }
+    out=e.stdout?String(e.stdout):"";
   }
+  out=out.trim();
+  return maxLines?out.split("\n").slice(0,maxLines).join("\n"):out;
 }
 
 // 300 lines was too few: alerts.js, improvement-loop.js, attribution.js and the guardian are all longer, so their tails were never reviewed.
@@ -55,8 +63,8 @@ function readFileSafe(filePath,maxLines=800){
 // Recent commits plus whatever is edited or added in the working tree but not committed yet,
 // so LP code changed on disk is reviewed before it ever runs — not only after it lands in git.
 function getChangedFiles(hours=6){
-  const committed=exec(`git log --since="${hours} hours ago" --name-only --pretty=format: --diff-filter=AM -- "*.js" "*.mjs"`);
-  const uncommitted=exec(`git status --porcelain --untracked-files=all -- "*.js" "*.mjs"`)
+  const committed=git(["log",`--since=${hours} hours ago`,"--name-only","--pretty=format:","--diff-filter=AM","--","*.js","*.mjs"]);
+  const uncommitted=git(["status","--porcelain","--untracked-files=all","--","*.js","*.mjs"])
     .split("\n").filter(l=>l.length>3&&!l.startsWith(" D")&&!l.startsWith("D ")).map(l=>l.slice(3).trim().split(" -> ").pop());
   const raw=[...uncommitted,...committed.split("\n")];
   return [...new Set(raw.filter(f=>(f.endsWith(".js")||f.endsWith(".mjs"))&&!f.includes("node_modules")&&!f.includes("tasks/output")))].slice(0,6);
@@ -139,10 +147,10 @@ async function reviewDiff(changedFiles){
   for(const f of changedFiles.slice(0,3)){
     // The same 6-hour window getChangedFiles() uses, not just the last commit.
     const since=new Date(Date.now()-6*3600*1000).toISOString();
-    let d=exec(`git log --since="${since}" -p --follow -- "${f}" 2>/dev/null | head -80`);
+    let d=git(["log",`--since=${since}`,"-p","--follow","--",f],{maxLines:80});
     // Nothing committed in the window: the change is still in the working tree (edited, or a brand-new untracked file).
-    if(!d)d=exec(`git diff HEAD -- "${f}" 2>/dev/null | head -80`);
-    if(!d&&fs.existsSync(path.join(ROOT,f)))d=exec(`git diff --no-index -- /dev/null "${f}" 2>/dev/null | head -80`);
+    if(!d)d=git(["diff","HEAD","--",f],{maxLines:80});
+    if(!d&&fs.existsSync(path.join(ROOT,f)))d=git(["diff","--no-index","--","/dev/null",f],{okStatus:[0,1],maxLines:80});
     if(d)diffs.push(`--- ${f} ---\n${d.split("\n").slice(0,60).join("\n")}`);
   }
   if(!diffs.length)return null;

@@ -21,15 +21,17 @@ const PAGES = [
 // Console lines that are noise, not errors.
 const IGNORE = [/Password field is not contained in a form/i, /DevTools listening/i, /Fontconfig/i];
 
-const chromeArgs = (width, extra, url) => ["--headless=new", "--disable-gpu", "--enable-logging=stderr", "--v=0", "--virtual-time-budget=20000", `--window-size=${width},${width < 600 ? 812 : 900}`, ...extra, url];
+const chromeArgs = (width, extra, url, budgetMs = 20000) => ["--headless=new", "--disable-gpu", "--enable-logging=stderr", "--v=0", `--virtual-time-budget=${budgetMs}`, `--window-size=${width},${width < 600 ? 812 : 900}`, ...extra, url];
 
 /**
  * Load one page at a width: the rendered DOM, the console lines and the ones that count as
  * errors. With `screenshot: "<path>.png"` a second Chrome run writes the picture (Chrome does
  * not combine --dump-dom and --screenshot in one run); `screenshotOk` says whether it landed.
+ * `budgetMs` is Chrome's virtual-time budget (default 20 s): raise it for a page whose late
+ * sections (the watched wallets on /) load after the first fetches.
  */
-function loadPage(url, width = 1280, { screenshot = null } = {}) {
-  const r = spawnSync(CHROME, chromeArgs(width, ["--dump-dom"], url), { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 90000 });
+function loadPage(url, width = 1280, { screenshot = null, budgetMs = 20000 } = {}) {
+  const r = spawnSync(CHROME, chromeArgs(width, ["--dump-dom"], url, budgetMs), { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 90000 + budgetMs });
   const dom = r.stdout || "";
   const consoleLines = (r.stderr || "")
     .split("\n")
@@ -43,7 +45,7 @@ function loadPage(url, width = 1280, { screenshot = null } = {}) {
     const target = /^\/mnt\/[a-z]\//.test(screenshot)
       ? screenshot.replace(/^\/mnt\/([a-z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, "\\")
       : `\\\\wsl.localhost\\${process.env.WSL_DISTRO_NAME || "Ubuntu"}${screenshot.replace(/\//g, "\\")}`;
-    const s = spawnSync(CHROME, chromeArgs(width, [`--screenshot=${target}`, "--hide-scrollbars"], url), { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 90000 });
+    const s = spawnSync(CHROME, chromeArgs(width, [`--screenshot=${target}`, "--hide-scrollbars"], url, budgetMs), { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 90000 + budgetMs });
     screenshotOk = s.status === 0 && fs.existsSync(screenshot);
   }
   return { dom, errors, consoleLines, status: r.status, screenshotOk };

@@ -31,6 +31,17 @@ const WIDTHS = [1280, 375];
 const TIME_CAP_MS = 20 * 60 * 1000;
 const MAX_SKELETON = 6 * 1024;
 const MAX_FINDINGS = 6;
+// A page whose important section loads late: the first capture is re-done with a longer
+// virtual-time budget when the section is still hidden (the watched wallets on /).
+const READY = { "/": { test: (dom) => /<section\b[^>]*id="watchsec"(?![^>]*\bhidden\b)[^>]*>/i.test(dom), budgetMs: 45000, name: "watched-wallet section" } };
+// What the model must not report: true by design, or an artefact of the headless capture.
+const KNOWN_BY_DESIGN = [
+  "This is a headless capture with no wallet extension connected, so every wallet-signed action (arm, approve, sell, mint, revoke) is disabled by design; do not report disabled buttons, missing wallet state, or 'connect wallet' dead ends.",
+  "The Positions section on / lists the Main (collector) wallet only; the other wallets have their own Watched wallets section below it.",
+  "Every wide table sits inside a horizontal-scroll wrapper; do not report table overflow at 375 px.",
+  "In the Operator approvals table the column after Role is an unlabeled action column; Revoke is an action, not the role.",
+  "FLAGGED lines are markers this reducer extracted from rows that carry them on the real page; they are not free-floating alerts.",
+];
 
 // The only routes this script may read. A path outside the list throws before any request.
 const ALLOW = new Set(["/api/daily", "/api/risk", "/api/positions", "/api/attribution", "/api/sales/pending", "/api/watch"]);
@@ -54,6 +65,9 @@ function reduceDom(html, { max = MAX_SKELETON } = {}) {
   h = h.replace(/<!--[\s\S]*?-->/g, "");
   for (const tag of ["script", "style", "svg", "noscript", "template"]) h = h.replace(new RegExp(`<${tag}\\b[\\s\\S]*?<\\/${tag}>`, "gi"), " ");
   h = h.replace(/<input\b[^>]*type=["']?password["']?[^>]*>/gi, " ");
+  // Hidden sections are not on the operator's screen (the wallet page keeps every tab in the
+  // DOM and shows one); the dump reflects the attribute after the page's scripts ran.
+  h = h.replace(/<section\b[^>]*\shidden(?=[\s>=])[^>]*>[\s\S]*?<\/section>/gi, " ");
   const out = [];
   // Headings, in order.
   const heads = [];
@@ -124,6 +138,9 @@ ${skeleton}
 === DATA THE PAGE IS BUILT FROM ===
 ${context}
 
+=== KNOWN BY DESIGN (do not report) ===
+${KNOWN_BY_DESIGN.map((k) => "- " + k).join("\n")}
+
 Respond ONLY as JSON: {"page":"${pagePath}","width":${width},"score":1-10,"findings":[{"severity":"HIGH|MEDIUM|LOW","element":"section id or heading","msg":"what is wrong","fix":"one concrete change"}],"keep":["what works and must not change"]}. Max ${MAX_FINDINGS} findings; HIGH only for wrong or misleading information, never for taste.`;
 }
 function normalizeReview(raw, pagePath, width) {
@@ -140,6 +157,21 @@ function normalizeReview(raw, pagePath, width) {
 
 // ---- dedupe across runs -----------------------------------------------------------------------
 const fingerprint = (f) => `${f.page}|${f.width}|${f.element.toLowerCase()}|${f.msg.toLowerCase().slice(0, 40)}`;
+// A finding must point at something in the skeleton the model was shown; one it invented
+// (a section the reduced page does not contain) is dropped, not reported.
+function anchorFindings(findings, skeleton) {
+  const sk = String(skeleton || "").toLowerCase();
+  const kept = [], dropped = [];
+  for (const f of findings || []) {
+    const tokens = String(f.element || "").toLowerCase().split(/[^a-z0-9#$%.\/]+/).filter((t) => t.length >= 4 || /^#?\d+$/.test(t));
+    // Most of the element's words must be on the page: one common word ("position") is not an anchor.
+    const hits = tokens.filter((t) => sk.includes(t)).length;
+    const anchored = tokens.length > 0 && hits / tokens.length >= 0.6;
+    (anchored ? kept : dropped).push(f);
+  }
+  return { kept, dropped };
+}
+
 function applyDedupe(findings, seen, now) {
   const next = { ...seen };
   const out = findings.map((f) => {
@@ -180,6 +212,12 @@ async function main() {
     const shot = path.join(SCREENS, `${slug(p.path)}-${width}.png`);
     let cap = loadPage(`${BASE}${p.path}`, width, { screenshot: shot });
     if (cap.status !== 0 || !cap.dom.includes(p.marker)) cap = loadPage(`${BASE}${p.path}`, width, { screenshot: shot }); // one retry, like smoke.js
+    const ready = READY[p.path];
+    if (ready && cap.status === 0 && !ready.test(cap.dom)) {
+      console.log(`[dashboard-review] ${label}: ${ready.name} not loaded in 20 s, capturing again with a ${ready.budgetMs / 1000} s budget`);
+      const again = loadPage(`${BASE}${p.path}`, width, { screenshot: shot, budgetMs: ready.budgetMs });
+      if (again.status === 0 && again.dom.includes(p.marker)) cap = again;
+    }
     if (cap.status !== 0 || !cap.dom.includes(p.marker)) { failedPages.push({ page: p.path, width, reason: cap.status !== 0 ? `chrome exited ${cap.status}` : "marker missing" }); console.warn(`[dashboard-review] ${label}: capture failed`); continue; }
     const skeleton = reduceDom(cap.dom);
     const context = await contextFor(p.path);
@@ -190,9 +228,11 @@ async function main() {
     try { review = normalizeReview(await model.call(pr, { timeoutMs: model.budgetForLines(linesSent) }), p.path, width); if (!review) error = "model reply was not a JSON object"; }
     catch (e) { error = e.message; }
     if (!review) { failedPages.push({ page: p.path, width, reason: error }); console.warn(`[dashboard-review] ${label}: ${error}`); continue; }
-    const dd = applyDedupe(review.findings, seen, Date.now());
+    const anch = anchorFindings(review.findings, skeleton);
+    if (anch.dropped.length) console.log(`[dashboard-review] ${label}: dropped ${anch.dropped.length} finding(s) not anchored in the skeleton (${anch.dropped.map((f) => f.element).join("; ").slice(0, 160)})`);
+    const dd = applyDedupe(anch.kept, seen, Date.now());
     seen = dd.seen;
-    pages.push({ ...review, findings: dd.findings, screenshot: cap.screenshotOk ? path.relative(ROOT, shot) : null, consoleErrors: cap.errors.length });
+    pages.push({ ...review, findings: dd.findings, droppedUnanchored: anch.dropped.length, screenshot: cap.screenshotOk ? path.relative(ROOT, shot) : null, consoleErrors: cap.errors.length });
   }
   const allFindings = pages.flatMap((pg) => pg.findings.map((f) => ({ ...f, page: pg.page, width: pg.width })));
   const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
@@ -226,7 +266,7 @@ async function main() {
   return 0;
 }
 
-module.exports = { reduceDom, contextFor, prompt, normalizeReview, applyDedupe, fingerprint, statusFor, assertAllowed, get, ALLOW, slug, MAX_SKELETON, MAX_FINDINGS };
+module.exports = { reduceDom, contextFor, prompt, normalizeReview, anchorFindings, applyDedupe, fingerprint, statusFor, assertAllowed, get, ALLOW, slug, MAX_SKELETON, MAX_FINDINGS, KNOWN_BY_DESIGN, READY };
 
 if (require.main === module) {
   main().then((code) => process.exit(code)).catch((e) => { console.error("[dashboard-review] fatal:", e.message); process.exit(1); });

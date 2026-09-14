@@ -16,8 +16,10 @@ const html = `<!doctype html><html><head><title>LP</title><style>.x{color:red}</
 <button>Collect now</button><button disabled>Lock</button>
 <form><input type="password" name="p" value="hunter2"></form>
 <table><thead><tr><th>Token</th><th>Lots</th></tr></thead><tbody>${Array.from({ length: 9 }, (_, i) => `<tr><td>TOK${i}</td><td>${i}</td></tr>`).join("")}</tbody></table>
-<svg><path d="M0 0 L100 100"/></svg></section></body></html>`;
+<svg><path d="M0 0 L100 100"/></svg></section>
+<section class="tab" id="sec-mint" hidden><h2>Mint or move a position</h2><button disabled>Mint with wallet</button></section></body></html>`;
 const sk = dr.reduceDom(html);
+assert.ok(!sk.includes("Mint or move a position") && !sk.includes("sec-mint") && !sk.includes("Mint with wallet"), "a hidden section (an inactive wallet tab) is not on the operator's screen");
 assert.ok(sk.includes("# LP Dashboard") && sk.includes("### Positions"), "headings kept");
 assert.ok(sk.includes("SECTIONS summary, watchsec"), `section ids kept: ${sk.split("\n").find((l) => l.startsWith("SECTIONS"))}`);
 assert.ok(sk.includes("TABS Arm | Sell"), "tab order kept");
@@ -59,6 +61,18 @@ assert.strictEqual(dr.statusFor({ newHigh: 1, newAny: 3, succeeded: 12, attempte
 assert.strictEqual(dr.statusFor({ newHigh: 0, newAny: 3, succeeded: 12, attempted: 12 }), "🟡 UI WATCH");
 assert.strictEqual(dr.statusFor({ newHigh: 0, newAny: 0, succeeded: 12, attempted: 12 }), "🟢 UI OK");
 assert.strictEqual(dr.statusFor({ newHigh: 0, newAny: 0, succeeded: 0, attempted: 12 }), "⚠️ UI REVIEW FAILED");
+
+// 3b. Findings must point at something the model was shown; the prompt carries the design facts.
+const anch = dr.anchorFindings([
+  { severity: "HIGH", element: "Positions", msg: "a" },
+  { severity: "MEDIUM", element: "sec-mint / Mint or move a position", msg: "b" },
+  { severity: "LOW", element: "TABLE 1: Token | Lots", msg: "c" },
+  { severity: "LOW", element: "", msg: "d" },
+], sk);
+assert.deepStrictEqual(anch.kept.map((f) => f.msg), ["a", "c"], `anchored findings kept, invented ones dropped (${anch.dropped.map((f) => f.element).join("; ")})`);
+const pr = dr.prompt("/wallet#mint", 375, sk, "ctx");
+assert.ok(pr.includes("KNOWN BY DESIGN") && pr.includes("no wallet extension connected") && pr.includes("horizontal-scroll wrapper") && pr.includes("Main (collector) wallet only"), "prompt states the headless context and the design facts");
+assert.ok(dr.READY["/"].test('<section class="earnings watchsec" id="watchsec"><h3>Watched</h3></section>') && !dr.READY["/"].test('<section class="earnings watchsec" id="watchsec" hidden></section>'), "the / readiness test keys on the watched section being unhidden");
 
 // 4. Allow-list: a write route throws before any request is made.
 (async () => {

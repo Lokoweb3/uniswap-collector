@@ -3,7 +3,7 @@ const MIN_TVL = 200_000;
 
 function get(url) {
   return new Promise((resolve, reject) => {
-    http.get(url, res => {
+    const req = http.get(url, res => {
       let data = "";
       res.on("data", d => data += d);
       res.on("end", () => {
@@ -11,7 +11,10 @@ function get(url) {
         if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode} from ${url}: ${data.slice(0, 200)}`));
         try { resolve(JSON.parse(data)); } catch(e) { reject(new Error(`JSON parse ${url}: ${e.message}`)); }
       });
-    }).on("error", reject);
+    });
+    // A stalled dashboard must not hang the script (pool-scan.js has the same 15 s guard).
+    req.setTimeout(15000, () => req.destroy(new Error(`Timeout after 15s fetching ${url}`)));
+    req.on("error", reject);
   });
 }
 

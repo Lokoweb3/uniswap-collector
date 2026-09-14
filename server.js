@@ -2593,10 +2593,29 @@ if (LOOPS) {
   setInterval(syncMemory, 10 * 60 * 1000);
   server.syncMemory = syncMemory;
 
+  // Improvement loop + code review (tasks/run-all.sh) every 6 h from here: cron is not running in
+  // this WSL instance, so this timer is the only scheduler. One run at a time; output appended to
+  // tasks/output/run-all.log. Never on the smoke-test or read-only instances (LOOPS guards this block).
+  let tasksBusy = false;
+  function runTasks() {
+    const script = path.join(__dirname, "tasks", "run-all.sh");
+    if (tasksBusy || !fs.existsSync(script)) return;
+    tasksBusy = true;
+    let logFd = null;
+    try { fs.mkdirSync(path.join(__dirname, "tasks", "output"), { recursive: true }); logFd = fs.openSync(path.join(__dirname, "tasks", "output", "run-all.log"), "a"); } catch (err) { console.error(`tasks: cannot open run-all.log: ${err.message}`); }
+    const child = spawn("bash", [script], { cwd: __dirname, stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"], env: process.env });
+    console.log(`tasks: run-all started (pid ${child.pid})`);
+    child.on("close", (code) => { tasksBusy = false; if (logFd != null) { try { fs.closeSync(logFd); } catch {} } console.log(`tasks: run-all finished (code ${code})`); timers.tasks = { lastAt: Date.now(), code }; });
+    child.on("error", (err) => { tasksBusy = false; if (logFd != null) { try { fs.closeSync(logFd); } catch {} } console.error(`tasks: run-all failed to start: ${err.message}`); });
+  }
+  setTimeout(runTasks, 10 * 60 * 1000);
+  setInterval(runTasks, 6 * 60 * 60 * 1000);
+  server.runTasks = runTasks;
+
   // Recorded runs from before the fold count for the watchdog.
   { const st = backupState(); if (st.lastBackupAt) { timers.backup.lastAt = Date.parse(st.lastBackupAt) || 0; timers.backup.lastResult = { at: timers.backup.lastAt, code: st.lastBackupCode ?? null }; } }
   server.runBackup = runBackup;
-  console.log(`loops: risk guardian every 60 s, fee auto-collect every 15 min, ledger backup daily at ${String(BACKUP_HOUR).padStart(2, "0")}:00`);
+  console.log(`loops: risk guardian every 60 s, fee auto-collect every 15 min, ledger backup daily at ${String(BACKUP_HOUR).padStart(2, "0")}:00, tasks/run-all.sh every 6 h`);
 
   // Launch scanner (launch-scanner.js): new v4 pools scored every 5 minutes; alerts through the same Telegram path.
   if (cfg.launchScanner && cfg.launchScanner.enabled !== false) {

@@ -2660,11 +2660,22 @@ if (LOOPS) {
     try { fs.mkdirSync(path.join(__dirname, "tasks", "output"), { recursive: true }); logFd = fs.openSync(path.join(__dirname, "tasks", "output", "run-all.log"), "a"); } catch (err) { console.error(`tasks: cannot open run-all.log: ${err.message}`); }
     const child = spawn("bash", [script], { cwd: __dirname, stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"], env: process.env });
     console.log(`tasks: run-all started (pid ${child.pid})`);
-    child.on("close", (code) => { tasksBusy = false; if (logFd != null) { try { fs.closeSync(logFd); } catch {} } console.log(`tasks: run-all finished (code ${code})`); timers.tasks = { lastAt: Date.now(), code }; });
+    child.on("close", (code) => { tasksBusy = false; if (logFd != null) { try { fs.closeSync(logFd); } catch {} } console.log(`tasks: run-all finished (code ${code})`); timers.tasks = { lastAt: Date.now(), code }; rememberTasksRun(code); });
     child.on("error", (err) => { tasksBusy = false; if (logFd != null) { try { fs.closeSync(logFd); } catch {} } console.error(`tasks: run-all failed to start: ${err.message}`); });
   }
-  setTimeout(runTasks, 10 * 60 * 1000);
-  setInterval(runTasks, 6 * 60 * 60 * 1000);
+  // The cadence survives restarts: the last run is remembered in digest-state.json (next to the
+  // backup's), so a process that restarts 20 times a day does not run the paid model review 20
+  // times. First run at max(10 min, lastTasksAt + 6 h − now); then every 6 h.
+  const TASKS_EVERY_MS = 6 * 60 * 60 * 1000;
+  function rememberTasksRun(code) { try { fs.writeFileSync(path.join(__dirname, "digest-state.json"), JSON.stringify({ ...backupState(), lastTasksAt: new Date().toISOString(), lastTasksCode: code })); } catch {} }
+  {
+    const st = backupState();
+    const lastTasksAt = st.lastTasksAt ? Date.parse(st.lastTasksAt) || 0 : 0;
+    if (lastTasksAt) timers.tasks = { lastAt: lastTasksAt, code: st.lastTasksCode ?? null };
+    const firstDelay = Math.max(10 * 60 * 1000, lastTasksAt + TASKS_EVERY_MS - Date.now());
+    setTimeout(() => { runTasks(); setInterval(runTasks, TASKS_EVERY_MS); }, firstDelay);
+    console.log(`tasks: first run-all at ${new Date(Date.now() + firstDelay).toISOString().slice(0, 16)}Z${lastTasksAt ? ` (last ran ${new Date(lastTasksAt).toISOString().slice(0, 16)}Z)` : ""}, then every 6 h`);
+  }
   server.runTasks = runTasks;
   server.tasksBusy = () => tasksBusy;
 

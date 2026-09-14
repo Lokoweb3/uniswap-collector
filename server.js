@@ -903,6 +903,14 @@ async function build() {
           collectedUsd += toFloat(e.fee0, dec0) * usd0 + toFloat(e.fee1, dec1) * usd1;
           collects++;
         }
+        // Collected fees at the prices of the collect itself when every collect has a price
+        // record (the same figure the card's "claimed" line and /api/history show); only when
+        // one is missing do the legs fall back to today's prices, and then they say so.
+        let collectedBasis = "today";
+        {
+          const cs = collectSummary(p.tokenId, dec0, dec1, usd0, usd1);
+          if (cs && !cs.approx && cs.count === collects && collects > 0) { collectedUsd = cs.usd; collectedBasis = "collect-time"; }
+        }
         if (depositedUsd > 0) {
           pnlUsd = (valueUsd || 0) + (feesUsd || 0) + collectedUsd + withdrawnUsd - depositedUsd;
           pnlPct = (pnlUsd / depositedUsd) * 100;
@@ -911,7 +919,7 @@ async function build() {
           pnlLegs = {
             deposited: depositedUsd, adds: b.increases || null,
             withdrawn: withdrawnUsd,
-            collected: collectedUsd, collects,
+            collected: collectedUsd, collects, collectedBasis,
             held: valueUsd || 0, uncollected: feesUsd || 0,
           };
           // If the ledger's liquidity disagrees with the live position, the

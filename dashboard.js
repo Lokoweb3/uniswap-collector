@@ -1097,7 +1097,7 @@ function pnlTip(p){
   return `<span class="tip"><table>
     ${row('Still in the pool', L.held)}
     ${row('Uncollected fees', L.uncollected)}
-    ${row('Fees collected' + (L.collects ? ' · ' + L.collects + ' collect' + (L.collects === 1 ? '' : 's') : ''), L.collected)}
+    ${row('Fees collected' + (L.collects ? ' · ' + L.collects + ' collect' + (L.collects === 1 ? '' : 's') : '') + (L.collects && L.collectedBasis === 'today' ? ' (at today\'s prices)' : ''), L.collected)}
     ${row('Principal withdrawn', L.withdrawn)}
     ${row('Deposited' + (L.adds ? ' · ' + L.adds + ' add' + (L.adds === 1 ? '' : 's') : ''), L.deposited, true)}
     <tr class="sum"><td>Profit vs holding</td><td class="n${p.pnlUsd < 0 ? ' neg' : ''}">${sign(p.pnlUsd)}</td></tr>

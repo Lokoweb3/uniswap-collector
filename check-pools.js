@@ -74,33 +74,37 @@ async function main() {
       if (row.beats) s.beatCount++;
     }
 
+    // The position's own APR over the whole window, not the single latest reading: one outlier
+    // reading must not flip every sibling's verdict.
+    const ownAvgApr = posRows.reduce((a, r) => a + r.ownAprPct, 0) / posRows.length;
     console.log(`Position: ${latest.pair} #${tokenId} (${latest.wallet})`);
-    console.log(`Current APR: ${Math.round(latest.ownAprPct)}%`);
+    console.log(`Current APR: ${Math.round(latest.ownAprPct)}% (3-day avg ${Math.round(ownAvgApr)}%)`);
     console.log(`─────────────────────────────────────────────────`);
 
+    // Comparisons use the unrounded values (49.5 % must not pass a 50 % bar); rounding is for display only.
     const siblingList = [...siblings.values()]
       .map(s => ({
         ...s,
-        avgApr: Math.round(s.aprs.reduce((a,b)=>a+b,0)/s.aprs.length),
-        maxApr: Math.round(Math.max(...s.aprs)),
-        avgTvl: Math.round(s.tvls.reduce((a,b)=>a+b,0)/s.tvls.length),
-        maxTvl: Math.round(Math.max(...s.tvls)),
-        consistency: Math.round(s.beatCount/s.totalCount*100),
+        avgApr: s.aprs.reduce((a,b)=>a+b,0)/s.aprs.length,
+        maxApr: Math.max(...s.aprs),
+        avgTvl: s.tvls.reduce((a,b)=>a+b,0)/s.tvls.length,
+        maxTvl: Math.max(...s.tvls),
+        consistency: s.beatCount/s.totalCount*100,
       }))
       .sort((a, b) => b.avgApr - a.avgApr);
 
     for (const s of siblingList) {
       const tvlOk  = s.avgTvl >= MIN_TVL;
-      const aprOk  = s.avgApr > latest.ownAprPct * 1.5;
+      const aprOk  = s.avgApr > ownAvgApr * 1.5;
       const consOk = s.consistency >= 50;
       const verdict = tvlOk && aprOk && consOk ? "✅ MOVE CANDIDATE"
                     : !tvlOk                   ? "❌ TVL TOO LOW"
                     : !aprOk                   ? "⚪ NOT BETTER ENOUGH"
                     :                            "🟡 INCONSISTENT";
       console.log(`\n  ${s.name}`);
-      console.log(`    APR  avg:${s.avgApr}% max:${s.maxApr}%`);
+      console.log(`    APR  avg:${Math.round(s.avgApr)}% max:${Math.round(s.maxApr)}%`);
       console.log(`    TVL  avg:${tvlLabel(s.avgTvl)} max:${tvlLabel(s.maxTvl)}`);
-      console.log(`    Beats yours: ${s.consistency}% of readings`);
+      console.log(`    Beats yours: ${Math.round(s.consistency)}% of readings`);
       console.log(`    ${verdict}`);
     }
     console.log("\n");

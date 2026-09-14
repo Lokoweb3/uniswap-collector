@@ -18,11 +18,12 @@ async function main(){
   const rawScout=Array.isArray(scoutData?.rows)?scoutData.rows:[];
   const rawAdvisor=Object.values(advisorData?.pools&&typeof advisorData.pools==="object"?advisorData.pools:{});
   // Only rows with the fields the ranking reads are used; a malformed one is counted, not crashed on.
-  const num=v=>Number.isFinite(Number(v));
-  const scoutRows=rawScout.filter(r=>r&&typeof r.pair==="string"&&typeof r.bestSibling==="string"&&num(r.ownAprPct)&&num(r.bestAprPct)&&num(r.bestTvl))
-    .map(r=>({...r,ownAprPct:Number(r.ownAprPct),bestAprPct:Number(r.bestAprPct),bestTvl:Number(r.bestTvl)}));
+  // No coercion: Number(null), Number("") and Number(false) are all 0 and would let a broken row through as a 0 reading.
+  const num=v=>typeof v==="number"&&Number.isFinite(v);
+  const str=v=>typeof v==="string"&&v.length>0;
+  const scoutRows=rawScout.filter(r=>r&&str(r.pair)&&str(r.bestSibling)&&num(r.ownAprPct)&&num(r.bestAprPct)&&num(r.bestTvl));
   // /api/advisor "pools" is mostly a per-pool coverage map; only entries that carry a pair and an APR are pool rows.
-  const advisorPools=rawAdvisor.filter(p=>p&&typeof p.pair==="string"&&num(p.aprPct)).map(p=>({...p,aprPct:Number(p.aprPct),tvlUsd:num(p.tvlUsd)?Number(p.tvlUsd):null}));
+  const advisorPools=rawAdvisor.filter(p=>p&&str(p.pair)&&num(p.aprPct)).map(p=>({...p,tvlUsd:num(p.tvlUsd)?p.tvlUsd:null}));
   const skipped=rawScout.length-scoutRows.length;
   if(skipped)console.warn(`⚠️  Skipped ${skipped} malformed scout row(s) of ${rawScout.length}`);
   const poolMap=new Map();
@@ -67,8 +68,8 @@ async function main(){
       .map(p=>({...p,score:score(p.avgApr,p.avgTvl)}))
       .sort((a,b)=>b.score-a.score);
     const pos=pairPositions[0];
-    const curApr=cur?.avgApr??(num(pos.aprPct)?Number(pos.aprPct):0);
-    const totalValue=pairPositions.reduce((a,p)=>a+(num(p.valueUsd)?Number(p.valueUsd):0),0);
+    const curApr=cur?.avgApr??(num(pos.aprPct)?pos.aprPct:0);
+    const totalValue=pairPositions.reduce((a,p)=>a+(num(p.valueUsd)?p.valueUsd:0),0);
     console.log(`╔══════════════════════════════════════════════`);
     console.log(`║ ${pairKey} — ${pairPositions.map(p=>`#${p.tokenId} (${p.wallet||"Main"})`).join(", ")}`);
     console.log(`║ Current APR: ${Math.round(curApr)}% | Value: $${totalValue.toFixed(0)}${pairPositions.length>1?` across ${pairPositions.length} positions`:""}`);

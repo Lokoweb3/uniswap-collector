@@ -34,7 +34,7 @@ const OFF_LOW = 0.5, OFF_HIGH = 1.5; // booked / hourly-price ratio outside this
 const LOTS_MULT = 3; // proceeds or realized beyond this multiple of the basis
 const INFLOW_TOLERANCE = 1.02; // booked units may exceed the day's inflow by this factor (rounding)
 
-const dayOf = (t) => new Date(t).toISOString().slice(0, 10);
+const dayOf = (t) => require("./daykey").dayKey(t); // was UTC; now the same calendar as the ledgers and the daily line-up
 const round = (n, d = 2) => (n == null ? null : Math.round(n * 10 ** d) / 10 ** d);
 
 /** Hourly price of `addr` nearest `t` (within 3 h), from a normalised { hourMs: { addrLower: price } } map. */

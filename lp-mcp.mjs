@@ -20,7 +20,8 @@ import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const BASE = (process.env.LP_DASHBOARD_URL || "http://127.0.0.1:8787").replace(/\/$/, "");
-const TZ = process.env.LP_TZ || "America/New_York";
+import daykey from "./daykey.js"; // one calendar for every "day": LP_TZ, else the process zone
+const TZ = daykey.TZ;
 
 async function get(path) {
   const r = await fetch(BASE + path, { signal: AbortSignal.timeout(60000) });
@@ -36,8 +37,7 @@ const fail = (err) => ({
   content: [{ type: "text", text: `Dashboard not reachable at ${BASE}: ${err.message}. Start it with ./run-dashboard.sh.` }],
 });
 
-const dayKey = (t) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
+const dayKey = (t) => daykey.dayKey(t);
 const monthKey = (t) => dayKey(t).slice(0, 7);
 const round = (n, d = 2) => (n == null ? null : +Number(n).toFixed(d));
 

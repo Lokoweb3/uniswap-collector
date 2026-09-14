@@ -34,14 +34,11 @@ const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
 const MAIN = "main";
 
-const dayKey = (t) => {
-  const d = new Date(t);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+// Day keys and day boundaries come from daykey.js (LP_TZ, else the process zone), the same
+// calendar the daily line-up, the MCP, staking, the watch view and the audit use.
+const { dayKey, dayStart: dayStartTz } = require("./daykey");
 const dayStart = (t) => {
-  const d = new Date(t);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
+  return dayStartTz(t);
 };
 
 /** Latest point at or before `t` in a time-sorted [{t,…}] array, or null. Binary search: the
@@ -204,7 +201,7 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
   });
 
   return {
-    ok: true, at: now, days, dayList: dayList.map(dayKey),
+    ok: true, at: now, days, dayList: dayList.map((t) => dayKey(t)),
     wallets: Object.values(perWallet), book, positions,
     notes: {
       exact: ["fees", "staking", "vault", "gas"],

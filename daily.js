@@ -20,7 +20,7 @@ const { verdictFor, idleText } = require("./verdict");
 const HERE = __dirname;
 const STATE_FILE = path.join(HERE, "digest-state.json");
 // "Local" means LP_TZ (default America/New_York), not the server's clock, which runs in UTC under WSL.
-const TZ = process.env.LP_TZ || "America/New_York";
+const { TZ, dayKey: dayKeyTz, hourIn: hourInTz } = require("./daykey"); // LP_TZ, else the process zone
 const usd = (n) => (n == null || !isFinite(n) ? "—" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const pct = (n) => (n == null || !isFinite(n) ? "—" : (n >= 0 ? "+" : "") + Number(n).toFixed(1) + "%");
 const hm = (mins) => (mins == null ? "—" : mins >= 1440 ? `${Math.floor(mins / 1440)}d ${Math.floor((mins % 1440) / 60)}h` : `${Math.floor(mins / 60)}h ${Math.round(mins % 60)}m`);
@@ -137,8 +137,8 @@ function verdictLines(all, memecoins, now = Date.now()) {
 
 function readState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch { return {}; } }
 function writeState(s) { try { fs.writeFileSync(STATE_FILE, JSON.stringify(s)); } catch {} }
-const dayKey = (now) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
-const hourIn = (now) => Number(new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", hour12: false }).format(now).replace(/\D/g, "")) % 24;
+const dayKey = (now) => dayKeyTz(now);
+const hourIn = (now) => hourInTz(now);
 
 /** Time to send today's line-up? At or after the configured hour in LP_TZ, not yet sent today. */
 function due(cfg, now = new Date(), state = readState()) {

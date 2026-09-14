@@ -161,10 +161,7 @@ function create({ provider, cfg, getPrice, log = console }) {
     return out;
   }
 
-  const dayKey = (t) => {
-    const d = new Date(t);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  };
+  const { dayKey } = require("./daykey"); // one calendar for every "day" (LP_TZ, else the process zone)
 
   function view() {
     const now = Date.now();

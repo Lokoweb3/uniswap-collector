@@ -110,10 +110,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     saveAccrual();
   }
 
-  const dayOf = (ms) => {
-    const d = new Date(Number(ms));
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  };
+  const dayOf = (ms) => require("./daykey").dayKey(Number(ms)); // the project's one calendar (LP_TZ, else the process zone)
 
   /** Earned summary for a wallet from its hourly buckets. */
   function earnedFor(address) {

@@ -50,7 +50,7 @@ server.registerTool(
   {
     title: "Open LP positions",
     description:
-      "Current state of every open Uniswap v3/v4 position owned by the wallet: pair, fee tier, in-range status and distance to each edge, USD value, uncollected fees, accrual rate per day, APR, PnL vs holding with its legs, and whether the collector will take its fees next run. Also totals and the list of closed positions. Prices are read from pool state; tokens not paired with WETH or the reference stable have no USD value.",
+      "Current state of every open Uniswap v3/v4 position in the Main (collector) wallet ONLY — not the LP Rewards or Trading wallets. For every wallet's positions use `health` (guardian.positions) or `watched_wallets`. Per position: pair, fee tier, in-range status and distance to each edge, USD value, uncollected fees, accrual rate per day, APR, PnL vs holding with its legs, and whether the collector will take its fees next run. Also totals and the list of closed positions. Prices are read from pool state; tokens not paired with WETH or the reference stable have no USD value.",
     inputSchema: {
       include_closed: z.boolean().optional().describe("Also list closed positions (default false)"),
     },

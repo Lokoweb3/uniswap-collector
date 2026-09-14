@@ -165,7 +165,7 @@ function anchorFindings(findings, skeleton) {
   for (const f of findings || []) {
     const tokens = String(f.element || "").toLowerCase().split(/[^a-z0-9#$%.\/]+/).filter((t) => t.length >= 4 || /^#?\d+$/.test(t));
     // Most of the element's words must be on the page: one common word ("position") is not an anchor.
-    const hits = tokens.filter((t) => sk.includes(t)).length;
+    const hits = tokens.filter((t) => sk.includes(t) || sk.includes(t.replace(/s$/, ""))).length;
     const anchored = tokens.length > 0 && hits / tokens.length >= 0.6;
     (anchored ? kept : dropped).push(f);
   }

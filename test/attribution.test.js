@@ -32,6 +32,16 @@ const input = {
   positions: [{ key: "main", tokenId: "1", pair: "X / ETH", version: 3, pnlUsd: 40, pnlLegs: { collected: 25, uncollected: 5 }, pnlSince: d0, valueUsd: 4000 }],
 };
 const r = compute(input, { days: 3, now });
+{
+  // A watched position's "fees today" comes from its own accrual, keyed wallet:tokenId — never a bare id.
+  const wk = "0xabc";
+  const todayHour = String(Math.floor((now - HOUR) / HOUR) * HOUR); // the last full hour of today (sumHours is [from, to))
+  const rw = compute({ ...input, wallets: [...input.wallets, { key: wk, label: "Trading", main: false }], feesByHour: { ...feesByHour, [wk]: { [todayHour]: 3.5 } },
+    feesByPosition: { ...input.feesByPosition, [`${wk}:v4-9`]: { [todayHour]: 3.5 }, "9": { [todayHour]: 99 } },
+    positions: [...input.positions, { key: wk, tokenId: "v4-9", pair: "B / USDG", version: 4, pnlUsd: 1, pnlLegs: { collected: 1, uncollected: 0 }, pnlSince: d0, valueUsd: 100 }] }, { days: 3, now });
+  const wp = rw.positions.find((x) => x.tokenId === "v4-9");
+  assert.strictEqual(wp.feesToday, 3.5, `watched position fees today from its own accrual, got ${wp && wp.feesToday}`);
+}
 const w = r.wallets[0];
 assert.strictEqual(w.rows.length, 3);
 const [day1, day2, today] = w.rows;

@@ -197,7 +197,10 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
   const positions = (input.positions || []).map((p) => {
     const fees = p.pnlLegs ? (p.pnlLegs.collected || 0) + (p.pnlLegs.uncollected || 0) : (p.feesUsd || 0);
     const priceAndIl = p.pnlUsd != null ? p.pnlUsd - fees : null;
-    const feesToday = (input.feesByPosition || {})[String(p.tokenId)] ? sumHours(input.feesByPosition[String(p.tokenId)], todayStart, now) : null;
+    // Main positions are keyed by tokenId, watched ones by wallet:tokenId (never by a bare id).
+    const fbp = input.feesByPosition || {};
+    const perPos = p.key === MAIN ? fbp[String(p.tokenId)] : fbp[`${p.key}:${p.tokenId}`];
+    const feesToday = perPos ? sumHours(perPos, todayStart, now) : null;
     return { key: p.key, tokenId: String(p.tokenId), pair: p.pair, version: p.version, valueUsd: p.valueUsd || 0, fees, feesToday, priceAndIl, pnlUsd: p.pnlUsd, since: p.pnlSince || null, approx: !!p.pnlApprox, longTerm: p.longTerm || null };
   });
 
@@ -323,6 +326,9 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, getHist
     const wa = readJson("watch-accrual.json", { hours: {} });
     const feesByHour = { [MAIN]: mainHours };
     for (const w of wallets) if (!w.main) feesByHour[w.key] = (wa.hours || {})[w.key] || {};
+    // Watched positions: the same accrual, per position, keyed wallet:tokenId so a watched id can
+    // never be read as a main-wallet id.
+    for (const [k, hours] of Object.entries(wa.byPos || {})) feesByPosition[k] = hours;
 
     // Holdings (current): tokens in the wallet + inside positions + uncollected fees.
     const holdings = {};

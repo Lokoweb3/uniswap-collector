@@ -101,12 +101,22 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         if (usd > 0) {
           accrual.hours[key] = accrual.hours[key] || {};
           accrual.hours[key][hourKey] = +(((accrual.hours[key][hourKey] || 0) + usd).toFixed(4));
+          // The same accrual per position, so attribution can say what each position earned today.
+          accrual.byPos = accrual.byPos || {};
+          accrual.byPos[k] = accrual.byPos[k] || {};
+          accrual.byPos[k][hourKey] = +(((accrual.byPos[k][hourKey] || 0) + usd).toFixed(4));
           p.earnedSinceLast = usd;
         }
       }
       if (p.feesOk) accrual.last[k] = { t: now, f0: p.fee0, f1: p.fee1 };
     }
     for (const k of Object.keys(accrual.last)) if (k.startsWith(key + ":") && !seen.has(k)) delete accrual.last[k];
+    // Per-position hours older than 35 days are of no use to any window; keep the file small.
+    const cutoff = now - 35 * 24 * HOUR;
+    for (const [k, hours] of Object.entries(accrual.byPos || {})) {
+      for (const h of Object.keys(hours)) if (Number(h) < cutoff) delete hours[h];
+      if (!Object.keys(hours).length) delete accrual.byPos[k];
+    }
     saveAccrual();
   }
 

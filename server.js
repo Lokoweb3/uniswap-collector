@@ -2557,7 +2557,9 @@ if (LOOPS) {
   autoCollect = require("./memecoin-collect").create({ dir: __dirname, alerts, log: stamp("auto-collect"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets,
     treasury: () => treasuryView().catch(() => null), armUrl: `http://127.0.0.1:${PORT}/arm` });
   async function autoCollectTick() {
-    try { await autoCollect.cycle(); timers.autoCollect.lastAt = Date.now(); }
+    // A skipped cycle (previous collector child still running) leaves the heartbeat alone, so a
+    // hung run trips the 45 min stale alert instead of reading as healthy forever.
+    try { const r = await autoCollect.cycle(); if (require("./memecoin-collect").cycleCounts(r)) timers.autoCollect.lastAt = Date.now(); }
     catch (err) { console.error("auto-collect: cycle failed:", err.shortMessage || err.message); }
   }
   setTimeout(autoCollectTick, 2 * 60 * 1000);

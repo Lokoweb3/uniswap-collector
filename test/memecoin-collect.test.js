@@ -1,6 +1,11 @@
 // node test/memecoin-collect.test.js — trigger logic and collector-output parsing with mocks.
 const assert = require("assert");
-const { memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor } = require("../memecoin-collect");
+const { cycleCounts, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor } = require("../memecoin-collect");
+
+// A skipped cycle (collector child still running) must not refresh the heartbeat; a real one does.
+assert.strictEqual(cycleCounts({ skipped: true }), false, "skipped cycle leaves lastAt unchanged");
+assert.strictEqual(cycleCounts({ skipped: false, at: 1 }), true, "real cycle stamps lastAt");
+assert.strictEqual(cycleCounts(undefined), true, "legacy undefined result still stamps");
 
 const positions = { ok: true, owner: "0x0000000000000000000000000000000000000001", ownerLabel: "Main", positions: [
   { tokenId: "1030190", nftId: "1030190", version: 3, pair: "WETH / USDG", feesUsd: 31 },

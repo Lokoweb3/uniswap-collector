@@ -212,14 +212,20 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     return { cfg, enabled: mc.enabled !== false, minUsd: Number(mc.minUsd ?? 20), minIntervalMinutes: Number(mc.minIntervalMinutes ?? 30),
       memecoins: Array.isArray(cfg.memecoins) ? cfg.memecoins : null, tradingLabel: mc.tradingWalletLabel || "Trading" };
   }
+  // A collector child that hangs (a stalled RPC, a stuck ssh sync) would otherwise hold
+  // `running` forever and stop auto-collect silently: SIGTERM after 45 min, SIGKILL 30 s later.
+  const COLLECTOR_TIMEOUT_MS = Number(process.env.LP_COLLECTOR_TIMEOUT_MS || 45 * 60000);
   function runCollector() {
     return new Promise((resolve) => {
       const child = spawn(path.join(dir, "run-collector.sh"), ["full", "--quiet"], { cwd: dir, env: process.env });
-      let out = "";
+      let out = "", timedOut = false;
+      const term = setTimeout(() => { timedOut = true; log(`collector still running after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; sending SIGTERM`); try { child.kill("SIGTERM"); } catch {} }, COLLECTOR_TIMEOUT_MS);
+      const kill = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, COLLECTOR_TIMEOUT_MS + 30000);
+      const done = (r) => { clearTimeout(term); clearTimeout(kill); resolve(r); };
       child.stdout.on("data", (d) => (out += d));
       child.stderr.on("data", (d) => (out += d));
-      child.on("close", (code) => resolve({ code, out }));
-      child.on("error", (err) => resolve({ code: -1, out: `${out}\n${err.message}` }));
+      child.on("close", (code) => done({ code: timedOut ? -2 : code, out: timedOut ? `${out}\n[timed out after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min]` : out, timedOut }));
+      child.on("error", (err) => done({ code: -1, out: `${out}\n${err.message}`, timedOut: false }));
     });
   }
   /** Telegram. With a pool key the message shares the per-pool cool-down with the guardian and the range check. */
@@ -278,15 +284,16 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     log(`running the collector (trigger ${trigger.pair} #${trigger.tokenId}, $${trigger.feesUsd.toFixed(2)})`);
     state.lastRunAt = Date.now();
     writeJson(STATE, state);
-    const { code, out } = await runCollector();
+    const { code, out, timedOut } = await runCollector();
     const parsed = parseCollectorOutput(out);
     const splitUsdg = parsed.splits.reduce((s, x) => s + x.usdg, 0);
-    const status = parsed.locked ? "locked" : code !== 0 ? "error" : parsed.collected.length ? "collected" : "nothing-eligible";
+    const status = timedOut ? "timed-out" : parsed.locked ? "locked" : code !== 0 ? "error" : parsed.collected.length ? "collected" : "nothing-eligible";
     appendLog({ timestamp: new Date().toISOString(), trigger, ranCollector: true, exitCode: code, collected: parsed.collected, splits: parsed.splits, sends: parsed.sends, failures: parsed.failures,
       splitUsdg: +splitUsdg.toFixed(6), status, output: out.split("\n").slice(-25).join("\n") });
     log(`collector finished: ${status} (${parsed.collected.length} collected, split ${splitUsdg.toFixed(2)} USDG, ${parsed.failures.length} failure line(s))`);
     for (const n of collectNotices(parsed, trigger)) await notify(n.text, poolKeyFor(list, n.tokenId));
     if (status === "error") await notify(`⚠️ Auto-collect run exited with code ${code}; see memecoin-collect-log.json`);
+    if (status === "timed-out") await notify(`⚠️ Auto-collect run killed after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min without finishing; see collector.log`);
   }
 
   // First vault split verification: once, after the first "ok" ledger row.
@@ -342,14 +349,16 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     }
   }
 
-  /** One evaluation; never runs twice at once. */
+  /** One evaluation; never runs twice at once. Returns { skipped: true } when the previous
+   *  cycle still runs, so the caller's heartbeat is NOT stamped and a hung run can go stale. */
   async function cycle(opts = {}) {
-    if (running) return log("previous cycle still running (collector in progress); skipped");
+    if (running) { log("previous cycle still running (collector in progress); skipped"); return { skipped: true }; }
     running = true;
     try {
       try { await evaluate(opts); } catch (err) { log(`evaluate: ${err.message}`); }
       lastCycleAt = Date.now();
       try { await verifyFirstSplit(opts); } catch (err) { log(`first-split check: ${err.message}`); }
+      return { skipped: false, at: lastCycleAt };
     } finally { running = false; }
   }
 
@@ -376,4 +385,7 @@ if (require.main === module) {
   })();
 }
 
-module.exports = { create, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor };
+/** True when a cycle() result should refresh the loop heartbeat: only a real evaluation does. */
+function cycleCounts(result) { return !(result && result.skipped); }
+
+module.exports = { create, cycleCounts, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor };

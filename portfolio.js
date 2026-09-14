@@ -72,12 +72,38 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+/**
+ * A series point is PARTIAL when a token that was priced in the previous point has no
+ * price now and was worth more than `share` of that previous total: the drop in `total`
+ * is a pricing gap, not a value change. Marks `partial: true` + `unpriced: [keys]` on
+ * such points and clears the flag on the others, so the rule is the same for points
+ * written today and for points already on disk. Pure; returns the same array.
+ */
+function markPartial(series, share = 0.01) {
+  let prev = null;
+  for (const pt of series || []) {
+    if (prev && prev.p && prev.total > 0) {
+      const gone = [];
+      for (const [k, price] of Object.entries(prev.p)) {
+        if (pt.p && pt.p[k] != null) continue;
+        const amt = prev.a ? prev.a[k] : null;
+        if (amt != null && amt * price > share * prev.total) gone.push(k);
+      }
+      if (gone.length) { pt.partial = true; pt.unpriced = gone; }
+      else { delete pt.partial; delete pt.unpriced; }
+    }
+    prev = pt;
+  }
+  return series;
+}
+
 function create({ provider, factory, cfg, explorerApi }) {
   let state = { discoveredAt: 0, tokens: {}, pools: {}, series: [], wallets: {} };
   try {
     const s = JSON.parse(fs.readFileSync(FILE, "utf8"));
     if (s.series) state = { ...state, ...s };
   } catch {}
+  markPartial(state.series);
   const save = () => {
     try {
       fs.writeFileSync(FILE, JSON.stringify(state));
@@ -484,14 +510,20 @@ function create({ provider, factory, cfg, explorerApi }) {
       const a = {};
       for (const r of rows) if (r.total != null) a[r.native ? "eth" : r.address.toLowerCase()] = +Number(r.total).toPrecision(6);
       state.series.push({ t: now, wallet: +walletUsd.toFixed(2), lp: +(lpUsd || 0).toFixed(2), fees: +(feesUsd || 0).toFixed(2), total: +totalUsd.toFixed(2), p, a });
+      markPartial(state.series.slice(-2)); // flags the new point against the one before it
       save();
     }
 
+    const newest = state.series[state.series.length - 1];
     latest = {
       ok: true, at: now, owner, wethUsd,
       totals: { walletUsd, lpUsd: lpUsd || 0, feesUsd: feesUsd || 0, totalUsd, unpricedCount: rows.filter((r) => r.usd == null).length },
+      // The newest point is partial when a token priced an hour ago has no price now: the
+      // total is understated by that token, so consumers must not record it as a value drop.
+      partial: !!(newest && newest.partial && now - newest.t < 2 * SERIES_STEP_MS),
+      unpriced: newest && newest.partial ? newest.unpriced : [],
       rows,
-      series: decimate(state.series.map((s) => ({ t: s.t, wallet: s.wallet, lp: s.lp, fees: s.fees, total: s.total }))),
+      series: decimate(state.series.map((s) => ({ t: s.t, wallet: s.wallet, lp: s.lp, fees: s.fees, total: s.total, ...(s.partial ? { partial: true } : {}) }))),
       explorer: explorerApi.replace(/\/api$/, ""),
     };
     return latest;
@@ -511,4 +543,4 @@ function create({ provider, factory, cfg, explorerApi }) {
   };
 }
 
-module.exports = { create };
+module.exports = { create, markPartial };

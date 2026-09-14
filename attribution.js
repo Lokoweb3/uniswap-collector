@@ -28,6 +28,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const { markPartial } = require("./portfolio");
 
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
@@ -279,13 +280,17 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
     // Value series: main from portfolio.json, every wallet from portfolio-all.json.
     const valueSeries = {};
     const pj = readJson("portfolio.json", { series: [] });
-    valueSeries[MAIN] = (pj.series || []).map((s) => ({ t: s.t, v: s.total })).filter((p) => p.v != null);
+    // A point where a token priced an hour earlier has no price is a pricing gap, not a
+    // value change (portfolio.markPartial); such points are absent for every computation here.
+    markPartial(pj.series || []);
+    valueSeries[MAIN] = (pj.series || []).filter((s) => !s.partial).map((s) => ({ t: s.t, v: s.total })).filter((p) => p.v != null);
     const pa = readJson("portfolio-all.json", { points: [] });
+    const allPts = (pa.points || []).filter((p) => !p.partial);
     for (const w of wallets) {
       if (w.main) continue;
-      valueSeries[w.key] = (pa.points || []).map((p) => ({ t: p.t, v: p.wallets && p.wallets[w.key] })).filter((p) => p.v != null);
+      valueSeries[w.key] = allPts.map((p) => ({ t: p.t, v: p.wallets && p.wallets[w.key] })).filter((p) => p.v != null);
     }
-    const bookSeries = (pa.points || []).map((p) => ({ t: p.t, v: p.total })).filter((p) => p.v != null);
+    const bookSeries = allPts.map((p) => ({ t: p.t, v: p.total })).filter((p) => p.v != null);
 
     // Fees: main per position (fee-daily.json), watched per wallet (watch-accrual.json).
     const fd = readJson("fee-daily.json", { hours: {} });
@@ -316,7 +321,7 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
     // persisted portfolio.json series point, which carries per-token amounts (`a`).
     const mainHold = holdings[MAIN];
     if (!(mainHold && Object.keys(mainHold).length) && pj.series && pj.series.length) {
-      const last = pj.series[pj.series.length - 1];
+      const last = [...pj.series].reverse().find((s) => !s.partial) || pj.series[pj.series.length - 1];
       const h = (holdings[MAIN] = {});
       for (const [addr, amt] of Object.entries((last && last.a) || {})) fold(h, normAddr(addr === "eth" ? "eth" : addr), amt);
     }

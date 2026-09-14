@@ -107,8 +107,31 @@ const cfg = { ownerAddress: OWNER, contracts: { weth: WETH }, usdReference: { st
   assert.equal(warned.filter((m) => m.includes("unreadable timestamp")).length, 1, `one warning for the unreadable row, got ${warned.length}`);
   console.log("iso-timestamps: gas =", row3.gas, "flows =", row3.flows, "(unreadable row skipped with one warning)");
 
+  // ---- Case: a partially priced point (a held token lost its price for one hour) is a pricing gap, not a value drop. ----
+  const dir4 = fs.mkdtempSync(path.join(os.tmpdir(), "lp-attrload4-"));
+  make(dir4);
+  const pj4 = JSON.parse(fs.readFileSync(path.join(dir4, "portfolio.json"), "utf8"));
+  // The live writer keys prices and amounts alike ("eth" or the lower-case address); the point before the gap
+  // needs the amount under the same key as its price for the > 1 % test.
+  pj4.series[pj4.series.length - 1].a = { eth: 1 };
+  // Newest point: ETH (the whole holding) has no price, so `total` collapses to 400 with no `partial` flag on disk.
+  pj4.series.push({ t: now - 1 * HOUR, total: 400, p: {}, a: { eth: 1 } });
+  fs.writeFileSync(path.join(dir4, "portfolio.json"), JSON.stringify(pj4));
+  const attr4 = require("../attribution").create({
+    cfg, getPortfolio: () => null, getWatch: () => ({ wallets: [] }),
+    getPositions: () => ({ positions: [] }), getStaking: () => null, dir: dir4,
+  });
+  const r4 = attr4.load({ days: 4, now });
+  const b7 = r4.mainBenchmarks.find((b) => b.windowDays === 7);
+  // Good points run 1500 -> 1750 (+16.7 %); with the gap counted the window would read -73 %.
+  assert.ok(b7.portfolioPct > 16 && b7.portfolioPct < 17, `partial point ignored by the benchmark, got ${b7.portfolioPct}`);
+  const row4 = r4.wallets[0].rows.find((x) => x.day === localDay(d1));
+  assert.equal(row4.price, 100, `earlier day's price leg unaffected, got ${row4.price}`);
+  console.log("partial-point: 7d =", b7.portfolioPct.toFixed(2), "% (expected ~16.67, not -73)");
+
   console.log("attribution-load: live-null disk fallback + normAddr keying + null-not-zero guard passed");
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(dir2, { recursive: true, force: true });
+  fs.rmSync(dir4, { recursive: true, force: true });
   fs.rmSync(dir3, { recursive: true, force: true });
 })().catch((e) => { console.error(e); process.exitCode = 1; });

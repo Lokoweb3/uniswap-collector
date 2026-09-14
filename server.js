@@ -553,7 +553,9 @@ function recordAllWallets() {
   for (const w of (wl && wl.wallets) || []) if (w.ok && w.totals) wallets[w.address.toLowerCase()] = +w.totals.totalUsd.toFixed(2);
   const owner = +pf.totals.totalUsd.toFixed(2);
   const total = +(owner + Object.values(wallets).reduce((a, b) => a + b, 0)).toFixed(2);
-  allSeries.points.push({ t: Date.now(), owner, wallets, total });
+  // A partially priced owner view understates `owner` and `total`; the point is kept for the
+  // chart but flagged so attribution never reads the gap as a value drop.
+  allSeries.points.push({ t: Date.now(), owner, wallets, total, ...(pf.partial ? { partial: true } : {}) });
   try {
     fs.writeFileSync(ALL_FILE, JSON.stringify(allSeries));
   } catch {}

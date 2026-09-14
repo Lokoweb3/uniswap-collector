@@ -71,8 +71,11 @@ function analyseAttribution(attr) {
   }
   const b = attr.book.totals;
 
+  // IL only counts when it is a loss (il < 0) and no larger than the LP value it could have come
+  // from: a positive residual or one bigger than the positions is a pricing gap, not IL.
+  const lpValue = (attr.positions || []).reduce((a, p) => a + (Number(p.valueUsd) || 0), 0);
   let feeIlRatio = null;
-  if (b.il != null && b.il !== 0 && b.fees != null) {
+  if (b.il != null && b.il < 0 && b.fees != null && Math.abs(b.il) <= Math.max(lpValue, 1)) {
     feeIlRatio = Math.abs(b.fees / b.il);
   }
 
@@ -119,7 +122,16 @@ function analyseAttribution(attr) {
   return { feeIlRatio, walletFees, totals: b, benchmarks: main7, issues, suggestions };
 }
 
-function analysePositions(attr) {
+// A per-position amount is worth an issue only when it is money: at least $5 AND at least 1 % of
+// the position's value. Anything smaller is dropped, not downgraded (a −$0.21 "HIGH" once forced
+// 🔴 ACTION NEEDED and a Telegram message on its own).
+const MATERIAL_MIN_USD = 5, MATERIAL_MIN_PCT = 1;
+function material(amountUsd, valueUsd) {
+  const a = Math.abs(Number(amountUsd) || 0);
+  return a >= MATERIAL_MIN_USD && (Number(valueUsd) > 0 ? a / Number(valueUsd) * 100 >= MATERIAL_MIN_PCT : true);
+}
+
+function analysePositions(attr, strategyPositions = null) {
   const issues = [], suggestions = [];
   const positions = attr.positions || [];
 
@@ -128,22 +140,23 @@ function analysePositions(attr) {
     if (age != null && age > 48 && pos.feesToday !== null && pos.feesToday < 1) {
       issues.push({ severity: "LOW", msg: `${pos.pair} #${pos.tokenId} earned only ${fmt(pos.feesToday)} today` });
     }
-    if (pos.pnlUsd < 0) {
+    if (pos.pnlUsd < 0 && material(pos.pnlUsd, pos.valueUsd)) {
       issues.push({ severity: "MEDIUM", msg: `${pos.pair} #${pos.tokenId} has negative PnL ${fmt(pos.pnlUsd)} since opening` });
       suggestions.push(`Review ${pos.pair} — consider closing if trend continues`);
     }
-    if (pos.priceAndIl != null && pos.fees != null && pos.priceAndIl < 0 && Math.abs(pos.priceAndIl) > pos.fees) {
+    if (pos.priceAndIl != null && pos.fees != null && pos.priceAndIl < 0 && Math.abs(pos.priceAndIl) > pos.fees && material(pos.priceAndIl, pos.valueUsd)) {
       issues.push({ severity: "HIGH", msg: `${pos.pair}: IL+price (${fmt(pos.priceAndIl)}) exceeds fees earned (${fmt(pos.fees)})` });
     }
   }
 
-  const best = positions
-    .filter(p => p.valueUsd > 0 && Number.isFinite(p.fees) && ageHours(p.since) != null && ageHours(p.since) > 48) // null fees would make the ratio NaN and the sort meaningless
-    .map(p => ({ ...p, feeRatio: p.fees / p.valueUsd }))
-    .sort((a, b) => b.feeRatio - a.feeRatio)[0];
-
+  // "Add capital here" ranks by realised fee APR on the deposit (strategy positions), never by
+  // lifetime fees over today's value: a drawdown or an approximate row must not win the ranking.
+  const candidates = (strategyPositions || [])
+    .filter(p => p.open && !p.approx && Number(p.hoursOpen) >= 72 && Number.isFinite(p.realizedFeeAprPct) && Number(p.depositedUsd) > 0)
+    .sort((a, b) => b.realizedFeeAprPct - a.realizedFeeAprPct);
+  const best = candidates[0];
   if (best) {
-    suggestions.push(`Best fee/value ratio: ${best.pair} at ${(best.feeRatio * 100).toFixed(1)}% return — consider adding capital here`);
+    suggestions.push(`Best realised fee APR: ${best.pair} #${best.tokenId} at ${best.realizedFeeAprPct.toFixed(0)}% on ${fmt(best.depositedUsd)} deposited (${Math.round(best.hoursOpen / 24)}d) — consider adding capital here`);
   }
 
   return { positions, issues, suggestions };
@@ -270,16 +283,17 @@ async function main() {
   console.log("[loop] starting improvement loop v3...");
   const ts = new Date().toISOString();
 
-  const [portfolio, attribution, scoutData] = await Promise.all([
+  const [portfolio, attribution, scoutData, strategyData] = await Promise.all([
     get("/api/portfolio").catch(e => { console.warn("[loop] portfolio:", e.message); return null; }),
     get("/api/attribution?days=7").catch(e => { console.warn("[loop] attribution:", e.message); return null; }),
     get("/api/strategy/scout?days=7").catch(e => { console.warn("[loop] scout:", e.message); return null; }),
+    get("/api/strategy/positions").catch(e => { console.warn("[loop] strategy positions:", e.message); return null; }),
   ]);
 
   if (!attribution) { console.error("[loop] attribution unavailable"); process.exit(1); }
 
   const attrAnalysis  = analyseAttribution(attribution);
-  const posAnalysis   = analysePositions(attribution);
+  const posAnalysis   = analysePositions(attribution, strategyData ? (strategyData.positions || strategyData.rows || null) : null);
   const portAnalysis  = portfolio ? analysePortfolio(portfolio) : { issues: [], suggestions: [], lpPct: "n/a" };
   const scoutAnalysis = scoutData  ? analyseScout(scoutData.rows || []) : { moveOpps: [], issues: [], suggestions: [] };
 

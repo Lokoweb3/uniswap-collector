@@ -8,7 +8,10 @@ const path = require("path");
 
 const HOUR = 3600 * 1000, DAY = 24 * HOUR;
 const localDay = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const now = Date.now();
+// A fixed local-noon clock: with Date.now() the three day boundaries fall exactly on an
+// hourly price key during the first hour after local midnight, priceRowAt() then returns the
+// same row for both ends of the day and the price leg reads "incomplete" instead of +100.
+const now = new Date(2026, 8, 10, 12, 0, 0).getTime();
 const OWNER = "0x00000000000000000000000000000000000000a1";
 const WETH = "0x00000000000000000000000000000000000000ee";
 

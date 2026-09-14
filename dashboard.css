@@ -102,7 +102,7 @@ button.collect:hover{filter:brightness(1.12);border-color:var(--live)}
 .pstats{display:flex;gap:22px;flex-wrap:wrap;margin:8px 0 2px;font-size:12px;color:var(--muted)}
 .pstats b{color:var(--bright);font-weight:600}
 .etable td.chg.up{color:var(--live)} .etable td.chg.down{color:var(--edge)}
-.ehead h3{margin:0;font-size:13px;font-weight:600;color:var(--bright);letter-spacing:.02em}
+.ehead h2{margin:0;font-size:13px;font-weight:600;color:var(--bright);letter-spacing:.02em}
 .etotal{font-size:13px;color:var(--live);font-weight:600}
 select.scope{font:inherit;font-size:12.5px;font-weight:500;color:var(--bright);background:transparent;border:1px solid var(--rule-soft);border-radius:4px;padding:2px 6px;cursor:pointer}
 select.scope option{background:#0d1418;color:#e6edf3}
@@ -237,7 +237,7 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
 .pos:hover{border-color:var(--rule)}
 .top{display:flex;flex-wrap:wrap;gap:14px;align-items:baseline;justify-content:space-between;margin-bottom:6px}
 .name{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-.name h2{font-size:17px;font-weight:600;margin:0;letter-spacing:-.008em;color:var(--bright)}
+.name h3{font-size:17px;font-weight:600;margin:0;letter-spacing:-.008em;color:var(--bright)}
 .tier{font-size:11.5px;color:var(--muted);border:1px solid var(--rule);border-radius:4px;padding:1px 6px}
 .tier.v4{color:var(--ink);border-color:var(--muted);cursor:help}
 .nft{font-size:11.5px;color:var(--muted)}
@@ -246,7 +246,7 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
   background:rgba(255,81,122,.10)}
 .state.near{color:var(--edge)}
 .pos.out{border-left:3px solid var(--edge);padding-left:20px}
-.pos.out h2{color:var(--edge)}
+.pos.out h3{color:var(--edge)}
 .vals{display:flex;gap:28px;align-items:baseline}
 .vals .v{font-size:19px;font-weight:600;letter-spacing:-.015em;color:var(--bright)}
 .vals .f{font-size:14px;font-weight:500;color:var(--live)}
@@ -321,7 +321,7 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
 .wcards .pos:hover{border-color:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.18),0 8px 22px rgba(0,0,0,.45)}
 .wcards .pos.out{border-color:var(--edge);border-left-width:3px}
 .wcards .pos .top{padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,.12)}
-.wcards .name h2{font-size:15px}
+.wcards .name h3{font-size:15px}
 .wcards .vals .v{font-size:16px}
 .wcards .vals .f{font-size:12.5px}
 .wcards .track{height:44px}
@@ -482,7 +482,7 @@ select.scope option{background:#0b1017}
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   box-shadow:0 10px 40px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.02) inset;
 }
-.ehead h3{font-family:var(--font-sans);font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:#dfe7ee}
+.ehead h2{font-family:var(--font-sans);font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:#dfe7ee}
 
 /* gradient-border glass cards (summary tiles and position cards) */
 .stat,.pos,.wcards .pos,#ownergroup .pos{

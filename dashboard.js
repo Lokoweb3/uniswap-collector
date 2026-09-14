@@ -304,10 +304,11 @@ function renderHeadline(){
     // Section header: this wallet alone, or everything, depending on the picker.
     const W = lastWatchForPf && lastWatchForPf.totals;
     if (scope === 'owner') {
-      $('#watchtitle').textContent = 'Positions';
+      $('#watchtitle').textContent = `Positions · Main wallet · ${m.totals.count} open`;
       $('#watchtotal').textContent = usd(ownTotal);
     } else if (scope === 'all' && W) {
-      $('#watchtitle').textContent = 'Positions';
+      const watchedOpen = (lastWatchForPf.wallets || []).reduce((a, w) => a + ((w.totals && w.totals.count) || 0), 0);
+      $('#watchtitle').textContent = `Positions · ${m.totals.count + watchedOpen} open across ${W.wallets + 1} wallets`;
       $('#watchtotal').textContent = usd(ownTotal + W.totalUsd);
       $('#watchstats').innerHTML = `<span>${W.wallets + 1} wallets</span><span>tokens in wallets <b>${usd((pf ? pf.totals.walletUsd : 0) + W.walletUsd)}</b></span><span>in pools <b>${usd(m.totals.liquidityUsd + W.liquidityUsd)}</b></span><span>uncollected fees <b>${usd(m.totals.feesUsd + W.feesUsd)}</b></span>`;
     }
@@ -1097,12 +1098,12 @@ function pnlTip(p){
   return `<span class="tip"><table>
     ${row('Still in the pool', L.held)}
     ${row('Uncollected fees', L.uncollected)}
-    ${row('Fees collected' + (L.collects ? ' · ' + L.collects + ' collect' + (L.collects === 1 ? '' : 's') : '') + (L.collects && L.collectedBasis === 'today' ? ' (at today\'s prices)' : ''), L.collected)}
+    ${row('Fees collected (all time)' + (L.collects ? ' · ' + L.collects + ' collect' + (L.collects === 1 ? '' : 's') : '') + (L.collects && L.collectedBasis === 'today' ? ' (at today\'s prices)' : ''), L.collected)}
     ${row('Principal withdrawn', L.withdrawn)}
-    ${row('Deposited' + (L.adds ? ' · ' + L.adds + ' add' + (L.adds === 1 ? '' : 's') : ''), L.deposited, true)}
+    ${row('Deposited from wallet' + (L.adds ? ' · ' + L.adds + ' add' + (L.adds === 1 ? '' : 's') : ''), L.deposited)}
     <tr class="sum"><td>Profit vs holding</td><td class="n${p.pnlUsd < 0 ? ' neg' : ''}">${sign(p.pnlUsd)}</td></tr>
   </table>
-  <div class="note">Fees earned ${usd(feesTotal)}; ${holdCost < 0 ? 'holding the deposit instead would be worth ' + usd(-holdCost) + ' more' : 'the pool balance is also ' + usd(holdCost) + ' ahead of holding'}. All legs at today\'s prices${p.pnlApprox ? '; deposit history is missing a recent change' : ''}${p.pnlSource === 'rpc' ? ' (history read from the chain)' : p.pnlSource === 'blockscout' ? ' (history from Blockscout until the chain scan reaches the mint)' : p.pnlSource === 'first-seen' ? ' (deposit = the amounts first seen by the dashboard, not the mint)' : ''}.</div></span>`;
+  <div class="note">Profit = still in the pool + fees + principal withdrawn − deposited. Fees earned ${usd(feesTotal)}; ${holdCost < 0 ? 'holding the deposit instead would be worth ' + usd(-holdCost) + ' more' : 'the pool balance is also ' + usd(holdCost) + ' ahead of holding'}. All legs at today\'s prices${p.pnlApprox ? '; deposit history is missing a recent change' : ''}${p.pnlSource === 'rpc' ? ' (history read from the chain)' : p.pnlSource === 'blockscout' ? ' (history from Blockscout until the chain scan reaches the mint)' : p.pnlSource === 'first-seen' ? ' (deposit = the amounts first seen by the dashboard, not the mint)' : ''}.</div></span>`;
 }
 
 // Projections need a track record: a position's age, from its first deposit.
@@ -1354,7 +1355,7 @@ function render(d){
     <article class="${cls}">
       <div class="top">
         <div class="name">
-          <h2>${p.pair}</h2>
+          <h3>${p.pair}</h3>
           <span class="tier">${p.feeTierLabel}</span>
           ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}. Collected like v3 once the wallet has approved the operator on the v4 position manager (/approve-v4).">v4</span>` : ''}
           <span class="nft mono">${nftLink(d, p, '#' + (p.nftId || p.tokenId))}</span>
@@ -1620,7 +1621,7 @@ function renderWatch(d){
   const scopeW = pfScope();
   const shown = scopeW === 'owner' || scopeW === 'all' ? d.wallets : d.wallets.filter(w => w.address.toLowerCase() === scopeW);
   if (scopeW !== 'all' && scopeW !== 'owner') {
-    $('#watchtitle').textContent = 'Positions';
+    $('#watchtitle').textContent = shown[0] ? `Positions · ${shown[0].label || 'watched wallet'} · ${(shown[0].totals && shown[0].totals.count) || 0} open` : 'Positions';
     $('#watchtotal').textContent = shown[0] && shown[0].totals ? usd(shown[0].totals.totalUsd) : '';
   }
   $('#watchstats').hidden = scopeW !== 'all';
@@ -1669,7 +1670,7 @@ function renderWatch(d){
       return `<article class="${cls}">
         <div class="top">
           <div class="name">
-            <h2>${p.pair}</h2>
+            <h3>${p.pair}</h3>
             <span class="tier">${p.feeTierLabel}</span>
             ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}. Collected like v3 once this wallet has approved the operator on the v4 position manager (/approve-v4).">v4</span>` : ''}
             ${full ? '<span class="full" title="Liquidity across the whole price range: always earning, never idle">full range</span>' : ''}
@@ -1828,7 +1829,7 @@ async function loadRisk(){
       const lc = p.lastClose;
       return `<article class="pos meme ${p.status === 'red' ? 'out' : ''} ${d.stale ? 'stale' : ''}">
         <div class="top">
-          <div class="name"><span class="dot ${p.status}"></span><h2>${p.pair}</h2><span class="tier">v${p.version || 4} #${p.tokenId}</span><span class="muted">${p.wallet}</span>
+          <div class="name"><span class="dot ${p.status}"></span><h3>${p.pair}</h3><span class="tier">v${p.version || 4} #${p.tokenId}</span><span class="muted">${p.wallet}</span>
             <span class="state ${p.inRange ? '' : 'out'}">${p.inRange ? 'In range' : 'Out of range · ' + Math.round(p.outMinutes) + ' min'}</span>${verdictBadge(p)}</div>
           <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span>${claimedLine(p)}</div>
         </div>

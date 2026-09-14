@@ -37,6 +37,7 @@ const MAIN = "main";
 // Day keys and day boundaries come from daykey.js (LP_TZ, else the process zone), the same
 // calendar the daily line-up, the MCP, staking, the watch view and the audit use.
 const { dayKey, dayStart: dayStartTz } = require("./daykey");
+const longterm = require("./longterm");
 const dayStart = (t) => {
   return dayStartTz(t);
 };
@@ -197,7 +198,7 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
     const fees = p.pnlLegs ? (p.pnlLegs.collected || 0) + (p.pnlLegs.uncollected || 0) : (p.feesUsd || 0);
     const priceAndIl = p.pnlUsd != null ? p.pnlUsd - fees : null;
     const feesToday = (input.feesByPosition || {})[String(p.tokenId)] ? sumHours(input.feesByPosition[String(p.tokenId)], todayStart, now) : null;
-    return { key: p.key, tokenId: String(p.tokenId), pair: p.pair, version: p.version, valueUsd: p.valueUsd || 0, fees, feesToday, priceAndIl, pnlUsd: p.pnlUsd, since: p.pnlSince || null, approx: !!p.pnlApprox };
+    return { key: p.key, tokenId: String(p.tokenId), pair: p.pair, version: p.version, valueUsd: p.valueUsd || 0, fees, feesToday, priceAndIl, pnlUsd: p.pnlUsd, since: p.pnlSince || null, approx: !!p.pnlApprox, longTerm: p.longTerm || null };
   });
 
   return {
@@ -267,7 +268,7 @@ function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stak
 }
 
 /** Assemble compute()/benchmarks() inputs from the ledgers and the server's live views. */
-function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = __dirname }) {
+function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, getHistory = null, dir = __dirname }) {
   const readJson = (f, dflt) => {
     try {
       return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
@@ -431,6 +432,21 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, dir = _
     for (const p of (pos && pos.positions) || []) positions.push({ key: MAIN, tokenId: p.tokenId, pair: p.pair, version: p.version, pnlUsd: p.pnlUsd, pnlLegs: p.pnlLegs, pnlSince: p.pnlSince, pnlApprox: p.pnlApprox, valueUsd: p.valueUsd, feesUsd: p.feesUsd });
     for (const w of (wl && wl.wallets) || []) for (const p of w.positions || []) positions.push({ key: w.address.toLowerCase(), tokenId: p.tokenId, pair: p.pair, version: p.version, pnlUsd: p.pnlUsd, pnlLegs: p.pnlLegs, pnlSince: p.pnlSince, pnlApprox: p.pnlApprox, valueUsd: p.valueUsd, feesUsd: p.feesUsd });
 
+    // Long-term returns per position (longterm.js): every wallet, chained across re-mints.
+    {
+      const open = [];
+      for (const p of (pos && pos.positions) || []) open.push({ p, walletAddress: cfg.ownerAddress });
+      for (const w of (wl && wl.wallets) || []) for (const p of w.positions || []) open.push({ p, walletAddress: w.address });
+      const lt = longterm.compute({
+        open, collects: (getHistory && getHistory()) || [],
+        rangeLog: readJson(path.join(dir, "range-log.json"), { positions: {} }).positions || {},
+        values: readJson(path.join(dir, "position-values.json"), {}), now,
+      });
+      for (const q of positions) {
+        const wa = q.key === MAIN ? String(cfg.ownerAddress).toLowerCase() : q.key;
+        q.longTerm = lt.get(`${wa}:${longterm.idKey(q.tokenId, q.version)}`) || null;
+      }
+    }
     const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, priceHours, stakingDaily, vaultSplits, gasSpends, positions, flows };
     const result = compute(input, { days, now });
     result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal, now });

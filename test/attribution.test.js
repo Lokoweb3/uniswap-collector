@@ -168,4 +168,78 @@ assert.strictEqual(+wDep2.flows.toFixed(6), 0, "an LP deposit is not a flow");
 assert.strictEqual(+wDep2.dv.toFixed(6), 313, "value unchanged by an internal LP deposit");
 assert.strictEqual(+wDep2.il.toFixed(6), -10, "IL unchanged by an internal LP deposit");
 
+// ---- TASK-51: long-term per-position returns (longterm.js) ---------------------------------
+{
+  const lt = require("../longterm");
+  const W = "0xabc";
+  const t0 = now - 10 * DAY;                 // position A opened
+  const tClose = now - 4 * DAY;              // A closed
+  const tOpenB = tClose + 3 * HOUR;          // B minted 3 h later: same wallet, same pair -> one chain
+  const collects = [
+    { t: t0 + 2 * DAY, usd: 20, tokenId: "v4-1", version: 4, walletAddress: W, pair: "USDG/Bucket" },
+    { t: tClose - HOUR, usd: 30, tokenId: "v4-1", version: 4, walletAddress: W, pair: "USDG/Bucket" },
+    { t: tOpenB + DAY, usd: 40, tokenId: "v4-2", version: 4, walletAddress: W, pair: "USDG/Bucket" },
+    { t: tOpenB + 2 * DAY, usd: null, tokenId: "v4-2", version: 4, walletAddress: W, pair: "USDG/Bucket" }, // unpriced
+  ];
+  const rangeLog = { "1": { segments: [{ from: t0, to: tClose, inRange: true }] } };
+  const B = { tokenId: "v4-2", version: 4, pair: "USDG / Bucket", pnlSince: tOpenB, valueUsd: 1100, feesUsd: 5, pnlUsd: 50, pnlApprox: false,
+    pnlLegs: { deposited: 1000, collected: 40, uncollected: 5, withdrawn: 0, held: 1100 } };
+  const r = lt.compute({ open: [{ p: B, walletAddress: W }], collects, rangeLog, now });
+  const b = r.get(`${W}:v4-2`);
+  assert.ok(b, "longTerm block for the open position");
+  assert.strictEqual(b.chained, true, "A -> B is one chain (3 h gap)");
+  assert.strictEqual(b.chainId, "v4-1", "chainId is the first tokenId");
+  assert.strictEqual(b.chainSince, t0, "chainSince is the first open");
+  assert.strictEqual(b.members, 2);
+  // Own numbers: fees = priced collects (40) + uncollected (5) on the open basis (1000) over the actual days.
+  const daysB = (now - tOpenB) / DAY;
+  assert.strictEqual(b.sinceOpen.feesUsd, 45);
+  assert.strictEqual(b.sinceOpen.basis, "open");
+  assert.strictEqual(b.sinceOpen.basisUsd, 1000);
+  assert.strictEqual(b.sinceOpen.feeAprPct, +((45 / 1000) * (365 / daysB) * 100).toFixed(1), "APR annualised over the actual elapsed days on the open basis");
+  assert.strictEqual(b.sinceOpen.unpricedCollects, 1, "the unpriced collect is counted, not valued as 0");
+  assert.strictEqual(b.sinceOpen.netUsd, 50, "net return since open = pnlUsd");
+  assert.strictEqual(b.sinceOpen.netPct, 5);
+  assert.strictEqual(b.d30.days, b.sinceOpen.days, "30 d window is min(30, age)");
+  // Chain: fees accumulate (20 + 30 + 40 + 5), days run from A's open; A's deposit is unknown so the
+  // chain basis and APR are null, never a fabricated number.
+  assert.strictEqual(b.chain.sinceOpen.feesUsd, 95);
+  assert.strictEqual(b.chain.sinceOpen.days, +((now - t0) / DAY).toFixed(2));
+  assert.strictEqual(b.chain.sinceOpen.feeAprPct, null, "chain APR unknown without A's deposit");
+  assert.strictEqual(b.chain.sinceOpen.netUsd, null, "chain net unknown without A's withdrawal");
+  // With A's deposit known the chain basis is the open-time-weighted deposit.
+  const r2 = lt.compute({ open: [{ p: B, walletAddress: W }], collects, rangeLog, closedDeposits: { "v4-1": 800 }, now });
+  const b2 = r2.get(`${W}:v4-2`);
+  assert.strictEqual(b2.chain.sinceOpen.basis, "open");
+  const dA = tClose - t0, dB = now - tOpenB;
+  assert.strictEqual(b2.chain.sinceOpen.basisUsd, +((800 * dA + 1000 * dB) / (dA + dB)).toFixed(2));
+  assert.ok(b2.chain.sinceOpen.feeAprPct > 0);
+  // No price leg (no pnlLegs) -> net return null, fees still measured.
+  const Bnoleg = { ...B, pnlLegs: null, pnlUsd: null };
+  const r3 = lt.compute({ open: [{ p: Bnoleg, walletAddress: W }], collects, rangeLog, now });
+  const b3 = r3.get(`${W}:v4-2`);
+  assert.strictEqual(b3.sinceOpen.netUsd, null, "unknown legs -> null net, never 0");
+  assert.strictEqual(b3.sinceOpen.feeAprPct, null, "no deposit -> no basis -> null APR");
+  assert.strictEqual(b3.sinceOpen.feesUsd, 45);
+  // A 50 h gap breaks the chain.
+  const Blate = { ...B, pnlSince: tClose + 50 * HOUR };
+  const r4 = lt.compute({ open: [{ p: Blate, walletAddress: W }], collects, rangeLog, now });
+  assert.strictEqual(r4.get(`${W}:v4-2`).chained, false, "a gap of 50 h is a new position, not a re-mint");
+  // Time-weighted basis: a daily value ledger covering the whole life switches the basis to "twa".
+  const values = { [`${W}:v4-2`]: [{ t: tOpenB, usd: 1000, fees: 0 }, { t: tOpenB + DAY, usd: 1200, fees: 1 }, { t: tOpenB + 2 * DAY, usd: 1200, fees: 2 }, { t: now - HOUR, usd: 1100, fees: 5 }] };
+  const r5 = lt.compute({ open: [{ p: B, walletAddress: W }], collects, rangeLog, values, now });
+  const b5 = r5.get(`${W}:v4-2`);
+  assert.strictEqual(b5.sinceOpen.basis, "twa");
+  assert.ok(b5.sinceOpen.basisUsd > 1000 && b5.sinceOpen.basisUsd < 1200, `twa basis between the samples, got ${b5.sinceOpen.basisUsd}`);
+  // A position older than the window: the 30 d net return needs the ledger at the window start.
+  const Old = { ...B, pnlSince: now - 40 * DAY };
+  const oldValues = { [`${W}:v4-2`]: [{ t: now - 31 * DAY, usd: 900, fees: 3 }, { t: now - 20 * DAY, usd: 950, fees: 4 }, { t: now - HOUR, usd: 1100, fees: 5 }] };
+  const r6 = lt.compute({ open: [{ p: Old, walletAddress: W }], collects: collects.filter((c) => c.tokenId === "v4-2"), values: oldValues, now });
+  const b6 = r6.get(`${W}:v4-2`);
+  assert.strictEqual(b6.d30.days, 30);
+  assert.strictEqual(b6.d30.netUsd, +(1100 + 5 + 40 - (900 + 3)).toFixed(2), "30 d net = value + fees now + collects in window - value + fees at the window start");
+  assert.strictEqual(b6.sinceOpen.netUsd, 50, "since-open net is still pnlUsd");
+  console.log("longterm: chain, open/twa basis, actual-day APR, null-not-zero legs, 30 d window — all assertions passed");
+}
+
 console.log("attribution: decomposition sums to NET on 3 scenarios + transfer out/in + internal sale/deposit, benchmarks math ok");

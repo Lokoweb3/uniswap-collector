@@ -782,6 +782,88 @@ function unlockState() {
   return { armed: false };
 }
 
+// === long-term returns (longterm.js, TASK-51) ===============================
+// The collect history rows, built the same way /api/history serves them, kept in memory so
+// the positions build and attribution.load() can hand them to longterm.compute() without a
+// round trip; refreshed at most every 5 min (the route always refreshes).
+const longterm = require("./longterm");
+const { dayKey: ltDayKey } = require("./daykey");
+let lastHistoryRows = [];
+let lastHistoryAt = 0;
+let historyInFlight = null;
+async function historyRows(fresh = false) {
+  if (!fresh && Date.now() - lastHistoryAt < 5 * 60 * 1000) return lastHistoryRows;
+  if (historyInFlight) return historyInFlight;
+  historyInFlight = (async () => {
+    const rows = [];
+    const merged = [...bf.events, ...hist.events].sort((a, b) => a.block - b.block);
+    for (const e of merged) {
+      const m = await eventMeta(e).catch(() => null);
+      const wl = walletLabelFor(e);
+      let f0 = null, f1 = null, usd = null, weth = null, locked = false;
+      const px = feePrices[priceKey(e)];
+      if (m) {
+        f0 = Number(ethers.formatUnits(e.fee0, m.t0.decimals));
+        f1 = Number(ethers.formatUnits(e.fee1, m.t1.decimals));
+        if (px) {
+          usd = f0 * px.p0 + f1 * px.p1;
+          weth = px.w ? usd / px.w : null;
+          locked = true;
+        } else {
+          // Main-wallet rows keep the original rule (only tokens in its own positions have a
+          // current price); watched wallets' rows may also use their holdings' prices.
+          const p0 = wl.main ? lastPrices[priceAddr(m.t0)] : currentPrice(priceAddr(m.t0));
+          const p1 = wl.main ? lastPrices[priceAddr(m.t1)] : currentPrice(priceAddr(m.t1));
+          if (p0 != null && p1 != null) {
+            usd = f0 * p0 + f1 * p1;
+            weth = lastWethUsdSeen ? usd / lastWethUsdSeen : null;
+          }
+        }
+      }
+      rows.push({
+        t: e.t, block: e.block, tx: e.tx, tokenId: e.tokenId,
+        version: isV4Key(e.tokenId) ? 4 : 3, nftId: isV4Key(e.tokenId) ? String(e.tokenId).slice(3) : String(e.tokenId),
+        src: e.src || null, note: e.note || null,
+        wallet: wl.label, walletAddress: wl.address, mainWallet: wl.main,
+        pair: m ? `${m.t0.symbol}/${m.t1.symbol}` : null,
+        sym0: m ? m.t0.symbol : null, sym1: m ? m.t1.symbol : null,
+        f0, f1, usd, weth, locked, principal: !!e.principal,
+        p0: px ? px.p0 : null, p1: px ? px.p1 : null, wethAt: px ? px.w : null,
+      });
+    }
+    lastHistoryRows = rows;
+    lastHistoryAt = Date.now();
+    return rows;
+  })().finally(() => { historyInFlight = null; });
+  return historyInFlight;
+}
+
+// Daily per-position value ledger (position-values.json): one point per position per day,
+// { "<wallet>:<id>": [{ t, usd, fees }] }, the time-weighted basis for the 30 d window and
+// the value at a window start for the 30 d net return. The fee snapshots keep 7 days only.
+const POSVAL_FILE = path.join(__dirname, "position-values.json");
+let posValues = {};
+try { posValues = JSON.parse(fs.readFileSync(POSVAL_FILE, "utf8")) || {}; } catch {}
+function recordPositionValues(now, entries) {
+  let changed = false;
+  const today = ltDayKey(now);
+  for (const { walletAddress, p } of entries) {
+    if (!p || p.valueUsd == null) continue;
+    const key = `${String(walletAddress).toLowerCase()}:${longterm.idKey(p.tokenId, p.version)}`;
+    const arr = posValues[key] || (posValues[key] = []);
+    const point = { t: now, usd: +Number(p.valueUsd).toFixed(2), fees: p.feesUsd != null ? +Number(p.feesUsd).toFixed(2) : null };
+    const last = arr[arr.length - 1];
+    if (last && ltDayKey(last.t) === today) arr[arr.length - 1] = point; else arr.push(point);
+    while (arr.length > 400) arr.shift();
+    changed = true;
+  }
+  if (!changed) return;
+  try {
+    fs.writeFileSync(POSVAL_FILE + ".tmp", JSON.stringify(posValues));
+    fs.renameSync(POSVAL_FILE + ".tmp", POSVAL_FILE);
+  } catch (err) { console.warn(`position-values: ${err.message}`); }
+}
+
 async function build() {
   await pools.refresh().catch(() => {});
   const [blockNumber, wethUsd, operatorWei] = await Promise.all([
@@ -1019,6 +1101,17 @@ async function build() {
     p.aprPct = r.dailyUsd != null && r.windowH >= 6 && p.valueUsd ? (r.dailyUsd * 365 * 100) / p.valueUsd : null;
     p.spark = r.spark;
     p.px = pxSeriesFor(p.tokenId);
+  }
+  // Long-term returns (longterm.js): since-open and 30 d fee APR and net return on the open or
+  // time-weighted basis, chained across re-mints of the same wallet + pair. Main wallet here;
+  // attribution.load() does the same for every wallet.
+  {
+    const ltRows = await historyRows().catch((err) => { console.warn(`history rows: ${err.message}`); return lastHistoryRows; });
+    const entries = positions.map((p) => ({ walletAddress: cfg.ownerAddress, p }));
+    for (const w of (watch.latest && watch.latest.wallets) || []) for (const p of w.positions || []) entries.push({ walletAddress: w.address, p });
+    recordPositionValues(nowT, entries);
+    const lt = longterm.compute({ open: positions.map((p) => ({ p, walletAddress: cfg.ownerAddress })), collects: ltRows, rangeLog: rangeLog.positions, values: posValues, now: nowT });
+    for (const p of positions) p.longTerm = lt.get(`${String(cfg.ownerAddress).toLowerCase()}:${longterm.idKey(p.tokenId, p.version)}`) || null;
   }
 
   const liquidityUsd = positions.reduce((s, p) => s + (p.valueUsd || 0), 0);
@@ -2057,42 +2150,7 @@ async function handleRequest(req, res) {
   if (url.pathname === "/api/history") {
     res.setHeader("Content-Type", "application/json");
     try {
-      const rows = [];
-      const merged = [...bf.events, ...hist.events].sort((a, b) => a.block - b.block);
-      for (const e of merged) {
-        const m = await eventMeta(e).catch(() => null);
-        const wl = walletLabelFor(e);
-        let f0 = null, f1 = null, usd = null, weth = null, locked = false;
-        const px = feePrices[priceKey(e)];
-        if (m) {
-          f0 = Number(ethers.formatUnits(e.fee0, m.t0.decimals));
-          f1 = Number(ethers.formatUnits(e.fee1, m.t1.decimals));
-          if (px) {
-            usd = f0 * px.p0 + f1 * px.p1;
-            weth = px.w ? usd / px.w : null;
-            locked = true;
-          } else {
-            // Main-wallet rows keep the original rule (only tokens in its own positions have a
-            // current price); watched wallets' rows may also use their holdings' prices.
-            const p0 = wl.main ? lastPrices[priceAddr(m.t0)] : currentPrice(priceAddr(m.t0));
-            const p1 = wl.main ? lastPrices[priceAddr(m.t1)] : currentPrice(priceAddr(m.t1));
-            if (p0 != null && p1 != null) {
-              usd = f0 * p0 + f1 * p1;
-              weth = lastWethUsdSeen ? usd / lastWethUsdSeen : null;
-            }
-          }
-        }
-        rows.push({
-          t: e.t, block: e.block, tx: e.tx, tokenId: e.tokenId,
-          version: isV4Key(e.tokenId) ? 4 : 3, nftId: isV4Key(e.tokenId) ? String(e.tokenId).slice(3) : String(e.tokenId),
-          src: e.src || null, note: e.note || null,
-          wallet: wl.label, walletAddress: wl.address, mainWallet: wl.main,
-          pair: m ? `${m.t0.symbol}/${m.t1.symbol}` : null,
-          sym0: m ? m.t0.symbol : null, sym1: m ? m.t1.symbol : null,
-          f0, f1, usd, weth, locked, principal: !!e.principal,
-          p0: px ? px.p0 : null, p1: px ? px.p1 : null, wethAt: px ? px.w : null,
-        });
-      }
+      const rows = await historyRows(true);
       const totalUsd = rows.reduce((s, r) => s + (r.usd || 0), 0);
       const lockedSince = rows.filter((r) => r.locked && r.t).reduce((a, r) => (a == null || r.t < a ? r.t : a), null);
       // Per-wallet breakdown, main wallet first, then in settings.json order.
@@ -2290,6 +2348,7 @@ const attribution = require("./attribution").create({
   getWatch: () => watch.latest,
   getPositions: () => cache.payload,
   getStaking: () => (staking.enabled ? staking.view() : null),
+  getHistory: () => lastHistoryRows,
 });
 // === ledger audit === (audit.js): nightly plausibility + inflow reconciliation of the valued rows
 const ledgerAudit = require("./audit").create({ cfg, port: PORT, log: (m) => console.log(m) });

@@ -44,19 +44,24 @@ async function main() {
   if (skipped) console.warn(`Skipped ${skipped} malformed scout row(s) of ${rawRows.length}`);
   if (!rows.length) { console.log("No usable scout rows in the last 3 days."); return; }
 
+  // One group per position, not per id: a v3 and a v4 position can share a tokenId and two
+  // wallets can hold the same id, so the key carries the wallet and the version (when the row has one).
+  const posKey = row => `${row.wallet}:${row.version ?? "?"}:${row.tokenId}`;
   const byPos = new Map();
   for (const row of rows) {
-    if (!byPos.has(row.tokenId)) byPos.set(row.tokenId, []);
-    byPos.get(row.tokenId).push(row);
+    const k = posKey(row);
+    if (!byPos.has(k)) byPos.set(k, []);
+    byPos.get(k).push(row);
   }
 
   console.log("\n══════════════════════════════════════════════════");
   console.log(" Pool validation — last 3 days");
   console.log("══════════════════════════════════════════════════\n");
 
-  for (const [tokenId, posRows] of byPos) {
+  for (const posRows of byPos.values()) {
     posRows.sort((a, b) => a.t.localeCompare(b.t));
     const latest = posRows[posRows.length - 1];
+    const tokenId = latest.tokenId;
 
     const siblings = new Map();
     for (const row of posRows) {

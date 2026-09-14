@@ -1,6 +1,6 @@
 const http = require("http");
 const MIN_TVL=100_000,MIN_APR=50,BASE="http://127.0.0.1:8787";
-function get(e){return new Promise((r,j)=>{const q=http.get(`${BASE}${e}`,s=>{let d="";s.on("data",c=>d+=c);s.on("end",()=>{try{r(JSON.parse(d))}catch(e){j(new Error(`JSON parse: ${e.message}`))}})});q.setTimeout(15000,()=>q.destroy(new Error("Timeout")));q.on("error",j)})}
+function get(e){return new Promise((r,j)=>{const q=http.get(`${BASE}${e}`,s=>{let d="";s.on("data",c=>d+=c);s.on("end",()=>{if(s.statusCode>=400)return j(new Error(`HTTP ${s.statusCode} from ${e}: ${d.slice(0,200)}`));try{r(JSON.parse(d))}catch(err){j(new Error(`JSON parse ${e}: ${err.message}`))}})});q.setTimeout(15000,()=>q.destroy(new Error("Timeout")));q.on("error",j)})}
 function tvlLabel(t){return t>=1e6?`$${(t/1e6).toFixed(1)}M`:t>=1e3?`$${(t/1e3).toFixed(0)}K`:`$${Math.round(t)}`}
 function score(apr,tvl){return apr*(0.4+0.6*Math.min(tvl/1e6,1))}
 async function main(){

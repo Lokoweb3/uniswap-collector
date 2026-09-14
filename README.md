@@ -349,6 +349,8 @@ the agent can propose, not act.
 Ledgers only record and the phone connector only answers while the dashboard
 server runs, so the read-only half belongs on an always-on machine. The
 collector and keystore stay where you sit. `deploy-vm.sh root@<ip>` does the
+
+Secrets never leave this machine: the script excludes `.env`, its backups, issued tokens, the gate and arm secrets, keystores, backups, logs and the agent memory (only `.env.mcp` and the hash-only `mcp-auth.json` go, for the VM's own MCP). `./deploy-vm.sh --check` prints what would be sent and refuses if anything secret-shaped is in the list.
 move onto a fresh Ubuntu VM: Node, Tailscale, a firewall admitting only SSH,
 an unprivileged `lp` user, code and data, and two systemd services
 (`vm/*.service`). The VM runs the dashboard with `LP_READONLY=1`, which hides

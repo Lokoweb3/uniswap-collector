@@ -16,7 +16,37 @@
 # you after asking), because the connector URL follows the name.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="${1:?usage: $0 root@vm-ip}"
+
+# What never leaves this machine. The VM runs the read-only dashboard and the remote MCP, so it
+# gets the code, the ledgers, .env.mcp (its own MCP settings) and mcp-auth.json (hashes only);
+# the collector's .env, its backups, issued tokens, the gate/arm secrets, the agent memory,
+# session data, backups and logs stay here. `--check` lists what would be sent and fails if
+# anything secret-shaped slipped through; run it after editing this list.
+RSYNC_EXCLUDES=(
+  --exclude node_modules --exclude .git
+  --exclude 'operator-keystore*' --exclude '*.keystore.json' --exclude '*.dpapi' --exclude keystore/
+  --exclude .env --exclude '.env.bak-*' --exclude .env.sync --exclude '.mcp-passphrase.txt' --exclude '.mcp-token-*'
+  --exclude gate-state.json --exclude arm-secret.json --exclude watchdog-state.json
+  --exclude .claude --exclude backups --exclude brain --exclude agent-memory --exclude 'agent-work.log'
+  --exclude '*.log' --exclude 'tasks/output'
+)
+# Files the check accepts even though their names look secret-shaped.
+CHECK_ALLOW='^(\.env\.mcp|mcp-auth\.json)$'
+
+if [ "${1:-}" = "--check" ]; then
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  list="$(rsync -an --out-format='%n' "${RSYNC_EXCLUDES[@]}" "$HERE/" "$tmp/" | grep -v '/$' || true)"
+  count=$(printf '%s\n' "$list" | grep -c . || true)
+  echo "deploy-vm --check: $count file(s) would be sent"
+  # Secret-shaped: env files, issued tokens (.mcp-token-*.txt), anything named secret/keystore/passphrase,
+  # the gate/arm state, key material. "token" alone is not enough: token-sales.json is a ledger.
+  bad="$(printf '%s\n' "$list" | grep -iE '(^|/)(\.env(\..*)?|\.mcp-token-[^/]*|[^/]*secret[^/]*|[^/]*keystore[^/]*|[^/]*passphrase[^/]*|gate-state\.json|arm-secret\.json|[^/]*\.pem|[^/]*\.key|id_(rsa|ed25519)[^/]*)$' | grep -vE "$CHECK_ALLOW" || true)"
+  if [ -n "$bad" ]; then echo "REFUSED — secret-shaped files in the send list:"; printf '  %s\n' $bad; exit 1; fi
+  echo "ok — nothing secret-shaped (allowed: .env.mcp, mcp-auth.json — hashes and MCP settings the VM needs)"
+  exit 0
+fi
+
+TARGET="${1:?usage: $0 root@vm-ip   (or: $0 --check)}"
 HOST="${TARGET#*@}"
 REMOTE_DIR=/home/lp/uniswap-collector
 KEY="$HOME/.ssh/lp-vm"
@@ -46,11 +76,8 @@ echo "node \$(node -v), tailscale \$(tailscale version | head -1), firewall: \$(
 REMOTE
 
 echo "== 2/6 code and data"
-rsync -az --delete -e "ssh" \
-  --exclude node_modules --exclude 'operator-keystore*' --exclude '*.keystore.json' --exclude '*.dpapi' \
-  --exclude .mcp-passphrase.txt --exclude .env.sync --exclude dashboard.log --exclude mcp-remote.log \
-  --exclude '.git' \
-  "$HERE/" "$TARGET:$REMOTE_DIR/"
+bash "$0" --check   # refuses to continue if the send list holds anything secret-shaped
+rsync -az --delete -e "ssh" "${RSYNC_EXCLUDES[@]}" "$HERE/" "$TARGET:$REMOTE_DIR/"
 ssh "$TARGET" bash -s <<REMOTE
 set -euo pipefail
 cd $REMOTE_DIR

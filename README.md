@@ -272,6 +272,11 @@ clone before every task; ids in `settings.json` and the ledgers change daily), d
 `.env`, keystores, or the runtime ledgers, and a patch that only re-derives facts already verified in
 the brief it was given is sent back.
 
+The restart is not optional. The dashboard chat imports `lp-mcp.mjs` on demand (and, through it,
+whatever `agent.js` pulls in), and Node caches a module that threw while loading, so a fix to one of
+those files is invisible to the chat until `./stop-all.sh && ./start-all.sh`. On 2026-09-13 the chat
+kept answering "server is not defined" for hours after that exact error had been fixed on disk.
+
 ### From an agent on a server
 
 A program with no browser cannot use the sign-in page. Issue it a

@@ -9,25 +9,33 @@
 # so the watchdog sends one itself on the 2nd consecutive restart, then at most once an
 # hour while the loop continues. Telegram token/chat come from .env exactly as alerts.js
 # reads them; nothing from .env is ever echoed or logged.
+#
+# Liveness from OUTSIDE the process (TASK-66): a port that answers is not a dashboard that
+# works. Every 60 s the watchdog fetches /api/positions with a 20 s limit and reads its
+# `loops` block. Two timeouts in a row = a wedged event loop → one Telegram line and a
+# restart. A loop reporting stale for more than 2 probes → one Telegram line (1 h cooldown),
+# no restart: the process is alive, something inside it is not, and server.log has the why.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 LOG="$HERE/watchdog.log"
-STATE="$HERE/watchdog-state.json"   # { count, firstAt, lastAt, alertedAt } epoch seconds
+STATE="$HERE/watchdog-state.json"   # { count, firstAt, lastAt, alertedAt, probeAlertedAt } epoch seconds
+PROBE_URL="http://127.0.0.1:8787/api/positions"
+PROBE_EVERY=2                        # cycles of 30 s between probes
 LOOP_WINDOW=600                      # restarts closer than this are one crash loop
 ALERT_COOLDOWN=3600
 CURL="${WATCHDOG_CURL:-curl}"        # tests replace curl with a stub
 
-read_state() {  # -> COUNT FIRST_AT LAST_AT ALERTED_AT (0 when unknown)
-  COUNT=0; FIRST_AT=0; LAST_AT=0; ALERTED_AT=0
+read_state() {  # -> COUNT FIRST_AT LAST_AT ALERTED_AT PROBE_ALERTED_AT (0 when unknown)
+  COUNT=0; FIRST_AT=0; LAST_AT=0; ALERTED_AT=0; PROBE_ALERTED_AT=0
   [ -f "$STATE" ] || return 0
   local v
-  for k in count firstAt lastAt alertedAt; do
+  for k in count firstAt lastAt alertedAt probeAlertedAt; do
     v=$(sed -n "s/.*\"$k\":[[:space:]]*\([0-9]*\).*/\1/p" "$STATE" | head -1)
-    case "$k" in count) COUNT=${v:-0};; firstAt) FIRST_AT=${v:-0};; lastAt) LAST_AT=${v:-0};; alertedAt) ALERTED_AT=${v:-0};; esac
+    case "$k" in count) COUNT=${v:-0};; firstAt) FIRST_AT=${v:-0};; lastAt) LAST_AT=${v:-0};; alertedAt) ALERTED_AT=${v:-0};; probeAlertedAt) PROBE_ALERTED_AT=${v:-0};; esac
   done
 }
-write_state() { printf '{"count":%d,"firstAt":%d,"lastAt":%d,"alertedAt":%d}\n' "$COUNT" "$FIRST_AT" "$LAST_AT" "$ALERTED_AT" > "$STATE.tmp" && mv -f "$STATE.tmp" "$STATE"; }
+write_state() { printf '{"count":%d,"firstAt":%d,"lastAt":%d,"alertedAt":%d,"probeAlertedAt":%d}\n' "$COUNT" "$FIRST_AT" "$LAST_AT" "$ALERTED_AT" "$PROBE_ALERTED_AT" > "$STATE.tmp" && mv -f "$STATE.tmp" "$STATE"; }
 
 notify() {  # $1 = text; silent no-op when .env has no token/chat
   local token="" chat=""
@@ -60,21 +68,90 @@ record_restart() {
   write_state
 }
 
-if [ "${1:-}" = "--self-test" ]; then   # exercise the counter with a stub curl and a temp state file
+# --- liveness probe -----------------------------------------------------------------------
+PROBE_TIMEOUTS=0; PROBE_STALE=0
+# stale_loops BODY -> prints "label (N min)" per stale loop, one per line; empty when healthy.
+stale_loops() {
+  printf '%s' "$1" | node -e '
+    let d = ""; process.stdin.on("data", (c) => d += c).on("end", () => {
+      let j; try { j = JSON.parse(d); } catch { process.exit(2); }
+      const loops = j && j.loops && typeof j.loops === "object" ? j.loops : {};
+      for (const [k, v] of Object.entries(loops)) if (v && v.stale) console.log(`${v.label || k} (${Math.round(v.ageMin || 0)} min)`);
+    });' 2>/dev/null
+}
+# check_probe STATUS BODY: STATUS is curl's exit code (0 = answered). Updates the counters,
+# alerts and restarts as documented above. Returns 0; RESTART_NOW=1 asks the loop to restart.
+check_probe() {
+  local status="$1" body="$2" now; now=$(date +%s); RESTART_NOW=0
+  if [ "$status" != "0" ] || [ -z "$body" ]; then
+    PROBE_TIMEOUTS=$((PROBE_TIMEOUTS + 1))
+    echo "$(date -Is) probe failed (${PROBE_TIMEOUTS}× in a row, curl exit $status)" >> "$LOG"
+    if [ "$PROBE_TIMEOUTS" -ge 2 ]; then
+      read_state
+      if [ $((now - PROBE_ALERTED_AT)) -ge "$ALERT_COOLDOWN" ]; then notify "⚠️ dashboard is listening but not answering (2 probes timed out) — restarting"; PROBE_ALERTED_AT=$now; write_state; fi
+      PROBE_TIMEOUTS=0; RESTART_NOW=1
+    fi
+    return 0
+  fi
+  PROBE_TIMEOUTS=0
+  local stale; stale=$(stale_loops "$body")
+  if [ -z "$stale" ]; then PROBE_STALE=0; return 0; fi
+  PROBE_STALE=$((PROBE_STALE + 1))
+  if [ "$PROBE_STALE" -gt 2 ]; then
+    read_state
+    if [ $((now - PROBE_ALERTED_AT)) -ge "$ALERT_COOLDOWN" ]; then
+      notify "⚠️ loop stale: $(printf '%s' "$stale" | paste -sd ',' -) — the dashboard is up but this loop stopped reporting; check server.log"
+      PROBE_ALERTED_AT=$now; write_state
+    else
+      echo "$(date -Is) loop still stale (alert cooldown): $(printf '%s' "$stale" | paste -sd ',' -)" >> "$LOG"
+    fi
+  fi
+}
+probe() {  # fetch once; feeds check_probe
+  local body status
+  body=$("$CURL" -s -m 20 "$PROBE_URL"); status=$?
+  check_probe "$status" "$body"
+}
+
+if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl and a temp state file
   STATE="$(mktemp)"; LOG="/dev/stdout"; CURL="${WATCHDOG_CURL:-true}"
   record_restart; read_state; echo "after 1: count=$COUNT alertedAt=$ALERTED_AT"
   record_restart; read_state; echo "after 2: count=$COUNT alerted=$([ "$ALERTED_AT" -gt 0 ] && echo yes || echo no)"
   record_restart; read_state; echo "after 3: count=$COUNT (cooldown holds, no second alert)"
+  echo "--- probe"
+  HEALTHY='{"ok":true,"loops":{"guardian":{"ageMin":1,"staleAfterMin":10,"stale":false,"label":"risk guardian"}}}'
+  STALE='{"ok":true,"loops":{"guardian":{"ageMin":1,"stale":false,"label":"risk guardian"},"autoCollect":{"ageMin":52,"staleAfterMin":45,"stale":true,"label":"fee auto-collect"}}}'
+  check_probe 0 "$HEALTHY"; echo "healthy: stale=$PROBE_STALE timeouts=$PROBE_TIMEOUTS (nothing sent)"
+  check_probe 0 "$STALE"; check_probe 0 "$STALE"; echo "stale x2: stale=$PROBE_STALE (not yet)"
+  check_probe 0 "$STALE"; read_state; echo "stale x3: alerted=$([ "$PROBE_ALERTED_AT" -gt 0 ] && echo yes || echo no)"
+  check_probe 0 "$STALE"; echo "stale x4 within the hour: no second alert (see 'cooldown' line above)"
+  check_probe 0 "$HEALTHY"; echo "healthy again: stale=$PROBE_STALE"
+  check_probe 28 ""; echo "timeout 1: restart=$RESTART_NOW"; check_probe 28 ""; echo "timeout 2: restart=$RESTART_NOW (cooldown holds the message, restart still requested)"
   rm -f "$STATE"; exit 0
 fi
 
 echo "$(date -Is) watchdog started (pid $$)" >> "$LOG"
+CYCLE=0
 while true; do
   sleep 30
   if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':8787$'; then
     echo "$(date -Is) dashboard not listening; restarting" >> "$LOG"
     record_restart
     LP_RESTARTED_BY=watchdog LP_RESTART_REASON="not listening on :8787 at $(date +%H:%M)" bash "$HERE/start-all.sh" --no-watchdog >> "$LOG" 2>&1
+    PROBE_TIMEOUTS=0; PROBE_STALE=0
     sleep 60
+    continue
+  fi
+  CYCLE=$((CYCLE + 1))
+  if [ $((CYCLE % PROBE_EVERY)) -eq 0 ]; then
+    probe
+    if [ "${RESTART_NOW:-0}" = "1" ]; then
+      echo "$(date -Is) dashboard not answering; restarting" >> "$LOG"
+      record_restart
+      bash "$HERE/stop-all.sh" >> "$LOG" 2>&1
+      LP_RESTARTED_BY=watchdog LP_RESTART_REASON="listening but not answering at $(date +%H:%M)" bash "$HERE/start-all.sh" --no-watchdog >> "$LOG" 2>&1
+      PROBE_TIMEOUTS=0; PROBE_STALE=0
+      sleep 60
+    fi
   fi
 done

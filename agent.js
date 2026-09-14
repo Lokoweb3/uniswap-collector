@@ -46,7 +46,7 @@ const ROLES = { read: 0, approve: 1, full: 2 };
 const WRITE_TOOLS = { approve_sale: "approve", update_notes: "approve", record_strategy_proposal: "full" };
 
 const BASE_SYSTEM = `You are the assistant built into the LP Dashboard, a Uniswap v3/v4 liquidity-position monitor and fee collector on Robinhood Chain (chain id 4663). You are the same assistant on the website, on Telegram and for local scripts; the notes below are what you remember across all of them.
-You answer questions about the owner's positions, watched wallets, collected fees, revenue, portfolio, risk guardian (per-position alert and auto-close rules), the LOKOVault treasury, staking, attribution, the weekly digest, pending fee-token sales, and system health, using the tools. Call a tool before stating any number; never guess figures. Call several tools in one turn when the question spans them.
+You answer questions about the owner's positions, watched wallets, collected fees, revenue, portfolio, risk guardian (per-position alert and auto-close rules), the LOKOVault treasury, staking, attribution, the weekly digest, pending fee-token sales, and system health, using the tools. Call a tool before stating any number; never guess figures. Call several tools in one turn when the question spans them. Answer once, in one place; do not restate a number from an earlier tool result when a later, broader result supersedes it. positions covers the Main wallet only; for totals across all wallets use health (guardian.positions) or watched_wallets, and say which wallets the number covers.
 Reading the data: fees and revenue are in USD unless a token symbol is given. "In range" means the pool price sits inside the position's band and it earns fees; out of range earns nothing. In memecoin_watch, prices are TOKENS PER QUOTE (ETH or USDG), so a larger number means the token is worth less; report priceVsEntryPct as the token's move since entry. Percent changes are already computed; do not invert them.
 Alerts the dashboard sent to this chat appear in the conversation as your own earlier messages; "it" or "that sale" in a reply refers to the most recent one.
 Style: answer directly in a few short sentences or a bullet list; never use markdown tables or headings. Use $ with two decimals for USD, and the pair name and token id for positions. Say when a value is unpriced or missing rather than filling it in. Do not mention tool names.`;
@@ -199,8 +199,9 @@ async function ollamaChat(s, t, system) {
     const msg = out.message || {};
     const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
     s.messages.push({ role: "assistant", content: msg.content || "", ...(calls.length ? { tool_calls: calls } : {}) });
-    text = (msg.content || "").trim();
-    if (!calls.length) break;
+    // The reply is the final round only: text the model wrote alongside a tool call is
+    // an interim thought on partial data, never part of the answer.
+    if (!calls.length) { text = (msg.content || "").trim(); break; }
     for (const c of calls) {
       const name = c.function && c.function.name;
       let args = (c.function && c.function.arguments) || {};
@@ -292,4 +293,4 @@ function create({ port, dir = __dirname } = {}) {
   return { chat, remember, reset, status, channels, notes: mem.notes, SYSTEM: BASE_SYSTEM, ROLE_TEXT, toolsFor, WRITE_TOOLS };
 }
 
-module.exports = { create, status, ROLES, WRITE_TOOLS };
+module.exports = { create, status, ROLES, WRITE_TOOLS, ollamaChat };

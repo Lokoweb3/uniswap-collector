@@ -62,5 +62,24 @@ const agentMod = require("../agent");
   assert.ok(!fs.existsSync(f));
   delete process.env.ANTHROPIC_API_KEY;
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log("chat.test.js: agent provider, validation, roles, notes and memory ok");
+
+  // ollamaChat: the reply is the final round only. Text the model emits alongside a tool call
+  // ("There are 2." from the Main-only positions tool) must not be glued onto the final answer.
+  const rounds = [
+    { message: { content: "There are 2.", tool_calls: [{ function: { name: "positions", arguments: {} } }] } },
+    { message: { content: "There are 5 across all wallets." } },
+  ];
+  const realFetch = global.fetch;
+  const bodies = [];
+  global.fetch = async (url, opts) => { bodies.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => rounds.shift() }; };
+  try {
+    const s = { messages: [{ role: "user", content: "How many open positions across all wallets?" }] };
+    const t = { defs: [{ name: "positions", description: "p", input_schema: { type: "object", properties: {} } }], run: async () => ({ open: 2 }) };
+    const reply = await agentMod.ollamaChat(s, t, "sys");
+    assert.strictEqual(reply, "There are 5 across all wallets.");
+    assert.strictEqual(bodies.length, 2, "two model rounds");
+    assert.strictEqual(s.messages.filter((m) => m.role === "tool").length, 1, "the tool ran once");
+  } finally { global.fetch = realFetch; }
+  assert.ok(/Answer once, in one place/.test(bot.SYSTEM) && /positions covers the Main wallet only/.test(bot.SYSTEM));
+  console.log("chat.test.js: agent provider, validation, roles, notes, memory and final-round reply ok");
 })().catch((e) => { console.error(e); process.exit(1); });

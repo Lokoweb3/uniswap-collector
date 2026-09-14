@@ -71,10 +71,13 @@ function getChangedFiles(hours=6){
 }
 
 let apiKey=null, model=null; // set in main() after validation
-// A stalled model call must not hang the 6-hourly cron: OLLAMA_TIMEOUT (seconds, default 120) aborts it
-// and the abort surfaces as an ordinary review failure, which the caller already counts.
-const TIMEOUT_MS=(Number(process.env.OLLAMA_TIMEOUT)>0?Number(process.env.OLLAMA_TIMEOUT):120)*1000;
-async function callClaude(prompt){
+// A stalled model call must not hang the 6-hourly cron: OLLAMA_TIMEOUT (seconds, default 300) is the
+// base budget; a file review adds 0.5 s per line sent (capped at 600 s) because the 2026-09-14 run lost
+// its two longest files to a flat 120 s. The abort surfaces as an ordinary review failure.
+const TIMEOUT_MS=(Number(process.env.OLLAMA_TIMEOUT)>0?Number(process.env.OLLAMA_TIMEOUT):300)*1000;
+const MAX_TIMEOUT_MS=600*1000;
+function budgetForLines(linesSent){return Math.min(MAX_TIMEOUT_MS,TIMEOUT_MS+Math.round(linesSent*500))}
+async function callClaude(prompt,{timeoutMs=TIMEOUT_MS}={}){
   let res;
   try{
     res=await fetch("https://ollama.com/api/chat",{
@@ -88,10 +91,10 @@ async function callClaude(prompt){
         messages:[{role:"user",content:prompt}],
         stream:false,
       }),
-      signal:AbortSignal.timeout(TIMEOUT_MS),
+      signal:AbortSignal.timeout(timeoutMs),
     });
   }catch(e){
-    if(e.name==="TimeoutError"||e.name==="AbortError")throw new Error(`Ollama Cloud timed out after ${TIMEOUT_MS/1000}s (OLLAMA_TIMEOUT)`);
+    if(e.name==="TimeoutError"||e.name==="AbortError")throw new Error(`Ollama Cloud timed out after ${Math.round(timeoutMs/1000)}s (OLLAMA_TIMEOUT base ${TIMEOUT_MS/1000}s)`);
     throw e;
   }
   if(!res.ok)throw new Error(`Ollama Cloud ${res.status}: ${await res.text()}`);
@@ -134,7 +137,8 @@ Review for: bugs, missing null guards, bad error handling, hardcoded values, log
 Respond ONLY as JSON, no markdown:
 {"score":1-10,"summary":"one sentence","issues":[{"severity":"HIGH|MEDIUM|LOW","line":0,"msg":"description","fix":"fix"}],"suggestions":["improvement"]}`;
   try{
-    const raw=await callClaude(prompt);
+    const linesSent=f.truncated?f.content.split("\n").length:f.lines;
+    const raw=await callClaude(prompt,{timeoutMs:budgetForLines(linesSent)});
     const result=JSON.parse(raw.replace(/```json|```/g,"").trim());
     if(!result||typeof result!=="object")throw new Error("review is not a JSON object");
     return{file:filePath,reason,...normReview(result)};

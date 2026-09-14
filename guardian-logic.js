@@ -216,4 +216,30 @@ function shouldClose(d) {
   return null;
 }
 
-module.exports = { derive, alertsFor, shouldClose, rulesOf, RULE_DEFAULTS, HOUR };
+
+// State-file hygiene. Closed positions used to keep every sample forever (the
+// file reached 5 MB and was rewritten each minute): once closed, samples go and
+// only { closed, closedAt } stays, and the entry itself is dropped after
+// CLOSED_TTL_MS; open positions keep the last KEEP_MS of samples; stale
+// cool-down stamps in `sent` go with the same TTL. Pure, so it is tested.
+const CLOSED_TTL_MS = 7 * 24 * 3600 * 1000;
+function pruneState(state, now = Date.now(), { closedTtlMs = CLOSED_TTL_MS, keepMs = 24 * 3600 * 1000 } = {}) {
+  if (!state || typeof state !== "object") state = {};
+  if (!state.positions || typeof state.positions !== "object") state.positions = {};
+  if (!state.sent || typeof state.sent !== "object") state.sent = {};
+  for (const [id, st] of Object.entries(state.positions)) {
+    if (!st || typeof st !== "object") { delete state.positions[id]; continue; }
+    if (st.closed) {
+      const lastT = Array.isArray(st.samples) && st.samples.length ? Number(st.samples[st.samples.length - 1].t) || now : now;
+      const closedAt = Number(st.closedAt) || lastT;
+      if (now - closedAt > closedTtlMs) { delete state.positions[id]; continue; }
+      state.positions[id] = { closed: true, closedAt };
+    } else if (Array.isArray(st.samples)) {
+      st.samples = st.samples.filter((x) => x && now - Number(x.t) <= keepMs);
+    }
+  }
+  for (const [k, t] of Object.entries(state.sent)) if (!(Number(t) > 0) || now - Number(t) > closedTtlMs) delete state.sent[k];
+  return state;
+}
+
+module.exports = { pruneState, CLOSED_TTL_MS, derive, alertsFor, shouldClose, rulesOf, RULE_DEFAULTS, HOUR };

@@ -1,6 +1,6 @@
 // node test/guardian.test.js — risk guardian decision logic with synthetic samples (one rule block per position).
 const assert = require("assert");
-const { derive, alertsFor, shouldClose, rulesOf, RULE_DEFAULTS } = require("../guardian-logic");
+const { derive, alertsFor, shouldClose, rulesOf, RULE_DEFAULTS, pruneState } = require("../guardian-logic");
 
 const cfg = { tokenId: "1", pair: "LAPTOP/ETH", wallet: "Trading", walletAddress: "0x1", entryPrice: 1000000, alertPct: 20, closePct: 50, outOfRangeMinutes: 120, tvlDropPct: 50, autoClose: false, alertOnly: true };
 const t0 = Date.parse("2026-09-08T00:00:00Z");
@@ -120,3 +120,26 @@ d = derive(disc, [mk(0, 100, { liq: 1000 }), mk(5, 100, { liq: 300 })], undefine
 assert.strictEqual(d.rules.tvlDropPct, 60); assert.strictEqual(d.rules.closePct, 50); assert.strictEqual(d.status, "red");
 
 console.log("guardian: 11 scenarios passed (rule block, steady, mock dump = one alert, range, volume, liquidity, close-now, auto-close, gains, fee floor/target, defaults)");
+
+// ---- state pruning (TASK-60) ----
+{
+  const DAY = 24 * 3600 * 1000, now = 1_800_000_000_000;
+  const mk = (n, t0) => Array.from({ length: n }, (_, i) => ({ t: t0 + i * 60000, price: 1 }));
+  const state = {
+    positions: {
+      open:      { samples: [...mk(3, now - 2 * DAY), ...mk(3, now - 3600 * 1000)], closed: false, confirm: { n: 0 } },
+      closedNew: { samples: mk(50, now - 2 * DAY), closed: true },            // no closedAt: last sample stands in
+      closedOld: { samples: mk(5, now - 9 * DAY), closed: true, closedAt: now - 8 * DAY },
+      junk:      null,
+    },
+    sent: { "close:1": now - 1000, "close:2": now - 8 * DAY, bad: "x" },
+  };
+  const out = pruneState(state, now);
+  assert.equal(out.positions.open.samples.length, 3, "open position keeps only the last 24 h of samples");
+  assert.deepEqual(out.positions.closedNew, { closed: true, closedAt: now - 2 * DAY + 49 * 60000 }, "a closed position loses its samples and keeps closedAt");
+  assert.equal(out.positions.closedOld, undefined, "an 8-day-old closed entry is pruned");
+  assert.equal(out.positions.junk, undefined, "a malformed entry is dropped");
+  assert.deepEqual(Object.keys(out.sent), ["close:1"], "stale and malformed cool-down stamps are dropped");
+  assert.deepEqual(pruneState(undefined, now), { positions: {}, sent: {} }, "an unreadable file becomes an empty state");
+}
+console.log("guardian: state pruning — closed samples dropped, 7-day TTL, sent stamps trimmed");

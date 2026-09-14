@@ -43,7 +43,12 @@ const readJson = (f, d) => {
     return d;
   }
 };
-const writeJson = (f, o) => fs.writeFileSync(f, JSON.stringify(o));
+// Write-then-rename: a crash mid-write leaves the previous file, never a truncated one that readJson would turn into {}.
+const writeJson = (f, o) => {
+  const tmp = f + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(o));
+  fs.renameSync(tmp, f);
+};
 const addrOf = (t) => (typeof t === "string" ? t : t && t.address) || null;
 const bareId = (p) => String(p.nftId || String(p.tokenId).replace(/^v4-/, ""));
 
@@ -74,7 +79,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
   const isEth = (a) => a === ethers.ZeroAddress || String(a).toLowerCase() === WETH_ADDR;
   const isStable = (a) => !!STABLE_ADDR && String(a).toLowerCase() === STABLE_ADDR;
 
-  let state = readJson(STATE_FILE, { positions: {}, sent: {} });
+  let state = logic.pruneState(readJson(STATE_FILE, { positions: {}, sent: {} }), Date.now()); // an old file shrinks on the first write
   let status = readJson(STATUS_FILE, { ok: true, at: 0, positions: [], recent: [] });
   const liveConfig = () => { try { return settings.load(); } catch { return cfg; } };
 
@@ -262,7 +267,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
       const row = { ...base, status: "closed", tx: res.hash, block: res.block, gasEth: res.gasWei != null ? ethers.formatEther(res.gasWei) : null, recovered };
       appendLog(row);
       const st = state.positions[String(entry.tokenId)];
-      if (st) st.closed = true;
+      if (st) { st.closed = true; st.closedAt = Date.now(); }
       await send(`🚨 ${who === "manual" ? "Closed" : "Auto-closed"} ${entry.pair} — recovered ${recovered} to ${entry.wallet} (${reason}). tx ${String(res.hash).slice(0, 12)}…`, entry);
       return row;
     } catch (err) {
@@ -347,6 +352,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
       }
       if (s.gone || s.closed) {
         st.closed = true;
+        st.closedAt = t;
         log(`#${id} ${entry.pair}: position is ${s.gone ? "no longer owned" : "closed"}; watching stops`);
         if (entry.discovered) updateDiscovered(id, null);
         statuses.push({ tokenId: id, pair: entry.pair, wallet: entry.wallet, version: entry.version, closed: true, at: t });
@@ -381,13 +387,14 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
           state.sent[`close:${id}`] = t;
           const row = await closeNow(entry, reason, "auto");
           d.lastClose = row;
-          if (row.status === "closed") st.closed = true;
+          if (row.status === "closed") { st.closed = true; st.closedAt = t; }
           else st.confirm.n = 0; // a failed or locked attempt starts the confirmation over; retried after the 30-min cool-down
         }
       } else st.confirm.n = 0;
       statuses.push(d);
       log(`#${id} ${entry.pair}: ${d.status} price ${d.price.toLocaleString("en-US", { maximumFractionDigits: 0 })} (${d.priceVsEntryPct == null ? "no entry" : (d.priceVsEntryPct >= 0 ? "+" : "") + d.priceVsEntryPct.toFixed(1) + "% vs entry"}) ${d.inRange ? "in range" : "OUT " + Math.round(d.outMinutes) + "m"} fees $${(d.feeUsd || 0).toFixed(2)}${d.feesPerHour != null ? " (" + d.feesPerHour.toFixed(2) + "/h)" : ""} liq ${d.liqDropFromMaxPct == null ? "" : "-" + d.liqDropFromMaxPct.toFixed(0) + "% vs 24h max"}`);
     }
+    logic.pruneState(state, t);
     writeJson(STATE_FILE, state);
     status = { ok: true, at: t, wethUsd, positions: statuses, recent: readJson(LOG_FILE, []).slice(-10).reverse(), defaults: logic.rulesOf({}, defaults), discovery: live.memecoinDiscovery !== false };
     writeJson(STATUS_FILE, status);

@@ -87,6 +87,8 @@ function toLegacy(raw) {
     memecoinSell: risk.sell || {},
     dailySummary: al.dailySummary || {},
     launchScanner: s.launchScanner || {},
+    // Longest window (minutes) the operator passphrase stays decrypted after arming; 24 h unless raised.
+    armMaxMinutes: Number((s.arm || {}).maxMinutes) > 0 ? Math.min(10080, Number(s.arm.maxMinutes)) : 1440,
     alerts: { telegramChat: al.telegramChat || "", fallbackChat: al.fallbackChat || "", treasuryChat: al.treasuryChat || "", poolCooldownMinutes: al.poolCooldownMinutes != null ? Number(al.poolCooldownMinutes) : null },
   };
   return cfg;
@@ -135,6 +137,10 @@ function fromLegacy(c, w = null, chats = {}) {
       discovery: c.memecoinDiscovery !== false,
       autoCollect: strip(c.memecoinCollect || {}),
       sell: strip(c.memecoinSell || {}),
+    },
+    arm: {
+      _comment: "maxMinutes: the longest window the collector key stays decrypted after you arm (default 1440 = 24 h, hard cap 10080). Shorter is safer: while armed the operator can move every v4 position.",
+      maxMinutes: c.armMaxMinutes ?? 1440,
     },
     alerts: {
       _comment: "Telegram chat ids (the bot token stays in .env as TELEGRAM_TOKEN). telegramChat: the group for position alerts; fallbackChat: your personal chat (used when the group is unset or refuses); treasuryChat: vault messages (default the group). dailySummary: the 08:00 line-up.",

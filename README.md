@@ -714,6 +714,7 @@ is the template; the file is gitignored because it holds your wallet addresses):
 | `tokens` | `USDG`, `WETH` (each address once), `usdReferenceFeeTier` |
 | `contracts` | Uniswap v3 / v4 / v2 addresses (`v4.pricingHooks` included) |
 | `collector` | `sweepDestination`, `thresholds`, `sweep`, `tokenIds`, `denylist`, `v4Collect`, `swapFeeTierOverrides` |
+| `arm` | `maxMinutes` — the longest arm window (how long the collector key stays decrypted); default 1440 = 24 h, hard cap 7 days. While armed the operator can move every v4 position, so keep it short |
 | `vault` | `nft`, `tba`, `implementation`, `tokenId`, `feeSplitPct`, `feeSplitMax`, `withdrawAlertUsdg` |
 | `risk` | `memecoins` (rule blocks), `defaults`, `discovery`, `autoCollect`, `sell` |
 | `alerts` | `telegramChat` (group), `fallbackChat` (personal), `treasuryChat`, `dailySummary` |

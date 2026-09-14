@@ -148,6 +148,10 @@
       "confirmWaitMinutes": 10
     }
   },
+  "arm": {
+    "_comment": "maxMinutes: the longest window the collector key stays decrypted after you arm (default 1440 = 24 h, hard cap 10080).",
+    "maxMinutes": 1440
+  },
   "alerts": {
     "_comment": "Telegram chat ids (the bot token stays in .env as TELEGRAM_TOKEN). telegramChat: the group for position alerts; fallbackChat: your personal chat (used when the group is unset or refuses); treasuryChat: vault messages (default the group). dailySummary: the 08:00 line-up. agentChats: extra Telegram chats the agent answers, [{ chat, role }] with role read | approve | full (fallbackChat is always allowed with role approve). poolCooldownMinutes: one Telegram message per pool per window, shared by the guardian, the range check and the auto-collect summary (default 30; urgent messages always go through).",
     "telegramChat": "-100123456789",

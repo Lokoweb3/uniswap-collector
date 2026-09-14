@@ -1240,20 +1240,22 @@ async function handleRequest(req, res) {
     try {
       if (url.pathname === "/api/arm/status") {
         res.writeHead(200);
-        return res.end(JSON.stringify({ ok: true, owner: cfg.ownerAddress, operator: armer.operatorAddress(), chainId: Number(cfg.chainId), message: armer.message(cfg), unlock: unlockState(), ...armer.configured() }));
+        return res.end(JSON.stringify({ ok: true, owner: cfg.ownerAddress, operator: armer.operatorAddress(), chainId: Number(cfg.chainId), message: armer.message(cfg), unlock: unlockState(), maxMinutes: cfg.armMaxMinutes, ...armer.configured() }));
       }
       if (req.method !== "POST") throw new Error("POST required");
       const body = JSON.parse(await readBody(req));
+      // The window is clamped to settings arm.maxMinutes (24 h by default); the response says so.
+      const clampInfo = (mins) => { const asked = Number(body.minutes) || 120; return { minutes: mins, maxMinutes: cfg.armMaxMinutes, ...(asked > mins ? { clampedFrom: asked } : {}) }; };
       if (url.pathname === "/api/arm/setup") {
         await armer.setup(cfg, body);
         const mins = await armer.arm(cfg, body, CACHE_FILE);
         res.writeHead(200);
-        return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins }, ...armer.configured() }));
+        return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins }, ...clampInfo(mins), ...armer.configured() }));
       }
       if (url.pathname === "/api/arm") {
         const mins = await armer.arm(cfg, body, CACHE_FILE);
         res.writeHead(200);
-        return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins } }));
+        return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins }, ...clampInfo(mins) }));
       }
       if (url.pathname === "/api/arm/forget") {
         armer.verify(cfg, body.signature);
@@ -1277,7 +1279,7 @@ async function handleRequest(req, res) {
     }
     try {
       const body = JSON.parse(await readBody(req));
-      const minutes = Math.max(1, Math.min(10080, Number(body.minutes) || 120)); // up to 7 days
+      const minutes = Math.max(1, Math.min(Number(cfg.armMaxMinutes) || 1440, Number(body.minutes) || 120)); // settings arm.maxMinutes, 24 h by default
       const ksPath =
         process.env.LP_KEYSTORE_PATH ||
         path.join(process.env.HOME || "", ".lp-collector", "operator-keystore.json");

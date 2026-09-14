@@ -421,7 +421,7 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
     <div class="row"><span class="k">Wallet</span><span data-id="wallet">not connected</span></div>
     <div class="actions">
       <button data-id="connect">Connect wallet</button>
-      <select data-id="minutes"><option value="120">2 hours</option><option value="480">8 hours</option><option value="1440">24 hours</option><option value="4320">3 days</option><option value="10080" selected>1 week</option></select>
+      <select data-id="minutes" title="Longest window: settings arm.maxMinutes"><option value="120">2 hours</option><option value="480">8 hours</option><option value="1440" selected>24 hours</option><option value="4320">3 days</option><option value="10080">1 week</option></select>
       <button data-id="arm" class="primary" disabled>Arm with signature</button>
       <button data-id="lock" hidden>Lock now</button>
     </div>
@@ -935,6 +935,14 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
 
   function render() {
     const armed = st.unlock && st.unlock.armed;
+    // Windows longer than settings arm.maxMinutes cannot be chosen; the longest allowed is preselected.
+    const maxMin = Number(st.maxMinutes) || 1440, sel = $('[data-id="minutes"]');
+    if (sel) {
+      let best = null;
+      for (const o of sel.options) { o.disabled = Number(o.value) > maxMin; if (!o.disabled) best = o; }
+      if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && best) sel.value = best.value;
+      sel.title = `Longest window: ${maxMin >= 1440 ? (maxMin / 1440) + ' day(s)' : (maxMin / 60) + ' h'} (settings arm.maxMinutes)`;
+    }
     const el = $('[data-id="state"]');
     el.textContent = armed ? 'ARMED' : 'LOCKED';
     el.className = 'big ' + (armed ? 'ok' : 'bad');
@@ -1002,7 +1010,7 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
       status('[data-id="status"]', 'Signature accepted by the wallet, arming…', 'warn');
       const j = await post('/api/arm', { signature, minutes: Number($('[data-id="minutes"]').value) });
       await load();
-      status('[data-id="status"]', `Armed for ${j.unlock.minutesLeft} minutes.`, 'ok');
+      status('[data-id="status"]', `Armed for ${j.unlock.minutesLeft} minutes.${j.clampedFrom ? ` (${j.clampedFrom} requested; the maximum is ${j.maxMinutes} — settings arm.maxMinutes)` : ''}`, 'ok');
     } catch (e) {
       const m = e.shortMessage || e.message || String(e);
       status('[data-id="status"]', /rejected|denied|4001/i.test(m) ? 'Signature rejected in the wallet. Nothing changed.' : `Failed: ${m}`, 'bad');

@@ -929,6 +929,9 @@ async function loadWatchForAnalytics(){
 }
 function renderEarnedByWallet(){
   const rows = [];
+  // The Main wallet is never missing from this table: while its daily series is still loading
+  // the row says so, instead of the wallet silently not being there.
+  if (!dailyD) rows.push({ name: ownerName(), today: null, d7: null, d30: null, all: null, since: 'loading…' });
   if (dailyD){
     const m = dailyModel(dailyD);
     const now = Date.now();
@@ -942,8 +945,8 @@ function renderEarnedByWallet(){
   }
   if (!rows.length) return;
   $('#walletearn').innerHTML = `<table class="etable">
-    <tr><th class="l">Earned by wallet</th><th>Today</th><th>7 days</th><th>30 days</th><th>All tracked</th><th class="l">Tracking since</th></tr>
-    ${rows.map(r => `<tr><td class="l">${r.name}</td><td class="u">${usd(r.today)}</td><td class="u">${usd(r.d7)}</td><td class="u">${usd(r.d30)}</td><td class="u">${usd(r.all)}</td><td class="l muted">${r.since}</td></tr>`).join('')}
+    <tr><th class="l" title="Fees as they accrued in each position, per hour, by calendar day: the Main wallet from its fee ledger, watched wallets from their accrual snapshots. Attribution's 7-day fee total uses rolling 7 × 24 h windows, so the two can differ by up to a day of fees.">Earned by wallet <span class="muted" style="font-weight:400">accrued, by calendar day</span></th><th>Today</th><th>7 days</th><th>30 days</th><th>All tracked</th><th class="l">Tracking since</th></tr>
+    ${rows.map(r => `<tr><td class="l">${r.name}</td><td class="u">${r.today == null ? '—' : usd(r.today)}</td><td class="u">${r.d7 == null ? '—' : usd(r.d7)}</td><td class="u">${r.d30 == null ? '—' : usd(r.d30)}</td><td class="u">${r.all == null ? '—' : usd(r.all)}</td><td class="l muted">${r.since}</td></tr>`).join('')}
   </table>`;
 }
 

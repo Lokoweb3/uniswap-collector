@@ -32,22 +32,8 @@ function get(endpoint) {
   });
 }
 
-// brain/proposals.md grows with every run: rotate it aside once it passes 500 KB.
-function appendWithRotation(filePath, content, maxBytes = 500_000) {
-  try {
-    const stat = fs.statSync(filePath);
-    if (stat.size > maxBytes) {
-      const backup = filePath.replace(".md", `-${Date.now()}.md`);
-      fs.renameSync(filePath, backup);
-      console.log(`[loop] rotated proposals to ${backup}`);
-    }
-  } catch (e) {
-    // No file yet is normal; anything else (permissions, rename failure) would let the file grow unbounded.
-    if (e.code !== "ENOENT") console.warn(`[loop] rotation check failed for ${filePath}: ${e.message}`);
-  }
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.appendFileSync(filePath, content);
-}
+const { appendWithRotation: appendShared } = require("./lib");
+const appendWithRotation = (f, c) => appendShared(f, c, { tag: "loop" });
 
 function fmt(n, prefix = "$") {
   if (n == null) return "n/a";

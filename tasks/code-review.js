@@ -15,22 +15,8 @@ const KEY_FILES = [
   "tasks/improvement-loop.js",
 ];
 
-// brain/proposals.md grows with every run: rotate it aside once it passes 500 KB.
-function appendWithRotation(filePath, content, maxBytes = 500_000) {
-  try {
-    const stat = fs.statSync(filePath);
-    if (stat.size > maxBytes) {
-      const backup = filePath.replace(".md", `-${Date.now()}.md`);
-      fs.renameSync(filePath, backup);
-      console.log(`[code-review] rotated proposals to ${backup}`);
-    }
-  } catch (e) {
-    // No file yet is normal; anything else (permissions, rename failure) would let the file grow unbounded.
-    if (e.code !== "ENOENT") console.warn(`[code-review] rotation check failed for ${filePath}: ${e.message}`);
-  }
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.appendFileSync(filePath, content);
-}
+const { appendWithRotation: appendShared, createModel, stripFence, normIssues, normReview } = require("./lib");
+const appendWithRotation=(f,c)=>appendShared(f,c,{tag:"code-review"});
 
 // A failing git command must not look like "no files changed": say what failed before returning what little it printed.
 
@@ -70,53 +56,11 @@ function getChangedFiles(hours=6){
   return [...new Set(raw.filter(f=>(f.endsWith(".js")||f.endsWith(".mjs"))&&!f.includes("node_modules")&&!f.includes("tasks/output")))].slice(0,6);
 }
 
-let apiKey=null, model=null; // set in main() after validation
-// A stalled model call must not hang the 6-hourly run (server.js spawns tasks/run-all.sh): OLLAMA_TIMEOUT (seconds, default 300) is the
-// base budget; a file review adds 0.5 s per line sent (capped at 600 s) because the 2026-09-14 run lost
-// its two longest files to a flat 120 s. The abort surfaces as an ordinary review failure.
-const TIMEOUT_MS=(Number(process.env.OLLAMA_TIMEOUT)>0?Number(process.env.OLLAMA_TIMEOUT):300)*1000;
-const MAX_TIMEOUT_MS=600*1000;
-function budgetForLines(linesSent){return Math.min(MAX_TIMEOUT_MS,TIMEOUT_MS+Math.round(linesSent*500))}
-async function callClaude(prompt,{timeoutMs=TIMEOUT_MS}={}){
-  let res;
-  try{
-    res=await fetch("https://ollama.com/api/chat",{
-      method:"POST",
-      headers:{
-        "Content-Type":"application/json",
-        "Authorization":"Bearer "+apiKey,
-      },
-      body:JSON.stringify({
-        model,
-        messages:[{role:"user",content:prompt}],
-        stream:false,
-      }),
-      signal:AbortSignal.timeout(timeoutMs),
-    });
-  }catch(e){
-    if(e.name==="TimeoutError"||e.name==="AbortError")throw new Error(`Ollama Cloud timed out after ${Math.round(timeoutMs/1000)}s (OLLAMA_TIMEOUT base ${TIMEOUT_MS/1000}s)`);
-    throw e;
-  }
-  if(!res.ok)throw new Error(`Ollama Cloud ${res.status}: ${await res.text()}`);
-  const data=await res.json();
-  return data.message?.content||"";
-}
+let model=null; // created in main() after validation (tasks/lib.js createModel)
+function budgetForLines(linesSent){return model.budgetForLines(linesSent)}
+async function callClaude(prompt,opts={}){return model.call(prompt,opts)}
 
-// The model's JSON is untrusted: coerce the fields the report sorts and prints on, drop issues without a message.
-const SEVERITIES=new Set(["HIGH","MEDIUM","LOW"]);
-function normSeverity(s){s=String(s||"").toUpperCase();return SEVERITIES.has(s)?s:"LOW"}
-function normIssues(list){
-  if(!Array.isArray(list))return [];
-  return list.filter(i=>i&&typeof i.msg==="string"&&i.msg.trim()).map(i=>{
-    const line=Number(i.line);
-    return{...i,severity:normSeverity(i.severity),line:Number.isInteger(line)&&line>0?line:null,fix:typeof i.fix==="string"?i.fix:undefined};
-  });
-}
-function normReview(r){
-  const score=Math.round(Number(r.score));
-  return{...r,score:Number.isInteger(score)&&score>=1&&score<=10?score:null,summary:typeof r.summary==="string"?r.summary:"",
-    issues:normIssues(r.issues),suggestions:Array.isArray(r.suggestions)?r.suggestions.filter(s=>typeof s==="string"):[]};
-}
+// normIssues / normReview live in tasks/lib.js.
 
 async function reviewFile(filePath,reason){
   const f=readFileSafe(filePath);
@@ -139,7 +83,7 @@ Respond ONLY as JSON, no markdown:
   try{
     const linesSent=f.truncated?f.content.split("\n").length:f.lines;
     const raw=await callClaude(prompt,{timeoutMs:budgetForLines(linesSent)});
-    const result=JSON.parse(raw.replace(/```json|```/g,"").trim());
+    const result=JSON.parse(stripFence(raw));
     if(!result||typeof result!=="object")throw new Error("review is not a JSON object");
     return{file:filePath,reason,...normReview(result)};
   }catch(e){console.warn(`[code-review] parse error ${filePath}:`,e.message);return null}
@@ -168,7 +112,7 @@ Respond ONLY as JSON:
 {"riskLevel":"HIGH|MEDIUM|LOW|NONE","summary":"one sentence","concerns":[{"severity":"HIGH|MEDIUM|LOW","msg":"concern"}],"suggestions":["improvement"]}`;
   try{
     const raw=await callClaude(prompt);
-    const r=JSON.parse(raw.replace(/```json|```/g,"").trim());
+    const r=JSON.parse(stripFence(raw));
     if(!r||typeof r!=="object")throw new Error("diff review is not a JSON object");
     const risk=String(r.riskLevel||"").toUpperCase();
     return{...r,riskLevel:["HIGH","MEDIUM","LOW","NONE"].includes(risk)?risk:"NONE",summary:typeof r.summary==="string"?r.summary:"",
@@ -177,13 +121,12 @@ Respond ONLY as JSON:
 }
 
 async function main(){
-  apiKey=process.env.OLLAMA_API_KEY;
-  model=process.env.OLLAMA_MODEL||"kimi-k2.7-code";
-  if(!apiKey){
+  model=createModel();
+  if(!model.enabled){
     console.error("[code-review] OLLAMA_API_KEY not set — skipping review");
     process.exit(0); // exit 0 so run-all.sh continues
   }
-  console.log(`[code-review] starting AI code review (${model})...`);
+  console.log(`[code-review] starting AI code review (${model.model})...`);
   const ts=new Date().toISOString();
   const changedFiles=getChangedFiles(6);
   console.log(`[code-review] ${changedFiles.length} files changed in last 6h`);

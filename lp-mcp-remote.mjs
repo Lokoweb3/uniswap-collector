@@ -3,7 +3,9 @@
  * Remote MCP server for the LP dashboard, for claude.ai and the Claude
  * mobile app ("custom connector").
  *
- * Same four read-only tools as lp-mcp.mjs, served over Streamable HTTP and
+ * The lp-mcp.mjs tools served over Streamable HTTP: read tools for every token, the three
+ * write tools (record_strategy_proposal, approve_sale, run_tasks) only for a token issued with
+ * --write. OAuth clients (claude.ai) are always read.
  * guarded by a self-contained OAuth 2.1 provider: claude.ai registers itself
  * as a client (dynamic client registration), sends you to a login page where
  * you type the passphrase set with --set-passphrase, and gets a bearer token
@@ -38,7 +40,8 @@ import { createServer as createLpServer } from "./lp-mcp.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = process.env.LP_MCP_STATE || path.join(HERE, "mcp-auth.json");
 const PORT = Number(process.env.LP_MCP_PORT || 8788);
-const SCOPES = ["read"];
+const SCOPES = ["read"];            // what OAuth clients and plain tokens get
+const WRITE_SCOPES = ["read", "write"]; // --issue-token <label> --write: the three write tools too
 const ACCESS_TTL = 3600; // seconds
 const CODE_TTL = 10 * 60 * 1000; // ms
 const PENDING_TTL = 30 * 60 * 1000; // ms: how long the sign-in page stays valid after Connect
@@ -97,19 +100,21 @@ if (process.argv.includes("--set-passphrase")) {
 
 // -- Machine tokens -----------------------------------------------------------
 // An agent on a server has no browser for the login page, so it gets a
-// long-lived bearer token issued here instead. Same read-only scope, stored
-// as a hash like every other token, revocable by label. The running server
+// long-lived bearer token issued here instead. Read scope unless --write is given
+// (then approve_sale, run_tasks and record_strategy_proposal are exposed to it too),
+// stored as a hash like every other token, revocable by label. The running server
 // holds the state in memory, so restart it after issuing or revoking.
 const argAfter = (flag) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : null; };
 if (process.argv.includes("--issue-token")) {
   const label = argAfter("--issue-token");
-  if (!label || label.startsWith("--")) { console.error("Usage: --issue-token <label> [--days N]"); process.exit(1); }
+  if (!label || label.startsWith("--")) { console.error("Usage: --issue-token <label> [--days N] [--write]"); process.exit(1); }
   const days = Number(argAfter("--days") || 365);
+  const scopes = process.argv.includes("--write") ? WRITE_SCOPES : SCOPES;
   for (const [k, v] of Object.entries(state.tokens)) if (v.label === label) delete state.tokens[k];
   const token = rand(32);
-  state.tokens[h(token)] = { clientId: `token:${label}`, label, scopes: SCOPES, issuedAt: Date.now(), expiresAt: Math.floor(Date.now() / 1000) + days * 86400 };
+  state.tokens[h(token)] = { clientId: `token:${label}`, label, scopes, issuedAt: Date.now(), expiresAt: Math.floor(Date.now() / 1000) + days * 86400 };
   save();
-  console.log(`Token for "${label}", valid ${days} days. Shown once; store it now:\n${token}\nRestart the server for it to take effect.`);
+  console.log(`Token for "${label}" (${scopes.includes("write") ? "read + write tools" : "read tools only"}), valid ${days} days. Shown once; store it now:\n${token}\nRestart the server for it to take effect.`);
   process.exit(0);
 }
 if (process.argv.includes("--list-tokens")) {
@@ -334,7 +339,9 @@ function main() {
 
   // Stateless: a fresh server + transport per request, nothing to keep alive.
   app.post("/mcp", bearer, express.json({ limit: "1mb" }), async (req, res) => {
-    const server = createLpServer();
+    // Only a token issued with --write sees the write tools; OAuth clients and older tokens (no scope list) are read.
+    const scopes = (req.auth && Array.isArray(req.auth.scopes)) ? req.auth.scopes : [];
+    const server = createLpServer({ role: scopes.includes("write") ? "write" : "read" });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => { transport.close(); server.close(); });
     try {

@@ -42,8 +42,14 @@ const monthKey = (t) => dayKey(t).slice(0, 7);
 const round = (n, d = 2) => (n == null ? null : +Number(n).toFixed(d));
 
 /** Build a server with the four tools. Each transport gets its own instance. */
-export function createServer() {
+/**
+ * role: "write" (default — the local stdio server and the in-process agent, which gate writes by
+ * channel) registers every tool; "read" leaves out the three that change something
+ * (record_strategy_proposal, approve_sale, run_tasks). The remote server passes the token's scope.
+ */
+export function createServer({ role = "write" } = {}) {
 const server = new McpServer({ name: "lp-dashboard", version: "1.0.0" });
+const canWrite = role === "write";
 
 server.registerTool(
   "positions",
@@ -513,7 +519,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+if (canWrite) server.registerTool(
   "record_strategy_proposal",
   {
     title: "Record a strategy proposal",
@@ -587,7 +593,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+if (canWrite) server.registerTool(
   "approve_sale",
   {
     title: "Approve or reject a pending fee-token sale",
@@ -613,7 +619,7 @@ server.registerTool(
 
 // ── Task runner tools ────────────────────────────────────────────────────────
 
-server.registerTool("run_tasks", {
+if (canWrite) server.registerTool("run_tasks", {
   title: "Run the LP / code tasks",
   description: "Run LP improvement loop and code review. Pass task name to run one: improvement-loop, code-scan, code-review, pool-scan. Omit to run all.",
   inputSchema: { task: z.enum(["improvement-loop","code-scan","code-review","pool-scan"]).optional().describe("One task to run; omit to run all") },

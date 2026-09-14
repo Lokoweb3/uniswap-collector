@@ -288,8 +288,10 @@ node lp-mcp-remote.mjs --issue-token my-agent --days 365   # prints the token on
 ```
 
 The agent then talks Streamable HTTP to `https://<that address>/mcp` with
-the header `Authorization: Bearer <token>`. It gets the read-only tools and
-nothing else: `positions`, `watched_wallets`, `collects`, `daily_revenue`,
+the header `Authorization: Bearer <token>`. A token gets the read tools; only a token
+issued with `--write` also gets the three tools that change something (`approve_sale`,
+`run_tasks`, `record_strategy_proposal`), and claude.ai connectors are always read. The read
+tools: `positions`, `watched_wallets`, `collects`, `daily_revenue`,
 `portfolio`, `wallet_balances`, `memecoin_watch` (risk guardian status and rules),
 `vault` (LOKOVault balance and splits), `staking`,
 `attribution` (P&L breakdown and benchmarks), `weekly_digest` (the Monday
@@ -321,7 +323,8 @@ Live snapshots are not enough to design a strategy; the agent needs what happene
   the advice it gives (items: wallet, pair, action, expected fees / APR / net result, a horizon in
   days); once the horizon passes the server scores each item against the position history (beat /
   met / missed / no data, 5% tolerance) and the proposal gets a score, the share of items met or
-  beat. `record_strategy_proposal` is the one write on the MCP: it only appends to
+  beat. `record_strategy_proposal` is one of the three writes on the MCP (with `approve_sale`
+  and `run_tasks`; remote tokens need `--write` to see them): it only appends to
   `strategy-proposals.json` on the dashboard machine (loopback route, refused by the gate). The
   "Strategy track record" section on Analytics shows every proposal and outcome.
 - `token_lots`: cost basis of the fee tokens the collector handed back unconverted: one lot per

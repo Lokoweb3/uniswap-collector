@@ -1820,7 +1820,10 @@ async function loadRisk(){
     const age = d.at ? Math.round((Date.now() - d.at) / 1000) : null;
     $('#risknote').textContent = d.stale ? 'guardian not reporting' : `${d.watching} watched · updated ${age}s ago · v4 every 60 s, v3 every 5 min${d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : ''}`;
     const order = { red: 0, yellow: 1, green: 2 };
-    const list = (d.positions || []).filter(p => !p.closed).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.valueUsd || 0) - (a.valueUsd || 0));
+    // One card per wallet:tokenId, whatever the guardian sends (a re-mint or a rule block for a
+    // position it also discovered must never show the same position twice).
+    const seenKey = new Set();
+    const list = (d.positions || []).filter(p => !p.closed).filter(p => { const k = `${p.wallet || ''}:${p.tokenId}`; if (seenKey.has(k)) return false; seenKey.add(k); return true; }).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.valueUsd || 0) - (a.valueUsd || 0));
     $('#risklist').innerHTML = list.map(p => {
       const lc = p.lastClose;
       return `<article class="pos meme ${p.status === 'red' ? 'out' : ''} ${d.stale ? 'stale' : ''}">

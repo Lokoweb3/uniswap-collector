@@ -252,6 +252,9 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     if (!conf.enabled) return log("memecoinCollect.enabled is false; idle");
     const pos = positions(), w = watched();
     if (!pos || !pos.ok) return log("no position data yet");
+    // A payload the dashboard has not rebuilt for half an hour is not a basis for a collect:
+    // the fee figures in it are that old. Say so and let the caller's heartbeat go stale.
+    if (payloadIsStale(pos, Date.now())) { log(`position data is ${Math.round((Date.now() - pos.at) / 60000)} min old; skipped`); return { stale: true }; }
     const list = memecoinPositions({ positions: pos, watch: w ? { ok: true, wallets: w } : null, memecoins: conf.memecoins, tradingLabel: conf.tradingLabel });
     const trigger = pickTrigger(list, conf.minUsd);
     const decision = shouldRun({ trigger, lastRunAt: state.lastRunAt, minIntervalMinutes: conf.minIntervalMinutes });
@@ -355,7 +358,9 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     if (running) { log("previous cycle still running (collector in progress); skipped"); return { skipped: true }; }
     running = true;
     try {
-      try { await evaluate(opts); } catch (err) { log(`evaluate: ${err.message}`); }
+      let ev = null;
+      try { ev = await evaluate(opts); } catch (err) { log(`evaluate: ${err.message}`); }
+      if (ev && ev.stale) return { skipped: "stale" };
       lastCycleAt = Date.now();
       try { await verifyFirstSplit(opts); } catch (err) { log(`first-split check: ${err.message}`); }
       return { skipped: false, at: lastCycleAt };
@@ -387,5 +392,11 @@ if (require.main === module) {
 
 /** True when a cycle() result should refresh the loop heartbeat: only a real evaluation does. */
 function cycleCounts(result) { return !(result && result.skipped); }
+/** True when the dashboard payload's build time (`at`) is older than maxAgeMs; a payload without `at` is not judged. */
+const STALE_PAYLOAD_MS = 30 * 60 * 1000;
+function payloadIsStale(pos, now = Date.now(), maxAgeMs = STALE_PAYLOAD_MS) {
+  const at = Number(pos && pos.at);
+  return at > 0 && now - at > maxAgeMs;
+}
 
-module.exports = { create, cycleCounts, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor };
+module.exports = { create, cycleCounts, payloadIsStale, STALE_PAYLOAD_MS, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor };

@@ -2227,6 +2227,8 @@ function loopHealth() {
   loops.guardian = { ageMin: ageOf(timers.guardian.lastAt), staleAfterMin: 10, label: "risk guardian" };
   if (cfg.memecoinCollect && cfg.memecoinCollect.enabled !== false) loops.autoCollect = { ageMin: ageOf(timers.autoCollect.lastAt), staleAfterMin: 45, label: "fee auto-collect" };
   loops.backup = { ageMin: ageOf(timers.backup.lastAt), staleAfterMin: 26 * 60, label: "nightly backup", lastResult: timers.backup.lastResult || null };
+  // The position build itself: everything above reads its cache, so a build that keeps failing must show here.
+  loops.build = { ageMin: ageOf(cache.at), staleAfterMin: 30, label: "position build", lastError: lastBuildError };
   if (cfg.launchScanner && cfg.launchScanner.enabled !== false) loops.launch = { ageMin: ageOf(timers.launch.lastAt), staleAfterMin: 20, label: "launch scanner" };
   for (const l of Object.values(loops)) l.stale = l.ageMin > l.staleAfterMin;
   return loops;
@@ -2365,6 +2367,7 @@ async function advisorTick() {
 // browser tab is open.
 const startedAt = Date.now();
 let auditRunning = false;
+let lastBuildError = null; // one log line per distinct failure, not one per tick
 async function backgroundTick() {
   try {
     if (!buildInFlight) {
@@ -2378,7 +2381,13 @@ async function backgroundTick() {
         });
     }
     await buildInFlight;
-  } catch {}
+    if (lastBuildError) { console.log("build: recovered"); lastBuildError = null; }
+  } catch (err) {
+    // A failing build used to be silent unless a browser happened to be waiting on it;
+    // meanwhile alerts, the guardian watch list and auto-collect kept reading the stale cache.
+    const m = err && (err.shortMessage || err.message) || String(err);
+    if (m !== lastBuildError) { console.error(`build: ${m} (serving the ${cache.at ? Math.round((Date.now() - cache.at) / 60000) + " min old" : "empty"} cache)`); lastBuildError = m; }
+  }
   try {
     const sent = await alerts.check({
       payload: cache.payload,

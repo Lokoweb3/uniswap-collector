@@ -1,6 +1,6 @@
 // node test/memecoin-collect.test.js — trigger logic and collector-output parsing with mocks.
 const assert = require("assert");
-const { cycleCounts, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor } = require("../memecoin-collect");
+const { cycleCounts, payloadIsStale, STALE_PAYLOAD_MS, memecoinPositions, pickTrigger, shouldRun, parseCollectorOutput, collectMessages, collectNotices, poolKeyFor } = require("../memecoin-collect");
 
 // A skipped cycle (collector child still running) must not refresh the heartbeat; a real one does.
 assert.strictEqual(cycleCounts({ skipped: true }), false, "skipped cycle leaves lastAt unchanged");
@@ -88,3 +88,14 @@ assert.strictEqual(locked.locked, true);
 assert.strictEqual(locked.collected.length, 0);
 
 console.log("memecoin-collect: trigger logic and collector-output parsing assertions passed");
+
+// ---- stale payload (TASK-61): a 31-minute-old build is not a basis for a collect ----
+{
+  const now = 1_800_000_000_000;
+  assert.equal(payloadIsStale({ ok: true, at: now - 31 * 60000 }, now), true, "31 min old payload is stale");
+  assert.equal(payloadIsStale({ ok: true, at: now - 29 * 60000 }, now), false, "29 min old payload is fresh");
+  assert.equal(payloadIsStale({ ok: true }, now), false, "a payload without a build time is not judged");
+  assert.equal(STALE_PAYLOAD_MS, 30 * 60000);
+  assert.equal(cycleCounts({ skipped: "stale" }), false, "a stale skip does not stamp the heartbeat");
+}
+console.log("memecoin-collect: stale payload skip assertions passed");

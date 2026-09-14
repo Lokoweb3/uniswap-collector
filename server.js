@@ -1007,7 +1007,8 @@ async function build() {
     const r = rateFor(p.tokenId);
     p.dailyUsd = r.dailyUsd;
     p.rateWindowH = r.windowH;
-    p.aprPct = r.dailyUsd != null && p.valueUsd ? (r.dailyUsd * 365 * 100) / p.valueUsd : null;
+    // No annualising of a segment shorter than 6 h: the digest and the MCP print aprPct unguarded.
+    p.aprPct = r.dailyUsd != null && r.windowH >= 6 && p.valueUsd ? (r.dailyUsd * 365 * 100) / p.valueUsd : null;
     p.spark = r.spark;
     p.px = pxSeriesFor(p.tokenId);
   }
@@ -1530,7 +1531,15 @@ async function handleRequest(req, res) {
         // the hourly fee accrual (main wallet only; watched wallets accrue per wallet).
         const feeHours = {};
         for (const [h, per] of Object.entries(daily.hours || {})) if (per && per[key] > 0) feeHours[h] = per[key];
-        p.verdict = verdict.verdictFor(p, { feeHours });
+        // One fee rate per position: the dashboard's 48 h accrual segment (when it spans ≥ 6 h),
+        // else the verdict's 7-day realised rate. The guardian's 30-min rate stays as
+        // liveFeesPerHour for alerts; it is no longer what the cards, Telegram and MCP call "$/h".
+        const seg = rateFor(key);
+        const serverRate = seg.dailyUsd != null && seg.windowH >= 6 ? seg.dailyUsd / 24 : null;
+        p.verdict = verdict.verdictFor(p, { feeHours, rate: serverRate });
+        p.liveFeesPerHour = p.feesPerHour;
+        p.feesPerHour = p.verdict.feesPerHour;
+        p.feeRateSource = serverRate != null ? "48h-accrual" : p.verdict.feesPerHour != null ? "7d-realised" : null;
       }
       st.configured = (cfg.memecoins || []).length;
       st.discovery = cfg.memecoinDiscovery !== false;

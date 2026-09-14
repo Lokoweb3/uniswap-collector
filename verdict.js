@@ -28,10 +28,14 @@ const THRESHOLDS = { idleWatchHours: 48, idleCloseHours: 7 * 24, minRatePerHour:
  *                 collected { usd, usd7d, last }
  * @param feeHours { hourMs: usd } accrual buckets for this position (fee-daily.json), optional
  */
-function verdictFor(p = {}, { feeHours = {}, now = Date.now() } = {}) {
+function verdictFor(p = {}, { feeHours = {}, now = Date.now(), rate: givenRate } = {}) {
   const rules = p.rules || {};
   const col = p.collected || {};
   const liveRate = p.feesPerHour != null && isFinite(p.feesPerHour) ? Number(p.feesPerHour) : null;
+  // `rate`: the dashboard's own measured $/h (the 48 h accrual segment). When the caller passes
+  // it, that is THE rate; null means "no usable segment yet" and the 7-day realised rate stands
+  // in. When the option is absent (older callers, tests) the previous max(live, realised) applies.
+  const rateGiven = givenRate !== undefined;
 
   // Realised rate over the last week of collects (or since the mint when newer).
   let windowH = 7 * 24;
@@ -45,7 +49,9 @@ function verdictFor(p = {}, { feeHours = {}, now = Date.now() } = {}) {
     if (last == null || t > last) last = t; // last time the position earned anything
   }
   const realised = col.usd7d != null || accrued7d > 0 ? Math.max(Number(col.usd7d) || 0, accrued7d) / windowH : null;
-  const rate = liveRate == null && realised == null ? null : Math.max(liveRate || 0, realised || 0);
+  const rate = rateGiven
+    ? (givenRate != null && isFinite(givenRate) ? Number(givenRate) : realised)
+    : (liveRate == null && realised == null ? null : Math.max(liveRate || 0, realised || 0));
   if ((liveRate || 0) >= THRESHOLDS.minRatePerHour || (p.feesPerHour15m || 0) >= THRESHOLDS.minRatePerHour) last = now;
   const idleHours = last == null ? null : Math.max(0, (now - last) / HOUR);
   const aprPct = rate != null && p.valueUsd > 0 ? (rate * 24 * 365 / p.valueUsd) * 100 : null;

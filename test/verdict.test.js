@@ -90,3 +90,16 @@ const i = at.findIndex((l) => l.startsWith("📊 1 open position"));
 assert.ok(i > 0); assert.match(at[i + 1], /^   KEEP  ETH \/ USDG #1/);
 assert.ok(THRESHOLDS.idleCloseHours > THRESHOLDS.idleWatchHours);
 console.log("verdict: keep/watch/close/hold rules, idle text, realised rate and daily lines — all assertions passed");
+
+// ---- one rate per position (TASK-64): the caller's measured rate is THE rate ----
+{
+  const given = verdictFor({ ...base, feesPerHour: 9.9 }, { now, rate: 1.5 });
+  assert.strictEqual(given.feesPerHour, 1.5, "a given rate replaces max(live, realised)");
+  assert.strictEqual(given.liveFeesPerHour, 9.9, "the live 30-min rate is still reported separately");
+  assert.strictEqual(+given.aprPct.toFixed(2), +((1.5 * 24 * 365 / 1700) * 100).toFixed(2), "APR follows the given rate");
+  const fallback = verdictFor({ ...base, feesPerHour: 9.9, collected: { usd: 40, usd7d: 16.8, last: now - 2 * D } }, { now, rate: null });
+  assert.strictEqual(+fallback.feesPerHour.toFixed(4), +(16.8 / 168).toFixed(4), "rate: null falls back to the 7-day realised rate, not the live one");
+  const legacy = verdictFor({ ...base, feesPerHour: 9.9 }, { now });
+  assert.strictEqual(legacy.feesPerHour, 9.9, "without the option the previous behaviour stands");
+}
+console.log("verdict: single-rate option assertions passed");

@@ -957,6 +957,9 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
     $('[data-id="operator"]').textContent = st.operator || 'no keystore found';
     $('[data-id="message"]').textContent = st.message;
     $('[data-id="lock"]').hidden = !armed;
+    // While armed the choice is Lock, not Arm: the arm controls come back when the window ends.
+    $('[data-id="arm"]').hidden = armed;
+    if (sel) sel.hidden = armed;
     $('[data-id="setuptitle"]').textContent = st.configured ? 'Saved passphrase' : 'One-time setup';
     $('[data-id="setupnote"]').textContent = st.configured
       ? `A passphrase sealed with your signature is saved (since ${new Date(st.createdAt).toLocaleString()}). Re-save here if the operator keystore or its passphrase changes.`
@@ -1113,8 +1116,25 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
       <td>${r.unlimited ? '<span class="pill bad">unlimited</span> ' : ''}${r.old ? '<span class="pill warn">older than 90 days</span>' : ''}${!r.spenderLabel ? ' <span class="pill warn" title="Not a known Uniswap / vault contract">unknown spender</span>' : ''}</td>
       <td><button class="danger revoke-allow" data-i="${i}" ${canSign() ? '' : 'disabled'}>Revoke</button></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No standing allowances.</td></tr>';
-    $('[data-id="alcount"]').textContent = d.allowancesOk ? `${d.allowances.length} standing · ${d.allowances.filter((r) => r.unlimited).length} unlimited` : 'allowance scan failed: ' + (d.allowancesError || '');
+    const alc = $('[data-id="alcount"]');
+    if (d.allowancesOk) alc.textContent = `${d.allowances.length} standing · ${d.allowances.filter((r) => r.unlimited).length} unlimited`;
+    else {
+      // A failed scan is a status, not a heading: the count is unknown, not zero.
+      alc.innerHTML = `<span class="pill bad" title="${String(d.allowancesError || 'unknown error').replace(/"/g, '&quot;')}">scan failed</span> <a href="#" data-id="alretry">Retry</a>`;
+      alc.querySelector('[data-id="alretry"]').addEventListener('click', (e) => { e.preventDefault(); load(data && data.owner); });
+    }
     $('[data-id="alnote"]').textContent = 'From every Approval event this wallet ever emitted, filtered to allowances that are still non-zero on chain. Revoke sets the allowance to 0.';
+    // The approve sections already know the answer from this table: say "Approved" and offer
+    // Revoke instead of an Approve button the operator must not press twice.
+    for (const v of ['v3', 'v4']) {
+      const box = document.getElementById('approve-' + v);
+      if (!box) continue;
+      const done = d.operators.some((o) => String(o.version).toLowerCase() === v && o.isCollector);
+      const pill = box.querySelector('[data-id="approval"]');
+      if (pill && done) pill.innerHTML = '<span class="pill ok">Approved ✓</span> <span class="muted">the collector is an operator on this manager; use Revoke to withdraw it</span>';
+      const ab = box.querySelector('[data-id="approve"]'); if (ab) ab.hidden = done;
+      const rb = box.querySelector('[data-id="revoke"]'); if (rb && done) rb.hidden = false;
+    }
     const ob = $('[data-id="ops"] tbody');
     ob.innerHTML = d.operators.map((o, i) => `<tr>
       <td>Uniswap ${o.version} <span class="mono muted">${short(o.manager)}</span></td>

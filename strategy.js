@@ -598,7 +598,10 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
           // swap it is a liquidity deposit, still yours.
           if (protocol.has(to) || (await isContract(to))) {
             const sp = await swapProceeds(l.transactionHash, w, raw, t, tk.address, amount);
-            if (sp === null) continue; // receipt unavailable; retried next scan
+            // Receipt unavailable: stop the watermark BEFORE this log and leave the rest of the
+            // batch for the next scan, so the row is really retried (TASK-88). Advancing past it
+            // (the old `continue`) skipped the transfer for good.
+            if (sp === null) { top = Math.min(top, bn - 1); break; }
             if (sp.sold) { kind = "sold"; usd = sp.usd; priced = sp.priced; shape = sp.shape; units = sp.units; }
             else if (protocol.has(to)) { deposits++; (state.deposits || (state.deposits = [])).push(k); continue; }
           }

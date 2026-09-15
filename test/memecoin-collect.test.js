@@ -99,3 +99,36 @@ console.log("memecoin-collect: trigger logic and collector-output parsing assert
   assert.equal(cycleCounts({ skipped: "stale" }), false, "a stale skip does not stamp the heartbeat");
 }
 console.log("memecoin-collect: stale payload skip assertions passed");
+
+// ---- TASK-86: the collector timeout kills the whole process group and frees the lock. ----
+// An owned wrapper shaped like run-collector.sh (TERM trap, flock on fd 9 inherited by a
+// foreground node child) is started from a temp dir with a 1 s timeout; afterwards no
+// child is alive, the lock is free, and the promise settled with timedOut.
+(async () => {
+  const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lp-collect86-"));
+  fs.writeFileSync(path.join(dir, "child.cjs"), `require("fs").writeFileSync(process.argv[2], String(process.pid)); setInterval(() => {}, 1000);`);
+  fs.writeFileSync(path.join(dir, "run-collector.sh"), `#!/usr/bin/env bash
+trap 'echo term-deferred' TERM
+exec 9>"${dir}/.collector.lock"
+flock -n 9 || exit 1
+node "${dir}/child.cjs" "${dir}/child.pid"
+`);
+  fs.chmodSync(path.join(dir, "run-collector.sh"), 0o755);
+  process.env.LP_COLLECTOR_TIMEOUT_MS = "1000";
+  delete require.cache[require.resolve("../memecoin-collect")];
+  const mc = require("../memecoin-collect").create({ dir, log: () => {} });
+  const started = Date.now();
+  const r = await mc._runCollector();
+  assert.equal(r.timedOut, true, "the run timed out");
+  assert.ok(Date.now() - started < 60000, "settled without waiting for the 30 s SIGKILL fallback of a hung close");
+  await new Promise((res) => setTimeout(res, 300));
+  const childPid = Number(fs.readFileSync(path.join(dir, "child.pid"), "utf8"));
+  let alive = true; try { process.kill(childPid, 0); } catch { alive = false; }
+  assert.equal(alive, false, "the node grandchild is dead after the group signal");
+  const lock = cp.spawnSync("flock", ["-n", path.join(dir, ".collector.lock"), "true"]);
+  assert.equal(lock.status, 0, "the collector lock is free for the next run");
+  delete process.env.LP_COLLECTOR_TIMEOUT_MS;
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log("memecoin-collect: timeout kills the collector's process group and frees the lock");
+})().catch((e) => { console.error(e); process.exitCode = 1; });

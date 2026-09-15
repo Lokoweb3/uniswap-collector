@@ -215,16 +215,24 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
   // A collector child that hangs (a stalled RPC, a stuck ssh sync) would otherwise hold
   // `running` forever and stop auto-collect silently: SIGTERM after 45 min, SIGKILL 30 s later.
   const COLLECTOR_TIMEOUT_MS = Number(process.env.LP_COLLECTOR_TIMEOUT_MS || 45 * 60000);
+  // The collector runs as its own process group: run-collector.sh holds the flock on fd 9 and
+  // hands it to `node collector.js` in the foreground, and bash defers a TERM trap until that
+  // child exits. Signalling only the shell therefore left an orphaned node holding the lock
+  // and the stdout pipe, so `close` never fired and the cycle hung (TASK-86). The timeout now
+  // signals the whole group (-pid) and settles on `exit` plus its own timer, never on `close`.
   function runCollector() {
     return new Promise((resolve) => {
-      const child = spawn(path.join(dir, "run-collector.sh"), ["full", "--quiet"], { cwd: dir, env: process.env });
-      let out = "", timedOut = false;
-      const term = setTimeout(() => { timedOut = true; log(`collector still running after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; sending SIGTERM`); try { child.kill("SIGTERM"); } catch {} }, COLLECTOR_TIMEOUT_MS);
-      const kill = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, COLLECTOR_TIMEOUT_MS + 30000);
-      const done = (r) => { clearTimeout(term); clearTimeout(kill); resolve(r); };
+      const child = spawn(path.join(dir, "run-collector.sh"), ["full", "--quiet"], { cwd: dir, env: process.env, detached: true });
+      let out = "", timedOut = false, settled = false;
+      const signalGroup = (sig) => { try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch {} } };
+      const term = setTimeout(() => { timedOut = true; log(`collector still running after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; sending SIGTERM to its process group`); signalGroup("SIGTERM"); }, COLLECTOR_TIMEOUT_MS);
+      const kill = setTimeout(() => { signalGroup("SIGKILL"); }, COLLECTOR_TIMEOUT_MS + 30000);
+      // If even SIGKILL leaves `exit` unreported (it should not), settle anyway so the cycle can end.
+      const settle = setTimeout(() => done({ code: -2, out: `${out}\n[timed out after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; process group killed]`, timedOut: true }), COLLECTOR_TIMEOUT_MS + 60000);
+      const done = (r) => { if (settled) return; settled = true; clearTimeout(term); clearTimeout(kill); clearTimeout(settle); resolve(r); };
       child.stdout.on("data", (d) => (out += d));
       child.stderr.on("data", (d) => (out += d));
-      child.on("close", (code) => done({ code: timedOut ? -2 : code, out: timedOut ? `${out}\n[timed out after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min]` : out, timedOut }));
+      child.on("exit", (code, signal) => done({ code: timedOut ? -2 : code, out: timedOut ? `${out}\n[timed out after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; ${signal || "exited"}]` : out, timedOut }));
       child.on("error", (err) => done({ code: -1, out: `${out}\n${err.message}`, timedOut: false }));
     });
   }
@@ -374,7 +382,7 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
     return { enabled: conf.enabled, minUsd: conf.minUsd, minIntervalMinutes: conf.minIntervalMinutes, lastRunAt: state.lastRunAt || null, lastCheckAt: lastCycleAt || null, running };
   }
 
-  return { cycle, summary, get lastCycleAt() { return lastCycleAt; } };
+  return { cycle, summary, get lastCycleAt() { return lastCycleAt; }, _runCollector: runCollector };
 }
 
 if (require.main === module) {

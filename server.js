@@ -19,6 +19,7 @@ require("dotenv").config();
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const longterm = require("./longterm");
 const { spawn } = require("child_process");
 const { ethers } = require("ethers");
 // Tolerate a flattened layout (some downloads drop lib/), but resolve the path
@@ -161,6 +162,7 @@ const watch = require("./watch").create({
   provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, pools,
   getPortfolio: () => portfolio, // created below; only used at refresh time
   getPrices: () => lastPrices,
+  priceAtOpen: (addr, t) => longterm.priceAt(priceLogData().hours, addr, t), // price-log price at the deposit hour (TASK-82)
   getOperator: () => require("./arm").operatorAddress(), // keystore's public address, re-read each time
   // === performance-attribution === PnL vs HODL for watched positions: liquidity ledger basis + collect events
   getBasis: (tokenId) => {
@@ -786,7 +788,6 @@ function unlockState() {
 // The collect history rows, built the same way /api/history serves them, kept in memory so
 // the positions build and attribution.load() can hand them to longterm.compute() without a
 // round trip; refreshed at most every 5 min (the route always refreshes).
-const longterm = require("./longterm");
 const { dayKey: ltDayKey } = require("./daykey");
 let lastHistoryRows = [];
 let lastHistoryAt = 0;
@@ -998,8 +999,12 @@ async function build() {
           pnlPct = (pnlUsd / depositedUsd) * 100;
           pnlSince = b.firstT;
           // The legs, so the card can show its working.
+          // Deposit priced at the hour it was made (price-log), for the long-term "value at
+          // open" basis; null when no price exists for that hour — never today's price.
+          const px0o = longterm.priceAt(priceLogData().hours, p.token0.address, b.firstT), px1o = longterm.priceAt(priceLogData().hours, p.token1.address, b.firstT);
+          const depositedAtOpen = b.firstT != null && px0o != null && px1o != null ? toFloat(b.dep0, dec0) * px0o + toFloat(b.dep1, dec1) * px1o : null;
           pnlLegs = {
-            deposited: depositedUsd, adds: b.increases || null,
+            deposited: depositedUsd, depositedAtOpen, adds: b.increases || null,
             withdrawn: withdrawnUsd,
             collected: collectedUsd, collects, collectedBasis,
             held: valueUsd || 0, uncollected: feesUsd || 0,

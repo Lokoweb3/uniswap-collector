@@ -193,7 +193,7 @@ assert.strictEqual(+wDep2.il.toFixed(6), -10, "IL unchanged by an internal LP de
   ];
   const rangeLog = { "1": { segments: [{ from: t0, to: tClose, inRange: true }] } };
   const B = { tokenId: "v4-2", version: 4, pair: "USDG / Bucket", pnlSince: tOpenB, valueUsd: 1100, feesUsd: 5, pnlUsd: 50, pnlApprox: false,
-    pnlLegs: { deposited: 1000, collected: 40, uncollected: 5, withdrawn: 0, held: 1100 } };
+    pnlLegs: { deposited: 1000, depositedAtOpen: 1000, collected: 40, uncollected: 5, withdrawn: 0, held: 1100 } }; // depositedAtOpen is the basis (TASK-82)
   const r = lt.compute({ open: [{ p: B, walletAddress: W }], collects, rangeLog, now });
   const b = r.get(`${W}:v4-2`);
   assert.ok(b, "longTerm block for the open position");

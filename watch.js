@@ -22,7 +22,7 @@ const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
 const tierLabel = (fee) => (fee == null ? "?" : `${+(Number(fee) / 10000).toFixed(3)}%`);
 
-function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator, getBasis, getCollectEvents, getCollectSummary }) {
+function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator, getBasis, getCollectEvents, getCollectSummary, priceAtOpen = null }) {
   // === performance-attribution === PnL vs HODL for watched positions.
   // v3: the shared liquidity ledger (getBasis) + collect events (getCollectEvents),
   // the same maths as the main wallet's cards. v4: no per-token liquidity events
@@ -38,7 +38,13 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const out = { pnlUsd: null, pnlPct: null, pnlSince: null, pnlApprox: false, pnlLegs: null, pnlSource: null };
     if (usd0 == null || usd1 == null) return out;
     const dec0 = p.token0.decimals, dec1 = p.token1.decimals;
-    let depositedUsd = null, withdrawnUsd = 0, since = null, adds = null, approx = false, source = null;
+    let depositedUsd = null, withdrawnUsd = 0, since = null, adds = null, approx = false, source = null, depositedAtOpen = null;
+    // Deposit at the prices of its own hour (price-log) for the long-term basis; null when unknown.
+    const atOpen = (q0, q1, t) => {
+      if (!priceAtOpen || t == null) return null;
+      const x0 = priceAtOpen(p.token0.address, t), x1 = priceAtOpen(p.token1.address, t);
+      return x0 != null && x1 != null ? q0 * x0 + q1 * x1 : null;
+    };
     if (version !== 4 && getBasis) {
       const b = getBasis(id.toString());
       if (b) {
@@ -46,6 +52,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         withdrawnUsd = toFloat(b.wd0, dec0) * usd0 + toFloat(b.wd1, dec1) * usd1;
         since = b.firstT; adds = b.increases || null; source = b.source || "rpc";
         approx = b.liq !== p.liquidity;
+        depositedAtOpen = atOpen(toFloat(b.dep0, dec0), toFloat(b.dep1, dec1), b.firstT);
       }
     }
     if (depositedUsd == null) {
@@ -57,6 +64,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       const b = pnlBasis[key];
       depositedUsd = b.a0 * usd0 + b.a1 * usd1;
       since = b.t; approx = true; source = "first-seen";
+      depositedAtOpen = atOpen(b.a0, b.a1, b.t);
     }
     let collectedUsd = 0, collects = 0;
     for (const e of (getCollectEvents ? getCollectEvents(version === 4 ? `v4-${id}` : id.toString()) : []) || []) {
@@ -67,7 +75,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const pnlUsd = (valueUsd || 0) + (feesUsd || 0) + collectedUsd + withdrawnUsd - depositedUsd;
     return {
       pnlUsd, pnlPct: (pnlUsd / depositedUsd) * 100, pnlSince: since, pnlApprox: approx, pnlSource: source,
-      pnlLegs: { deposited: depositedUsd, adds, withdrawn: withdrawnUsd, collected: collectedUsd, collects, held: valueUsd || 0, uncollected: feesUsd || 0 },
+      pnlLegs: { deposited: depositedUsd, depositedAtOpen, adds, withdrawn: withdrawnUsd, collected: collectedUsd, collects, held: valueUsd || 0, uncollected: feesUsd || 0 },
     };
   }
   const discovery = new Map(); // address -> v4 discovery (own state file per wallet)

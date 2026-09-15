@@ -44,6 +44,24 @@ function idKey(tokenId, version) {
   return s.startsWith("v4-") ? s : version === 4 ? `v4-${s}` : s;
 }
 
+/**
+ * The price-log price of `addr` at the hour at or just before `t` (within `maxAge`), or null.
+ * `hours` is price-log.json's `{ "<hourMs>": { "<addr lower>": usd } }`. Pure.
+ */
+function priceAt(hours, addr, t, maxAge = 36 * HOUR) {
+  if (!hours || num(t) == null || !addr) return null;
+  const a = String(addr).toLowerCase();
+  let best = null;
+  for (const k of Object.keys(hours)) {
+    const h = Number(k);
+    if (!Number.isFinite(h) || h > t || t - h > maxAge) continue;
+    if (best == null || h > best) best = h;
+  }
+  if (best == null) return null;
+  const v = hours[String(best)] && hours[String(best)][a];
+  return num(v) != null && v > 0 ? v : null;
+}
+
 /** An open position from a positions/watch payload. */
 function openRecord(p, walletAddress) {
   const legs = p.pnlLegs || null;
@@ -51,7 +69,11 @@ function openRecord(p, walletAddress) {
     id: idKey(p.tokenId, p.version), walletAddress: String(walletAddress || "").toLowerCase(),
     pair: p.pair || null, pairKey: pairKey(p.pair), version: p.version || 3, open: true,
     openedAt: num(p.pnlSince), closedAt: null,
-    depositedUsd: legs ? num(legs.deposited) : null,
+    // The "value at open" basis is the deposit priced AT OPEN (legs.depositedAtOpen, from the
+    // price-log hour of the first deposit). legs.deposited is the same quantity at TODAY's
+    // prices — the HODL comparator — and must never be the APR basis (TASK-82): unknown → null.
+    depositedUsd: legs ? num(legs.depositedAtOpen) : null,
+    depositedTodayUsd: legs ? num(legs.deposited) : null,
     collectedLegUsd: legs ? num(legs.collected) : null,
     uncollectedUsd: num(p.feesUsd) != null ? num(p.feesUsd) : legs ? num(legs.uncollected) : null,
     pnlUsd: legs ? num(p.pnlUsd) : null,
@@ -266,4 +288,4 @@ function compute({ open = [], collects = [], rangeLog = {}, values = {}, closedD
   return out;
 }
 
-module.exports = { compute, chainRecords, closedRecords, openRecord, twa, idKey, pairKey, WINDOW_DAYS, GAP_MS };
+module.exports = { compute, chainRecords, closedRecords, openRecord, twa, priceAt, idKey, pairKey, WINDOW_DAYS, GAP_MS };

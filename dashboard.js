@@ -1468,7 +1468,7 @@ function sortLT(arr){
 }
 const ltDate = t => t ? new Date(t).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '?';
 const ltPctText = (v, signed) => v == null ? '—' : (signed ? (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) : v.toFixed(0)) + '%';
-function ltBasisText(m){ return m.basis === 'twa' ? `time-weighted value ${usd(m.basisUsd)}` : m.basis === 'open' ? `value at open ${usd(m.basisUsd)}` : 'no basis (deposit unknown)'; }
+function ltBasisText(m){ return m.basis === 'twa' ? `time-weighted value ${usd(m.basisUsd)}` : m.basis === 'open' ? `value at open ${usd(m.basisUsd)}` : 'no basis (no price at open)'; }
 function longTermLine(p){
   const lt = p.longTerm;
   if (!lt || !lt.d30 || !lt.sinceOpen) return '';

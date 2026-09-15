@@ -25,6 +25,23 @@ PROBE_EVERY=2                        # cycles of 30 s between probes
 LOOP_WINDOW=600                      # restarts closer than this are one crash loop
 ALERT_COOLDOWN=3600
 CURL="${WATCHDOG_CURL:-curl}"        # tests replace curl with a stub
+DASH_PORT="${WATCHDOG_PORT:-8787}"   # the self-test points this at an owned stub listener
+START_ALL="${WATCHDOG_START_ALL:-}"  # the self-test replaces start-all.sh with a stub command
+
+# The pid listening on the dashboard port (the same lookup stop-all.sh uses).
+dash_pid() { ss -ltnp 2>/dev/null | awk -v p=":${DASH_PORT} " 'index($0, p) { print $NF }' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1; }
+# Recovery kills ONLY the dashboard process and starts it again. Never stop-all.sh: that
+# script kills this watchdog first (and the dashboard after it), so a wedged probe used to
+# end with nothing running and no supervisor (TASK-85).
+stop_dashboard() {
+  local pid i; pid=$(dash_pid); [ -n "$pid" ] || return 0
+  kill "$pid" 2>/dev/null
+  for i in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done
+  kill -9 "$pid" 2>/dev/null; return 0
+}
+start_dashboard() {  # $1 = reason for the server's own "restarted by watchdog" line
+  if [ -n "$START_ALL" ]; then $START_ALL; else LP_RESTARTED_BY=watchdog LP_RESTART_REASON="$1" bash "$HERE/start-all.sh" --no-watchdog; fi
+}
 
 read_state() {  # -> COUNT FIRST_AT LAST_AT ALERTED_AT PROBE_ALERTED_AT (0 when unknown)
   COUNT=0; FIRST_AT=0; LAST_AT=0; ALERTED_AT=0; PROBE_ALERTED_AT=0
@@ -127,6 +144,19 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   check_probe 0 "$STALE"; echo "stale x4 within the hour: no second alert (see 'cooldown' line above)"
   check_probe 0 "$HEALTHY"; echo "healthy again: stale=$PROBE_STALE"
   check_probe 28 ""; echo "timeout 1: restart=$RESTART_NOW"; check_probe 28 ""; echo "timeout 2: restart=$RESTART_NOW (cooldown holds the message, restart still requested)"
+  echo "--- wedged recovery (owned stub listener; never the live dashboard)"
+  DASH_PORT=$((20000 + RANDOM % 20000)); START_ALL="echo start-all-called"
+  before=$(pgrep -fc "^bash $HERE/watchdog.sh$" 2>/dev/null || true)
+  node -e "require('http').createServer(() => {}).listen(process.argv[1], '127.0.0.1'); setInterval(() => {}, 1000)" "$DASH_PORT" >/dev/null 2>&1 &
+  stub=$!
+  for i in $(seq 1 50); do [ -n "$(dash_pid)" ] && break; sleep 0.2; done
+  [ "$(dash_pid)" = "$stub" ] || { echo "self-test: stub listener did not appear on :$DASH_PORT"; kill "$stub" 2>/dev/null; exit 1; }
+  out=$(stop_dashboard; start_dashboard "self-test")
+  sleep 0.5
+  alive=$(kill -0 "$stub" 2>/dev/null && echo yes || echo no)
+  after=$(pgrep -fc "^bash $HERE/watchdog.sh$" 2>/dev/null || true)
+  echo "wedged recovery: stub dashboard alive=$alive port free=$([ -z "$(dash_pid)" ] && echo yes || echo no) start called=$([ "$out" = "start-all-called" ] && echo yes || echo no) watchdogs before=${before:-0} after=${after:-0}"
+  [ "$alive" = "no" ] && [ -z "$(dash_pid)" ] && [ "$out" = "start-all-called" ] && [ "${before:-0}" = "${after:-0}" ] || { echo "self-test: wedged recovery FAILED"; kill "$stub" 2>/dev/null; exit 1; }
   rm -f "$STATE"; exit 0
 fi
 
@@ -137,7 +167,7 @@ while true; do
   if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':8787$'; then
     echo "$(date -Is) dashboard not listening; restarting" >> "$LOG"
     record_restart
-    LP_RESTARTED_BY=watchdog LP_RESTART_REASON="not listening on :8787 at $(date +%H:%M)" bash "$HERE/start-all.sh" --no-watchdog >> "$LOG" 2>&1
+    start_dashboard "not listening on :${DASH_PORT} at $(date +%H:%M)" >> "$LOG" 2>&1
     PROBE_TIMEOUTS=0; PROBE_STALE=0
     sleep 60
     continue
@@ -148,8 +178,8 @@ while true; do
     if [ "${RESTART_NOW:-0}" = "1" ]; then
       echo "$(date -Is) dashboard not answering; restarting" >> "$LOG"
       record_restart
-      bash "$HERE/stop-all.sh" >> "$LOG" 2>&1
-      LP_RESTARTED_BY=watchdog LP_RESTART_REASON="listening but not answering at $(date +%H:%M)" bash "$HERE/start-all.sh" --no-watchdog >> "$LOG" 2>&1
+      stop_dashboard >> "$LOG" 2>&1
+      start_dashboard "listening but not answering at $(date +%H:%M)" >> "$LOG" 2>&1
       PROBE_TIMEOUTS=0; PROBE_STALE=0
       sleep 60
     fi

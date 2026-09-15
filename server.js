@@ -1708,6 +1708,26 @@ async function handleRequest(req, res) {
   // The daily check text (daily.js). /api/daily itself is the fee-by-hour ledger below, which the
   // analytics page, the MCP daily_revenue tool and the weekly digest read; the two shared one
   // path for a week and this one shadowed the ledger.
+  if (url.pathname === "/api/insights" && req.method === "GET") {
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const read = name => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, name), "utf8")); } catch { return null; } };
+      const pf = read("portfolio.json"), fee = read("fee-daily.json"), state = read("state.json");
+      const px = read("price-log.json"), flows = read("token-disposals.json");
+      const result = require("./insights").build({
+        positions: cache.payload ? { ...cache.payload, unlock: unlockState(), ops: opsInfo(), loops: loopHealth() } : null,
+        watch: watch.latest, portfolio: portfolio.latest, history: lastHistoryAt ? lastHistoryRows : null,
+        ranges: rangeLog.positions, series: pf && pf.series, fees: fee && fee.hours,
+        gas: state && state.gasSpends, prices: px && px.hours, flows: flows && flows.rows,
+      }, { since: url.searchParams.has("since") ? Number(url.searchParams.get("since")) : undefined });
+      res.writeHead(200);
+      return res.end(JSON.stringify(result));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: "Could not build dashboard insights" }));
+    }
+  }
   if (url.pathname === "/api/daily-check") {
     res.setHeader("Content-Type", "application/json");
     try {
@@ -2245,11 +2265,11 @@ async function handleRequest(req, res) {
   }
 
   // The dashboard's stylesheet and script, split out of dashboard.html by
-  // tools/split-dashboard.js. Only these two files are served as assets.
-  if (url.pathname === "/dashboard.css" || url.pathname === "/dashboard.js") {
+  // tools/split-dashboard.js. Serve only explicitly listed assets.
+  if (["/dashboard.css", "/dashboard.js", "/insights-view.js"].includes(url.pathname)) {
     const isCss = url.pathname === "/dashboard.css";
     try {
-      const body = fs.readFileSync(path.join(__dirname, isCss ? "dashboard.css" : "dashboard.js"));
+      const body = fs.readFileSync(path.join(__dirname, url.pathname.slice(1)));
       res.writeHead(200, { "Content-Type": isCss ? "text/css; charset=utf-8" : "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(body);
     } catch {

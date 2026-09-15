@@ -16,6 +16,14 @@
   --shadow:rgba(0,0,0,.4);
   --btn-ink:#031116;
 }
+.insightcards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.insightcard{padding:14px;border:1px solid var(--rule);border-radius:10px;min-width:0}
+.insightcard a,.visit-changes a{color:var(--live);text-decoration:none}
+.insightcard a:focus-visible,.visit-changes summary:focus-visible{outline:2px solid var(--live);outline-offset:4px}
+.insightcard p,.visit-changes{font-size:13px;color:var(--muted);line-height:1.6}
+.visit-changes{margin-top:16px}.visit-changes summary{cursor:pointer;color:var(--bright)}
+.visit-changes li{margin:6px 0}#weektable th[scope=row]{text-transform:none;white-space:normal;min-width:180px}
+@media(max-width:700px){.insightcards{grid-template-columns:1fr}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{margin:0;padding:0}

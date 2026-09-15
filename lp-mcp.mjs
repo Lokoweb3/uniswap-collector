@@ -392,6 +392,15 @@ server.registerTool(
   }
 );
 
+server.registerTool("dashboard_insights", {
+  title: "Dashboard attention, changes and two-week comparison",
+  description: "The same read-only summary shown on Dashboard/Analytics: top attention items, changes since a supplied timestamp (default 24 hours), freshness and two complete weeks for the main wallet. Return figures are estimates after recorded transfers, not independently reconciled performance. Browser last-visit timestamps are local to that browser; ask for a period if it is not in this conversation.",
+  inputSchema: { since: z.number().optional().describe("Epoch milliseconds of the previous check, within the last 30 days") },
+}, async ({ since }) => {
+  try { return text(await get(`/api/insights${since != null ? `?since=${since}` : ""}`)); }
+  catch (err) { return fail(err); }
+});
+
 server.registerTool(
   "status_report",
   {

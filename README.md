@@ -1166,3 +1166,28 @@ only what it shows. The public gate serves the page at the same path.
 - Public passphrase gate (`lp-gate.mjs`) for the dashboard and scanner over Funnel.
 - `watchWallets` support, `/api/watch`, `watched_wallets` MCP tool.
 - Windows keepalive task so WSL no longer stops the servers.
+
+
+### Dashboard insights
+
+Dashboard now shows up to three **Needs attention** items and **What changed since my last
+visit?**. The last successful visit timestamp stays in that browser; it is saved when the
+page is hidden or left. Refreshes keep the comparison baseline fixed. First visits show the
+last 24 hours. Position observations older than ten minutes are labeled stale.
+
+Analytics compares the main wallet over two complete Monday–Sunday weeks in `LP_TZ` (or
+the server timezone). It shows measured fees, recorded gas, observed time in range, value
+change, recorded external transfers, and estimated return on starting value. Returns
+subtract recorded transfers from wallet value change; gas is already included in that
+change. Incomplete transfer history can still distort these estimates. Missing prices or
+value-history gaps withhold the affected weekly figures, and missing gas prices remain
+unavailable. Time in range is weighted by observed position-hours, not unobserved downtime.
+
+`GET /api/insights?since=<epoch-ms>` returns the same read-only summary. `since` defaults to
+24 hours ago and accepts at most 30 days of lookback. It reads existing snapshots/ledgers
+without initiating RPC requests, signing, or writing state. Loko_AI can call the read-only
+`dashboard_insights` MCP tool with a timestamp or use its 24-hour default; it cannot see a
+browser's private last-visit timestamp. No Telegram message is sent automatically.
+
+Verification: `LP_TZ=America/New_York node test/insights.test.js`. This test is also part of
+`npm test`; the existing live-config browser smoke remains a separate environment requirement.

@@ -54,6 +54,15 @@
   <div class="hint" id="cohint" hidden></div>
 </section>
 
+<section class="earnings" id="decisionsec" aria-labelledby="decisiontitle">
+  <div class="ehead"><h2 id="decisiontitle">Needs attention</h2><span class="enote" id="insightsfresh" role="status">Checking the latest observations…</span></div>
+  <div id="attentionitems" class="insightcards"><p class="enote">Loading attention items…</p></div>
+  <details class="visit-changes"><summary>What changed since my last visit?</summary>
+    <p class="enote" id="visitsince"></p><ul id="visitchanges"></ul>
+    <a href="/analytics#weeksec">Compare the last two complete weeks →</a>
+  </details>
+</section>
+
 <section class="summary" id="summary" hidden>
   <div class="stat hero">
     <div class="n" id="networth">—</div>
@@ -138,6 +147,13 @@
   <div class="echart" id="pchart"></div>
   <div class="etablewrap" id="baltable"></div>
   <div class="enote" id="pnote"></div>
+</section>
+
+<section class="earnings analytics" id="weeksec" aria-labelledby="weektitle">
+  <div class="ehead"><h2 id="weektitle">Two complete weeks</h2><span class="enote" id="weekscope">Main wallet</span></div>
+  <p class="enote" id="weekstatus" role="status">Loading weekly observations…</p>
+  <div class="etablewrap" id="weektable"></div>
+  <p class="enote" id="weeknote"></p>
 </section>
 
 <section class="earnings analytics" id="perfsec" hidden>
@@ -253,6 +269,7 @@
 </div>
 
 <script src="/dashboard.js"></script>
+<script src="/insights-view.js"></script>
 <script src="/chat-widget.js"></script>
 </body>
 </html>

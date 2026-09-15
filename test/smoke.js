@@ -74,7 +74,7 @@ async function main() {
       }
     }
     // The split assets must be served with the right types.
-    for (const [file, type] of [["/dashboard.css", "text/css"], ["/dashboard.js", "application/javascript"]]) {
+    for (const [file, type] of [["/dashboard.css", "text/css"], ["/dashboard.js", "application/javascript"], ["/insights-view.js", "application/javascript"]]) {
       const r = await fetch(base + file);
       const ct = r.headers.get("content-type") || "";
       if (!r.ok || !ct.startsWith(type)) {

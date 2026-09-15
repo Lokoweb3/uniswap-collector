@@ -64,6 +64,24 @@ function priceKeys(priceHours) {
   return keys;
 }
 
+/**
+ * Holdings snapshot for a wallet at or just before `t`. `byDay` maps a day key
+ * (the ledger's day label) to { addr|'eth': amount }; the snapshot whose day is
+ * < = `t` and closest wins. Returns {} when no day covers `t` (a holdings
+ * change mid-window only affects the price leg from that day on, and an early
+ * day with no snapshot prices as UNKNOWN, never as today's holdings).
+ */
+function dayHoldingsAt(byDay, t) {
+  const day = dayKey(t);
+  if (byDay[day] != null) return byDay[day];
+  // Fall back to the most recent day-stamped snapshot before `t`, if any. The
+  // ledger may not have a row for every single calendar day; the last known
+  // holdings before the window still describe that day's position. But an
+  // entirely-empty series (no snapshot ever) means UNKNOWN, so {} it is.
+  const days = Object.keys(byDay).filter((d) => d <= day).sort();
+  return days.length ? byDay[days[days.length - 1]] : {};
+}
+
 /** Price table for the hour at or before `t` (price-log rows), or null. */
 function priceRowAt(priceHours, t) {
   const keys = priceKeys(priceHours);
@@ -138,21 +156,33 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
       // kinds are flows; anything else (sold, deposit, move) is internal.
       const flows = (input.flows || []).filter((f) => (f.kind === "sent" || f.kind === "received") && f.key === w.key && f.t >= d0 && f.t < d1).reduce((a, f) => a + (Number(f.usd) || 0), 0);
       let gas = 0;
+      let gasWei = 0n;      // unpriced gas wei (no ETH price at the spend hour): carried, not dropped
       if (w.main) {
         for (const g of input.gasSpends || []) {
           if (g.t >= d0 && g.t < d1) {
             const px = ethPriceAt(g.t);
-            if (px != null) gas -= (Number(g.wei) / 1e18) * px;
+            if (px != null) gas -= (Number(g.wei) / 1e18) * px;   // priced now
+            else gasWei += BigInt(g.wei);                          // price it on a later load
           }
         }
       }
-      // Price move on current holdings. Only a real number when at least one held
-      // token has a price in both day-boundary rows; empty holdings (e.g. the live
-      // portfolio view was absent when load() built them) or no matching price means
-      // the move is UNKNOWN, not zero -- a confident 0 would fabricate a price leg.
+      // Price move on that day's holdings. Only a real number when at least one held
+      // token has a price in both day-boundary rows; a missing holdings snapshot
+      // (no per-day ledger entry, no wallet snapshot) leaves the move UNKNOWN, never
+      // today's holdings and never a fabricated 0.
+      //
+      // When `holdingsByDay` is supplied (the per-position value ledger + wallet
+      // holdings snapshots), the price leg uses the holdings as of THIS day (the
+      // snapshot at or just before the day start), so a deposit / withdrawal /
+      // rebalance / fee-compound on day N changes the price leg only from day N on.
+      // The flat `holdings` map is kept as the fallback so the existing contract
+      // (tests, callers without a per-day source) is unchanged.
       let price = null;
       const p0 = priceRowAt(input.priceHours || {}, d0), p1 = priceRowAt(input.priceHours || {}, d1);
-      const hold = (input.holdings || {})[w.key] || {};
+      const byDay = (input.holdingsByDay || {})[w.key];
+      const hold = byDay != null
+        ? dayHoldingsAt(byDay, d0)
+        : (input.holdings || {})[w.key] || {};
       if (p0 && p1 && p0.h !== p1.h) {
         let pricedAny = false, acc = 0;
         for (const [addr, amt] of Object.entries(hold)) {
@@ -167,7 +197,10 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
       const dv = haveSpan ? v1.v - v0.v : null;
       const il = dv != null && price != null ? dv - fees - staking + (-vault) - price - flows : null;
       const net = dv != null ? dv + gas : fees + staking + vault + gas + (price || 0) + flows;
-      rows.push({ day: dayKey(d0), fees, staking, vault, gas, price, flows, il, dv, net, exact: dv != null && price != null });
+      // A day with unpriced gas is incomplete the same way a day with an unpriced
+      // price leg is: gasUsd stays the priced part, gasWei carries the unpriced
+      // wei, and `exact` goes false. The cost is NOT dropped silently.
+      rows.push({ day: dayKey(d0), fees, staking, vault, gas, gasWei: gasWei.toString(), price, flows, il, dv, net, exact: dv != null && price != null && gasWei === 0n });
     }
     const totals = { fees: 0, staking: 0, vault: 0, gas: 0, price: 0, flows: 0, il: 0, net: 0, dv: 0, incomplete: 0 };
     for (const r of rows) {
@@ -353,6 +386,29 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, getHist
         fold(h, normAddr(p.token0), p.amount0); fold(h, normAddr(p.token0), p.fee0);
         fold(h, normAddr(p.token1), p.amount1); fold(h, normAddr(p.token1), p.fee1);
       }
+    }
+
+    // Per-day holdings (item 3): the price leg uses THAT day's holdings, not today's.
+    // The main wallet's persisted portfolio.json series points carry per-token amounts
+    // (`a`) with their timestamps, so each point is a holdings snapshot for its day;
+    // only points that were not partial (a token priced an hour earlier has no price
+    // is a gap, not a change) are snapshots. With no per-day source the map is left
+    // undefined and compute() falls back to the flat `holdings` (existing behaviour).
+    const holdingsByDay = {};
+    const pjPoints = (pj.series || []).filter((s) => s.t != null && !s.partial);
+    if (pjPoints.length) {
+      const hd = (holdingsByDay[MAIN] = {});
+      for (const s of pjPoints) {
+        const h = {};
+        let any = false;
+        for (const [addr, amt] of Object.entries((s && s.a) || {})) {
+          if (amt == null) continue;
+          fold(h, normAddr(addr === "eth" ? "eth" : addr), amt);
+          any = true;
+        }
+        if (any) hd[dayKey(s.t)] = h;
+      }
+      if (!Object.keys(hd).length) delete holdingsByDay[MAIN];
     }
 
     // Prices: price-log hours, normalised so WETH and native ETH share the 'eth' key.

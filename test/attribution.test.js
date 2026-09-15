@@ -253,3 +253,63 @@ assert.strictEqual(+wDep2.il.toFixed(6), -10, "IL unchanged by an internal LP de
 }
 
 console.log("attribution: decomposition sums to NET on 3 scenarios + transfer out/in + internal sale/deposit, benchmarks math ok");
+
+// ---- item 3: the price leg uses that DAY's holdings, not today's (attribution.js) ----
+// A holdings change mid-window (an added 1000 X on day 2) must change the price leg
+// ONLY from day 2 on; day 1 keeps the day-1 (2000 X) holdings.
+{
+  const priceHours2 = {};
+  const pput = (t, eth, x) => { priceHours2[String(t)] = { eth, "0xaaa": x }; };
+  pput(d0, 2000, 1.0); pput(d1, 2100, 1.2); pput(d2, 2075, 1.1); pput(now - HOUR, 2075, 1.1);
+  const valueSeries2 = { main: [
+    { t: d0, v: 10000 }, { t: d1, v: 10400 }, { t: d2, v: 10380 }, { t: now - HOUR, v: 10360 },
+  ] };
+  const base2 = { wallets: [{ key: "main", label: "Main", main: true }], valueSeries: valueSeries2, priceHours: priceHours2, gasSpends: [], flows: [], positions: [] };
+
+  // Holdings ledger: day1 = 2000 X; the 1000 X buy lands at d1 (day-2 start) -> day2 onwards = 3000 X.
+  const holdingsByDay = { main: { [dayKey(d0)]: { eth: 1, "0xaaa": 2000 }, [dayKey(d1)]: { eth: 1, "0xaaa": 3000 } } };
+  const r3 = compute({ ...base2, holdingsByDay }, { days: 3, now });
+  const rows = r3.wallets[0].rows;
+  // Day 1 (d0->d1): price leg = 1*(2100-2000) + 2000*(1.2-1.0) = 500.
+  assert.strictEqual(+rows[0].price.toFixed(6), 500, "day-1 price leg uses day-1 holdings (2000 X)");
+  // Day 2 (d1->d2): price leg = 1*(2075-2100) + 3000*(1.1-1.2) = -325 (now 3000 X).
+  assert.strictEqual(+rows[1].price.toFixed(6), -325, "day-2 price leg uses the new (3000 X) holdings");
+  // Today (d2->now): flat ETH/X -> 0 price leg (with real priced hold).
+  assert.strictEqual(+rows[2].price.toFixed(6), 0, "today's leg over flat prices is 0 (both prices known)");
+
+  // A day with no holdings snapshot at all prices as UNKNOWN (null, never today's / never 0).
+  const r4 = compute({ ...base2, holdingsByDay: {} }, { days: 3, now });
+  assert.strictEqual(r4.wallets[0].rows[0].price, null, "no snapshot -> price leg stays null, not today's holdings, not 0");
+}
+
+console.log("attribution: item-3 per-day-holdings price leg (change mid-window starts on that day; no snapshot -> null)");
+
+// ---- item 4: unpriced gas is carried as gasWei, the day is incomplete, never dropped (attribution.js) ----
+{
+  // ETH price only from d1 on; a gas spend lands on day 1 at d0+1h where there is no ETH price.
+  const priceHours4 = {};
+  const qput = (t, eth, x) => { priceHours4[String(t)] = { eth, "0xaaa": x }; };
+  qput(d1, 2100, 1.2); qput(d2, 2050, 1.1); qput(now - HOUR, 2075, 1.1);
+  const valueSeries4 = { main: [{ t: d0, v: 5000 }, { t: d1, v: 5100 }, { t: d2, v: 5050 }, { t: now - HOUR, v: 5040 }] };
+  const gasWei = 1000000000000000n; // 0.001 ETH
+  const base4 = {
+    wallets: [{ key: "main", label: "Main", main: true }],
+    valueSeries: valueSeries4,
+    priceHours: priceHours4,
+    holdings: { main: { eth: 1, "0xaaa": 1000 } },
+    gasSpends: [{ t: d0 + HOUR, wei: String(gasWei) }],
+    flows: [], positions: [],
+  };
+  const r7 = compute(base4, { days: 3, now });
+  const day1Row = r7.wallets[0].rows[0];
+  // No ETH price at d0 + 1h -> gas is NOT silently dropped: gasUsd stays the priced part
+  // (none, so 0 / absent), gasWei carries the wei, and the day is inexact.
+  assert.strictEqual(day1Row.gasWei, gasWei.toString(), "unpriced gas carried as gasWei, not dropped");
+  assert.strictEqual(day1Row.gas, 0, "no priced part for that gas (USD side stays 0 until a price exists)");
+  assert.strictEqual(day1Row.exact, false, "day with unpriced gas is incomplete, like an unpriced price leg");
+  // A later day with ETH price prices its (own) gas normally.
+  const r8 = compute({ ...base4, gasSpends: [{ t: d2 + HOUR, wei: String(gasWei) }] }, { days: 3, now });
+  assert.strictEqual(r8.wallets[0].rows[2].exact, true, "priced gas keeps the day exact");
+}
+
+console.log("attribution: item-4 unpriced gas carried as gasWei, day incomplete (never dropped)");

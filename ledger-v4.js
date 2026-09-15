@@ -63,7 +63,41 @@ const MOD_IFACE = new ethers.Interface([
   "event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)",
 ]);
 
+/**
+ * The ids whose zero-liquidity ModifyLiquidity (an owner collect) share one transaction:
+ * tx -> [ids in log order]. A batched collect emits one receipt of PoolManager transfers for
+ * all of them, so the transfers can only be credited once per token (TASK-87). Pure.
+ */
+function zeroDeltaIdsByTx(logs, idSet) {
+  const out = new Map();
+  for (const l of logs || []) {
+    if (!l.topics || l.topics[0] !== MOD_TOPIC) continue;
+    let ev; try { ev = MOD_IFACE.parseLog(l); } catch { continue; }
+    const id = BigInt(ev.args.salt).toString();
+    if (!idSet.has(id) || ev.args.liquidityDelta !== 0n) continue;
+    const arr = out.get(l.transactionHash) || [];
+    if (!arr.includes(id)) arr.push(id);
+    out.set(l.transactionHash, arr);
+  }
+  return out;
+}
+/**
+ * Which of a position's two fee legs may still be credited from a batched receipt: a token
+ * already credited to an earlier position in the same transaction is unknown for this one
+ * (the receipt total went to the first). `credited` is the per-tx set, mutated. Pure otherwise.
+ */
+function allocateBatch(credited, t0, t1) {
+  const take = (t) => {
+    if (!t || !t.address) return true;
+    const a = String(t.address).toLowerCase();
+    if (credited.has(a)) return false;
+    credited.add(a); return true;
+  };
+  return { fee0Known: take(t0), fee1Known: take(t1) };
+}
+
 function create({ provider, poolManager, posm, posmAddress, stateView, forwardStart, log = console.log }) {
+  const batchCredited = new Map(); // tx -> Set(token address) already credited to a position in that tx
   posmAddress = posmAddress || (posm && posm.target);
   const pmLower = String(poolManager).toLowerCase();
   let state = { fwd: forwardStart - 1, tokens: {} };
@@ -207,7 +241,7 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
   const ownerCollectsSeen = () => {
     try { return new Set(JSON.parse(fs.readFileSync(OWNER_COLLECTS, "utf8")).map((r) => `${r.tx}:${r.tokenId}`)); } catch { return new Set(); }
   };
-  async function recordOwnerCollect({ id, block, tx, poolId }) {
+  async function recordOwnerCollect({ id, block, tx, poolId, batch = null }) {
     const key = `${tx}:v4-${id}`;
     if (ownerCollectsSeen().has(key)) return;
     let rows = [];
@@ -235,14 +269,24 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
     }
     if (t0 && t0.address === ethers.ZeroAddress) nativeLeg = "fee0 unknown (native ETH leaves no log)";
     if (t1 && t1.address === ethers.ZeroAddress) nativeLeg = "fee1 unknown (native ETH leaves no log)";
+    // A batched collect (several positions' zero-liquidity events in one tx) has ONE receipt:
+    // credit each token's transfers to the first position that carries it, the others get null.
+    let fee0Known = true, fee1Known = true, batchNote = null;
+    if (batch && batch.n > 1) {
+      const cred = batchCredited.get(tx) || new Set();
+      batchCredited.set(tx, cred);
+      ({ fee0Known, fee1Known } = allocateBatch(cred, t0, t1));
+      const dup = [!fee0Known && t0 ? t0.symbol : null, !fee1Known && t1 ? t1.symbol : null].filter(Boolean);
+      batchNote = dup.length ? `batch of ${batch.n} positions in one tx: ${dup.join(", ")} already credited to #${batch.first}, split unknown` : `batch of ${batch.n} positions in one tx: receipt total credited here`;
+    }
     let wallet = null;
     try { wallet = await posm.ownerOf(BigInt(id), { blockTag: block }); } catch { try { wallet = await posm.ownerOf(BigInt(id)); } catch { wallet = recipient; } }
     if (!wallet) wallet = recipient;
     rows.push({
       block, t: await blockTime(block), tx, tokenId: `v4-${id}`,
-      fee0: fee0.toString(), fee1: fee1.toString(), principal: false,
+      fee0: fee0Known ? fee0.toString() : null, fee1: fee1Known ? fee1.toString() : null, principal: false,
       wallet: wallet ? String(wallet).toLowerCase() : null, walletLabel: null,
-      t0, t1, src: "owner-modify", poolId, note: nativeLeg || undefined,
+      t0, t1, src: "owner-modify", poolId, note: [nativeLeg, batchNote].filter(Boolean).join("; ") || undefined,
     });
     rows.sort((a, b) => a.block - b.block);
     try {
@@ -256,6 +300,7 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
   }
 
   async function ingest(logs, idSet) {
+    const zeroByTx = zeroDeltaIdsByTx(logs, idSet);
     for (const l of logs) {
       if (l.topics[0] === TRANSFER_TOPIC) {
         // A mint is an ERC-721 Transfer from the zero address; the id is topic 3.
@@ -282,7 +327,8 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
       if (!e.poolId) e.poolId = poolId;
 
       if (liq === 0n) {
-        await recordOwnerCollect({ id, block: l.blockNumber, tx: l.transactionHash, poolId }).catch((err) => log(`ledger-v4: owner collect #${id}: ${err.message}`));
+        const ids = zeroByTx.get(l.transactionHash) || [id];
+        await recordOwnerCollect({ id, block: l.blockNumber, tx: l.transactionHash, poolId, batch: { n: ids.length, first: ids[0] } }).catch((err) => log(`ledger-v4: owner collect #${id}: ${err.message}`));
         continue;
       }
 
@@ -408,4 +454,4 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
   };
 }
 
-module.exports = { create };
+module.exports = { create, zeroDeltaIdsByTx, allocateBatch };

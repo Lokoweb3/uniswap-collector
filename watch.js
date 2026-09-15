@@ -68,7 +68,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     }
     let collectedUsd = 0, collects = 0;
     for (const e of (getCollectEvents ? getCollectEvents(version === 4 ? `v4-${id}` : id.toString()) : []) || []) {
-      collectedUsd += toFloat(e.fee0, dec0) * usd0 + toFloat(e.fee1, dec1) * usd1;
+      collectedUsd += toFloat(e.fee0 ?? "0", dec0) * usd0 + toFloat(e.fee1 ?? "0", dec1) * usd1;
+      if (e.fee0 == null || e.fee1 == null) approx = true; // batched v4 collect, split unknown (TASK-87)
       collects++;
     }
     if (!(depositedUsd > 0)) return out;

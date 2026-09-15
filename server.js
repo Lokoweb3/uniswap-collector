@@ -804,9 +804,12 @@ async function historyRows(fresh = false) {
       let f0 = null, f1 = null, usd = null, weth = null, locked = false;
       const px = feePrices[priceKey(e)];
       if (m) {
-        f0 = Number(ethers.formatUnits(e.fee0, m.t0.decimals));
-        f1 = Number(ethers.formatUnits(e.fee1, m.t1.decimals));
-        if (px) {
+        // A leg recorded as null (a batched v4 collect whose split is unknown, TASK-87) is 0 for
+        // the amount and makes the row unpriced: the USD would be a guess.
+        const legUnknown = e.fee0 == null || e.fee1 == null;
+        f0 = Number(ethers.formatUnits(e.fee0 ?? "0", m.t0.decimals));
+        f1 = Number(ethers.formatUnits(e.fee1 ?? "0", m.t1.decimals));
+        if (px && !legUnknown) {
           usd = f0 * px.p0 + f1 * px.p1;
           weth = px.w ? usd / px.w : null;
           locked = true;
@@ -980,10 +983,11 @@ async function build() {
           toFloat(b.dep0, dec0) * usd0 + toFloat(b.dep1, dec1) * usd1;
         const withdrawnUsd =
           toFloat(b.wd0, dec0) * usd0 + toFloat(b.wd1, dec1) * usd1;
-        let collectedUsd = 0, collects = 0;
+        let collectedUsd = 0, collects = 0, legUnknown = false;
         for (const e of [...bf.events, ...hist.events]) {
           if (e.tokenId !== p.tokenId) continue;
-          collectedUsd += toFloat(e.fee0, dec0) * usd0 + toFloat(e.fee1, dec1) * usd1;
+          collectedUsd += toFloat(e.fee0 ?? "0", dec0) * usd0 + toFloat(e.fee1 ?? "0", dec1) * usd1;
+          if (e.fee0 == null || e.fee1 == null) legUnknown = true; // batched v4 collect, split unknown (TASK-87)
           collects++;
         }
         // Collected fees at the prices of the collect itself when every collect has a price
@@ -1012,7 +1016,7 @@ async function build() {
           // If the ledger's liquidity disagrees with the live position, the
           // basis is missing an add or remove: the chain scanner has not
           // reached it yet (minutes), or Blockscout never indexed it.
-          pnlApprox = b.liq !== p.liquidity;
+          pnlApprox = b.liq !== p.liquidity || legUnknown;
         }
       }
 

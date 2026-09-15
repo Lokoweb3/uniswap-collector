@@ -18,6 +18,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const { execFile } = require("child_process");
 const { ethers } = require("ethers");
 const v4 = require("./univ4");
 const u = require("./univ3");
@@ -31,6 +32,7 @@ const NPM_ABI = [
   "function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
   "function decreaseLiquidity((uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min, uint256 deadline)) payable returns (uint256 amount0, uint256 amount1)",
   "function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)) payable returns (uint256 amount0, uint256 amount1)",
+  "function multicall(bytes[] data) payable returns (bytes[] results)",
   "function ownerOf(uint256 tokenId) view returns (address)",
 ];
 
@@ -94,7 +96,36 @@ async function closeV4({ provider, cfg, tokenId, owner, wallet }) {
   return { hash: tx.hash, block: rcpt.blockNumber, gasWei: rcpt.gasUsed * rcpt.gasPrice, expect, position };
 }
 
-/** v3: decrease 100% then collect everything to the owner. Two transactions. */
+/**
+ * Build the two v3 close calldatas for one atomic multicall (see `closeV3`).
+ * Pure: no chain calls. Exported so the test can assert the exact calldatas and
+ * their order without a live RPC.
+ *
+ *   calldatas[0] = decreaseLiquidity({ tokenId, liquidity, amount0Min, amount1Min, deadline })
+ *   calldatas[1] = collect({ tokenId, recipient: owner, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 })
+ */
+function buildV3CloseCalldatas({ tokenId, liquidity, amount0Min, amount1Min, amount0Max = MAX_UINT128, amount1Max = MAX_UINT128, deadline, owner }) {
+  const npmIface = new ethers.Interface(NPM_ABI);
+  return [
+    npmIface.encodeFunctionData("decreaseLiquidity", [{ tokenId: BigInt(tokenId), liquidity, amount0Min, amount1Min, deadline }]),
+    npmIface.encodeFunctionData("collect", [{ tokenId: BigInt(tokenId), recipient: owner, amount0Max, amount1Max }]),
+  ];
+}
+
+/**
+ * v3: decrease 100% then collect everything to the owner, in ONE multicall so the
+ * two steps can never be interleaved by the collector's own collect(MAX_UINT128)
+ * landing between them and taking principal + fees to the operator. The same
+ * layout mint.js' buildV3Close already uses for the move flow: one signature,
+ * one transaction, both calldatas atomic.
+ *
+ * multicall calldata order (encoded by buildV3CloseCalldatas):
+ *   1. decreaseLiquidity({ tokenId, liquidity, amount0Min, amount1Min, deadline })
+ *   2. collect({ tokenId, recipient: owner, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 })
+ * Inside one multicall on NonfungiblePositionManager the decrease is applied first and
+ * its owed balances are then collectable, so fees (and the just-freed principal) all
+ * leave to the OWNER - never to the operator.
+ */
 async function closeV3({ provider, cfg, tokenId, owner, wallet, dryRun = false }) {
   const npm = new ethers.Contract(cfg.contracts.positionManager, NPM_ABI, provider);
   const pos = await npm.positions(BigInt(tokenId));
@@ -105,17 +136,51 @@ async function closeV3({ provider, cfg, tokenId, owner, wallet, dryRun = false }
   const pool = new ethers.Contract(poolAddr, u.POOL_ABI, provider);
   const slot0 = await pool.slot0();
   const { amount0, amount1 } = u.getAmountsForLiquidity(slot0.sqrtPriceX96, u.getSqrtRatioAtTick(Number(pos.tickLower)), u.getSqrtRatioAtTick(Number(pos.tickUpper)), pos.liquidity);
-  const dec = { tokenId: BigInt(tokenId), liquidity: pos.liquidity, amount0Min: minus1pct(amount0), amount1Min: minus1pct(amount1), deadline: deadline() };
-  const col = { tokenId: BigInt(tokenId), recipient: owner, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 };
   const from = wallet ? wallet.address : owner;
-  await npm.decreaseLiquidity.staticCall(dec, { from });
+  const calldatas = buildV3CloseCalldatas({
+    tokenId, liquidity: pos.liquidity,
+    amount0Min: minus1pct(amount0), amount1Min: minus1pct(amount1),
+    deadline: deadline(), owner,
+  });
+  // dry-run the whole multicall exactly as sent (as `from`), so a revert (e.g. a
+  // blocklist or a stale slippage) blocks the send the same way the old two-step path did.
+  await npm.multicall.staticCall(calldatas, { from });
   if (dryRun || !wallet) return { ok: true, dryRun: true, expect: { amount0, amount1 } };
   const w = npm.connect(wallet);
-  const t1 = await w.decreaseLiquidity(dec);
-  const r1 = await t1.wait();
-  const t2 = await w.collect(col);
-  const r2 = await t2.wait();
-  return { hash: t2.hash, decreaseHash: t1.hash, block: r2.blockNumber, gasWei: r1.gasUsed * r1.gasPrice + r2.gasUsed * r2.gasPrice, expect: { amount0, amount1 } };
+  const tx = await w.multicall(calldatas);
+  const rcpt = await tx.wait();
+  return { hash: tx.hash, block: rcpt.blockNumber, gasWei: rcpt.gasUsed * rcpt.gasPrice, expect: { amount0, amount1 } };
 }
 
-module.exports = { operatorWallet, buildV4, dryRunV4, closeV4, closeV3 };
+/*
+ * Try to hold the SAME exclusive lock the collector takes in run-collector.sh
+ * (`.collector.lock`, flock(2)-ed on fd 9, non-blocking). We replicate that exact
+ * shell dance in a child: `exec 9> file; flock -n 9`, then hold the child (and
+ * thus the fd + lock) until release. `flock -n` fails immediately (exit 1)
+ * when the collector already holds the lock — so we can tell acquired vs deferred
+ * with no waiting and no race on the operator's nonce.
+ *
+ * Resolves to a release function when the lock is acquired, or null when the
+ * collector holds it (the caller retries on the next guardian cycle). Never waits.
+ */
+function lockCollector({ dir = __dirname } = {}) {
+  const lockFile = path.join(dir, ".collector.lock");
+  return new Promise((resolve) => {
+    try {
+      fs.closeSync(fs.openSync(lockFile, "a"));
+    } catch (_) {
+      resolve(null);
+      return;
+    }
+    const shell = `exec 9>"$1"; if flock -n 9; then echo LOCKED; exec sleep 3600; else exit 1; fi`;
+    const child = execFile("/bin/bash", ["-c", shell, "bash", lockFile], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; if (out.includes("LOCKED")) resolve(() => { try { child.kill(); } catch (_) {} }); });
+    child.on("error", () => resolve(null));
+    child.on("exit", (code) => { if (code !== 0 && !out.includes("LOCKED")) resolve(null); });
+    child.unref();
+  });
+}
+
+module.exports = { operatorWallet, buildV4, dryRunV4, closeV4, closeV3, buildV3CloseCalldatas, lockCollector };
+

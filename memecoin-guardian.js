@@ -255,21 +255,36 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
       return row;
     }
     try {
-      const is3 = Number(entry.version) === 3;
-      const res = is3
-        ? await closer.closeV3({ provider, cfg, tokenId: entry.tokenId, owner: entry.walletAddress, wallet })
-        : await closer.closeV4({ provider, cfg, tokenId: entry.tokenId, owner: entry.walletAddress, wallet });
-      const p = res.position;
-      const ethIs0 = p && isEth(p.token0.address);
-      const recovered = p && res.expect
-        ? `${Number(ethers.formatUnits(ethIs0 ? res.expect.amount0 : res.expect.amount1, ethIs0 ? p.token0.decimals : p.token1.decimals)).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${ethIs0 ? p.token0.symbol : p.token1.symbol} + ${Number(ethers.formatUnits(ethIs0 ? res.expect.amount1 : res.expect.amount0, ethIs0 ? p.token1.decimals : p.token0.decimals)).toLocaleString("en-US", { maximumFractionDigits: 0 })} ${ethIs0 ? p.token1.symbol : p.token0.symbol}`
-        : "position value";
-      const row = { ...base, status: "closed", tx: res.hash, block: res.block, gasEth: res.gasWei != null ? ethers.formatEther(res.gasWei) : null, recovered };
-      appendLog(row);
-      const st = state.positions[String(entry.tokenId)];
-      if (st) { st.closed = true; st.closedAt = Date.now(); }
-      await send(`🚨 ${who === "manual" ? "Closed" : "Auto-closed"} ${entry.pair} — recovered ${recovered} to ${entry.wallet} (${reason}). tx ${String(res.hash).slice(0, 12)}…`, entry);
-      return row;
+      // Same flock the collector holds (run-collector.sh) so a close can never
+      // interleave with the collector's collect(MAX_UINT128) and let it take the
+      // position's principal to the operator. Non-blocking: if the collector is
+      // running, defer -- the guardian retries on the next cycle, it never waits
+      // and never races the operator's nonce.
+      const release = await closer.lockCollector({ dir });
+      if (!release) {
+        const row = { ...base, status: "deferred", error: "collector holds the lock; will retry next cycle" };
+        appendLog(row);
+        return row;
+      }
+      try {
+        const is3 = Number(entry.version) === 3;
+        const res = is3
+          ? await closer.closeV3({ provider, cfg, tokenId: entry.tokenId, owner: entry.walletAddress, wallet })
+          : await closer.closeV4({ provider, cfg, tokenId: entry.tokenId, owner: entry.walletAddress, wallet });
+        const p = res.position;
+        const ethIs0 = p && isEth(p.token0.address);
+        const recovered = p && res.expect
+          ? `${Number(ethers.formatUnits(ethIs0 ? res.expect.amount0 : res.expect.amount1, ethIs0 ? p.token0.decimals : p.token1.decimals)).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${ethIs0 ? p.token0.symbol : p.token1.symbol} + ${Number(ethers.formatUnits(ethIs0 ? res.expect.amount1 : res.expect.amount0, ethIs0 ? p.token1.decimals : p.token0.decimals)).toLocaleString("en-US", { maximumFractionDigits: 0 })} ${ethIs0 ? p.token1.symbol : p.token0.symbol}`
+          : "position value";
+        const row = { ...base, status: "closed", tx: res.hash, block: res.block, gasEth: res.gasWei != null ? ethers.formatEther(res.gasWei) : null, recovered };
+        appendLog(row);
+        const st = state.positions[String(entry.tokenId)];
+        if (st) { st.closed = true; st.closedAt = Date.now(); }
+        await send(`🚨 ${who === "manual" ? "Closed" : "Auto-closed"} ${entry.pair} — recovered ${recovered} to ${entry.wallet} (${reason}). tx ${String(res.hash).slice(0, 12)}…`, entry);
+        return row;
+      } finally {
+        release();
+      }
     } catch (err) {
       const row = { ...base, status: "failed", error: err.shortMessage || err.message };
       appendLog(row);

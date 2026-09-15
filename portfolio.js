@@ -80,19 +80,26 @@ async function mapLimit(items, limit, fn) {
  * written today and for points already on disk. Pure; returns the same array.
  */
 function markPartial(series, share = 0.01) {
+  // The baseline is the last COMPLETE point, not simply the previous one: a token that
+  // stays unpriced for several hours keeps every one of those points partial (comparing
+  // against the previous, already-partial point would clear the flag on the second hour
+  // and let the collapsed total through as a real value). A token the wallet no longer
+  // holds (amount 0) never flags, so a sold token does not mark the series forever.
   let prev = null;
   for (const pt of series || []) {
     if (prev && prev.p && prev.total > 0) {
       const gone = [];
       for (const [k, price] of Object.entries(prev.p)) {
         if (pt.p && pt.p[k] != null) continue;
+        const held = pt.a && pt.a[k] != null ? pt.a[k] : prev.a ? prev.a[k] : null;
+        if (!(held > 0)) continue;
         const amt = prev.a ? prev.a[k] : null;
         if (amt != null && amt * price > share * prev.total) gone.push(k);
       }
       if (gone.length) { pt.partial = true; pt.unpriced = gone; }
       else { delete pt.partial; delete pt.unpriced; }
     }
-    prev = pt;
+    if (!pt.partial) prev = pt;
   }
   return series;
 }
@@ -510,7 +517,10 @@ function create({ provider, factory, cfg, explorerApi }) {
       const a = {};
       for (const r of rows) if (r.total != null) a[r.native ? "eth" : r.address.toLowerCase()] = +Number(r.total).toPrecision(6);
       state.series.push({ t: now, wallet: +walletUsd.toFixed(2), lp: +(lpUsd || 0).toFixed(2), fees: +(feesUsd || 0).toFixed(2), total: +totalUsd.toFixed(2), p, a });
-      markPartial(state.series.slice(-2)); // flags the new point against the one before it
+      // Flag the new point against the last COMPLETE point (a run of partial points keeps the same baseline).
+      let base = state.series.length - 2;
+      while (base > 0 && state.series[base].partial) base--;
+      markPartial(state.series.slice(Math.max(0, base)));
       save();
     }
 

@@ -43,7 +43,7 @@ const MAX_NOTES_CHARS = 4000;
 
 const ROLES = { read: 0, approve: 1, full: 2 };
 /** Tools that change something, and the lowest role that may call them. */
-const WRITE_TOOLS = { approve_sale: "approve", update_notes: "approve", record_strategy_proposal: "full" };
+const WRITE_TOOLS = { approve_sale: "approve", update_notes: "approve", record_strategy_proposal: "full", run_tasks: "full" }; // run_tasks starts scripts and writes their output: full role only (TASK-84)
 
 const BASE_SYSTEM = `You are the assistant built into the LP Dashboard, a Uniswap v3/v4 liquidity-position monitor and fee collector on Robinhood Chain (chain id 4663). You are the same assistant on the website, on Telegram and for local scripts; the notes below are what you remember across all of them.
 You answer questions about the owner's positions, watched wallets, collected fees, revenue, portfolio, risk guardian (per-position alert and auto-close rules), the LOKOVault treasury, staking, attribution, the weekly digest, pending fee-token sales, and system health, using the tools. Call a tool before stating any number; never guess figures. Call several tools in one turn when the question spans them. Answer once, in one place; do not restate a number from an earlier tool result when a later, broader result supersedes it. positions covers the Main wallet only; for totals across all wallets use health (guardian.positions) or watched_wallets, and say which wallets the number covers.

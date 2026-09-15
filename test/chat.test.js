@@ -26,13 +26,16 @@ const agentMod = require("../agent");
   assert.ok(/READ-ONLY/.test(bot.ROLE_TEXT.read) && /approve_sale/.test(bot.ROLE_TEXT.approve) && /full access/.test(bot.ROLE_TEXT.full));
 
   // roles gate the write tools: read sees none, approve sees approve_sale + update_notes, full sees all
-  const all = { defs: [{ name: "positions" }, { name: "approve_sale" }, { name: "record_strategy_proposal" }].map((d) => ({ ...d, description: d.name, input_schema: { type: "object", properties: {} } })), run: async (n) => ({ ran: n }) };
+  const all = { defs: [{ name: "positions" }, { name: "approve_sale" }, { name: "record_strategy_proposal" }, { name: "run_tasks" }].map((d) => ({ ...d, description: d.name, input_schema: { type: "object", properties: {} } })), run: async (n) => ({ ran: n }) };
   const names = (role) => bot.toolsFor(all, role, { notes: () => "", writeNotes() {} }).defs.map((d) => d.name).sort();
   assert.deepStrictEqual(names("read"), ["positions", "read_notes"]);
   assert.deepStrictEqual(names("approve"), ["approve_sale", "positions", "read_notes", "update_notes"]);
-  assert.deepStrictEqual(names("full"), ["approve_sale", "positions", "read_notes", "record_strategy_proposal", "update_notes"]);
+  assert.deepStrictEqual(names("full"), ["approve_sale", "positions", "read_notes", "record_strategy_proposal", "run_tasks", "update_notes"]);
   const readTools = bot.toolsFor(all, "read", { notes: () => "n", writeNotes() { throw new Error("must not write"); } });
   assert.match((await readTools.run("approve_sale", {})).error, /not allowed/);
+  // TASK-84: the read role can neither list nor invoke the task trigger; approve cannot either.
+  assert.match((await readTools.run("run_tasks", {})).error, /not allowed/, "read role cannot start tasks");
+  assert.match((await bot.toolsFor(all, "approve", { notes: () => "n", writeNotes() {} }).run("run_tasks", {})).error, /not allowed/, "approve role cannot start tasks");
   assert.deepStrictEqual(await readTools.run("read_notes", {}), { notes: "n" });
   let written = null;
   const fullTools = bot.toolsFor(all, "full", { notes: () => "", writeNotes(t) { written = t; } });

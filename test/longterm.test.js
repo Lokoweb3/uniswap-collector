@@ -43,4 +43,24 @@ function pos(legs) {
   const r = lt.compute({ open: [pos({ deposited: 200, depositedAtOpen: null })], collects: [], values: { [`${OWNER}:7`]: vals }, now }).get(`${OWNER}:7`);
   assert.equal(r.sinceOpen.basis, "twa"); assert.equal(r.sinceOpen.basisUsd, 120);
 }
-console.log("longterm: priceAt hour lookup; open basis is the deposit priced at open, null without a price, twa when the ledger covers the window");
+// TASK-83: window fees are the window's fees.
+{
+  const HOURS6 = 6 * HOUR;
+  const openAt = now - 40 * DAY; // older than the 30 d window
+  const p = { tokenId: "9", version: 3, pair: "WETH / USDG", pnlSince: openAt, valueUsd: 1000, feesUsd: 100, pnlUsd: 0, pnlLegs: { deposited: 1000, depositedAtOpen: 1000, collected: 0, uncollected: 100 } };
+  // Ledger: the uncollected balance was already $100 at the window start and never moved.
+  const flat = []; for (let t = openAt; t <= now; t += HOURS6) flat.push({ t, usd: 1000, fees: 100 });
+  const r1 = lt.compute({ open: [{ p, walletAddress: OWNER }], collects: [], values: { [`${OWNER}:9`]: flat }, now }).get(`${OWNER}:9`);
+  assert.equal(r1.d30.feesUsd, 0, `an unchanged $100 opening balance earns $0 in the window, got ${r1.d30.feesUsd}`);
+  assert.equal(r1.sinceOpen.feesUsd, 100, "since open the whole balance counts (it was 0 at open)");
+  // A fee-only `principal` row (history.js already subtracted the withdrawn principal) counts.
+  const collects = [{ t: now - 5 * DAY, usd: 20, principal: true, tokenId: "9", version: 3, walletAddress: OWNER, pair: "WETH / USDG" }];
+  const r2 = lt.compute({ open: [{ p, walletAddress: OWNER }], collects, values: { [`${OWNER}:9`]: flat }, now }).get(`${OWNER}:9`);
+  assert.equal(r2.d30.feesUsd, 20, `the $20 fee row from a principal tx counts, got ${r2.d30.feesUsd}`);
+  // No ledger sample at the window start -> window fees unknown (null), never the whole balance.
+  const r3 = lt.compute({ open: [{ p, walletAddress: OWNER }], collects: [], values: {}, now }).get(`${OWNER}:9`);
+  assert.equal(r3.d30.feesUsd, null, `no start sample -> unknown, got ${r3.d30.feesUsd}`);
+  assert.equal(r3.d30.feeAprPct, null);
+  assert.equal(r3.sinceOpen.feesUsd, 100);
+}
+console.log("longterm: priceAt hour lookup; open basis is the deposit priced at open, null without a price, twa when the ledger covers the window; window fees exclude the opening balance and count fee-only principal rows");

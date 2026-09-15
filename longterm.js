@@ -163,16 +163,31 @@ function sampleAt(samples, t) {
   return best && t - best.t <= 36 * HOUR ? best : null;
 }
 
-function windowFees(rec, collectsById, from, to, now) {
+/**
+ * Fees earned in [from, to]: the priced collects inside the window plus, for an open position
+ * whose window reaches now, the change in the uncollected balance over the window. A window
+ * that starts at open counts the whole uncollected balance (it was 0 at open); a later window
+ * needs the ledger's uncollected balance at its start (sampleAt) and is UNKNOWN (null) without
+ * one, so an unchanged opening balance is never reported as earned. `principal` rows are
+ * fee-only already (history.js subtracts the withdrawn principal), so they count. (TASK-83)
+ */
+function windowFees(rec, collectsById, from, to, now, samples = null) {
   const rows = collectsById.get(`${rec.walletAddress}:${rec.id}`) || [];
   let fees = 0, unpriced = 0, any = false;
   for (const r of rows) {
-    if (r.principal) continue; // a principal withdrawal rides in the same tx as a collect: not a fee
     if (num(r.t) == null || r.t < from || r.t > to) continue;
     if (num(r.usd) == null) { unpriced++; continue; }
     fees += r.usd; any = true;
   }
-  if (rec.open && to >= now - HOUR && rec.uncollectedUsd != null) { fees += rec.uncollectedUsd; any = true; }
+  if (rec.open && to >= now - HOUR && rec.uncollectedUsd != null) {
+    const wholeLife = rec.openedAt != null && from <= rec.openedAt + HOUR;
+    if (wholeLife) { fees += rec.uncollectedUsd; any = true; }
+    else {
+      const start = sampleAt(samples, from);
+      if (start && num(start.fees) != null) { fees += rec.uncollectedUsd - start.fees; any = true; }
+      else return { feesUsd: null, unpricedCollects: unpriced };
+    }
+  }
   return { feesUsd: any ? fees : 0, unpricedCollects: unpriced };
 }
 
@@ -184,8 +199,8 @@ function aprOf(feesUsd, basisUsd, days) {
 /** One position, one window [from, to]. */
 function measureOne(rec, { collectsById, values, now, from, to }) {
   const days = (to - from) / DAY;
-  const { feesUsd, unpricedCollects } = windowFees(rec, collectsById, from, to, now);
   const samples = values[`${rec.walletAddress}:${rec.id}`] || values[rec.id] || [];
+  const { feesUsd, unpricedCollects } = windowFees(rec, collectsById, from, to, now, samples);
   const twaUsd = twa(samples, from, to);
   const basis = twaUsd != null ? "twa" : "open";
   const basisUsd = twaUsd != null ? twaUsd : rec.depositedUsd;
@@ -211,13 +226,15 @@ function measureOne(rec, { collectsById, values, now, from, to }) {
 /** A chain of members over [from, to]: fees and days accumulate; basis is open-time-weighted. */
 function measureChain(members, { collectsById, values, now, from, to }) {
   const days = (to - from) / DAY;
-  let fees = 0, unpriced = 0, netSum = 0, netKnown = true, basisNum = 0, basisDen = 0, basisKnown = true, approx = false;
+  let fees = 0, unpriced = 0, netSum = 0, netKnown = true, basisNum = 0, basisDen = 0, basisKnown = true, approx = false, feesKnown = true;
   const twaParts = [];
   for (const m of members) {
     const mFrom = Math.max(from, m.openedAt ?? from), mTo = Math.max(mFrom, Math.min(to, m.closedAt ?? to));
     if (m.closedAt != null && m.closedAt < from) continue; // ended before the window
-    const w = windowFees(m, collectsById, mFrom, mTo, now);
-    fees += w.feesUsd; unpriced += w.unpricedCollects;
+    const mSamples = values[`${m.walletAddress}:${m.id}`] || values[m.id] || [];
+    const w = windowFees(m, collectsById, mFrom, mTo, now, mSamples);
+    if (w.feesUsd == null) feesKnown = false; else fees += w.feesUsd;
+    unpriced += w.unpricedCollects;
     const whole = m.openedAt != null && from <= m.openedAt + HOUR;
     // A closed member's net needs its withdrawal, which the collect rows do not carry (optional
     // closedWithdrawals input); unknown -> the chain's net is unknown, never a partial sum.
@@ -232,8 +249,9 @@ function measureChain(members, { collectsById, values, now, from, to }) {
   const basis = twaUsd != null ? "twa" : basisKnown && basisDen > 0 ? "open" : null;
   const basisUsd = twaUsd != null ? twaUsd : basis === "open" ? basisNum / basisDen : null;
   const netUsd = netKnown && members.length ? netSum : null;
+  const feesOut = feesKnown ? fees : null;
   return {
-    days: round(days, 2), feesUsd: round(fees), feeAprPct: round(aprOf(fees, basisUsd, days), 1),
+    days: round(days, 2), feesUsd: round(feesOut), feeAprPct: round(aprOf(feesOut, basisUsd, days), 1),
     netUsd: round(netUsd), netPct: netUsd != null && basisUsd > 0 ? round((netUsd / basisUsd) * 100, 2) : null,
     basis, basisUsd: round(basisUsd), approx, unpricedCollects: unpriced,
   };
@@ -278,7 +296,7 @@ function compute({ open = [], collects = [], rangeLog = {}, values = {}, closedD
       chain = {
         id: c.chainId, since,
         members: members.map((m) => ({ id: m.id, openedAt: m.openedAt, closedAt: m.closedAt, depositedUsd: round(m.depositedUsd),
-          feesUsd: round(windowFees(m, collectsById, m.openedAt ?? since, m.closedAt ?? now, now).feesUsd) })),
+          feesUsd: round(windowFees(m, collectsById, m.openedAt ?? since, m.closedAt ?? now, now, values[`${m.walletAddress}:${m.id}`] || values[m.id] || []).feesUsd) })),
         sinceOpen: measureChain(members, { ...ctx, from: since, to: now }),
         d30: measureChain(members, { ...ctx, from: Math.max(since, now - win), to: now }),
       };

@@ -16,6 +16,9 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+// === pure decision logic (testable in isolation) ===
+const cl = require("./collector-logic");
+// === end pure decision logic ===
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -90,11 +93,11 @@ function saveState(state) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-function gasSpentLast24h(state) {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  state.gasSpends = state.gasSpends.filter((s) => s.t > cutoff);
-  return state.gasSpends.reduce((acc, s) => acc + BigInt(s.wei), 0n);
-}
+// Pure decision logic lifted to collector-logic.js (kept here as a thin delegate
+// so the rest of the file is unchanged).
+function gasSpentLast24h(state) { return cl.gasSpentLast24h(state); }
+function gasFloat(cfg) { return cl.gasFloat(cfg); }
+function sweepTarget(cfg) { return cl.sweepTarget(cfg); }
 
 // v4 collects leave no Collect event on the v3 manager, so the dashboard's
 // history (history.js) reads them from this ledger instead. One row per sent
@@ -287,29 +290,6 @@ async function quoteSingle(quoter, tokenIn, tokenOut, amountIn, feeTier) {
   }
 }
 
-/**
- * The ETH the operator keeps for gas. `keepGasReserveEth` is the floor it must
- * never sweep below; `gasTargetEth` (optional, >= the floor) is the float it
- * refills itself to out of collected fees before anything is swapped or sent,
- * so the hot wallet never runs dry between manual top-ups.
- */
-function gasFloat(cfg) {
-  const reserve = ethers.parseEther(String(cfg.sweep.keepGasReserveEth || "0"));
-  let target = cfg.sweep.gasTargetEth != null ? ethers.parseEther(String(cfg.sweep.gasTargetEth)) : reserve;
-  if (target < reserve) target = reserve;
-  return { reserve, target };
-}
-
-/** The sweep target: ETH (unwrap and send) or a stable token (swap and send). */
-function sweepTarget(cfg) {
-  const t = String((cfg.sweep && cfg.sweep.target) || "ETH").toUpperCase();
-  if (t === "ETH") return { kind: "eth" };
-  if (!cfg.sweep.targetToken || !cfg.sweep.targetFeeTier) {
-    throw new Error(`sweep.target is ${t} but sweep.targetToken / sweep.targetFeeTier are not set`);
-  }
-  return { kind: "token", address: ethers.getAddress(cfg.sweep.targetToken), feeTier: Number(cfg.sweep.targetFeeTier), symbol: t };
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -481,7 +461,7 @@ async function runOwner(ctx, owner) {
         `≈ ${ethers.formatEther(value)} WETH`
     );
 
-    if (value < minWeth) {
+    if (!cl.isPositionEligible(value, minWeth)) {
       log(`  below threshold (${cfg.thresholds.minWethPerPosition} WETH) — skipping`);
       continue;
     }
@@ -538,7 +518,7 @@ async function runOwner(ctx, owner) {
       sim.wethValue = v0 + v1;
       totalWethValue += sim.wethValue;
       log(`v4 #${id} ${sim.t0.symbol}/${sim.t1.symbol} ${sim.fee / 10000}%${sim.hooks && sim.hooks !== ethers.ZeroAddress ? " (hooks)" : ""}  ${fmt(sim.amount0, sim.t0.decimals)} ${sim.t0.symbol} + ${fmt(sim.amount1, sim.t1.decimals)} ${sim.t1.symbol}  ≈ ${ethers.formatEther(sim.wethValue)} WETH`);
-      if (sim.wethValue < minWeth) { log(`  below threshold (${cfg.thresholds.minWethPerPosition} WETH) — skipping`); continue; }
+      if (!cl.isPositionEligible(sim.wethValue, minWeth)) { log(`  below threshold (${cfg.thresholds.minWethPerPosition} WETH) — skipping`); continue; }
       eligibleV4.push(sim);
     }
     if (v4Open + v4Closed) log(`v4: ${v4Open} open, ${v4Closed} closed, ${eligibleV4.length} eligible.`);
@@ -844,18 +824,19 @@ async function runOwner(ctx, owner) {
       }
     }
     const feeTier = feeTierFor.get(tokenAddr);
+    // No usable tier is decided up front (it gates whether we can even quote).
     if (feeTier === undefined || feeTier === null) {
       await handBack(`no known fee tier for ${info.symbol}`);
       continue;
     }
-
     // Fresh quote immediately before the swap, then apply slippage tolerance.
     const quoted = await quoteToWeth(quoter, tokenAddr, balance, feeTier, weth);
-    if (quoted === 0n) {
+    const why = cl.handBackReason({ feeTier, quotedWeth: quoted, maxSwapWeth: maxSwap });
+    if (why === "could not quote on a v3 pool") {
       await handBack(`could not quote ${info.symbol} on a v3 pool`);
       continue;
     }
-    if (quoted > maxSwap) {
+    if (why === "swap over maxSwapValueWeth") {
       await handBack(`${info.symbol} swap would be ${ethers.formatEther(quoted)} WETH, over maxSwapValueWeth`);
       continue;
     }
@@ -925,7 +906,7 @@ async function runOwner(ctx, owner) {
   // held when the pass started stay put (they belong to another owner's pass,
   // or are leftovers to sort out by hand).
   const wethNow = await wethC.balanceOf(wallet.address);
-  let wethBal = wethNow > before.weth ? wethNow - before.weth : 0n;
+  let wethBal = cl.passDelta(before.weth, wethNow);
   const { reserve, target: gasTarget } = gasFloat(cfg);
 
   if (target.kind === "token") {
@@ -995,10 +976,10 @@ async function runOwner(ctx, owner) {
     //    LOKOVault TBA, the rest to the owner. A failed vault transfer is logged
     //    and the owner receives the whole amount, so nothing is stranded.
     const tNow = await targetC.balanceOf(wallet.address);
-    const tBal = tNow > before.target ? tNow - before.target : 0n;
+    const tBal = cl.passDelta(before.target, tNow);
     if (tBal > 0n) {
       const ts = passSplitPct != null ? { ...treasurySettings, pct: passSplitPct, enabled: true } : treasurySettings; // --compound: the pipeline holds the vault's share only
-      const sp = ts.enabled ? treasury.split(tBal, ts.pct) : { toVault: 0n, toOwner: tBal };
+      const sp = ts.enabled ? cl.splitAmount(tBal, ts.pct) : { toVault: 0n, toOwner: tBal };
       let splitTx = null, ownerTx = null, status = ts.enabled ? "ok" : "off";
       if (sp.toVault > 0n) {
         try {
@@ -1066,7 +1047,7 @@ async function runOwner(ctx, owner) {
   }
 
   const ethNow = await provider.getBalance(wallet.address);
-  const ethBal = owner.main ? ethNow : (ethNow > before.eth ? before.eth + (ethNow - before.eth) : 0n);
+  const ethBal = cl.ethPassDelta(before.eth, ethNow, owner.main);
   if (ethBal <= gasTarget) {
     log(`Operator ETH (${ethers.formatEther(ethBal)}) at or below the gas float target. Nothing to sweep.`);
     return;

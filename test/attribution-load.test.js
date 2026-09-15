@@ -69,7 +69,9 @@ const cfg = { ownerAddress: OWNER, contracts: { weth: WETH }, usdReference: { st
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), "lp-attrload2-"));
   make(dir2);
   const pj = JSON.parse(fs.readFileSync(path.join(dir2, "portfolio.json"), "utf8"));
-  pj.series[pj.series.length - 1].a = { "0x00000000000000000000000000000000000000bb": 5 };
+  // Every day's snapshot holds only an unpriced token (per-day holdings are used since TASK-79,
+  // so the earlier days must be unpriced too, not just the newest point).
+  for (const pt of pj.series) pt.a = { "0x00000000000000000000000000000000000000bb": 5 };
   fs.writeFileSync(path.join(dir2, "portfolio.json"), JSON.stringify(pj));
   const attr2 = require("../attribution").create({
     cfg, getPortfolio: () => null, getWatch: () => ({ wallets: [] }),
@@ -128,6 +130,19 @@ const cfg = { ownerAddress: OWNER, contracts: { weth: WETH }, usdReference: { st
   const row4 = r4.wallets[0].rows.find((x) => x.day === localDay(d1));
   assert.equal(row4.price, 100, `earlier day's price leg unaffected, got ${row4.price}`);
   console.log("partial-point: 7d =", b7.portfolioPct.toFixed(2), "% (expected ~16.67, not -73)");
+
+  // ---- TASK-79: the price leg uses THAT day's holdings (holdingsByDay wired into compute). ----
+  // 1 WETH on the earlier days, 10 WETH today: the d0->d1 price leg is 1 * (2100 - 2000) = 100,
+  // never 10 * 100 = 1000 (today's holdings applied to an earlier day).
+  const dir5 = fs.mkdtempSync(path.join(os.tmpdir(), "lp-attrload5-"));
+  make(dir5);
+  const pj5 = JSON.parse(fs.readFileSync(path.join(dir5, "portfolio.json"), "utf8"));
+  pj5.series[2].a = { [WETH]: 10 }; pj5.series[2].total = 21000;
+  fs.writeFileSync(path.join(dir5, "portfolio.json"), JSON.stringify(pj5));
+  const attr5 = require("../attribution").create({ cfg, getPortfolio: () => null, getWatch: () => ({ wallets: [] }), getPositions: () => ({ positions: [] }), getStaking: () => null, dir: dir5 });
+  const row5 = attr5.load({ days: 4, now }).wallets[0].rows.find((x) => x.day === localDay(d1));
+  assert.equal(row5.price, 100, `earlier day's price leg uses that day's 1 WETH, not today's 10, got ${row5.price}`);
+  fs.rmSync(dir5, { recursive: true, force: true });
 
   console.log("attribution-load: live-null disk fallback + normAddr keying + null-not-zero guard passed");
   fs.rmSync(dir, { recursive: true, force: true });

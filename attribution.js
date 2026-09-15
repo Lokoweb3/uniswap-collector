@@ -509,7 +509,7 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, getHist
         q.longTerm = lt.get(`${wa}:${longterm.idKey(q.tokenId, q.version)}`) || null;
       }
     }
-    const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, priceHours, stakingDaily, vaultSplits, gasSpends, positions, flows };
+    const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, holdingsByDay, priceHours, stakingDaily, vaultSplits, gasSpends, positions, flows };
     const result = compute(input, { days, now });
     result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal, now });
     result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, stakingRewards, principal, now });

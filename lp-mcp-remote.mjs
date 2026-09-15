@@ -33,7 +33,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { InvalidGrantError, InvalidTokenError, InvalidClientMetadataError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { InvalidGrantError, InvalidTokenError, InvalidClientMetadataError, InvalidScopeError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer as createLpServer } from "./lp-mcp.mjs";
 
@@ -59,6 +59,19 @@ if (!state.hashed) {
     state[k] = Object.fromEntries(Object.entries(state[k] || {}).map(([key, v]) => [h(key), v]));
   }
   state.hashed = true;
+}
+// Only a machine token issued with --write (clientId "token:<label>") may carry the write
+// scope. An OAuth grant stored with "write" by an older version is clamped here so it can
+// never reach the write tools, whatever a client once asked for.
+const isMachine = (clientId) => String(clientId || "").startsWith("token:");
+{
+  let stripped = 0;
+  for (const k of ["tokens", "refresh"]) {
+    for (const v of Object.values(state[k] || {})) {
+      if (!isMachine(v.clientId) && Array.isArray(v.scopes) && v.scopes.includes("write")) { v.scopes = v.scopes.filter((x) => x !== "write"); stripped++; }
+    }
+  }
+  if (stripped) { console.warn(`mcp-remote: stripped the write scope from ${stripped} stored OAuth grant(s); OAuth clients are read-only`); save(); }
 }
 function save() {
   const now = Date.now();
@@ -193,6 +206,11 @@ const provider = {
 
   // The consent screen: one passphrase, then back to Claude with a code.
   async authorize(client, params, res) {
+    // OAuth clients are read-only: anything beyond SCOPES is refused up front (the SDK turns
+    // this into an error redirect), never silently downgraded, so the client cannot believe
+    // it holds write access that the consent page never promised.
+    const bad = (params.scopes || []).filter((sc) => !SCOPES.includes(sc));
+    if (bad.length) throw new InvalidScopeError(`unsupported scope: ${bad.join(" ")}; this server grants read only`);
     const nonce = rand(24);
     for (const [k, v] of pending) if (v.expiresAt < Date.now()) pending.delete(k);
     while (pending.size >= PENDING_MAX) pending.delete(pending.keys().next().value); // oldest first
@@ -218,7 +236,8 @@ const provider = {
     const r = state.refresh[h(refreshToken)];
     if (!r || r.clientId !== client.client_id) throw new InvalidGrantError("Unknown refresh token");
     delete state.refresh[h(refreshToken)]; // rotate
-    const granted = scopes && scopes.length ? scopes.filter((s) => r.scopes.includes(s)) : r.scopes;
+    let granted = scopes && scopes.length ? scopes.filter((s) => r.scopes.includes(s)) : r.scopes;
+    if (!isMachine(client.client_id)) granted = granted.filter((s) => SCOPES.includes(s)); // OAuth: read only, always
     return issueTokens(client.client_id, granted);
   },
 
@@ -325,7 +344,7 @@ function main() {
       clientId: p.client.client_id,
       codeChallenge: p.params.codeChallenge,
       redirectUri: p.params.redirectUri,
-      scopes: p.params.scopes && p.params.scopes.length ? p.params.scopes : SCOPES,
+      scopes: SCOPES, // OAuth grants are read-only whatever was requested (authorize() already refused anything else)
       expiresAt: Date.now() + CODE_TTL,
     };
     save();
@@ -341,7 +360,8 @@ function main() {
   app.post("/mcp", bearer, express.json({ limit: "1mb" }), async (req, res) => {
     // Only a token issued with --write sees the write tools; OAuth clients and older tokens (no scope list) are read.
     const scopes = (req.auth && Array.isArray(req.auth.scopes)) ? req.auth.scopes : [];
-    const server = createLpServer({ role: scopes.includes("write") ? "write" : "read" });
+    const write = isMachine(req.auth && req.auth.clientId) && scopes.includes("write");
+    const server = createLpServer({ role: write ? "write" : "read" });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => { transport.close(); server.close(); });
     try {

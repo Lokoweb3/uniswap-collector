@@ -501,8 +501,8 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, getHist
       for (const w of (wl && wl.wallets) || []) for (const p of w.positions || []) open.push({ p, walletAddress: w.address });
       const lt = longterm.compute({
         open, collects: (getHistory && getHistory()) || [],
-        rangeLog: readJson(path.join(dir, "range-log.json"), { positions: {} }).positions || {},
-        values: readJson(path.join(dir, "position-values.json"), {}), now,
+        rangeLog: readJson("range-log.json", { positions: {} }).positions || {},
+        values: readJson("position-values.json", {}), now,
       });
       for (const q of positions) {
         const wa = q.key === MAIN ? String(cfg.ownerAddress).toLowerCase() : q.key;

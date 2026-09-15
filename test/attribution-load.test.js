@@ -144,6 +144,32 @@ const cfg = { ownerAddress: OWNER, contracts: { weth: WETH }, usdReference: { st
   assert.equal(row5.price, 100, `earlier day's price leg uses that day's 1 WETH, not today's 10, got ${row5.price}`);
   fs.rmSync(dir5, { recursive: true, force: true });
 
+  // ---- TASK-80: the long-term ledgers load from `dir` (bare filenames, not dir/dir/...). ----
+  // A position-values.json with full coverage makes the basis "twa"; if the file silently
+  // loaded as empty (the doubled-path bug) the basis would fall back to "open" = deposited.
+  const dir6 = fs.mkdtempSync(path.join(os.tmpdir(), "lp-attrload6-"));
+  make(dir6);
+  const OPEN_AT = now - 3 * DAY;
+  const vals = [];
+  for (let t = OPEN_AT; t <= now; t += 6 * HOUR) vals.push({ t, usd: 100, fees: 0 });
+  fs.writeFileSync(path.join(dir6, "position-values.json"), JSON.stringify({ [`${OWNER}:7`]: vals }));
+  fs.writeFileSync(path.join(dir6, "range-log.json"), JSON.stringify({ positions: {} }));
+  const attr6 = require("../attribution").create({
+    cfg, getPortfolio: () => null, getWatch: () => ({ wallets: [] }), getStaking: () => null, dir: dir6,
+    getPositions: () => ({ positions: [{ tokenId: "7", version: 3, pair: "WETH / USDG", pnlSince: OPEN_AT, valueUsd: 100, feesUsd: 0, pnlUsd: 0, pnlLegs: { deposited: 200, collected: 0, uncollected: 0 } }] }),
+    getHistory: () => [],
+  });
+  const lt6 = attr6.load({ days: 4, now }).positions[0].longTerm;
+  const direct6 = require("../longterm").compute({
+    open: [{ p: { tokenId: "7", version: 3, pair: "WETH / USDG", pnlSince: OPEN_AT, valueUsd: 100, feesUsd: 0, pnlUsd: 0, pnlLegs: { deposited: 200, collected: 0, uncollected: 0 } }, walletAddress: OWNER }],
+    collects: [], rangeLog: {}, values: JSON.parse(fs.readFileSync(path.join(dir6, "position-values.json"), "utf8")), now,
+  }).get(`${OWNER}:7`);
+  assert.ok(lt6, "attribution carries a longTerm block for the open position");
+  assert.equal(lt6.sinceOpen.basis, "twa", `ledger loaded -> twa basis, got ${lt6.sinceOpen.basis}`);
+  assert.equal(lt6.sinceOpen.basisUsd, direct6.sinceOpen.basisUsd, "attribution and longterm.compute agree on the basis");
+  assert.equal(lt6.chainId, direct6.chainId, "and on the chain");
+  fs.rmSync(dir6, { recursive: true, force: true });
+
   console.log("attribution-load: live-null disk fallback + normAddr keying + null-not-zero guard passed");
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(dir2, { recursive: true, force: true });

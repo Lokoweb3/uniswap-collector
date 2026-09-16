@@ -34,6 +34,7 @@ const STATE_VIEW_ABI = [
   "function getPositionInfo(bytes32 poolId, address owner, int24 tickLower, int24 tickUpper, bytes32 salt) view returns (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128)",
 ];
 
+const msgOf = (e) => String((e && (e.shortMessage || e.message)) || e || "unknown").slice(0, 200);
 const DYNAMIC_FEE_FLAG = 0x800000;
 const MASK256 = (1n << 256n) - 1n;
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
@@ -65,31 +66,150 @@ async function getCurrency(address, provider) {
 }
 
 /** Build the full picture for one v4 position, in univ3.loadPosition's shape. */
+/**
+ * Did this token really cease to exist, or did the RPC simply not answer?
+ *
+ * Positive evidence only, and all of it has to line up:
+ *   - the provider is on the chain this instance is configured for;
+ *   - there is a position manager at that address on this chain;
+ *   - ownerOf refuses a second time, because one refusal is one endpoint's
+ *     opinion and two endpoints disagreeing is a reason to do nothing;
+ *   - the manager reports an empty pool key for the id, which is what a burned
+ *     v4 position leaves behind and a live one never does.
+ *
+ * Anything else — an empty response, a transport failure, a revert nothing
+ * corroborates, a chain or address mismatch — returns gone:false with a reason,
+ * and the caller reports the read as unavailable instead of dropping the id.
+ */
+async function verifyGone({ provider, posm, cfg }, tokenId, firstError) {
+  const id = BigInt(tokenId);
+  const no = (reason) => ({ gone: false, reason });
+
+  if (cfg && cfg.chainId != null) {
+    let seen;
+    try {
+      seen = (await provider.getNetwork()).chainId;
+    } catch (e) {
+      return no(`could not confirm the chain before judging #${id}: ${msgOf(e)}`);
+    }
+    if (BigInt(seen) !== BigInt(cfg.chainId)) {
+      return no(`refusing to judge #${id} against chain ${seen}; this instance is configured for ${cfg.chainId}`);
+    }
+  }
+
+  const addr = posm && (posm.target || posm.address);
+  if (addr && provider && typeof provider.getCode === "function") {
+    let code;
+    try {
+      code = await provider.getCode(addr);
+    } catch (e) {
+      return no(`could not read the position manager's code: ${msgOf(e)}`);
+    }
+    if (!code || code === "0x") {
+      return no(`no position manager at ${addr} on this chain, so #${id} cannot be judged`);
+    }
+  }
+
+  // Both ownership reads have to be the manager's own refusal — a revert that
+  // carried data back from the contract. An empty response, a timeout, a 429 or
+  // a dead socket is the transport failing, and says nothing about the token.
+  const first = nonexistentEvidence(firstError);
+  if (!first.ok) return no(`#${id}: ${first.why}`);
+
+  try {
+    await posm.ownerOf(id);
+    return no(`#${id} answered ownerOf on a second read, so it is not gone`);
+  } catch (e) {
+    const second = nonexistentEvidence(e);
+    if (!second.ok) return no(`#${id}: the second ownership read ${second.why}`);
+  }
+
+  // The manager's own account of the id, and it has to be a read that succeeded
+  // and decoded. A missing or undecodable field is not an empty pool key.
+  let r;
+  try {
+    r = await posm.getPoolAndPositionInfo(id);
+  } catch (e) {
+    return no(`#${id} refused ownerOf twice but its pool key could not be read: ${msgOf(e)}`);
+  }
+  const key = r && (r.key !== undefined ? r.key : r[0]);
+  if (!key) return no(`#${id}: the pool key read returned nothing to decode`);
+  const c0 = key.currency0 !== undefined ? key.currency0 : key[0];
+  const c1 = key.currency1 !== undefined ? key.currency1 : key[1];
+  const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+  if (!ADDRESS.test(String(c0)) || !ADDRESS.test(String(c1))) {
+    return no(`#${id}: the pool key did not decode to two addresses, so it proves nothing`);
+  }
+  const ZERO = "0x" + "0".repeat(40);
+  if (String(c0).toLowerCase() !== ZERO || String(c1).toLowerCase() !== ZERO) {
+    return no(`#${id} refused ownerOf but still has a pool key, so it is not confirmed gone`);
+  }
+  return { gone: true, reason: `#${id}: the manager refused ownerOf twice and decoded an empty pool key` };
+}
+
+/**
+ * Is this error the position manager saying the token does not exist, or is it
+ * the plumbing failing? Only the first may condemn a position.
+ *
+ * The distinguishing fact is mechanical, not textual: a contract that reverts
+ * sends data back, and ethers surfaces it as a CALL_EXCEPTION carrying `data`
+ * (or a decoded `revert`). A call that came back empty has data null — that is
+ * ethers' "missing revert data" — and a timeout or a 5xx never reaches the
+ * contract at all. Message text is used only to exclude, never to condemn.
+ */
+function nonexistentEvidence(err) {
+  if (!err) return { ok: false, why: "there was no error to judge" };
+  const code = err.code || (err.info && err.info.code) || "";
+  if (/TIMEOUT|NETWORK_ERROR|SERVER_ERROR|UNKNOWN_ERROR|CONNECTION/i.test(String(code))) {
+    return { ok: false, why: `was a transport failure (${code}), not the contract answering` };
+  }
+  if (/timeout|econnre|socket|network|rate limit|429|503|502|504/i.test(msgOf(err))) {
+    return { ok: false, why: `looks like a transport failure: ${msgOf(err)}` };
+  }
+  if (String(code) !== "CALL_EXCEPTION") {
+    return { ok: false, why: `was not a contract revert (code ${code || "none"})` };
+  }
+  const raw = err.data !== undefined && err.data !== null
+    ? err.data
+    : err.info && err.info.error && err.info.error.data;
+  const hasData = typeof raw === "string" && /^0x[0-9a-fA-F]+$/.test(raw) && raw !== "0x";
+  const decoded = !!(err.revert && err.revert.name) || (typeof err.reason === "string" && err.reason.length > 0);
+  if (!hasData && !decoded) {
+    return { ok: false, why: "came back with no revert data, so the call was never answered" };
+  }
+  return { ok: true, why: "the manager reverted with data" };
+}
+
+
 async function loadPosition(ctx, tokenId) {
   const { provider, posm, stateView, cfg } = ctx;
   const id = BigInt(tokenId);
 
-  // "Gone" only when the chain answers with a different owner. An RPC error
-  // here must surface as an error, not as a transfer, or a hiccup would make
-  // the server forget the position for good.
-  let owner;
+  // A position is only "gone" when the chain says so, verified. Never inferred
+  // from error prose: "revert", "missing revert data", a timeout and a dead
+  // endpoint all arrive as text, vary by RPC vendor and ethers version, and the
+  // consequence here is irreversible — watch.js drops the id from discovery.
+  // Anything short of a verified answer is an unavailable read, and the id stays.
+  let owner = null, ownerErr = null;
   try {
     owner = await posm.ownerOf(id);
   } catch (err) {
-    const msg = err.shortMessage || err.message || "";
-    // ownerOf reverts for a burned token: that one really is gone. But
-    // "missing revert data" is ethers' words for a call that came back empty,
-    // which is an RPC that did not answer — not a chain saying the token does
-    // not exist. Arc returns exactly that for entries inside a batched call, and
-    // treating it as a burn made the server forget live positions for good.
-    if (/missing revert data/i.test(msg)) throw err;
-    if (/revert|nonexistent|invalid token/i.test(msg) && !/rate|timeout|network|429|503/i.test(msg)) {
-      return { tokenId: id.toString(), gone: true };
-    }
-    throw err;
+    ownerErr = err;
   }
+
+  if (ownerErr) {
+    const v = await verifyGone({ provider, posm, cfg }, id, ownerErr);
+    if (v.gone) return { tokenId: id.toString(), gone: true, verified: true, goneReason: v.reason };
+    const e = new Error(v.reason);
+    e.unverified = true;
+    e.cause = ownerErr;
+    e.shortMessage = v.reason;
+    throw e;
+  }
+
+  // An owner that is not ours is the one case the chain answers directly.
   if (owner.toLowerCase() !== cfg.ownerAddress.toLowerCase()) {
-    return { tokenId: id.toString(), gone: true };
+    return { tokenId: id.toString(), gone: true, verified: true, goneReason: `owned by ${owner}` };
   }
 
   // v4 pays fees out whenever liquidity changes, so an empty position owes
@@ -311,8 +431,32 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile 
 
   return {
     ids,
-    forget(id) {
-      if (ids.delete(String(id))) save();
+    /**
+     * Stop asking about an id, without losing that it existed. The identity is
+     * kept with the reason and a timestamp so a wrong call can be undone and so
+     * anyone can see what was dropped and why. Only ever called for a verified
+     * gone: see verifyGone().
+     */
+    forget(id, reason) {
+      const k = String(id);
+      if (!ids.delete(k)) return false;
+      state.gone = state.gone || {};
+      state.gone[k] = { at: Date.now(), reason: String(reason || "verified gone").slice(0, 200) };
+      save();
+      return true;
+    },
+    /** Put a tombstoned id back into discovery. */
+    restore(id) {
+      const k = String(id);
+      if (!state.gone || !state.gone[k]) return false;
+      delete state.gone[k];
+      ids.add(k);
+      save();
+      return true;
+    },
+    /** What has been tombstoned, and why. */
+    get tombstones() {
+      return { ...(state.gone || {}) };
     },
     async discover(maxChunks = 20) {
       await fromBlockscout();
@@ -349,6 +493,8 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile 
 module.exports = {
   POSM_ABI,
   STATE_VIEW_ABI,
+  verifyGone,
+  nonexistentEvidence,
   NATIVE,
   poolIdOf,
   unpackInfo,

@@ -941,7 +941,7 @@ async function build() {
           ? await v4.loadPosition({ provider, posm: V4.posm, stateView: V4.stateView, cfg }, id)
           : await u.loadPosition({ provider, npm, factory, cfg }, id);
       if (p.gone) {
-        V4.discovery.forget(id); // transferred away; stop asking about it
+        V4.discovery.forget(id, p.goneReason || "transferred away"); // stop asking, but keep the record
         return;
       }
       if (version === 4) p.tokenId = v4Key(p.tokenId);

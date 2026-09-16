@@ -230,7 +230,9 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
           version === 4
             ? await v4.loadPosition({ provider, posm: V4.posm, stateView: V4.stateView, cfg: wcfg }, id)
             : await u.loadPosition({ provider, npm, factory, cfg: wcfg }, id);
-        if (p.gone) { if (disc) disc.forget(id); return; }
+        // Only a verified gone reaches here; an unverified read throws and is
+        // reported as an error, keeping the id in discovery.
+        if (p.gone) { if (disc) disc.forget(id, p.goneReason); return; }
         if (p.closed) { closed++; return; }
         const { usd0, usd1 } = priceSides(p, wethUsd);
         // Native ETH (v4, address zero) is not an ERC-20; the wallet's ETH balance is read separately.

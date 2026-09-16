@@ -1,11 +1,10 @@
-// node test/gone-guard.test.js — an RPC that answers with nothing must never be
-// read as "this position was burned or transferred away".
+// node test/gone-guard.test.js — the narrow rule this file was written for: an
+// RPC that answers with nothing must never be read as "burned".
 //
-// loadPosition marks a position `gone` when ownerOf reverts, and watch.js then
-// deletes the id from discovery permanently. Ethers words an empty eth_call
-// response as "missing revert data", which contains "revert" and so matched the
-// burn test. On Arc, entries inside a batched call come back empty, and live
-// positions were being forgotten for good.
+// The full matrix now lives in test/burn-guard.test.js, which replaced message
+// matching with verification. This keeps the original case pinned, and pins the
+// part of the old contract that changed deliberately: a bare revert is no longer
+// enough on its own, because a revert is what an unrelated failure looks like too.
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
@@ -18,34 +17,54 @@ process.on("exit", () => { try { fs.rmSync(TMP, { recursive: true, force: true }
 
 const v4 = require("../univ4");
 
+const ZERO = "0x" + "00".repeat(20);
+const OWNER = "0x" + "22".repeat(20);
+const cfg = { ownerAddress: OWNER, chainId: 5042, contracts: { v4: {} }, denylist: [] };
+const provider = { async getNetwork() { return { chainId: 5042n }; }, async getCode() { return "0xbeef"; } };
+const boom = (m) => { const e = new Error(m); e.shortMessage = m; return e; };
+const revert = () => { const e = boom("execution reverted"); e.code = "CALL_EXCEPTION"; e.data = "0x7e273289"; return e; };
+const empty = () => { const e = boom("missing revert data"); e.code = "CALL_EXCEPTION"; e.data = null; return e; };
+const posmFor = (ownerOfErr, poolInfo) => ({
+  target: "0x" + "11".repeat(20),
+  async ownerOf() { throw typeof ownerOfErr === "function" ? ownerOfErr() : boom(ownerOfErr); },
+  async getPoolAndPositionInfo() { if (poolInfo instanceof Error) throw poolInfo; return poolInfo; },
+  async getPositionLiquidity() { return 0n; },
+});
+const load = (posm) => v4.loadPosition({ provider, posm, stateView: {}, cfg }, 1n);
+
 (async () => {
-const cfg = { ownerAddress: "0x" + "22".repeat(20), contracts: { v4: {} }, denylist: [] };
-const posmThatFails = (message) => ({ ownerOf: async () => { const e = new Error(message); e.shortMessage = message; throw e; } });
+  // ---- an empty answer is an error, never a burn ----------------------------
+  for (const msg of ["missing revert data", 'missing revert data (action="call", data=null)']) {
+    let threw = null, result = null;
+    try { result = await load(posmFor(empty, empty())); } catch (e) { threw = e; }
+    assert.ok(threw, "an empty answer must surface as an error: got " + JSON.stringify(result));
+    assert.ok(!result || !result.gone, "and must never be reported as gone");
+    assert.ok(threw.unverified, "and must be marked unverified");
+  }
 
-// ---- an empty answer is an error, never a burn ------------------------------
-for (const msg of ["missing revert data", "missing revert data (action=\"call\", data=null)"]) {
-  let threw = null, result = null;
-  try {
-    result = await (v4.loadPosition({ provider: {}, posm: posmThatFails(msg), stateView: {}, cfg }, 1n));
-  } catch (e) { threw = e; }
-  assert.ok(threw, "an empty answer must surface as an error, not a result: got " + JSON.stringify(result));
-  assert.ok(!result || !result.gone, "and must never be reported as gone");
-  assert.ok(/missing revert data/i.test(threw.message), "the reason is preserved: " + threw.message);
-}
+  // ---- a revert alone is no longer enough -----------------------------------
+  // This is the deliberate change: the token still has a pool key, so whatever
+  // reverted, it was not the token ceasing to exist.
+  for (const msg of ["execution reverted", "ERC721: invalid token ID", "nonexistent token"]) {
+    let threw = null, result = null;
+    try { result = await load(posmFor(revert, { key: { currency0: "0x" + "aa".repeat(20), currency1: "0x" + "bb".repeat(20) } })); } catch (e) { threw = e; }
+    assert.ok(!result || !result.gone, `"${msg}" with a live pool key must not be a burn`);
+    assert.ok(threw && threw.unverified, "it is an unverified read");
+  }
 
-// ---- a genuine burn is still a burn -----------------------------------------
-for (const msg of ["execution reverted", "ERC721: invalid token ID", "nonexistent token"]) {
-  const r = await (v4.loadPosition({ provider: {}, posm: posmThatFails(msg), stateView: {}, cfg }, 2n));
-  assert.strictEqual(r.gone, true, "a real revert still means gone: " + msg);
-}
+  // ---- a revert plus an empty pool key still is a burn ----------------------
+  {
+    const r = await load(posmFor(revert, { key: { currency0: ZERO, currency1: ZERO } }));
+    assert.strictEqual(r.gone, true, "no owner and no pool key is a real burn");
+    assert.strictEqual(r.verified, true, "and it is marked verified");
+  }
 
-// ---- a transient failure is still an error, not a burn ----------------------
-for (const msg of ["timeout", "429 Too Many Requests", "network error"]) {
-  let threw = null;
-  try { await (v4.loadPosition({ provider: {}, posm: posmThatFails(msg), stateView: {}, cfg }, 3n)); }
-  catch (e) { threw = e; }
-  assert.ok(threw, "a transient failure must throw, not report gone: " + msg);
-}
+  // ---- transport failures are still errors ----------------------------------
+  for (const msg of ["timeout", "429 Too Many Requests", "network error"]) {
+    let threw = null;
+    try { await load(posmFor(() => { const e = boom(msg); e.code = "NETWORK_ERROR"; return e; }, boom(msg))); } catch (e) { threw = e; }
+    assert.ok(threw, "a transient failure must throw, not report gone: " + msg);
+  }
 
-})().then(() => console.log("gone guard: an empty RPC answer is an error, a real revert is still a burn")).catch((e) => { console.error(e); process.exit(1); });
-
+  console.log("gone guard: an empty RPC answer is an error, and a burn needs more than a revert");
+})().catch((e) => { console.error(e); process.exit(1); });

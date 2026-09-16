@@ -2403,9 +2403,12 @@ const attribution = require("./attribution").create({
   getPositions: () => cache.payload,
   getStaking: () => (staking.enabled ? staking.view() : null),
   getHistory: () => lastHistoryRows,
+  dir: DATA_DIR, // the instance's ledgers, not the checkout's: a second chain must never read the first's history
 });
 // === ledger audit === (audit.js): nightly plausibility + inflow reconciliation of the valued rows
-const ledgerAudit = require("./audit").create({ cfg, port: PORT, log: (m) => console.log(m) });
+// dir: this instance's ledgers, not the checkout's — a second chain must never
+// reconcile the first's history.
+const ledgerAudit = require("./audit").create({ cfg, dir: DATA_DIR, port: PORT, log: (m) => console.log(m) });
 // === token-health-and-approvals ===
 // Risk read on every held token (token-health.json, refreshed in the tick) and
 // the approval audit behind /approvals.

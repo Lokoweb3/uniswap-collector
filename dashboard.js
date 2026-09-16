@@ -1,5 +1,15 @@
 const $ = s => document.querySelector(s);
 const PAGE = location.pathname.replace(/\/+$/, '') === '/analytics' ? 'analytics' : 'dashboard';
+
+// The chain this instance is pointed at, for labelling an aggregate scope. A
+// name from the settings wins; the two chains this project runs on are known;
+// anything else is named by its id rather than guessed at.
+let CHAIN = { id: null, name: null };
+const KNOWN_CHAINS = { 4663: 'Robinhood', 5042: 'Arc' };
+function chainLabel() {
+  return CHAIN.name || KNOWN_CHAINS[CHAIN.id] || (CHAIN.id ? 'chain ' + CHAIN.id : '');
+}
+
 document.body.classList.add('page-' + PAGE);
 document.title = PAGE === 'analytics' ? 'LP analytics' : document.title;
 $('#nav-' + (PAGE === 'analytics' ? 'analytics' : 'dash')).classList.add('here');
@@ -1379,6 +1389,13 @@ function render(d){
   lastRender = d;
   EXPLORER = d.explorer || null;
   $('#owner').textContent = d.owner.slice(0,6) + '…' + d.owner.slice(-4);
+  // The address is the configured main wallet, not the owner of everything on
+  // the page: watched wallets appear here too, and on Analytics most sections
+  // cover a different scope. Say which wallet it is and let each section say
+  // what it covers.
+  CHAIN = { id: d.chainId, name: d.chainName || null };
+  const ol = $('#ownerline');
+  if (ol) ol.firstChild && (ol.firstChild.textContent = PAGE === 'analytics' ? 'Main wallet ' : 'Positions held by ');
   $('#blockinfo').textContent = 'block ' + d.blockNumber.toLocaleString('en-US')
     + (d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : '');
   $('#pulse').className = 'pulse' + (d.cached ? ' stale' : '');
@@ -2208,7 +2225,7 @@ async function loadAttribution(){
 function attribScope(){
   const sel = $('#attribscope');
   const want = sel.value || 'book';
-  const opts = [['book', 'All wallets']].concat((attribD.wallets || []).map(w => [w.key, w.label]));
+  const opts = [['book', chainLabel() ? 'All ' + chainLabel() + ' wallets' : 'All wallets']].concat((attribD.wallets || []).map(w => [w.key, w.label]));
   sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
   sel.value = opts.some(o => o[0] === want) ? want : 'book';
   return sel.value === 'book' ? attribD.book : attribD.wallets.find(w => w.key === sel.value);
@@ -2219,6 +2236,21 @@ function renderAttribution(){
   $('#attribsec').hidden = false;
   const scope = attribScope();
   const T = scope.totals;
+  // Nothing recorded for this window is not a row of zeros. A second chain
+  // starts with no history at all, and printing $0.00 across every leg reads
+  // as "nothing happened here" rather than "nothing was observed yet".
+  const anyRecorded = (scope.rows || []).some(r =>
+    ATTRIB_PARTS.some(([k]) => Number(r[k] || 0) !== 0) || Number(r.dv || 0) !== 0);
+  if (!anyRecorded) {
+    $('#attribtotal').innerHTML = '<span class="muted">History unavailable</span>';
+    $('#attribstats').innerHTML = '<span class="muted">No value observations recorded for this wallet on this chain yet, so no fees, price move or impermanent loss can be attributed. This is missing history, not a zero result.</span>';
+    $('#attribchart').innerHTML = '';
+    $('#attriblegend').innerHTML = '';
+    $('#attribtable').innerHTML = '';
+    $('#attribnote').textContent = 'Attribution needs at least one recorded value sample. Nothing is substituted from another wallet or chain.';
+    $('#attribpos') && ($('#attribpos').innerHTML = '');
+    return;
+  }
   const sgn = v => v == null ? '—' : (v < 0 ? '−' : '+') + usd(Math.abs(v));
   const cls = v => v == null ? '' : v < 0 ? 'neg' : '';
   $('#attribtotal').innerHTML = `<span class="${T.net < 0 ? 'neg' : ''}">${sgn(T.net)} net</span>`;

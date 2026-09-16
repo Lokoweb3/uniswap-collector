@@ -902,11 +902,17 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
 <script>
 (() => {
   const tabs = [...document.querySelectorAll('#tabs a')];
+  // Each tab's data loads the first time that tab is shown, not on every page load: the
+  // arm status, sell tokens and mint context requests belong to their own tab (TASK-89).
+  const pending = new Map(); let active = null;
+  window.whenTab = (id, fn) => { if (active === id) fn(); else pending.set(id, fn); };
   const show = (id) => {
     if (!document.getElementById('sec-' + id)) id = 'arm';
     for (const s of document.querySelectorAll('section.tab')) s.hidden = s.id !== 'sec-' + id;
     for (const a of tabs) a.classList.toggle('here', a.dataset.tab === id);
     document.title = tabs.find((a) => a.dataset.tab === id).textContent + ' · Wallet';
+    active = id;
+    const fn = pending.get(id); if (fn) { pending.delete(id); fn(); }
   };
   window.addEventListener('hashchange', () => show(location.hash.slice(1)));
   show(location.hash.slice(1) || 'arm');
@@ -1066,7 +1072,7 @@ pre{white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.35);padding:10px;
   $('[data-id="pass"]').addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
 
   if (!local()) status('[data-id="status"]', 'Arming only works when this page is opened on the dashboard machine (http://127.0.0.1:8787/wallet).', 'bad');
-  load().then(() => setInterval(load, 60000)).catch((e) => status('[data-id="status"]', `Could not load status: ${e.message}`, 'bad'));
+  whenTab('arm', () => load().then(() => setInterval(load, 60000)).catch((e) => status('[data-id="status"]', `Could not load status: ${e.message}`, 'bad')));
 })();
 
 </script>
@@ -1996,7 +2002,7 @@ loadConfig().then(async () => {
   q('sl-requote').addEventListener('click', () => scheduleQuote(0));
   q('sl-connect').addEventListener('click', connect);
   q('sl-sell').addEventListener('click', () => { if (quote && confirm(`Sell ${fmt(quote.amountIn, quote.token.decimals)} ${quote.token.symbol} for at least ${fmt(quote.minOut, quote.outDecimals, 4)} ${quote.outSymbol}?`)) sell(); });
-  loadTokens().catch((e) => status('sl-status', `Could not load: ${e.message}`, 'bad'));
+  whenTab('sell', () => loadTokens().catch((e) => status('sl-status', `Could not load: ${e.message}`, 'bad')));
 })();
 </script>
 <script>
@@ -2299,7 +2305,7 @@ loadConfig().then(async () => {
   q('mt-requote').addEventListener('click', () => scheduleQuote(0));
   q('mt-connect').addEventListener('click', connect);
   q('mt-go').addEventListener('click', () => { if (!quote) return; const from = q('mt-mode').value === 'move' ? selPos() : null; if (confirm(`${from && !closed ? `Close ${from.pair} #${from.tokenId}, then m` : 'M'}int ${q('mq-big').textContent} into ${quote.label}?`)) go(); });
-  loadContext().catch((e) => status('mt-status', `Could not load: ${e.message}`, 'bad'));
+  whenTab('mint', () => loadContext().catch((e) => status('mt-status', `Could not load: ${e.message}`, 'bad')));
 })();
 </script>
 <script src="/chat-widget.js"></script>

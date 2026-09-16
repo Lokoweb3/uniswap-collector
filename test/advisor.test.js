@@ -3,6 +3,17 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+
+// Isolation first, before a single project module is required: data-dir.js resolves
+// the data directory once at require time, so setting this afterwards would be too
+// late, and putting it in the environment means any subprocess inherits it as well.
+// Without this the scout's state and log land in the real data directory and this
+// test both pollutes production and fails on its own second run.
+const TMPDATA = fs.mkdtempSync(path.join(os.tmpdir(), "advisor-data-"));
+process.env.LP_DATA_DIR = TMPDATA;
+const STARTED = Date.now();
+process.on("exit", () => { try { fs.rmSync(TMPDATA, { recursive: true, force: true }); } catch {} });
+
 const { ethers } = require("ethers");
 const u = require("../univ3");
 
@@ -70,13 +81,19 @@ const big = advisor.ilForecast({ ...base, sigmaH: 0.2 }); // 20 %/hour: enormous
 assert.ok(big.ilUsd < il.ilUsd, "more volatility, more IL");
 
 // 7. Scout: alert only after two consecutive daily checks with a 1.5× better pool, once.
-const tmp = path.join(os.tmpdir(), `scout-${process.pid}`);
-fs.mkdirSync(tmp, { recursive: true });
+const tmp = TMPDATA;
 const sent = [];
 let clock = now;
 const Module = require("module");
-// Point scout's state/log files at a temp dir by loading it with a patched __dirname.
-const scoutSrc = fs.readFileSync(path.join(__dirname, "..", "scout.js"), "utf8").replace(/path\.join\(__dirname, "pool-scout-(state|log)\.json"\)/g, (m, k) => `"${path.join(tmp, `pool-scout-${k}.json`)}"`);
+// scout.js is compiled at a temp path, so its own relative require of ./data-dir
+// would not resolve; make that one absolute. Where its files land is decided by
+// LP_DATA_DIR, set at the top of this file — not by rewriting paths in the source,
+// which is what silently stopped working and let this test write to live data.
+const DATA_DIR_MODULE = path.join(__dirname, "..", "data-dir.js");
+const scoutRaw = fs.readFileSync(path.join(__dirname, "..", "scout.js"), "utf8");
+assert.ok(scoutRaw.includes('require("./data-dir")'),
+  "scout.js no longer requires ./data-dir — re-check how this test isolates its state");
+const scoutSrc = scoutRaw.replace('require("./data-dir")', `require(${JSON.stringify(DATA_DIR_MODULE)})`);
 const mod = new Module(path.join(tmp, "scout.js"));
 mod.paths = Module._nodeModulePaths(path.join(__dirname, ".."));
 mod._compile(scoutSrc.replace('require("ethers")', `require(${JSON.stringify(require.resolve("ethers"))})`), path.join(tmp, "scout.js"));
@@ -95,6 +112,14 @@ const pos = [{ wallet: "T", tokenId: "1", pair: "A / B", version: 3, poolAddress
   assert.match(out[0], /A\/B 0.3% v4 \(200% APR/);
   clock += 3600 * 1000;
   assert.deepStrictEqual(await scout.check(pos), [], "no repeat within a week");
+  // The scout wrote where it was told to, and nowhere near the checkout.
+  assert.ok(fs.existsSync(path.join(TMPDATA, "pool-scout-state.json")),
+    "the scout's state belongs in the temp data directory");
+  for (const f of ["pool-scout-state.json", "pool-scout-log.json"]) {
+    const beside = path.join(__dirname, "..", f);
+    assert.ok(!fs.existsSync(beside) || fs.statSync(beside).mtimeMs < STARTED,
+      `${f} beside the code was written during this test`);
+  }
   global.fetch = realFetch;
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log("advisor: range comparison, scaling, IL forecast and scout assertions passed");

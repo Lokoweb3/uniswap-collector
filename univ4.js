@@ -113,14 +113,14 @@ async function verifyGone({ provider, posm, cfg }, tokenId, firstError) {
   // Both ownership reads have to be the manager's own refusal — a revert that
   // carried data back from the contract. An empty response, a timeout, a 429 or
   // a dead socket is the transport failing, and says nothing about the token.
-  const first = nonexistentEvidence(firstError);
+  const first = nonexistentEvidence(firstError, cfg);
   if (!first.ok) return no(`#${id}: ${first.why}`);
 
   try {
     await posm.ownerOf(id);
     return no(`#${id} answered ownerOf on a second read, so it is not gone`);
   } catch (e) {
-    const second = nonexistentEvidence(e);
+    const second = nonexistentEvidence(e, cfg);
     if (!second.ok) return no(`#${id}: the second ownership read ${second.why}`);
   }
 
@@ -157,8 +157,43 @@ async function verifyGone({ provider, posm, cfg }, tokenId, firstError) {
  * ethers' "missing revert data" — and a timeout or a 5xx never reaches the
  * contract at all. Message text is used only to exclude, never to condemn.
  */
-function nonexistentEvidence(err) {
+/**
+ * The only errors that mean "this token does not exist".
+ *
+ * Read off the deployed managers rather than assumed: on 2026-09-16 the v4
+ * PositionManager and the v3 NonfungiblePositionManager on both Arc (5042) and
+ * Robinhood (4663) answer ownerOf for an unminted id with Error(string) carrying
+ * "NOT_MINTED" — solmate's ERC721. The OpenZeppelin spellings are listed too so a
+ * future deployment on a different base is recognised rather than mistaken for
+ * something unknown, and settings can add to the list for a manager that uses
+ * neither.
+ *
+ * Anything outside this list is not identified, and an unidentified revert leaves
+ * the position unavailable. An encoded revert is not evidence merely for being
+ * encoded: a manager can revert for many reasons that have nothing to do with the
+ * token existing.
+ */
+const ERROR_STRING_SELECTOR = "0x08c379a0"; // Error(string)
+const NONEXISTENT_STRINGS = new Set([
+  "NOT_MINTED",                                 // solmate — what both deployed managers use
+  "ERC721: invalid token ID",                   // OpenZeppelin v4
+  "ERC721: owner query for nonexistent token",  // OpenZeppelin v3
+]);
+const NONEXISTENT_SELECTORS = new Map([
+  [ethers.id("ERC721NonexistentToken(uint256)").slice(0, 10), "ERC721NonexistentToken(uint256), OpenZeppelin v5"],
+  [ethers.id("InvalidTokenId(uint256)").slice(0, 10), "InvalidTokenId(uint256)"],
+]);
+
+/**
+ * Is this error one of the recognised nonexistent-token answers, from the
+ * manager itself? Transport failures and empty responses are excluded first,
+ * because they never reached the contract; then the payload has to be one we
+ * can name. Message text is used to exclude and to match an exact known string,
+ * never to condemn on a resemblance.
+ */
+function nonexistentEvidence(err, cfg) {
   if (!err) return { ok: false, why: "there was no error to judge" };
+
   const code = err.code || (err.info && err.info.code) || "";
   if (/TIMEOUT|NETWORK_ERROR|SERVER_ERROR|UNKNOWN_ERROR|CONNECTION/i.test(String(code))) {
     return { ok: false, why: `was a transport failure (${code}), not the contract answering` };
@@ -169,15 +204,38 @@ function nonexistentEvidence(err) {
   if (String(code) !== "CALL_EXCEPTION") {
     return { ok: false, why: `was not a contract revert (code ${code || "none"})` };
   }
+
   const raw = err.data !== undefined && err.data !== null
     ? err.data
     : err.info && err.info.error && err.info.error.data;
-  const hasData = typeof raw === "string" && /^0x[0-9a-fA-F]+$/.test(raw) && raw !== "0x";
-  const decoded = !!(err.revert && err.revert.name) || (typeof err.reason === "string" && err.reason.length > 0);
-  if (!hasData && !decoded) {
+  const data = typeof raw === "string" && /^0x[0-9a-fA-F]*$/.test(raw) ? raw : null;
+  if (!data || data === "0x") {
     return { ok: false, why: "came back with no revert data, so the call was never answered" };
   }
-  return { ok: true, why: "the manager reverted with data" };
+
+  const extra = (cfg && cfg.contracts && cfg.contracts.v4 && cfg.contracts.v4.nonexistentReverts) || [];
+  const allowedStrings = new Set([...NONEXISTENT_STRINGS, ...extra.filter((x) => !/^0x/i.test(x))]);
+  const allowedSelectors = new Map([
+    ...NONEXISTENT_SELECTORS,
+    ...extra.filter((x) => /^0x[0-9a-fA-F]{8}$/.test(x)).map((x) => [x.toLowerCase(), "from settings"]),
+  ]);
+
+  const selector = data.slice(0, 10).toLowerCase();
+  if (selector === ERROR_STRING_SELECTOR) {
+    let reason = null;
+    try {
+      reason = ethers.AbiCoder.defaultAbiCoder().decode(["string"], "0x" + data.slice(10))[0];
+    } catch {
+      return { ok: false, why: "reverted with an Error(string) that would not decode" };
+    }
+    if (allowedStrings.has(reason)) return { ok: true, why: `the manager reverted with ${reason}` };
+    return { ok: false, why: `reverted with "${reason}", which is not a nonexistent-token error` };
+  }
+
+  if (allowedSelectors.has(selector)) {
+    return { ok: true, why: `the manager reverted with ${allowedSelectors.get(selector)}` };
+  }
+  return { ok: false, why: `reverted with an unrecognised error ${selector}, so the token cannot be judged` };
 }
 
 

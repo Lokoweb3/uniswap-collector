@@ -22,7 +22,9 @@ const OWNER = "0x" + "22".repeat(20);
 const cfg = { ownerAddress: OWNER, chainId: 5042, contracts: { v4: {} }, denylist: [] };
 const provider = { async getNetwork() { return { chainId: 5042n }; }, async getCode() { return "0xbeef"; } };
 const boom = (m) => { const e = new Error(m); e.shortMessage = m; return e; };
-const revert = () => { const e = boom("execution reverted"); e.code = "CALL_EXCEPTION"; e.data = "0x7e273289"; return e; };
+const { ethers } = require("ethers");
+const errString = (r) => "0x08c379a0" + ethers.AbiCoder.defaultAbiCoder().encode(["string"], [r]).slice(2);
+const revert = () => { const e = boom("execution reverted"); e.code = "CALL_EXCEPTION"; e.data = errString("NOT_MINTED"); return e; };
 const empty = () => { const e = boom("missing revert data"); e.code = "CALL_EXCEPTION"; e.data = null; return e; };
 const posmFor = (ownerOfErr, poolInfo) => ({
   target: "0x" + "11".repeat(20),

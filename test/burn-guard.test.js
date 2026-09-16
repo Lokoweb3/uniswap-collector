@@ -30,14 +30,21 @@ const CHAIN = 5042;
 // Errors shaped the way ethers actually shapes them, because the rule is
 // mechanical: a contract that reverts sends data back; a call that was never
 // answered does not; a transport failure never reaches the contract.
-const revert = (data = "0x7e273289") => {
+const { ethers } = require("ethers");
+const errString = (reason) =>
+  "0x08c379a0" + ethers.AbiCoder.defaultAbiCoder().encode(["string"], [reason]).slice(2);
+// What both deployed managers actually answer for an unminted id: solmate's
+// Error(string) "NOT_MINTED". Verified on Arc 5042 and Robinhood 4663, v3 and v4.
+const revert = (data = errString("NOT_MINTED")) => {
   const e = new Error("execution reverted");
   e.shortMessage = "execution reverted";
   e.code = "CALL_EXCEPTION";
-  e.data = data;                 // the manager's own refusal, with a payload
+  e.data = data;
   return e;
 };
-const named = (name) => { const e = revert(); e.revert = { name }; return e; };
+const named = () => revert("0x7e273289" + "00".repeat(32)); // ERC721NonexistentToken(uint256)
+// An encoded revert that has nothing to do with the token existing.
+const unrelatedRevert = (sel = "0xdeadbeef") => revert(sel + "00".repeat(32));
 const empty = () => {
   const e = new Error("missing revert data");
   e.shortMessage = "missing revert data";
@@ -88,7 +95,7 @@ const load = (posm, provider = fakeProvider()) =>
 
   // ---- 2b. a decoded custom error counts as the manager refusing ------------
   {
-    const r = await load(fakePosm({ ownerOf: () => named("NotMinted"), poolInfo: BURNT_KEY }));
+    const r = await load(fakePosm({ ownerOf: () => named(), poolInfo: BURNT_KEY }));
     assert.strictEqual(r.gone, true, "a named custom error is the contract answering");
   }
 
@@ -135,6 +142,29 @@ const load = (posm, provider = fakeProvider()) =>
                                    ["junk instead of addresses", { key: { currency0: "0x", currency1: null } }]]) {
     await assertUnverified(fakePosm({ ownerOf: () => revert(), poolInfo }),
       /decode|nothing to decode/, `a pool key read returning ${label} must not count as empty`);
+  }
+
+  // ---- 6d. an UNRELATED encoded revert is not evidence, even with an empty key -
+  // The manager reverted and sent data, but the data is not one of the errors that
+  // mean "no such token". An encoded revert is not evidence for being encoded.
+  {
+    await assertUnverified(fakePosm({ ownerOf: () => unrelatedRevert(), poolInfo: BURNT_KEY }),
+      /unrecognised error 0xdeadbeef/, "an unrelated custom error must preserve the id");
+  }
+  {
+    await assertUnverified(fakePosm({ ownerOf: () => revert(errString("Paused")), poolInfo: BURNT_KEY }),
+      /not a nonexistent-token error/, "an unrelated Error(string) must preserve the id");
+  }
+  // And an Error(string) whose payload will not decode proves nothing either.
+  {
+    await assertUnverified(fakePosm({ ownerOf: () => revert("0x08c379a0dead"), poolInfo: BURNT_KEY }),
+      /would not decode/, "an undecodable Error(string) must preserve the id");
+  }
+
+  // ---- 6e. every recognised spelling is accepted ----------------------------
+  for (const reason of ["NOT_MINTED", "ERC721: invalid token ID", "ERC721: owner query for nonexistent token"]) {
+    const r = await load(fakePosm({ ownerOf: () => revert(errString(reason)), poolInfo: BURNT_KEY }));
+    assert.strictEqual(r.gone, true, `"${reason}" is a recognised nonexistent-token error`);
   }
 
   // ---- 7. failover disagreement is NOT a burn --------------------------------

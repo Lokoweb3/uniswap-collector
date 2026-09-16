@@ -14,7 +14,7 @@
 
 <header class="topbar">
   <div class="topbar-left">
-    <span class="brand">LP Dashboard</span>
+    <h1 class="brand">LP Dashboard</h1>
     <nav class="pages" aria-label="Pages"><a href="/" id="nav-dash">Dashboard</a><a href="/analytics" id="nav-analytics">Analytics</a><a href="/wallet" id="nav-wallet" title="Arm, approvals, vault and operator">Wallet</a></nav>
   </div>
   <div class="topbar-right">
@@ -64,7 +64,9 @@
     <div class="l">Total portfolio</div>
     <div class="n" id="networth">—</div>
     <div class="l scope" id="networthlabel">Held by this wallet</div>
-    <div class="l parts" id="networthparts" hidden></div>
+    <details class="statmore"><summary>Breakdown</summary>
+      <div class="l parts" id="networthparts" hidden></div>
+    </details>
   </div>
   <div class="stat">
     <div class="l">Value in LP positions</div>
@@ -74,16 +76,20 @@
   <div class="stat">
     <div class="l" id="feeslabel">Uncollected fees</div>
     <div class="n sm fees" id="fees">—</div>
-    <div class="l note owneronly"><span id="collectlabel">Collectable now</span><span class="n sm" id="collectable">—</span></div>
-    <div class="l note owneronly"><span id="projlabel">Projected fees, next 30 days</span><span class="n sm fees" id="proj30">—</span></div>
-    <div class="l parts owneronly" id="projparts" hidden></div>
+    <details class="statmore owneronly"><summary>Collection detail</summary>
+      <div class="l note"><span id="collectlabel">Collectable now</span><span class="n sm" id="collectable">—</span></div>
+      <div class="l note"><span id="projlabel">Projected fees, next 30 days</span><span class="n sm fees" id="proj30">—</span></div>
+      <div class="l parts" id="projparts" hidden></div>
+    </details>
   </div>
   <div class="stat owneronly">
     <div class="l">LP vs holding</div>
     <div class="n sm" id="pnltotal">—</div>
-    <div class="l scope" id="pnllabel">LP vs holding</div>
-    <div class="l parts" id="pnlparts" hidden></div>
     <div class="l cover">Main wallet, open positions only</div>
+    <details class="statmore"><summary>Breakdown</summary>
+      <div class="l scope" id="pnllabel">LP vs holding</div>
+      <div class="l parts" id="pnlparts" hidden></div>
+    </details>
   </div>
   <div class="stat">
     <div class="l">Out of range</div>
@@ -124,17 +130,6 @@
   <div class="enote" id="watchnote"></div>
 </section>
 
-<!-- === risk-guardian === -->
-<section class="earnings" id="risksec" hidden>
-  <div class="ehead">
-    <h2>Risk</h2>
-    <span class="enote" id="risknote"></span>
-  </div>
-  <div class="wcards" id="risklist"></div>
-  <div class="enote" id="riskrecent"></div>
-</section>
-<!-- === end risk-guardian === -->
-
 <!-- === launch-watch === -->
 <section class="earnings" id="launchsec" hidden>
   <div class="ehead">
@@ -145,17 +140,6 @@
   <div class="enote" id="launchrecent"></div>
 </section>
 <!-- === end launch-watch === -->
-
-<section class="earnings" id="balpanel" hidden>
-  <div class="ehead">
-    <h2>Portfolio <span class="pfwho" id="pfwho"></span></h2>
-    <span class="etotal" id="baltotal"></span>
-  </div>
-  <div class="pstats" id="pstats"></div>
-  <div class="echart" id="pchart"></div>
-  <div class="etablewrap" id="baltable"></div>
-  <div class="enote" id="pnote"></div>
-</section>
 
 </div><!-- /col-main -->
 
@@ -179,8 +163,40 @@
     <p class="enote" id="coveragenote"></p>
   </section>
 
-</aside>
+</aside><!-- /col-side -->
 </div><!-- /grid2 -->
+
+<!-- Risk and Portfolio run the full page width, below the positions/sidebar
+     workspace: both are read across rather than scanned beside the positions. -->
+<div class="fullrow">
+
+<!-- === risk-guardian === -->
+<section class="earnings" id="risksec" hidden>
+  <div class="ehead">
+    <h2>Risk</h2>
+    <span class="enote" id="risknote"></span>
+  </div>
+  <div class="wcards" id="risklist"></div>
+  <div class="enote" id="riskrecent"></div>
+</section>
+<!-- === end risk-guardian === -->
+
+<section class="earnings" id="balpanel" hidden>
+  <div class="ehead">
+    <h2>Portfolio <span class="pfwho" id="pfwho"></span></h2>
+    <span class="etotal" id="baltotal"></span>
+  </div>
+  <div class="pstats" id="pstats"></div>
+  <!-- Vertical order: totals, the full-width chart, the chart's explanation, then
+       the table's own controls and the table. The note explains the chart, so it
+       sits under the chart rather than under everything. The filter controls are
+       inserted by dashboard.js immediately above the table. -->
+  <div class="echart" id="pchart"></div>
+  <div class="enote" id="pnote"></div>
+  <div class="etablewrap" id="baltable"></div>
+</section>
+
+</div><!-- /fullrow -->
 
 <section class="earnings analytics" id="weeksec" aria-labelledby="weektitle">
   <div class="ehead"><h2 id="weektitle">Two complete weeks</h2><span class="enote" id="weekscope">Main wallet</span></div>
@@ -208,9 +224,9 @@
   <div class="echart" id="attribchart"></div>
   <div class="dlegend" id="attriblegend"></div>
   <div class="etablewrap" id="attribtable"></div>
-  <div class="ehead" style="margin-top:14px"><h2>Benchmarks</h2><span class="enote" id="benchnote"></span></div>
+  <div class="ehead" style="margin-top:14px"><h3>Benchmarks</h3><span class="enote" id="benchnote"></span></div>
   <div class="etablewrap" id="benchtable"></div>
-  <div class="ehead" style="margin-top:14px"><h2>Per position</h2><span class="enote">fees versus everything else, from each card's PnL legs</span></div>
+  <div class="ehead" style="margin-top:14px"><h3>Per position</h3><span class="enote">fees versus everything else, from each card's PnL legs</span></div>
   <div class="etablewrap" id="attribpos"></div>
   <div class="enote" id="attribnote"></div>
 </section>
@@ -244,9 +260,9 @@
   </div>
   <div class="pstats" id="ewallets"></div>
   <div class="echart" id="echart"></div>
-  <div class="ehead" id="mhead" hidden><h2>By month</h2><span class="enote">valued at current prices; tokens no longer held are unpriced · click a month to filter</span></div>
+  <div class="ehead" id="mhead" hidden><h3>By month</h3><span class="enote">valued at current prices; tokens no longer held are unpriced · click a month to filter</span></div>
   <div class="etablewrap" id="mtable"></div>
-  <div class="ehead" id="tvhead" hidden><h2>Position value — 7 days</h2><span class="etotal" id="tvnow"></span></div>
+  <div class="ehead" id="tvhead" hidden><h3>Position value — 7 days</h3><span class="etotal" id="tvnow"></span></div>
   <div class="echart" id="tvchart"></div>
   <div class="etablewrap" id="etablewrap"></div>
   <div class="enote" id="enote"></div>

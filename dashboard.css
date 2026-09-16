@@ -585,7 +585,7 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
 .summary .stat{grid-column:auto}
 .summary .stat>*{order:0}
 .stat{
-  display:flex;flex-direction:column;gap:var(--s1);min-width:0;min-height:124px;
+  display:flex;flex-direction:column;gap:var(--s1);min-width:0;min-height:132px;
   padding:var(--s4);background:var(--card);
   border:1px solid var(--rule);border-radius:var(--r-card);box-shadow:none;
   transition:border-color .15s;
@@ -595,8 +595,8 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
   font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
 }
 .stat .n{
-  font-family:var(--mono);font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1.15;
-  color:var(--ink);text-shadow:none;overflow-wrap:anywhere;margin:var(--s1) 0 var(--s2);
+  font-family:var(--mono);font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1.1;
+  color:var(--ink);text-shadow:none;overflow-wrap:anywhere;margin:2px 0 var(--s1);
 }
 .stat .n.sm{font-size:28px;font-weight:600}
 .stat .n.fees{color:var(--pos)}
@@ -1113,3 +1113,414 @@ select.scope option{background:var(--card);color:var(--ink)}
 }
 .copyref:hover{color:var(--cyan);border-color:var(--cyan)}
 .copyref.copied{color:var(--pos);border-color:var(--pos)}
+
+/* ---- C2. summary cards: the face carries label, value and scope; the breakdown,
+   the collection threshold and the projection sit in a disclosure. A limitation that
+   changes how the number should be READ (main wallet only, unpriced excluded) is not
+   a detail and stays on the face. ---- */
+/* The original theme ordered these (label 1, value 2, parts 3) and those rules are
+   more specific than a bare reset, which is why the value was rendering above its
+   own label. State the order explicitly instead: label, value, scope, limitation,
+   then the disclosure pinned to the bottom of the card. */
+.summary .stat > .l:not(.parts):not(.scope):not(.cover){order:1}
+.summary .stat > .n{order:2}
+.summary .stat > .l.scope{order:3}
+.summary .stat > .l.cover{order:4}
+.summary .stat > .statmore{order:5}
+.statmore{margin-top:auto;border-top:1px solid var(--rule-soft);padding-top:var(--s2)}
+.statmore > summary{
+  cursor:pointer;list-style:none;font-size:12px;color:var(--muted);
+  display:inline-flex;align-items:center;gap:6px;padding:2px 0;
+}
+.statmore > summary::-webkit-details-marker{display:none}
+.statmore > summary::after{content:"▸";font-size:10px;color:var(--muted);transition:transform .12s}
+.statmore[open] > summary::after{transform:rotate(90deg)}
+.statmore > summary:hover{color:var(--ink)}
+.statmore > :not(summary){margin-top:var(--s2)}
+/* When the script has hidden everything inside, the disclosure has nothing to open. */
+.statmore:not(:has(> *:not(summary):not([hidden]))){display:none}
+
+/* ---- D2. one alert is a strip, not a panel ----------------------------------
+   With a single item the old panel spent 176px on one line of text. Laid out as a
+   row it is a status dot, the title (which is also the action — it links to the
+   section that needs attention), the one-line explanation, and the freshness note.
+   Two or more items fall back to the card grid and the panel grows naturally.
+   Driven by :has() so the rendering logic in insights-view.js is untouched: it
+   still appends one <article class="insightcard"> per item, exactly as before. */
+#decisionsec:has(#attentionitems > .insightcard:only-child),
+#decisionsec:has(#attentionitems > p:only-child){
+  display:grid;grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:baseline;gap:var(--s1) var(--s3);padding:var(--s3) var(--s4);
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .ehead,
+#decisionsec:has(#attentionitems > p:only-child) .ehead{display:contents}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .ehead h2,
+#decisionsec:has(#attentionitems > p:only-child) .ehead h2{
+  grid-column:1;font-size:13px;margin:0;white-space:nowrap;
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) #insightsfresh,
+#decisionsec:has(#attentionitems > p:only-child) #insightsfresh{
+  grid-column:3;justify-self:end;font-size:11.5px;
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) #attentionitems,
+#decisionsec:has(#attentionitems > p:only-child) #attentionitems{
+  grid-column:2;display:block;margin:0;
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .visit-changes,
+#decisionsec:has(#attentionitems > p:only-child) .visit-changes{
+  grid-column:1/-1;margin-top:0;
+}
+/* The single card stops being a card and becomes the line itself. */
+#decisionsec:has(#attentionitems > .insightcard:only-child) .insightcard{
+  display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap;
+  border:0;background:none;padding:0;border-radius:0;min-width:0;
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .insightcard::before{
+  content:"";width:7px;height:7px;border-radius:50%;flex:none;align-self:center;
+  background:var(--muted);
+}
+/* Amber only while the data actually reports something — the same signal the
+   panel's own has-items class carries, never colour alone: the title says it too. */
+#decisionsec.has-items:has(#attentionitems > .insightcard:only-child) .insightcard::before{
+  background:var(--warn);box-shadow:0 0 6px var(--warn-dim);
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .insightcard > a{
+  font-size:13.5px;font-weight:600;color:var(--ink);text-decoration:none;
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .insightcard > a:hover{color:var(--cyan)}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .insightcard > a::after{
+  content:" →";color:var(--cyan);font-weight:500;
+}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .insightcard > p{
+  margin:0;font-size:13px;color:var(--muted);min-width:0;
+}
+#decisionsec:has(#attentionitems > p:only-child) #attentionitems > p{margin:0;font-size:13px}
+.visit-changes > summary{font-size:12.5px}
+@media (max-width:760px){
+  #decisionsec:has(#attentionitems > .insightcard:only-child),
+  #decisionsec:has(#attentionitems > p:only-child){grid-template-columns:auto minmax(0,1fr)}
+  #decisionsec:has(#attentionitems > .insightcard:only-child) #insightsfresh,
+  #decisionsec:has(#attentionitems > p:only-child) #insightsfresh{grid-column:1/-1;justify-self:start}
+}
+
+/* ---- E2. a wallet holding one position uses the width it has -----------------
+   The grid is sized for three cards, so a wallet with a single position rendered it
+   at a third of the panel and left two thirds empty. With exactly one card the track
+   becomes full width and the card itself turns from a stack into four readable
+   columns: identity and status, value and fees, range, performance. `.top` is a
+   wrapper around the first two, so display:contents lifts its children into the same
+   grid rather than needing new markup. Two or more positions keep the card grid, and
+   nothing is ever invented to fill space. */
+:is(#ownergroup #list, .wcards):has(> .pos:only-child){grid-template-columns:minmax(0,1fr)}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos{
+  display:grid;
+  grid-template-columns:minmax(200px,1fr) minmax(140px,.65fr) minmax(230px,1.25fr) minmax(210px,1.1fr);
+  gap:var(--s3) var(--s5);align-items:start;
+}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top{display:contents}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top > .name{grid-column:1;margin:0}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top > .vals{
+  grid-column:2;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .rail{grid-column:3;margin:0}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .comp{grid-column:4;margin:0}
+/* The 7-day price chart is the full width of the card, under the four columns. */
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .pxchart{grid-column:1/-1;margin-top:var(--s2)}
+/* Below four columns' worth of room the same information stacks, in the same order. */
+@media (max-width:1100px){
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos{
+    grid-template-columns:minmax(200px,1fr) minmax(140px,.7fr);
+  }
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .rail,
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .comp{grid-column:1/-1}
+}
+@media (max-width:640px){
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos{grid-template-columns:minmax(0,1fr)}
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top > .vals{grid-column:1}
+}
+
+#decisionsec:has(#attentionitems > .insightcard:only-child) .ehead,
+#decisionsec:has(#attentionitems > p:only-child) .ehead{margin:0}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .visit-changes > summary,
+#decisionsec:has(#attentionitems > p:only-child) .visit-changes > summary{padding:0}
+
+/* ---- C3. card height: let each card be as tall as it needs ------------------
+   The row was stretching every card to match the tallest, so one card with more to
+   say made all five 190px. Sizing them to their own content with a common floor
+   keeps the row even where the content is even and lets one grow when it must —
+   "natural growth", not a fixed box. */
+.summary{align-items:start}
+.stat{padding:var(--s3) var(--s4)}
+.summary .stat > .statmore{margin-top:var(--s2)}
+/* The scope line and the limitation are sentences, not labels: no uppercase, and
+   large enough to read comfortably (item 5). */
+.summary .stat > .l.scope,.summary .stat > .l.cover{
+  text-transform:none;font-weight:400;letter-spacing:0;font-size:13px;line-height:1.45;
+}
+.summary .stat > .l.cover{color:var(--muted);opacity:.85}
+
+/* ---- D3. the alert strip in two rows, not three ---------------------------- */
+#decisionsec:has(#attentionitems > .insightcard:only-child) .ehead h2,
+#decisionsec:has(#attentionitems > p:only-child) .ehead h2{grid-row:1}
+#decisionsec:has(#attentionitems > .insightcard:only-child) #attentionitems,
+#decisionsec:has(#attentionitems > p:only-child) #attentionitems{grid-row:1}
+#decisionsec:has(#attentionitems > .insightcard:only-child) .visit-changes,
+#decisionsec:has(#attentionitems > p:only-child) .visit-changes{grid-row:2;grid-column:1/3}
+#decisionsec:has(#attentionitems > .insightcard:only-child) #insightsfresh,
+#decisionsec:has(#attentionitems > p:only-child) #insightsfresh{grid-row:2;grid-column:3}
+
+/* ---- F. position card: overview on the face, the rest one disclosure down ---- */
+.pos > .comp.perf{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s4);margin-top:var(--s2)}
+.posmore{margin-top:var(--s2);border-top:1px solid var(--rule-soft);padding-top:var(--s2)}
+.posmore > summary{
+  cursor:pointer;list-style:none;font-size:12.5px;color:var(--muted);
+  display:inline-flex;align-items:center;gap:6px;padding:2px 0;
+}
+.posmore > summary::-webkit-details-marker{display:none}
+.posmore > summary::after{content:"▸";font-size:10px;transition:transform .12s}
+.posmore[open] > summary::after{transform:rotate(90deg)}
+.posmore > summary:hover{color:var(--cyan)}
+.posmore > .comp{margin-top:var(--s2)}
+
+/* ---- G. wallet group header: its own surface, name left, subtotal right ------ */
+.watchwallet .wh,#ownerhead{
+  display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s4);
+  background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-ctl);
+  padding:var(--s2) var(--s3);margin-bottom:var(--s3);
+}
+.wh-main{display:flex;align-items:baseline;gap:var(--s3);min-width:0;flex:1 1 auto;font-size:13.5px}
+.wh-main a{font-weight:600;color:var(--ink);text-decoration:none}
+.wh-main a:hover{color:var(--cyan)}
+.wcount{font-size:13px;color:var(--muted);white-space:nowrap}
+.wh-side{display:flex;align-items:center;gap:var(--s3);flex:none}
+.wh-side .lpsub{font-size:13px;color:var(--muted);white-space:nowrap}
+.wh-side .lpsub b{color:var(--pos);font-family:var(--mono);font-weight:600}
+.whmore{flex-basis:100%;order:3}
+.whmore > summary{
+  cursor:pointer;list-style:none;font-size:12.5px;color:var(--muted);padding:2px 0;
+  display:inline-flex;align-items:center;gap:6px;
+}
+.whmore > summary::-webkit-details-marker{display:none}
+.whmore > summary::after{content:"▸";font-size:10px;transition:transform .12s}
+.whmore[open] > summary::after{transform:rotate(90deg)}
+.whmore > summary:hover{color:var(--ink)}
+.whmore-body{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s4);margin-top:var(--s2);font-size:13px;color:var(--muted)}
+.whmore-body b{font-family:var(--mono);color:var(--ink);font-weight:500}
+
+/* ---- H. typography: supporting text large enough to read ---------------------- */
+.enote,.rate,.amts{font-size:13px}
+.pstats{font-size:12.5px}
+.etable{font-size:12.5px}
+.etable th{letter-spacing:.03em}
+.wtokens{font-size:12.5px}
+
+/* ---- I. supporting panels share one padding, border and heading size --------- */
+.col-side .panel{padding:var(--s4);border:1px solid var(--rule);border-radius:var(--r-card);background:var(--card)}
+.col-side .panel > h3,.col-side .panel > .ehead h3{font-size:14px;font-weight:600;margin:0 0 var(--s3)}
+.col-side > .panel:first-child{margin-top:0}
+.grid2{align-items:start}
+
+/* A stated absence, not a dash: it must not read like a value of zero. */
+.rate.lt.nobasis{color:var(--muted);border-bottom:1px dotted var(--rule);cursor:help;font-size:13px}
+.rate.lt.nobasis:hover,.rate.lt.nobasis:focus-visible{color:var(--ink)}
+
+/* ---- C4. one height for the row, set by the content that needs the most -------
+   Every supporting line after the label is a sentence, whatever class the script
+   gives it, so target position rather than class: the first .l is the label, any
+   .l after it is prose. This also catches the comparison line, which the script
+   re-classes and which was still rendering as shouted uppercase. */
+.summary .stat > .l ~ .l{
+  text-transform:none;font-weight:400;letter-spacing:0;font-size:13px;line-height:1.45;
+}
+.summary .stat > .l ~ .l.warn{font-weight:500}
+/* A common floor keeps the row even; a card with more to say still grows past it. */
+.stat{min-height:150px}
+
+/* ==========================================================================
+   Refinement pass 2 — full-width detail, a page-spanning lower row,
+   long-table disclosure, and a real heading hierarchy.
+   ========================================================================== */
+
+/* --- heading hierarchy ---------------------------------------------------
+   The page had no h1 and put every section and sub-section at h2, so a screen
+   reader heard one flat list. Now: h1 is the page, h2 is a section, h3 is a
+   block inside a section (Benchmarks inside Attribution, By month inside
+   Collected fees). The brand is the h1 and must not change visually. */
+.brand{margin:0;font-size:15px;line-height:1.2}
+.ehead h3{
+  margin:0;font-family:var(--sans);font-size:13px;font-weight:600;
+  letter-spacing:.01em;color:var(--muted);text-transform:none;
+}
+/* A sub-heading sits closer to what it introduces than a section heading does. */
+.ehead:has(h3){margin-top:var(--s5);padding-top:var(--s3);border-top:1px solid var(--rule)}
+.panel .ehead h2{font-size:13px;color:var(--muted);letter-spacing:.02em}
+
+/* --- the page-spanning lower row ----------------------------------------
+   Risk and Portfolio are read across, not scanned beside the positions, so
+   they leave the 72/28 workspace and take the full width beneath it. */
+.fullrow{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s5);margin-top:var(--s5)}
+.fullrow > section{margin-top:0}
+/* Risk cards had a narrow column; with the width they lay out as a real grid. */
+.fullrow #risklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--s3)}
+/* Portfolio's chart and table share the width instead of stacking tall. */
+/* ---- Portfolio: one column, full width ---------------------------------
+   The chart and the table used to sit side by side. That squeezed a nine-column
+   table into half the page, forced horizontal scrolling at desktop widths, and
+   left the chart's column empty below it. Both now run the full width in the
+   order they are read: totals, chart, the chart's explanation, the table's
+   controls, the table. No grid areas, so nothing can be left in an empty cell. */
+.fullrow #balpanel > #pchart{min-width:0;margin-top:var(--s3)}
+.fullrow #balpanel > #pnote{margin-top:var(--s2)}
+.fullrow #balpanel > .tblock{min-width:0;margin-top:var(--s4)}
+@media (min-width:1000px){
+  /* Full width, so the chart can afford the height the side-by-side layout could
+     not. tvChart draws 600x80 user units with preserveAspectRatio="none", so the
+     SVG stretches to fit: a taller box scales its in-SVG axis text up with it.
+     The label size is therefore given back in user units, the same hand-tuned
+     approach the narrow breakpoint already uses for these charts. */
+  .fullrow #balpanel > #pchart svg{height:190px}
+  .fullrow #balpanel > #pchart .axis{font-size:5px}
+}
+
+/* ---- Portfolio table: figures read as columns of figures -----------------
+   Column 1 is the token. Every other column is a number, so it is right
+   aligned with tabular numerals and does not wrap. Widths are allocated rather
+   than left to the browser, so the table fills the page instead of scrolling.
+   The markup, the values and the formatting helpers are untouched: this is
+   alignment and width only. Below 520px the existing rules still hide the
+   Fees, Price and Share columns and the wrapper still scrolls. */
+#baltable .etable{width:100%;table-layout:auto}
+#baltable .etable th,#baltable .etable td{white-space:nowrap}
+#baltable .etable th:first-child,#baltable .etable td:first-child{
+  white-space:normal;width:14%;min-width:96px;
+}
+#baltable .etable :is(th,td):not(:first-child){
+  text-align:right;font-variant-numeric:tabular-nums;
+}
+/* Quantities and price carry long digit strings; value, share and change are short. */
+#baltable .etable :is(th,td):nth-child(n+2):nth-child(-n+6){width:13%}
+#baltable .etable :is(th,td):nth-child(7){width:11%}
+#baltable .etable :is(th,td):nth-child(8),
+#baltable .etable :is(th,td):nth-child(9){width:8%}
+
+/* The controls belong to the table, directly above it. */
+.tblock{min-width:0}
+.tblock > .tfilter{margin-top:0}
+.tblock > .etablewrap{margin-top:var(--s2)}
+
+/* --- expanded position detail spans the whole card ----------------------
+   In the single-position layout the card is a four-column grid and the
+   disclosure was taking one column. It belongs on its own row, under the
+   overview, using the full width. */
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .posmore{
+  grid-column:1/-1;margin-top:var(--s2);padding-top:var(--s3);border-top:1px solid var(--rule);
+}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .posmore > .comp{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+  gap:var(--s2) var(--s5);align-items:start;
+}
+/* The same intent in the multi-card grid: details run the card's full width. */
+.pos > .posmore{width:100%;box-sizing:border-box}
+.pos > .posmore > .comp{min-width:0}
+
+/* --- long-table disclosure ----------------------------------------------
+   A view-only filter. Exports and totals are built from the data arrays, not
+   from these rows, so nothing here can change an exported figure. The note
+   below every control bar says so on the page. */
+.tfilter{
+  display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2) var(--s3);
+  margin-top:var(--s3);
+}
+.tfilter label{font-size:12px;color:var(--muted)}
+.tfilter input[type=search]{
+  flex:1 1 200px;min-width:0;max-width:340px;
+  background:var(--raised);color:var(--ink);border:1px solid var(--rule);
+  border-radius:var(--r-ctl);padding:6px 10px;font:inherit;font-size:13px;
+}
+.tfilter input[type=search]:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.tfilter .tcount{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tfilter .tmore{
+  background:none;border:1px solid var(--rule);color:var(--cyan);
+  border-radius:var(--r-pill);padding:4px 12px;font:inherit;font-size:12px;cursor:pointer;
+}
+.tfilter .tmore:hover{border-color:var(--cyan)}
+.tfilter .tmore:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.tscope{margin-top:var(--s1);font-size:11px;color:var(--muted)}
+.tfilter .tnone{font-size:12px;color:var(--warn)}
+@media (max-width:640px){
+  .tfilter input[type=search]{max-width:none;flex-basis:100%}
+}
+
+/* ---- narrow: the single-alert strip goes back to a stack -------------------
+   The strip is a three-column row whose heading is nowrap and whose third
+   column carries a full timestamp. Below about 700px those two fixed columns
+   leave the middle one no width at all, so the explanation wrapped one
+   character per line and the grid pushed the whole page wider than the screen.
+   A phone has the vertical room the strip was saving, so it simply stacks. */
+@media (max-width:700px){
+  #decisionsec:has(#attentionitems > .insightcard:only-child),
+  #decisionsec:has(#attentionitems > p:only-child){
+    display:block;padding:var(--s3) var(--s4);
+  }
+  #decisionsec:has(#attentionitems > .insightcard:only-child) .ehead,
+  #decisionsec:has(#attentionitems > p:only-child) .ehead{
+    display:flex;margin:0 0 var(--s2);
+  }
+  #decisionsec:has(#attentionitems > .insightcard:only-child) .ehead h2,
+  #decisionsec:has(#attentionitems > p:only-child) .ehead h2{
+    grid-column:auto;grid-row:auto;white-space:normal;font-size:14px;
+  }
+  :is(#decisionsec:has(#attentionitems > .insightcard:only-child),
+      #decisionsec:has(#attentionitems > p:only-child))
+    :is(#attentionitems, #insightsfresh, .visit-changes){
+    grid-column:auto;grid-row:auto;justify-self:auto;display:block;
+  }
+  #decisionsec:has(#attentionitems > .insightcard:only-child) #insightsfresh,
+  #decisionsec:has(#attentionitems > p:only-child) #insightsfresh{
+    margin-top:var(--s2);font-size:11.5px;
+  }
+  #decisionsec:has(#attentionitems > .insightcard:only-child) .visit-changes,
+  #decisionsec:has(#attentionitems > p:only-child) .visit-changes{
+    margin-top:var(--s2);
+  }
+}
+
+/* Wide tables and charts scroll inside their own container. */
+.fullrow,.grid2,.summary{min-width:0}
+
+/* ---- Portfolio on a narrow screen ----------------------------------------
+   Two fixes, both presentation only.
+
+   1. All nine columns stay reachable. The theme hid Fees, Price and Share
+      below 520px, which removed data rather than deferring it. The table now
+      keeps every column and sizes them to their content, so it grows past the
+      screen and scrolls inside its own wrapper — the wrapper scrolls, never the
+      page. The row filter and the "show N tokens under $1" disclosure are the
+      progressive disclosure here; hiding columns outright is not.
+
+   2. The chart's value labels stop being clipped. tvChart draws 600x80 user
+      units and starts the value labels at x=550, leaving a 50-unit gutter. At
+      this breakpoint the axis type is enlarged so it stays legible once the SVG
+      is scaled down, and a label like "$29,499.94" no longer fits that gutter,
+      so its tail was cut off at the viewBox edge. The SVG is allowed to paint
+      past its viewport and the container carries a matching gutter to receive
+      it. Nothing about the chart's data, scale or geometry changes. */
+@media (max-width:520px){
+  /* The theme hid columns 2, 3, 4, 6 and 8 here — Wallet, In pools, Fees,
+     Price and Share. Every one comes back. These have to carry the same
+     :nth-child weight as the rules they override, or they lose the cascade. */
+  #baltable .etable :is(th,td):nth-child(2),
+  #baltable .etable :is(th,td):nth-child(3),
+  #baltable .etable :is(th,td):nth-child(4),
+  #baltable .etable :is(th,td):nth-child(6),
+  #baltable .etable :is(th,td):nth-child(8){display:table-cell}
+  /* Content-sized columns that may exceed the wrapper, which then scrolls. */
+  #baltable .etable{width:auto;min-width:100%;table-layout:auto}
+  #baltable .etable :is(th,td){width:auto;padding-left:10px;padding-right:10px}
+  #baltable .etable :is(th,td):first-child{width:auto;min-width:80px;white-space:nowrap}
+  /* Say so, rather than leaving someone to discover the columns by accident. */
+  #baltable{scrollbar-width:thin}
+
+  #pchart{padding-right:38px;box-sizing:border-box}
+  #pchart svg{overflow:visible}
+}

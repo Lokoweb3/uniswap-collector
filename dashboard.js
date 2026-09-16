@@ -350,12 +350,15 @@ function renderHeadline(){
   if (m) {
     const link = chainRef(EXPLORER, `/address/${m.owner}`, `${ownerLabel()} <span class="muted">${shortA(m.owner)}</span>`, m.owner);
     const ownTotal = m.totals.liquidityUsd + m.totals.feesUsd + (pf ? pf.totals.walletUsd : 0);
-    $('#ownerhead').innerHTML = `${link}<span class="wtotal">total <b>${usd(ownTotal)}</b></span>` +
+    $('#ownerhead').innerHTML =
+      `<div class="wh-main">${link}<span class="wcount"><b>${m.totals.count}</b> open${m.totals.idle ? ` · <span class="idle">${m.totals.idle} idle</span>` : ''}</span></div>` +
+      `<div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b></span>` +
+      walletToggle('owner', 'list', m.totals.count) + `</div>` +
+      `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">` +
+      `<span class="wtotal">total <b>${usd(ownTotal)}</b></span>` +
       (pf ? `<span>tokens <b>${usd(pf.totals.walletUsd)}</b>${pf.totals.unpricedCount ? ` <span class="muted">+${pf.totals.unpricedCount} unpriced</span>` : ''}</span>` : '') +
-      `<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b></span>` +
       `<span>uncollected <b>${usd(m.totals.feesUsd)}</b></span>` +
-      `<span><b>${m.totals.count}</b> open${m.totals.idle ? ` · <span class="idle">${m.totals.idle} idle</span>` : ''}</span>` +
-      walletToggle('owner', 'list', m.totals.count);
+      `</div></details>`;
     applyWalletOpen('owner', 'list');
     // Section header: this wallet alone, or everything, depending on the picker.
     const W = lastWatchForPf && lastWatchForPf.totals;
@@ -1597,7 +1600,15 @@ function render(d){
         </div>
       </div>
 
-      <div class="comp">
+      <!-- The face of the card is what the owner scans: Fee APR, Net return and the
+           real 48h sparkline. Everything else is kept, one disclosure down. -->
+      <div class="comp perf">
+        ${longTermLine(p)}
+        ${sparkline(p.spark)}
+      </div>
+      <details class="posmore">
+        <summary>View details</summary>
+        <div class="comp">
         <div class="split" role="img" aria-label="${s0.toFixed(0)} percent ${p.symbol0}, ${s1.toFixed(0)} percent ${p.symbol1}">
           <i class="a" style="width:${s0}%"></i><i class="b" style="width:${s1}%"></i>
         </div>
@@ -1623,10 +1634,9 @@ function render(d){
           p.pnlPct != null ? ' (' + (p.pnlPct >= 0 ? '+' : '−') + Math.abs(p.pnlPct).toFixed(1) + '%)' : ''}</b>${
           p.pnlApprox ? ' ≈' : ''}${
           p.pnlSince ? ' · since ' + new Date(p.pnlSince).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : ''}${pnlTip(p)}</span>` : ''}
-        ${longTermLine(p)}
-        ${sparkline(p.spark)}
-      </div>
-      ${pxChart(p, v)}
+        </div>
+        ${pxChart(p, v)}
+      </details>
     </article>`;
   }).join('');
 }
@@ -1687,6 +1697,13 @@ function longTermLine(p){
   const chainNote = lt.chained ? `\nChained: ${lt.members} positions in this pool counted as one (re-minted within 48 h of a close); this position alone: fee APR ${ltPctText(lt.d30 && lt.d30.feeAprPct)}, net ${ltPctText(lt.d30 && lt.d30.netPct, true)}.` : '';
   const feeTip = `Fee APR, ${win}: fees ${usd(d30.feesUsd)} on the ${ltBasisText(d30)}, annualised over the actual days${d30.unpricedCollects ? ` (${d30.unpricedCollects} unpriced collect${d30.unpricedCollects === 1 ? '' : 's'} not counted)` : ''}.\nSince open (${(all.days || 0).toFixed(1)} d): ${ltPctText(all.feeAprPct)}, fees ${usd(all.feesUsd)}.${approx}${chainNote}`;
   const netTip = `Net return, ${win}: fees + price move + IL = ${d30.netUsd == null ? 'unknown (a leg is missing)' : (d30.netUsd >= 0 ? '+' : '−') + usd(Math.abs(d30.netUsd))} on the ${ltBasisText(d30)}.\nSince open: ${all.netUsd == null ? 'unknown' : (all.netUsd >= 0 ? '+' : '−') + usd(Math.abs(all.netUsd)) + ' (' + ltPctText(all.netPct, true) + ')'}.${approx}${chainNote}`;
+  // Both figures rest on an opening value. When there is no price recorded at the
+  // position's open the basis is unknown, so neither percentage exists: say that
+  // plainly and keep the full explanation on hover, rather than showing a bare dash
+  // or quietly substituting a different measure.
+  if (d30.basisUsd == null && d30.feeAprPct == null && d30.netPct == null) {
+    return `<span class="rate lt nobasis" tabindex="0" title="${esc(feeTip + "\n\n" + netTip)}">Opening value unavailable</span>`;
+  }
   const chainHint = lt.chained ? ` <span class="ltchain" title="${esc(`Re-minted ${lt.members - 1}× within 48 h of a close; fees and days run from the first open`)}">⛓ since ${ltDate(lt.chainSince)}</span>` : '';
   return `<span class="rate lt"><span class="ltstat" title="${esc(feeTip)}">Fee APR <b>${ltPctText(d30.feeAprPct)}</b></span><span class="ltstat" title="${esc(netTip)}">Net return <b class="${d30.netPct != null && d30.netPct < 0 ? 'neg' : ''}">${ltPctText(d30.netPct, true)}</b></span>${chainHint}</span>`;
 }
@@ -1852,7 +1869,14 @@ function renderWatch(d){
     const mark = v => v === true ? '<span class="in">✓</span>' : v === false ? '<span class="idle">✗</span>' : '?';
     const collectorPart = c && c.enabled ? `<span title="The collector collects this wallet's fees once it has approved the operator on the v3 and v4 position managers (Wallet page, Approvals tab)">collector: v3 ${mark(c.v3)} v4 ${mark(c.v4)}${c.v3 === false || c.v4 === false ? ' <a href="/wallet#approvals" class="muted">approve</a>' : ''}</span>` : '';
     const cardsId = 'wcards-' + w.address.toLowerCase();
-    const head = `<div class="wh">${link}<span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span><span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}<span><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span>${w.positions.length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>`;
+    // Name and count read first; the LP subtotal and the control sit opposite. The
+    // wallet's own balance, its loose tokens, what it has earned and whether the
+    // collector is approved are all kept, one disclosure down.
+    const head = `<div class="wh">
+      <div class="wh-main">${link}<span class="wcount"><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>
+      <div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span>${w.positions.length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
+      <details class="whmore"><summary>Wallet detail</summary><div class="whmore-body"><span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}</div></details>
+    </div>`;
     // Top tokens sitting in the wallet, compact.
     const toks = h && h.tokens.length
       ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
@@ -1909,15 +1933,22 @@ function renderWatch(d){
             <span>${highH}&nbsp; <span class="mono">${full ? '∞' : price(v.upper)}</span></span>
           </div>
         </div>
-        <div class="comp">
+          <!-- Same shape as the owner cards: the rate is the face, everything else -->
+          <!-- is one disclosure down and spans the full card width when opened. -->
+          <div class="comp perf">
+          ${longTermLine(p)}
+          </div>
+          <details class="posmore">
+            <summary>View details</summary>
+            <div class="comp">
           <div class="split"><i class="a" style="width:${s0}%"></i><i class="b" style="width:${100 - s0}%"></i></div>
           <span class="amts"><b>${amount(p.amount0)}</b> ${p.symbol0} · <b>${amount(p.amount1)}</b> ${p.symbol1}</span>
           ${(p.fee0 || 0) > 0 || (p.fee1 || 0) > 0 ? `<span class="amts">fees <b>${amount(p.fee0)}</b> ${p.symbol0} · <b>${amount(p.fee1)}</b> ${p.symbol1}</span>` : ''}
           ${p.feesOk ? '' : '<span class="amts">fee read unavailable</span>'}
           ${poolLine(p)}
           ${typeof pnlLine === 'function' ? pnlLine(p) : ''}
-          ${longTermLine(p)}
-        </div>
+            </div>
+          </details>
       </article>`;
     }).join('');
     return `<div class="watchwallet">${head}${toks}<div class="wcards" id="${cardsId}">${cards}</div></div>`;
@@ -2299,7 +2330,10 @@ function decorateAdvisor(){
     if (!nft) continue;
     const id = (nft.textContent.match(/#(\d+)/) || [])[1];
     const r = byNft[id];
-    const comp = card.querySelector('.comp');
+    // The card now has two: the overview on its face and the full set inside
+    // "View details". The range advisor is a comparison, so it belongs in the
+    // details; fall back to whatever .comp exists for cards without a disclosure.
+    const comp = card.querySelector('.posmore .comp') || card.querySelector('.comp');
     if (!comp || !r) continue;
     if (comp.dataset.advisorAt === String(advisorD.at)) continue; // already decorated with this data
     for (const old of comp.querySelectorAll('.advisor')) old.remove();
@@ -2341,3 +2375,136 @@ if (PAGE === 'dashboard'){
   setInterval(loadTokenHealth, 10 * 60 * 1000);
 }
 // === end token-health-and-approvals ===
+
+/* ===========================================================================
+   Long-table disclosure — view only.
+   ---------------------------------------------------------------------------
+   Long tables get a search box and, past a second threshold, show a first page
+   with a control to reveal the rest.
+
+   This is deliberately a DOM-only filter. Every CSV in this file is built from
+   the data arrays (filteredRows(), lotsD, the tax fetch), and every total is
+   computed before a row is ever rendered, so hiding a <tr> cannot change an
+   exported figure or a displayed sum. The on-page note states that, because a
+   filter that silently narrowed a total would be exactly the kind of quiet
+   wrongness this dashboard is supposed to avoid.
+
+   Tables are re-rendered by innerHTML in several places, so rather than hook
+   every render path this observes the document and re-applies. Each control bar
+   is tied to its table by a data attribute and rebuilt when the table changes.
+   =========================================================================== */
+(function longTableDisclosure(){
+  const SEARCH_FROM = 12;   // show the search box past this many body rows
+  const PAGE        = 12;   // show this many before "show the rest"
+  let uid = 0;
+
+  const bodyRows = (table) =>
+    Array.from(table.rows).filter(r =>
+      !r.querySelector('th') && !(r.parentElement && r.parentElement.tagName === 'TFOOT'));
+
+  function apply(bar, table){
+    const rows  = bodyRows(table);
+    const term  = bar._input ? bar._input.value.trim().toLowerCase() : '';
+    const all   = bar._expanded || !!term;
+    let shown = 0;
+    for (const r of rows){
+      const hit = !term || r.textContent.toLowerCase().includes(term);
+      const vis = hit && (all || shown < PAGE);
+      r.hidden = !vis;
+      if (hit) shown++;
+    }
+    const visible = rows.filter(r => !r.hidden).length;
+    bar._count.textContent = term
+      ? `${visible} of ${rows.length} rows match`
+      : visible < rows.length ? `Showing ${visible} of ${rows.length} rows` : `${rows.length} rows`;
+    bar._none.hidden = !(term && visible === 0);
+    const hiddenByPage = !term && !bar._expanded && rows.length > PAGE;
+    bar._more.hidden = !hiddenByPage;
+    bar._more.textContent = `Show all ${rows.length}`;
+  }
+
+  function build(table){
+    const wrap = table.closest('.etablewrap') || table.parentElement;
+    if (!wrap || !wrap.parentElement) return;
+    const rows = bodyRows(table);
+    if (rows.length < SEARCH_FROM){
+      const block = wrap.closest('.tblock');
+      if (block){
+        block.parentElement.insertBefore(wrap, block);
+        block.remove();
+      }
+      delete table.dataset.tfid;
+      return;
+    }
+    if (!table.dataset.tfid) table.dataset.tfid = 'tf' + (++uid);
+    const id = table.dataset.tfid;
+
+    // The controls live in a block with the table rather than beside it. The
+    // wrapper may sit in a grid (Portfolio places its table in a named area),
+    // and loose siblings would be laid out somewhere else entirely.
+    let block = wrap.closest('.tblock');
+    if (!block){
+      block = document.createElement('div');
+      block.className = 'tblock';
+      wrap.parentElement.insertBefore(block, wrap);
+      block.appendChild(wrap);
+    }
+
+    let bar = block.querySelector(`[data-tfilter="${id}"]`);
+    if (!bar){
+      bar = document.createElement('div');
+      bar.className = 'tfilter';
+      bar.dataset.tfilter = id;
+      const inputId = id + '-q';
+      bar.innerHTML =
+        `<label for="${inputId}">Filter rows</label>` +
+        `<input type="search" id="${inputId}" placeholder="Type to narrow this view" autocomplete="off">` +
+        `<span class="tcount" role="status" aria-live="polite"></span>` +
+        `<span class="tnone" hidden>No rows match</span>` +
+        `<button type="button" class="tmore"></button>`;
+      const scope = document.createElement('p');
+      scope.className = 'tscope';
+      scope.dataset.tfilter = id + '-note';
+      scope.textContent = 'Filtering changes this view only. Totals and CSV exports always use the complete data set.';
+      block.insertBefore(bar, wrap);
+      block.insertBefore(scope, wrap);
+      bar._input = bar.querySelector('input');
+      bar._count = bar.querySelector('.tcount');
+      bar._none  = bar.querySelector('.tnone');
+      bar._more  = bar.querySelector('.tmore');
+      bar._expanded = false;
+      bar._input.addEventListener('input', () => apply(bar, table));
+      bar._more.addEventListener('click', () => { bar._expanded = true; apply(bar, table); });
+    } else {
+      // The table was re-rendered underneath us: page state resets, the typed
+      // term does not, so a refresh does not throw away what someone is reading.
+      bar._expanded = false;
+    }
+    apply(bar, table);
+  }
+
+  function scan(){
+    for (const t of document.querySelectorAll('.etablewrap table, table.etable')) {
+      try { build(t); } catch {}
+    }
+  }
+
+  let queued = false;
+  const schedule = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; scan(); });
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', schedule);
+  else schedule();
+  new MutationObserver((recs) => {
+    // Ignore our own writes, or we would loop.
+    for (const r of recs){
+      const t = r.target;
+      if (t && t.closest && t.closest('.tfilter')) continue;
+      if (r.type === 'attributes' && r.attributeName === 'hidden') continue;
+      return schedule();
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+})();

@@ -37,7 +37,8 @@ const STATE_VIEW_ABI = [
 const DYNAMIC_FEE_FLAG = 0x800000;
 const MASK256 = (1n << 256n) - 1n;
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
-const CHUNK = 2000; // the RPC's getLogs range cap
+const CHUNK = 2000; // the smallest getLogs window we will ask any RPC for
+const MAX_SPAN = 5_000_000; // the widest; quartered down to CHUNK when refused
 
 const NATIVE = { address: ethers.ZeroAddress, symbol: "ETH", decimals: 18 };
 
@@ -165,7 +166,7 @@ async function loadPosition(ctx, tokenId) {
  */
 function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile }) {
   const FILE = stateFile || dataPath("v4-positions.json");
-  let state = { lastScanned: 0, ids: [], blockscoutAt: 0 };
+  let state = { lastScanned: 0, ids: [], blockscoutAt: 0, scannedFrom: null, complete: false, span: 0, lastError: null };
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(FILE, "utf8")) };
   } catch {}
@@ -204,53 +205,103 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile 
     }
   }
 
-  async function scan(maxChunks) {
-    const latest = await provider.getBlockNumber();
-    // First run: start about a day back. Anything older is Blockscout's job.
-    const to = ethers.zeroPadValue(owner, 32);
-    // First run: sweep the whole chain backwards in big windows. This RPC
-    // answers a topic-filtered query over ~5M blocks in one call (the whole
-    // chain at once times out); a window that fails is retried a quarter the
-    // size. Finds every position ever sent to the owner, so Blockscout is only
-    // a fallback. If even that fails, start a day back as before.
-    if (!state.lastScanned) {
+  // One getLogs call. No adaptation here — the callers decide the window.
+  async function logsIn(lo, hi) {
+    return provider.getLogs({
+      address: posmAddress,
+      topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(owner, 32)],
+      fromBlock: lo,
+      toBlock: hi,
+    });
+  }
+  const reason = (e) => String((e && (e.shortMessage || e.message)) || e || "unknown").slice(0, 200);
+
+  /**
+   * Sweep [0 .. hi] backwards, adapting the window to whatever this RPC accepts.
+   * Chains differ by three orders of magnitude here: some answer a 5M-block
+   * topic-filtered query, Arc's rejects anything over ~10k with "requested range
+   * too large". So the window starts wide and quarters on refusal down to CHUNK,
+   * and the first width that works is remembered for next time.
+   *
+   * Returns where it actually got to. `coveredFrom` is the lowest block genuinely
+   * read — never an assumption — so a caller can resume from there and can tell
+   * an exhausted budget from a dead RPC.
+   */
+  async function sweepBack(hi, budget) {
+    let span = Math.max(CHUNK, Math.min(state.span || MAX_SPAN, hi + 1));
+    let calls = 0;
+    let coveredFrom = hi + 1; // nothing read yet
+    while (hi >= 0 && calls < budget) {
+      const lo = Math.max(0, hi - span + 1);
+      calls++;
       try {
-        let hi = latest, span = 5_000_000, calls = 0;
-        while (hi >= 0 && calls < 60) {
-          const lo = Math.max(0, hi - span + 1);
-          calls++;
-          try {
-            const logs = await provider.getLogs({ address: posmAddress, topics: [TRANSFER_TOPIC, null, to], fromBlock: lo, toBlock: hi });
-            for (const l of logs) ids.add(BigInt(l.topics[3]).toString());
-            hi = lo - 1;
-          } catch (e) {
-            if (span <= 250_000) throw e;
-            span = Math.floor(span / 4);
-          }
-        }
-        state.lastScanned = latest;
-        save();
-        return true;
-      } catch {
-        state.lastScanned = Math.max(0, latest - 900000);
+        for (const l of await logsIn(lo, hi)) ids.add(BigInt(l.topics[3]).toString());
+        state.span = span; // this width works on this RPC; start here next time
+        coveredFrom = lo;
+        hi = lo - 1;
+      } catch (e) {
+        if (span <= CHUNK) return { coveredFrom, complete: false, error: reason(e) };
+        span = Math.max(CHUNK, Math.floor(span / 4));
       }
     }
-    let chunks = 0;
-    while (state.lastScanned < latest && chunks < maxChunks) {
-      const from = state.lastScanned + 1;
-      const end = Math.min(from + CHUNK - 1, latest);
-      const logs = await provider.getLogs({
-        address: posmAddress,
-        topics: [TRANSFER_TOPIC, null, to],
-        fromBlock: from,
-        toBlock: end,
-      });
-      for (const l of logs) ids.add(BigInt(l.topics[3]).toString());
-      state.lastScanned = end;
-      chunks++;
+    return { coveredFrom, complete: hi < 0, error: null };
+  }
+
+  /**
+   * Bring the state up to date. Two halves, and neither ever moves a cursor over
+   * a range it did not successfully read:
+   *   forward  — new blocks since `lastScanned`, in CHUNK steps.
+   *   backfill — the history below `scannedFrom`, when the first sweep ran out of
+   *              budget or the RPC refused. Resumable across calls.
+   */
+  async function scan(maxChunks) {
+    const latest = await provider.getBlockNumber();
+    state.lastError = null;
+
+    // --- forward -----------------------------------------------------------
+    if (state.lastScanned) {
+      let chunks = 0;
+      while (state.lastScanned < latest && chunks < maxChunks) {
+        const from = state.lastScanned + 1;
+        const end = Math.min(from + CHUNK - 1, latest);
+        try {
+          for (const l of await logsIn(from, end)) ids.add(BigInt(l.topics[3]).toString());
+        } catch (e) {
+          // Leave the cursor where it is: this range is unread, and pretending
+          // otherwise is how a position disappears for good.
+          state.lastError = reason(e);
+          save();
+          return false;
+        }
+        state.lastScanned = end;
+        chunks++;
+      }
     }
+
+    // --- first run ---------------------------------------------------------
+    if (!state.lastScanned) {
+      const r = await sweepBack(latest, 60);
+      if (r.coveredFrom <= latest) {
+        // Only claim the range that was actually read.
+        state.scannedFrom = r.coveredFrom;
+        state.lastScanned = latest;
+      }
+      state.complete = r.complete;
+      if (r.error) state.lastError = r.error;
+      save();
+      return !!state.complete;
+    }
+
+    // --- backfill ----------------------------------------------------------
+    if (!state.complete && state.scannedFrom > 0) {
+      const r = await sweepBack(state.scannedFrom - 1, Math.max(1, maxChunks));
+      if (r.coveredFrom < state.scannedFrom) state.scannedFrom = r.coveredFrom;
+      state.complete = r.complete;
+      if (r.error) state.lastError = r.error;
+    }
+
     save();
-    return state.lastScanned >= latest;
+    return !!state.complete && state.lastScanned >= latest;
   }
 
   return {
@@ -262,8 +313,27 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile 
       await fromBlockscout();
       try {
         await scan(maxChunks);
-      } catch {}
+      } catch (e) {
+        // Recorded, not swallowed. An empty list from a blind scan must never
+        // read like an empty wallet.
+        state.lastError = reason(e);
+        save();
+      }
       return [...ids];
+    },
+    /**
+     * What the caller needs to tell "this wallet has no positions" from "this
+     * scan did not finish". `complete` false means history is still unread.
+     */
+    get status() {
+      return {
+        complete: !!state.complete,
+        scannedFrom: state.scannedFrom == null ? null : state.scannedFrom,
+        lastScanned: state.lastScanned || 0,
+        window: state.span || null,
+        error: state.lastError || null,
+        known: ids.size,
+      };
     },
     get caughtUp() {
       return state.lastScanned;

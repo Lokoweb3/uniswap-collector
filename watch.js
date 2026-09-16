@@ -209,6 +209,9 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const ids = await u.listTokenIds(npm, w.address, []);
     const disc = discoveryFor(w.address);
     const v4Ids = disc ? await disc.discover(20) : [];
+    // Whether the v4 history has actually been read. An unfinished or refused
+    // scan must not render as "no positions": unavailable is not zero.
+    const discovery = disc ? disc.status : null;
     let work = [...ids.map((id) => ({ id, version: 3 })), ...v4Ids.map((id) => ({ id: BigInt(id), version: 4 }))];
     const known = work.length;
     // Newest first (ids are minted in order), then cap.
@@ -304,7 +307,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const feesUsd = positions.reduce((s, p) => s + (p.feesUsd || 0), 0);
     const walletUsd = holdings ? holdings.walletUsd : null;
     return {
-      ...w, ok: true, positions, closed, errors, known, truncated, earned, collector,
+      ...w, ok: true, positions, closed, errors, known, truncated, earned, collector, discovery,
       holdings: holdings
         ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, tokens: holdings.rows, tokenCount: holdings.rows.length }
         : null,

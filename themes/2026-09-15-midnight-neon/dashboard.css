@@ -271,7 +271,7 @@ body.scope-owner #watchlist,body.scope-owner #watchnote,body.scope-owner #watchs
 .pxchart .pxlabels{position:relative;width:72px;height:46px;font-size:9.5px;color:var(--muted);font-family:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace}
 .pxchart .pxlabels span{position:absolute;left:0;transform:translateY(-50%);white-space:nowrap}
 .ends .unit{cursor:pointer;color:var(--muted);text-decoration:underline dotted;text-underline-offset:3px}
-.ends .unit:hover{color:var(--ink)}
+.ends .unit:hover{color:var(--fg)}
 .pxchart .band{fill:var(--live);opacity:.08}
 .pxchart .bandline{stroke:var(--rule);stroke-width:1;stroke-dasharray:3 3}
 .pxchart .pline{stroke:var(--idle);stroke-width:1.5;fill:none}

@@ -238,6 +238,33 @@ function mergeRows(lists){
 const ownerLabel = () => (lastMain && lastMain.ownerLabel) || 'Main wallet';
 const ownerName = () => lastMain || lastPortfolio ? `${ownerLabel()} (${shortA((lastMain || lastPortfolio).owner)})` : ownerLabel();
 const walletName = w => w.label ? `${w.label} (${shortA(w.address)})` : shortA(w.address);
+
+/* ---- wallet groups open and closed ----
+   Each wallet's cards collapse behind a real button, so a page with several
+   wallets can be narrowed to the one being worked on. The choice is a per
+   browser convenience and defaults to open. */
+const walletOpen = key => pref('wallet:open:' + key) !== '0';
+function walletToggle(key, targetId, count){
+  const open = walletOpen(key);
+  const what = count === 1 ? '1 position' : `${count} positions`;
+  return `<button type="button" class="wtoggle" data-wkey="${key}" data-wtarget="${targetId}"`
+    + ` aria-expanded="${open}" aria-controls="${targetId}">${open ? 'Hide' : 'Show'} ${what}</button>`;
+}
+function applyWalletOpen(key, targetId){
+  const el = document.getElementById(targetId);
+  if (el) el.hidden = !walletOpen(key);
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.wtoggle');
+  if (!b) return;
+  const key = b.dataset.wkey, target = b.dataset.wtarget;
+  const open = !walletOpen(key);
+  setPref('wallet:open:' + key, open ? '1' : '0');
+  b.setAttribute('aria-expanded', String(open));
+  b.textContent = b.textContent.replace(/^(Hide|Show)/, open ? 'Hide' : 'Show');
+  applyWalletOpen(key, target);
+});
+
 function fillScopeSelect(){
   const sel = $('#pfscope');
   const wallets = (lastWatchForPf && lastWatchForPf.wallets || []).filter(w => w.ok);
@@ -299,8 +326,11 @@ function renderHeadline(){
     const ownTotal = m.totals.liquidityUsd + m.totals.feesUsd + (pf ? pf.totals.walletUsd : 0);
     $('#ownerhead').innerHTML = `${link}<span class="wtotal">total <b>${usd(ownTotal)}</b></span>` +
       (pf ? `<span>tokens <b>${usd(pf.totals.walletUsd)}</b>${pf.totals.unpricedCount ? ` <span class="muted">+${pf.totals.unpricedCount} unpriced</span>` : ''}</span>` : '') +
-      `<span>in pools <b>${usd(m.totals.liquidityUsd)}</b></span><span>uncollected <b>${usd(m.totals.feesUsd)}</b></span>` +
-      `<span><b>${m.totals.count}</b> open${m.totals.idle ? ` · <span class="idle">${m.totals.idle} idle</span>` : ''}</span>`;
+      `<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b></span>` +
+      `<span>uncollected <b>${usd(m.totals.feesUsd)}</b></span>` +
+      `<span><b>${m.totals.count}</b> open${m.totals.idle ? ` · <span class="idle">${m.totals.idle} idle</span>` : ''}</span>` +
+      walletToggle('owner', 'list', m.totals.count);
+    applyWalletOpen('owner', 'list');
     // Section header: this wallet alone, or everything, depending on the picker.
     const W = lastWatchForPf && lastWatchForPf.totals;
     if (scope === 'owner') {
@@ -390,8 +420,156 @@ function renderPortfolio(){
   $('#pnote').textContent = (series.length >= 2
     ? `Total = wallet + positions + uncollected fees, at current prices. Chart is hourly since ${new Date(series[0].t).toLocaleDateString(undefined,{month:'short',day:'numeric'})}. Prices come from the deepest WETH or USDG pool for each token; 24h change once a day of history exists.`
     : 'Total = wallet + positions + uncollected fees, at current prices. Prices come from the deepest WETH or USDG pool for each token; ≈ marks a value larger than that pool holds.' + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
+  renderSidebar();
 }
 $('#pfscope').addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); });
+
+/* ---- sidebar panels -------------------------------------------------------
+ * Wallet overview, collection activity and data coverage are drawn from the
+ * payloads this page has already fetched — /api/positions (lastMain and
+ * lastRender), /api/portfolio (lastPortfolio), /api/watch (lastWatchForPf) and
+ * the read-only summary insights-view.js publishes. No extra request and no
+ * extra polling. A figure the data does not carry is named as unavailable; it
+ * is never shown as zero, and no row is invented.
+ */
+let lastInsights = null;
+document.addEventListener('lp:insights', e => { lastInsights = e.detail; renderSidebar(); });
+
+function renderSidebar(){
+  if (PAGE === 'analytics') return;
+  panel(renderWalletPanel, '#walletbars', 'Wallet values are unavailable in this read.');
+  panel(renderCollectPanel, '#collectevents', 'Collector status is unavailable in this read.');
+  panel(renderCoveragePanel, '#coverlist', '<li>Coverage is unavailable in this read.</li>');
+}
+// A panel that cannot be built says so where its content would be, rather than
+// throwing and taking the rest of the render down with it.
+function panel(fn, sel, fallback){
+  try { fn(); }
+  catch (e) { const el = $(sel); if (el) el.innerHTML = `<p class="enote">${fallback}</p>`; }
+}
+
+function renderWalletPanel(){
+  const m = lastMain, pf = lastPortfolio, W = lastWatchForPf;
+  const box = $('#walletbars'), note = $('#walletpanelnote'), tot = $('#walletpaneltotal');
+  if (!box) return;
+  const rows = [];
+  if (m){
+    const tokens = pf ? pf.totals.walletUsd : null;
+    rows.push({ cls: 'owner', name: ownerLabel(), addr: m.owner,
+      total: tokens == null ? null : m.totals.liquidityUsd + m.totals.feesUsd + tokens,
+      lp: m.totals.liquidityUsd, count: m.totals.count,
+      unpriced: pf ? pf.totals.unpricedCount : 0,
+      why: tokens == null ? 'wallet token values still loading' : null });
+  }
+  for (const w of ((W && W.wallets) || [])){
+    if (!w.ok){ rows.push({ cls: 'watched', name: w.label || shortA(w.address), addr: w.address, total: null, why: w.error || 'could not load' }); continue; }
+    rows.push({ cls: 'watched', name: w.label || shortA(w.address), addr: w.address,
+      total: w.totals.totalUsd, lp: w.totals.liquidityUsd, count: w.totals.count,
+      unpriced: (w.holdings && w.holdings.unpricedCount) || 0,
+      partial: !!(w.holdings && w.holdings.ok === false) });
+  }
+  if (!rows.length){
+    box.innerHTML = '<p class="enote">No wallet values yet.</p>';
+    tot.textContent = ''; note.textContent = '';
+    return;
+  }
+  const priced = rows.filter(r => typeof r.total === 'number');
+  const sum = priced.reduce((s, r) => s + r.total, 0);
+  tot.textContent = priced.length ? usd(sum) : '';
+  box.innerHTML = rows.map(r => {
+    const share = sum > 0 && typeof r.total === 'number' ? (r.total / sum) * 100 : null;
+    const bar = share == null ? ''
+      : `<div class="wtrack" aria-hidden="true"><span class="wfill" style="width:${share.toFixed(1)}%"></span></div>`;
+    const meta = typeof r.total === 'number'
+      ? `<span>${r.count} open · LP <b class="mono">${usd(r.lp)}</b>${r.unpriced ? ` · ${r.unpriced} unpriced` : ''}${r.partial ? ' · partial holdings' : ''}</span>`
+        + `<span class="wshare">${share == null ? 'share unavailable' : share.toFixed(1) + '%'}</span>`
+      : `<span>${esc(r.why || 'unavailable')}</span>`;
+    return `<div class="wbar ${r.cls}">`
+      + `<div class="wtop"><span class="wname" title="${esc(r.addr || '')}">${esc(r.name)}</span>`
+      + `<span class="wval">${typeof r.total === 'number' ? usd(r.total) : 'Unavailable'}</span></div>`
+      + bar + `<div class="wmeta">${meta}</div></div>`;
+  }).join('');
+  const unpricedTotal = rows.reduce((s, r) => s + (r.unpriced || 0), 0);
+  note.textContent = 'Value = tokens in the wallet + open positions + uncollected fees, at current prices. '
+    + (unpricedTotal ? 'Tokens with no WETH or USDG pool are excluded. ' : '')
+    + (priced.length < rows.length ? 'Wallets without a value are left out of the shares.' : 'Shares are of the priced total above.');
+}
+
+function renderCollectPanel(){
+  const box = $('#collectevents'), note = $('#collectpanelnote');
+  const d = lastRender;
+  if (!box) return;
+  if (!d){ box.innerHTML = '<p class="enote">Collector status is not loaded yet.</p>'; note.textContent = ''; return; }
+  const out = [];
+  const run = d.ops && d.ops.lastRun;
+  if (run){
+    const dt = run.t ? new Date(run.t) : null;
+    const when = dt && !isNaN(dt) ? dt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : run.t ? String(run.t) : 'time not recorded';
+    const res = String(run.result || '');
+    const cls = /failed|aborted/i.test(res) ? 'failed' : /locked|skip/i.test(res) ? 'skipped' : 'ok';
+    const word = cls === 'failed' ? 'failed' : cls === 'skipped' ? 'skipped' : 'ran';
+    out.push(`<div class="crun"><span class="clabel">Last run</span>`
+      + `<span class="ctext">${esc(when)} · ${esc(run.mode || 'run')}${res ? ' — ' + esc(res) : ' — no result recorded'}</span>`
+      + `<span class="cstatus ${cls}">${word}</span></div>`);
+  } else {
+    out.push('<div class="crun"><span class="clabel">Last run</span><span class="ctext">No collector run recorded yet.</span></div>');
+  }
+  const t = d.totals || {};
+  if (t.eligibleCount){
+    out.push(`<div class="cevent"><span class="ctext">${t.eligibleCount} position${t.eligibleCount === 1 ? '' : 's'} over the threshold`
+      + ` · <b class="mono">${usd(t.collectableUsd)}</b> ready</span><span class="cstatus pending">pending</span></div>`);
+  } else {
+    out.push(`<div class="cevent"><span class="ctext">Nothing over the ${d.minWethPerPosition} WETH per-position threshold.</span>`
+      + `<span class="cstatus skipped">idle</span></div>`);
+  }
+  if (d.unlock && !d.unlock.armed)
+    out.push('<div class="cevent"><span class="ctext">The collector is locked, so a scheduled run will skip.</span><span class="cstatus skipped">locked</span></div>');
+  // The server's own count of collects since this browser's last visit.
+  const line = ((lastInsights && lastInsights.changes) || []).find(x => /collects recorded|Collect history/.test(x));
+  if (line){
+    const since = lastInsights.since ? new Date(lastInsights.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+    out.push(`<div class="cevent">${since ? `<span class="ctime">since ${esc(since)}</span>` : ''}<span class="ctext">${esc(line)}</span></div>`);
+  }
+  box.innerHTML = out.join('');
+  note.innerHTML = 'Per-collect rows, amounts and the CSV live on <a href="/analytics#earnings">Analytics</a>; this panel reads the collector\'s own status only.';
+}
+
+function renderCoveragePanel(){
+  const ul = $('#coverlist'), note = $('#coveragenote');
+  const d = lastRender, pf = lastPortfolio, W = lastWatchForPf, ins = lastInsights;
+  if (!ul) return;
+  if (!d && !pf && !W && !ins){ ul.innerHTML = '<li class="enote">Checking what the data covers…</li>'; return; }
+  const items = [];
+  const li = (cls, html) => items.push(`<li class="${cls}">${html}</li>`);
+  if (d && d.cached) li('warn', 'Positions are the last good read, not a fresh one.');
+  if (ins && ins.freshness){
+    const f = ins.freshness;
+    if (f.stale) li('warn', 'Position observations are over 10 minutes old.');
+    if (!f.watchAt) li('warn', 'Watched-wallet observations are unavailable.');
+    else if (ins.at - f.watchAt > 600000) li('warn', 'Watched-wallet observations are over 10 minutes old.');
+  }
+  if (pf && pf.totals){
+    const n = pf.totals.unpricedCount || 0;
+    li(n ? 'warn' : 'ok', n
+      ? `<b>${n}</b> unpriced token${n === 1 ? '' : 's'} in the main wallet, excluded from every value here.`
+      : 'Every main-wallet token has a price source.');
+  } else li('warn', 'Main-wallet token values are not loaded.');
+  const wl = ((W && W.wallets) || []).filter(w => w.ok);
+  const wUn = wl.reduce((s, w) => s + ((w.holdings && w.holdings.unpricedCount) || 0), 0);
+  if (wUn) li('warn', `<b>${wUn}</b> unpriced balance${wUn === 1 ? '' : 's'} across watched wallets — balances, not unique tokens: one token held in two wallets counts twice.`);
+  const partial = wl.filter(w => w.holdings && w.holdings.ok === false).length;
+  if (partial) li('warn', `${partial} watched wallet${partial === 1 ? '' : 's'} returned a partial holdings list; only position tokens and ETH were checked.`);
+  const trunc = wl.filter(w => w.truncated).length;
+  if (trunc) li('warn', `${trunc} watched wallet${trunc === 1 ? '' : 's'} hold more position NFTs than were read; only the newest are shown.`);
+  if (d && d.totals && d.totals.pnlApproxCount)
+    li('warn', `<b>${d.totals.pnlApproxCount}</b> position${d.totals.pnlApproxCount === 1 ? '' : 's'} left out of LP vs holding: the deposit history behind them is incomplete.`);
+  const feeBad = ((d && d.positions) || []).filter(p => p.feesOk === false).length;
+  if (feeBad) li('warn', `${feeBad} position${feeBad === 1 ? '' : 's'} could not report fees in this read.`);
+  li('', 'Collect-by-collect history and fee-token cost basis are loaded on Analytics, not here.');
+  ul.innerHTML = items.join('');
+  note.textContent = 'Unavailable is not zero: a figure with no evidence behind it is left out rather than guessed.';
+}
 
 /* ---- incentive rewards (Merkl) ---- */
 async function loadRewards(){
@@ -1211,6 +1389,7 @@ function render(d){
   $('#watchsec').hidden = false;
   lastMain = d;
   renderHeadline();
+  renderSidebar();
   const coll = $('#collectable');
   coll.textContent = usd(d.totals.collectableUsd);
   coll.className = 'n sm' + (d.totals.eligibleCount ? ' fees' : '');
@@ -1643,12 +1822,13 @@ function renderWatch(d){
     const c = w.collector;
     const mark = v => v === true ? '<span class="in">✓</span>' : v === false ? '<span class="idle">✗</span>' : '?';
     const collectorPart = c && c.enabled ? `<span title="The collector collects this wallet's fees once it has approved the operator on the v3 and v4 position managers (Wallet page, Approvals tab)">collector: v3 ${mark(c.v3)} v4 ${mark(c.v4)}${c.v3 === false || c.v4 === false ? ' <a href="/wallet#approvals" class="muted">approve</a>' : ''}</span>` : '';
-    const head = `<div class="wh">${link}<span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>in pools <b>${usd(t.liquidityUsd)}</b></span><span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}<span><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>`;
+    const cardsId = 'wcards-' + w.address.toLowerCase();
+    const head = `<div class="wh">${link}<span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span><span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}<span><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span>${w.positions.length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>`;
     // Top tokens sitting in the wallet, compact.
     const toks = h && h.tokens.length
       ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
       : '';
-    if (!w.positions.length) return `<div class="watchwallet">${head}${toks}<div class="enote">No open positions.</div></div>`;
+    if (!w.positions.length) return `<div class="watchwallet">${head}${toks}<div class="wempty">No open positions.</div></div>`;
     const cards = sortLT(w.positions).map(p => {
       const full = p.tickLower <= -887000 && p.tickUpper >= 887000;
       const v = orient(p);
@@ -1711,8 +1891,11 @@ function renderWatch(d){
         </div>
       </article>`;
     }).join('');
-    return `<div class="watchwallet">${head}${toks}<div class="wcards">${cards}</div></div>`;
+    return `<div class="watchwallet">${head}${toks}<div class="wcards" id="${cardsId}">${cards}</div></div>`;
   }).join('');
+  for (const w of shown) if (w.ok && w.positions && w.positions.length)
+    applyWalletOpen(w.address.toLowerCase(), 'wcards-' + w.address.toLowerCase());
+  renderSidebar();
 }
 async function loadWatch(){
   try {

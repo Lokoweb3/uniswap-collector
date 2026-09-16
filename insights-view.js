@@ -12,6 +12,20 @@
   const usd = n => num(n) ? n.toLocaleString(undefined, { style: "currency", currency: "USD" }) : "Unavailable";
   const pct = n => num(n) ? n.toFixed(1) + "%" : "Unavailable";
   let busy = false, latestAt = null;
+  // Amber while something needs attention, quiet when nothing does, neither
+  // when the request failed and the page cannot say.
+  const mark = items => {
+    const strip = $("decisionsec");
+    if (!strip || !strip.classList) return;
+    strip.classList.toggle("has-items", items === true);
+    strip.classList.toggle("calm", items === false);
+  };
+  // Hand the same payload to the dashboard's sidebar panels rather than let
+  // them fetch it a second time.
+  const publish = d => {
+    if (typeof CustomEvent !== "function" || !document.dispatchEvent) return;
+    document.dispatchEvent(new CustomEvent("lp:insights", { detail: d }));
+  };
   async function load() {
     if (busy) return;
     busy = true;
@@ -34,6 +48,8 @@
         card.append(a, node("p", item.detail)); $("attentionitems").append(card);
       }
       if (!d.attention.length) $("attentionitems").append(node("p", "No attention items in the latest observations."));
+      // The strip reads amber only while the data actually reports something.
+      mark(d.attention.length > 0);
       $("visitsince").textContent = (baseline && baseline === d.since ? "Since " : "Last 24 hours · no recent saved visit · since ") + new Date(d.since).toLocaleString() + ". Visit history stays in this browser.";
       $("visitchanges").replaceChildren(...d.changes.map(text => node("li", text)));
       $("weekscope").textContent = `${d.scope} · ${d.timezone}`;
@@ -61,9 +77,13 @@
         body.append(row);
       }
       table.append(body); $("weektable").replaceChildren(table);
+      // The dashboard's sidebar panels read this same payload instead of
+      // fetching it again; nothing else about the request changes.
+      publish(d);
     } catch {
       $("insightsfresh").textContent = "Insights unavailable · existing observations may be stale. Retry with Refresh.";
       $("weekstatus").textContent = "Weekly comparison unavailable · any displayed figures are from the previous update.";
+      mark(null);
     } finally { busy = false; }
   }
   // Save on leaving/hiding the rendered page, not every background refresh.

@@ -6,25 +6,30 @@
 <title>Liquidity positions</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
 <div class="wrap">
 
-<header>
-  <nav class="pages"><a href="/" id="nav-dash">Dashboard</a><a href="/analytics" id="nav-analytics">Analytics</a><a href="/wallet" id="nav-wallet" title="Arm, approvals, vault and operator">Wallet</a></nav>
-  <div class="addr"><span id="ownerline">Positions held by <b class="mono" id="owner">—</b></span>
-    <span class="walletpick" id="walletpick" hidden>Wallet <select id="pfscope" class="scope" title="Which wallet the page describes"></select></span>
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="brand">LP Dashboard</span>
+    <nav class="pages" aria-label="Pages"><a href="/" id="nav-dash">Dashboard</a><a href="/analytics" id="nav-analytics">Analytics</a><a href="/wallet" id="nav-wallet" title="Arm, approvals, vault and operator">Wallet</a></nav>
   </div>
-  <div class="meta">
-    <span><span class="pulse" id="pulse"></span><span id="blockinfo">connecting</span></span>
-    <button class="reload" id="reload">Refresh</button>
-    <button class="reload collect owneronly" id="collect">Collect fees</button>
+  <div class="topbar-right">
+    <div class="addr"><span id="ownerline">Positions held by <b class="mono" id="owner">—</b></span>
+      <span class="walletpick" id="walletpick" hidden><label for="pfscope">Wallet</label> <select id="pfscope" class="scope" title="Which wallet the page describes"></select></span>
+    </div>
+    <div class="meta">
+      <span class="chain"><span class="pulse" id="pulse"></span><span id="blockinfo">connecting</span></span>
+      <button class="reload" id="reload">Refresh</button>
+      <button class="reload collect owneronly" id="collect">Collect fees</button>
+    </div>
   </div>
 </header>
 
-<div class="chips owneronly" id="chips" hidden>
+<div class="chips statusstrip owneronly" id="chips" hidden>
   <span class="chip" id="armchip"></span>
   <button class="reload" id="armbtn" hidden>Arm collector…</button>
   <button class="reload" id="lockbtn" hidden>Lock now</button>
@@ -54,7 +59,40 @@
   <div class="hint" id="cohint" hidden></div>
 </section>
 
-<section class="earnings" id="decisionsec" aria-labelledby="decisiontitle">
+<section class="summary cards" id="summary" hidden>
+  <div class="stat">
+    <div class="l">Total portfolio</div>
+    <div class="n" id="networth">—</div>
+    <div class="l scope" id="networthlabel">Held by this wallet</div>
+    <div class="l parts" id="networthparts" hidden></div>
+  </div>
+  <div class="stat">
+    <div class="l">Value in LP positions</div>
+    <div class="n sm" id="tvl">—</div>
+    <div class="l scope"><span id="countlabel">In</span> <span id="count">0</span> LP positions</div>
+  </div>
+  <div class="stat">
+    <div class="l" id="feeslabel">Uncollected fees</div>
+    <div class="n sm fees" id="fees">—</div>
+    <div class="l note owneronly"><span id="collectlabel">Collectable now</span><span class="n sm" id="collectable">—</span></div>
+    <div class="l note owneronly"><span id="projlabel">Projected fees, next 30 days</span><span class="n sm fees" id="proj30">—</span></div>
+    <div class="l parts owneronly" id="projparts" hidden></div>
+  </div>
+  <div class="stat owneronly">
+    <div class="l">LP vs holding</div>
+    <div class="n sm" id="pnltotal">—</div>
+    <div class="l scope" id="pnllabel">LP vs holding</div>
+    <div class="l parts" id="pnlparts" hidden></div>
+    <div class="l cover">Main wallet, open positions only</div>
+  </div>
+  <div class="stat">
+    <div class="l">Out of range</div>
+    <div class="n sm" id="idle">—</div>
+    <div class="l scope" id="idlelabel">Positions sitting outside their range</div>
+  </div>
+</section>
+
+<section class="earnings attention" id="decisionsec" aria-labelledby="decisiontitle">
   <div class="ehead"><h2 id="decisiontitle">Needs attention</h2><span class="enote" id="insightsfresh" role="status">Checking the latest observations…</span></div>
   <div id="attentionitems" class="insightcards"><p class="enote">Loading attention items…</p></div>
   <details class="visit-changes"><summary>What changed since my last visit?</summary>
@@ -63,39 +101,8 @@
   </details>
 </section>
 
-<section class="summary" id="summary" hidden>
-  <div class="stat hero">
-    <div class="n" id="networth">—</div>
-    <div class="l" id="networthlabel">Held by this wallet</div>
-    <div class="l parts" id="networthparts" hidden></div>
-  </div>
-  <div class="stat pair">
-    <div class="n sm" id="tvl">—</div>
-    <div class="l"><span id="countlabel">In</span> <span id="count">0</span> LP positions</div>
-  </div>
-  <div class="stat pair">
-    <div class="n sm fees" id="fees">—</div>
-    <div class="l" id="feeslabel">Uncollected fees</div>
-  </div>
-  <div class="stat pair owneronly">
-    <div class="n sm" id="collectable">—</div>
-    <div class="l" id="collectlabel">Collectable now</div>
-  </div>
-  <div class="stat pair owneronly">
-    <div class="n sm" id="pnltotal">—</div>
-    <div class="l" id="pnllabel">LP vs holding</div>
-    <div class="l parts" id="pnlparts" hidden></div>
-  </div>
-  <div class="stat pair owneronly">
-    <div class="n sm fees" id="proj30">—</div>
-    <div class="l" id="projlabel">Projected fees, next 30 days</div>
-    <div class="l parts" id="projparts" hidden></div>
-  </div>
-  <div class="stat pair">
-    <div class="n sm" id="idle">—</div>
-    <div class="l" id="idlelabel">Sitting outside their range</div>
-  </div>
-</section>
+<div class="grid2">
+<div class="col-main">
 
 <section class="earnings watchsec" id="watchsec" hidden>
   <div class="ehead">
@@ -112,17 +119,11 @@
       <button class="reload" id="closedtoggle" hidden></button>
       <div class="closedlist" id="closedlist" hidden></div>
     </section>
-
-<!-- === launch-watch === -->
-<section class="earnings" id="launchsec" hidden>
-  <div class="ehead">
-    <h2>Launch Watch</h2>
-    <span class="enote" id="launchnote"></span>
   </div>
-  <div style="overflow-x:auto"><table class="etable" id="launchtable"><thead><tr><th>Token</th><th>MCap</th><th>Pool age</th><th>Score</th><th>Checks</th><th></th></tr></thead><tbody></tbody></table></div>
-  <div class="enote" id="launchrecent"></div>
+  <div id="watchlist"></div>
+  <div class="enote" id="watchnote"></div>
 </section>
-<!-- === end launch-watch === -->
+
 <!-- === risk-guardian === -->
 <section class="earnings" id="risksec" hidden>
   <div class="ehead">
@@ -133,10 +134,17 @@
   <div class="enote" id="riskrecent"></div>
 </section>
 <!-- === end risk-guardian === -->
+
+<!-- === launch-watch === -->
+<section class="earnings" id="launchsec" hidden>
+  <div class="ehead">
+    <h2>Launch Watch</h2>
+    <span class="enote" id="launchnote"></span>
   </div>
-  <div id="watchlist"></div>
-  <div class="enote" id="watchnote"></div>
+  <div class="etablewrap"><table class="etable" id="launchtable"><thead><tr><th>Token</th><th>MCap</th><th>Pool age</th><th>Score</th><th>Checks</th><th></th></tr></thead><tbody></tbody></table></div>
+  <div class="enote" id="launchrecent"></div>
 </section>
+<!-- === end launch-watch === -->
 
 <section class="earnings" id="balpanel" hidden>
   <div class="ehead">
@@ -148,6 +156,31 @@
   <div class="etablewrap" id="baltable"></div>
   <div class="enote" id="pnote"></div>
 </section>
+
+</div><!-- /col-main -->
+
+<aside class="col-side" aria-label="Supporting information">
+
+  <section class="earnings panel" id="walletpanel" aria-labelledby="walletpaneltitle">
+    <div class="ehead"><h2 id="walletpaneltitle">Wallet overview</h2><span class="etotal" id="walletpaneltotal"></span></div>
+    <div id="walletbars"><p class="enote">Reading wallet values…</p></div>
+    <p class="enote" id="walletpanelnote"></p>
+  </section>
+
+  <section class="earnings panel owneronly" id="collectpanel" aria-labelledby="collectpaneltitle">
+    <div class="ehead"><h2 id="collectpaneltitle">Collection activity</h2></div>
+    <div id="collectevents"><p class="enote">Reading collector status…</p></div>
+    <p class="enote" id="collectpanelnote"></p>
+  </section>
+
+  <section class="earnings panel" id="coveragepanel" aria-labelledby="coveragetitle">
+    <div class="ehead"><h2 id="coveragetitle">Data coverage</h2></div>
+    <ul class="coverlist" id="coverlist"><li class="enote">Checking what the data covers…</li></ul>
+    <p class="enote" id="coveragenote"></p>
+  </section>
+
+</aside>
+</div><!-- /grid2 -->
 
 <section class="earnings analytics" id="weeksec" aria-labelledby="weektitle">
   <div class="ehead"><h2 id="weektitle">Two complete weeks</h2><span class="enote" id="weekscope">Main wallet</span></div>

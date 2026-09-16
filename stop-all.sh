@@ -5,6 +5,11 @@ set -u
 # The watchdog first, or it would bring the dashboard straight back.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for w in $(pgrep -f "^bash $HERE/watchdog.sh$" 2>/dev/null); do kill "$w" 2>/dev/null && echo "watchdog: stopped (pid $w)"; done
+# The read-only second-chain viewer, if one is running.
+arcport="${LP_ARC_PORT:-8797}"
+arcpid=$(ss -ltnp 2>/dev/null | awk -v p=":${arcport} " 'index($0, p) { print $NF }' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
+[ -n "$arcpid" ] && kill "$arcpid" 2>/dev/null && echo "arc viewer: stopped (pid $arcpid)"
+
 pid=$(ss -ltnp 2>/dev/null | awk '/:8787 /{print $NF}' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
 if [ -z "$pid" ]; then echo "dashboard: not running"; exit 0; fi
 kill "$pid" && echo "dashboard: stopped (pid $pid)"

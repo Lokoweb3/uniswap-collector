@@ -172,6 +172,15 @@ while true; do
     sleep 60
     continue
   fi
+  # The read-only second-chain viewer is not the dashboard: if it is missing, start
+  # it and carry on. It never triggers a restart count, an alert or a stop, because
+  # nothing depends on it and it cannot move funds.
+  ARC_DIR="${LP_ARC_DATA_DIR:-$HOME/arc-data}"; ARC_PORT="${LP_ARC_PORT:-8797}"
+  if [ -f "$ARC_DIR/settings.json" ] && ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${ARC_PORT}\$"; then
+    echo "$(date -Is) arc viewer not listening; starting" >> "$LOG"
+    LP_READONLY=1 nohup node "$HERE/server.js" --data-dir="$ARC_DIR" --port="$ARC_PORT" --no-loops --no-services \
+      >> "$ARC_DIR/server.log" 2>&1 < /dev/null &
+  fi
   CYCLE=$((CYCLE + 1))
   if [ $((CYCLE % PROBE_EVERY)) -eq 0 ]; then
     probe

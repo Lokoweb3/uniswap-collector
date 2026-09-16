@@ -37,6 +37,23 @@ if [ "${1:-}" != "--no-watchdog" ] && ! pgrep -f "^bash $HERE/watchdog.sh$" >/de
   nohup bash "$HERE/watchdog.sh" >/dev/null 2>&1 < /dev/null &
   echo "watchdog: started (pid $!) — restarts the dashboard if it exits; log in watchdog.log"
 fi
+# A second chain, read-only: its own data directory, its own port, its loops and
+# companion services off, and LP_READONLY so it can never collect or arm. Started
+# before the check below so a running main dashboard does not skip it. Skipped
+# entirely when the data directory is absent, which is the single-chain install.
+start_arc() {
+  local dir="${LP_ARC_DATA_DIR:-$HOME/arc-data}" port="${LP_ARC_PORT:-8797}"
+  [ -f "$dir/settings.json" ] || return 0
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then
+    echo "arc viewer: already running on :${port}"
+    return 0
+  fi
+  LP_READONLY=1 nohup node server.js --data-dir="$dir" --port="$port" --no-loops --no-services \
+    >> "$dir/server.log" 2>&1 < /dev/null &
+  echo "arc viewer: started (pid $!) on :${port} — read-only, logs in $dir/server.log"
+}
+start_arc
+
 if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':8787$'; then
   echo "dashboard: already running on :8787 (stop it first to restart: ./stop-all.sh)"
   exit 0

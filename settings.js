@@ -24,8 +24,16 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const { DATA_DIR } = require("./data-dir");
 
-const FILE = path.join(__dirname, "settings.json");
+// settings.json belongs to the instance, so it lives in the data directory. A
+// second chain gets its own directory and its own file; with no --data-dir the
+// data directory *is* the source tree, so the single-chain layout is unchanged.
+// If the data directory has no settings.json we fall back to the one beside the
+// code, which keeps a bare `--data-dir=` pointing at an empty folder working.
+const DATA_FILE = path.join(DATA_DIR, "settings.json");
+const CODE_FILE = path.join(__dirname, "settings.json");
+const FILE = fs.existsSync(DATA_FILE) ? DATA_FILE : CODE_FILE;
 const EXAMPLE = path.join(__dirname, "settings.example.json");
 
 function read(file = FILE) {
@@ -52,10 +60,26 @@ function toLegacy(raw) {
   const s = strip(raw);
   const chain = s.chain || {}, wallets = s.wallets || {}, tokens = s.tokens || {}, col = s.collector || {}, vault = s.vault || {}, risk = s.risk || {}, al = s.alerts || {};
   const main = wallets.main && typeof wallets.main === "object" ? wallets.main : { address: wallets.main, label: "Main" };
+  const extraRpcs = Array.isArray(chain.rpcUrls) ? chain.rpcUrls.filter(Boolean) : [];
   const cfg = {
     rpcUrl: chain.rpcUrl,
+    // Extra endpoints for the same chain, in priority order. Reads fail over to
+    // a later one when an earlier stops answering; each is checked for the right
+    // chain id before use. The key is absent entirely when the chain has only
+    // one endpoint, so nothing downstream has to tell "none" from "undefined".
+    ...(extraRpcs.length ? { rpcUrls: extraRpcs } : {}),
     chainId: chain.chainId,
-    explorer: chain.explorer || "https://robinhoodchain.blockscout.com",
+    // No fallback to a particular chain's explorer: an empty string means this
+    // chain has none, and the page renders identifiers as plain text with a copy
+    // button instead of dead links.
+    explorer: chain.explorer || "",
+    // Where a *Blockscout* API lives, which is a narrower question than "is
+    // there an explorer": the audit's inflow reconciliation speaks Blockscout,
+    // and a chain can have a perfectly good explorer that does not. Unset, it
+    // follows the explorer (true for this chain, whose explorer is Blockscout);
+    // set to "" it opts the chain out and the audit says so rather than
+    // querying an API that will not answer in the shape it expects.
+    blockscout: chain.blockscout !== undefined ? (chain.blockscout || "") : (chain.explorer || ""),
     ownerAddress: main.address,
     ownerLabel: main.label || "Main",
     sweepDestination: col.sweepDestination || main.address,
@@ -67,6 +91,25 @@ function toLegacy(raw) {
     v4Collect: col.v4Collect || {},
     swapFeeTierOverrides: col.swapFeeTierOverrides || {},
     usdReference: { stable: tokens.USDG, feeTier: tokens.usdReferenceFeeTier ?? 100 },
+    // The unit of account the read path prices everything in. On a chain with a
+    // wrapped native token that is WETH, and its USD rate is discovered from the
+    // reference stable pool (usdRate null). On a chain whose unit is already a
+    // dollar -- Arc, where USDC *is* the gas token and no wrapper exists -- set
+    // usdRate 1 and the second hop disappears. nativeSameAsErc20 says the native
+    // currency and this ERC-20 are one balance behind two interfaces (Arc again),
+    // so a wallet scan must count it once, not once per interface.
+    numeraire: (() => {
+      const n = (s.numeraire || tokens.numeraire || {});
+      const address = n.address || tokens.WETH || (s.contracts || {}).weth || null;
+      const rate = n.usdRate;
+      return {
+        symbol: n.symbol || "WETH",
+        address,
+        decimals: n.decimals != null ? Number(n.decimals) : 18,
+        usdRate: rate == null || rate === "" ? null : Number(rate),
+        nativeSameAsErc20: n.nativeSameAsErc20 === true,
+      };
+    })(),
     tokens,
     dashboard: s.dashboard || {},
     portfolio: s.portfolio || {},
@@ -102,7 +145,7 @@ function fromLegacy(c, w = null, chats = {}) {
   const memecoins = (c.memecoins || []).map(strip);
   return {
     _comment: "LP dashboard + collector settings. One file: edit here, restart the dashboard (./start-all.sh). Secrets (TELEGRAM_TOKEN, BLOCKSCOUT_API_KEY, chat provider keys) live in .env only. settings.example.json is the template.",
-    chain: { rpcUrl: c.rpcUrl, chainId: c.chainId, explorer: "https://robinhoodchain.blockscout.com" },
+    chain: { rpcUrl: c.rpcUrl, ...(Array.isArray(c.rpcUrls) && c.rpcUrls.length ? { rpcUrls: c.rpcUrls } : {}), chainId: c.chainId, explorer: c.explorer || "https://robinhoodchain.blockscout.com", ...(c.blockscout !== undefined ? { blockscout: c.blockscout } : {}) },
     wallets: {
       _comment: "main: the collector's own wallet (positions read, fees swept back to it). watched: extra wallets shown read-only; collect: true makes the collector also collect that wallet's positions (after it approves the operator on the v3/v4 position managers, Wallet page > Approvals) and deliver the swept fees back to that same wallet.",
       main: { address: c.ownerAddress, label: (w && w.owner && w.owner.label) || "Main" },

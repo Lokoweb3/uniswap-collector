@@ -117,7 +117,10 @@ function create({ provider, factory, cfg, explorerApi }) {
     } catch {}
   };
 
-  const WETH = cfg.contracts.weth.toLowerCase();
+  // The unit of account: the wrapped native token on a chain that has one, or
+  // whatever the chain prices in (Arc quotes in USDC, which has no wrapper).
+  const UNIT = cfg.numeraire || { address: cfg.contracts.weth, symbol: "WETH", usdRate: null, nativeSameAsErc20: false };
+  const WETH = String(UNIT.address || cfg.contracts.weth || "").toLowerCase();
   const STABLE = ((cfg.usdReference && cfg.usdReference.stable) || "").toLowerCase();
   const owner = cfg.ownerAddress;
   const manual = ((cfg.portfolio && cfg.portfolio.tokens) || []).filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a));
@@ -305,11 +308,18 @@ function create({ provider, factory, cfg, explorerApi }) {
     }
     const addrs = new Set([...hint.tokens, ...extraTokens.map((a) => a.toLowerCase())]);
     const rows = [];
+    // getBalance is the chain's NATIVE currency, always 18 decimals. On Arc that
+    // native balance and the ERC-20 USDC balance are two interfaces over one
+    // balance (native 18 dp, ERC-20 6 dp), so the same money would be counted
+    // twice -- once here and once in the ERC-20 scan below. When the chain says
+    // so (numeraire.nativeSameAsErc20) we keep this reading, which is the more
+    // precise of the two, and skip that token in the scan.
     const native = await provider.getBalance(address).catch(() => null);
     if (native != null) {
-      const bal = Number(ethers.formatEther(native));
-      if (bal > 0) rows.push({ symbol: "ETH", address: null, native: true, amount: bal, price: wethUsd });
+      const bal = Number(ethers.formatEther(native)); // native: 18 decimals, always
+      if (bal > 0) rows.push({ symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : "ETH", address: null, native: true, amount: bal, price: UNIT.nativeSameAsErc20 ? (UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd) : wethUsd });
     }
+    if (UNIT.nativeSameAsErc20 && WETH) addrs.delete(WETH); // same balance, already counted natively
     const held = await mapLimit([...addrs], CONCURRENCY, async (addr) => {
       const meta = await u.getToken(addr, provider);
       const raw = await new ethers.Contract(addr, ERC20_BAL, provider).balanceOf(address);
@@ -452,12 +462,22 @@ function create({ provider, factory, cfg, explorerApi }) {
     const addrs = new Set([...Object.keys(state.tokens), ...positionTokens.keys(), ...manual.map((a) => a.toLowerCase())]);
     const rows = [];
 
-    // Native ETH first.
+    // The chain's native currency first. getBalance is always 18 decimals. On a
+    // chain where that native currency and an ERC-20 are one balance behind two
+    // interfaces (Arc's USDC: native 18 dp, ERC-20 6 dp) this reading is the
+    // whole balance, so the matching ERC-20 is dropped from the scan below
+    // rather than counted a second time.
     const native = await provider.getBalance(owner).catch(() => null);
     if (native != null) {
-      const bal = Number(ethers.formatEther(native));
-      rows.push({ symbol: "ETH", address: null, native: true, wallet: bal, pools: 0, fees: 0, price: wethUsd, source: "wallet" });
+      const bal = Number(ethers.formatEther(native)); // native: 18 decimals, always
+      rows.push({
+        symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : "ETH",
+        address: null, native: true, wallet: bal, pools: 0, fees: 0,
+        price: UNIT.nativeSameAsErc20 && UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd,
+        source: "wallet",
+      });
     }
+    if (UNIT.nativeSameAsErc20 && WETH) addrs.delete(WETH); // one balance, already counted natively
 
     const held = await mapLimit([...addrs], CONCURRENCY, async (addr) => {
       let meta = positionTokens.get(addr);
@@ -534,7 +554,7 @@ function create({ provider, factory, cfg, explorerApi }) {
       unpriced: newest && newest.partial ? newest.unpriced : [],
       rows,
       series: decimate(state.series.map((s) => ({ t: s.t, wallet: s.wallet, lp: s.lp, fees: s.fees, total: s.total, ...(s.partial ? { partial: true } : {}) }))),
-      explorer: explorerApi.replace(/\/api$/, ""),
+      explorer: (explorerApi || "").replace(/\/api$/, ""), // "" when the chain has no Blockscout
     };
     return latest;
   }

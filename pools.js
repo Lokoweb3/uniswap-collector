@@ -14,7 +14,10 @@ const SCANNER = process.env.LP_SCANNER_URL || "http://127.0.0.1:3847";
 const TTL_MS = 5 * 60 * 1000;
 // Direct v4 pool reads (for pools the scanner has not indexed yet): fee-growth
 // samples per pool are kept here so fees over the last 24h can be derived.
-const SAMPLES_FILE = path.join(__dirname, "pool-samples.json");
+// Ledgers belong to the instance, not the checkout: with --data-dir a second
+// chain keeps its own, and without it this is exactly path.join(__dirname, ...).
+const { dataPath } = require("./data-dir");
+const SAMPLES_FILE = dataPath("pool-samples.json");
 const STATE_ABI = [
   "function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
   "function getLiquidity(bytes32) view returns (uint128)",

@@ -1100,3 +1100,16 @@ select.scope option{background:var(--card);color:var(--ink)}
   .summary .stat .l{font-size:12px}
   .summary .stat .l.note{flex-wrap:wrap}
 }
+
+/* ---- an identifier on a chain with no public explorer ---- */
+/* Plain, selectable text plus a copy button, instead of a link that goes
+   nowhere. Sized and coloured like the link it replaces so rows stay aligned. */
+.chainref{display:inline-flex;align-items:center;gap:var(--s1);color:var(--ink)}
+.copyref{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;padding:0;border:1px solid var(--rule);border-radius:6px;
+  background:var(--raised);color:var(--muted);cursor:pointer;line-height:0;
+  transition:color .15s,border-color .15s;
+}
+.copyref:hover{color:var(--cyan);border-color:var(--cyan)}
+.copyref.copied{color:var(--pos);border-color:var(--pos)}

@@ -15,15 +15,18 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const FILE = path.join(__dirname, "fee-events.json");
+// Ledgers belong to the instance, not the checkout: with --data-dir a second
+// chain keeps its own, and without it this is exactly path.join(__dirname, ...).
+const { dataPath } = require("./data-dir");
+const FILE = dataPath("fee-events.json");
 // Uniswap v4 collects have no Collect event on the v3 manager, so the collector
 // appends each one it sends to this ledger (also rebuilt from collector.log by
 // tools/backfill-v4-collects.js). Rows share the event shape below, with
 // tokenId "v4-<id>" and the token metadata inline.
-const V4_FILE = path.join(__dirname, "v4-collects.json");
+const V4_FILE = dataPath("v4-collects.json");
 // The owner's own collects through the v4 PositionManager (ledger-v4.js writes
 // them; the server owns that file, the collector owns v4-collects.json).
-const V4_OWNER_FILE = path.join(__dirname, "v4-owner-collects.json");
+const V4_OWNER_FILE = dataPath("v4-owner-collects.json");
 const CHUNK = 2000;
 const START_BLOCK = 51940000; // just before the collector's first collect (2026-09-01)
 

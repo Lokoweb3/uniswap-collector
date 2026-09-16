@@ -16,7 +16,10 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const FILE = path.join(__dirname, "backfill.json");
+// Ledgers belong to the instance, not the checkout: with --data-dir a second
+// chain keeps its own, and without it this is exactly path.join(__dirname, ...).
+const { dataPath } = require("./data-dir");
+const FILE = dataPath("backfill.json");
 const REFRESH_MS = 24 * 3600 * 1000;
 
 const COLLECT_TOPIC = ethers.id("Collect(uint256,address,uint256,uint256)");

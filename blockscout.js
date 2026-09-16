@@ -9,17 +9,31 @@
  * environment only and never logged.
  */
 "use strict";
-const EXPLORER = "https://robinhoodchain.blockscout.com";
+// The explorer comes from settings, not from a chain baked in here: a second
+// chain has a different one, and Arc has none the public can reach.
+let EXPLORER = "";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
 const KEY = [process.env.BLOCKSCOUT_API_KEY, process.env.LP_BLOCKSCOUT_KEY].find((k) => k && k.startsWith("proapi_")) || null;
 let chainId = null;
 try {
-  chainId = require("./settings").load().chainId;
+  const c = require("./settings").load();
+  chainId = c.chainId;
+  EXPLORER = c.blockscout || "";
 } catch {}
 
 const hasKey = () => !!KEY;
+
+/**
+ * Whether a Blockscout API covers this chain at all. A PRO key changes how we
+ * reach it, not whether it exists, so this asks only whether one is configured
+ * (settings chain.blockscout, defaulting to the explorer). Arc has a good public
+ * explorer but no Blockscout, so it sets "" and callers must say "not available
+ * on this chain" rather than report an empty or failed answer, which would read
+ * as a discrepancy in the ledgers.
+ */
+const available = () => !!EXPLORER;
 
 /** Base URL for the explorer API ("…/api"), PRO or anonymous. */
 function apiBase() {
@@ -42,4 +56,4 @@ function bsFetch(pathOrUrl, { timeoutMs = 20000, ...init } = {}) {
   return fetch(url, { ...init, headers: headers(init.headers), signal: AbortSignal.timeout(timeoutMs) });
 }
 
-module.exports = { EXPLORER, UA, apiBase, headers, bsFetch, hasKey };
+module.exports = { EXPLORER, UA, apiBase, headers, bsFetch, hasKey, available };

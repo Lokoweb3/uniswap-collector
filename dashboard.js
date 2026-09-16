@@ -16,6 +16,32 @@ const usd = n => {
   return '$' + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 };
 
+/**
+ * A chain identifier — an address, a token, a transaction — rendered as a link
+ * when the chain publishes an explorer, and as selectable text with a copy
+ * button when it does not. Arc has no public explorer (Circle's sits behind an
+ * access gate), and a link that goes nowhere is worse than no link: it looks
+ * like the data is reachable when it is not. Nothing here is Arc-specific —
+ * any chain configured without an explorer degrades the same way.
+ */
+const COPY_ICON = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor"/><path d="M10.5 3.5H3.5a1 1 0 0 0-1 1v7" fill="none" stroke="currentColor"/></svg>';
+function chainRef(base, path, label, full = '') {
+  const t = full ? ` title="${full}"` : '';
+  if (base) return `<a href="${base}${path}" target="_blank" rel="noopener"${t}>${label}</a>`;
+  const copy = full || label;
+  return `<span class="chainref"${t}>${label}<button type="button" class="copyref" data-copy="${copy}" title="Copy ${copy}" aria-label="Copy ${copy}">${COPY_ICON}</button></span>`;
+}
+// One delegated handler for every copy button the helper renders.
+document.addEventListener('click', async e => {
+  const b = e.target.closest('.copyref');
+  if (!b) return;
+  try {
+    await navigator.clipboard.writeText(b.dataset.copy || '');
+    b.classList.add('copied');
+    setTimeout(() => b.classList.remove('copied'), 1200);
+  } catch { /* clipboard blocked: the value is selectable text beside the button */ }
+});
+
 function price(p){
   if (p == null) return '—';
   if (p === 0) return '0';
@@ -322,7 +348,7 @@ function renderHeadline(){
   $('#networthlabel').textContent = `Held by ${who}`;
   // Owner's group line inside the Positions panel, in the same shape as the watched wallets' lines.
   if (m) {
-    const link = `<a href="${EXPLORER || ''}/address/${m.owner}" target="_blank" rel="noopener" title="${m.owner}">${ownerLabel()} <span class="muted">${shortA(m.owner)}</span></a>`;
+    const link = chainRef(EXPLORER, `/address/${m.owner}`, `${ownerLabel()} <span class="muted">${shortA(m.owner)}</span>`, m.owner);
     const ownTotal = m.totals.liquidityUsd + m.totals.feesUsd + (pf ? pf.totals.walletUsd : 0);
     $('#ownerhead').innerHTML = `${link}<span class="wtotal">total <b>${usd(ownTotal)}</b></span>` +
       (pf ? `<span>tokens <b>${usd(pf.totals.walletUsd)}</b>${pf.totals.unpricedCount ? ` <span class="muted">+${pf.totals.unpricedCount} unpriced</span>` : ''}</span>` : '') +
@@ -399,7 +425,7 @@ function renderPortfolio(){
   const showDust = pref('portfolio:dust') === '1';
   const main = rows.filter(x => showDust || (x.usd == null ? x.source === 'pools' : x.usd >= 1));
   const dust = rows.length - main.length;
-  const link = x => x.native ? x.symbol : `<a href="${d.explorer}/token/${x.address}${holder ? `?holder_address_hash=${holder}` : ''}" target="_blank" rel="noopener">${x.symbol}</a>`;
+  const link = x => x.native ? x.symbol : chainRef(d.explorer, `/token/${x.address}${holder ? `?holder_address_hash=${holder}` : ''}`, x.symbol, x.address);
   $('#baltable').innerHTML = `<table class="etable">
     <tr><th>Token</th><th>Wallet</th><th>In pools</th><th>Fees</th><th>Total</th><th>Price</th><th>≈ USD</th><th>Share</th><th>24h</th></tr>
     ${main.map(x => `<tr>
@@ -742,7 +768,7 @@ function renderHistoryTable(){
       <td>${r.pair || '?'} <span class="mono">#${r.nftId || r.tokenId}</span>${r.version === 4 ? ' <span class="tier v4" title="Uniswap v4 position; recorded by the collector">v4</span>' : ''}${r.src === 'owner-modify' ? ' <span class="tier" title="Collected by the owner through the position manager (an add or remove of liquidity pays out the accrued fees), not by the collector">owner</span>' : ''}${r.principal ? ' (close)' : ''}</td>
       <td>${r.f0 != null ? amount(r.f0) + ' ' + r.sym0 + ' + ' + amount(r.f1) + ' ' + r.sym1 : '—'}${r.note ? ' <span class="muted" title="' + esc(r.note) + '">· ETH leg not recorded</span>' : ''}</td>
       <td class="u">${r.note ? '<span class="approx" title="' + esc(r.note) + '; the USD figure covers the other leg only">≈</span>' : r.locked ? '' : '<span class="approx" title="No price record from the time of this collect; valued at today\'s prices">≈</span>'}${usd(r.usd)}</td>
-      <td><a href="${histD.explorer}/tx/${r.tx}" target="_blank" rel="noopener">${r.tx.slice(0,10)}…</a></td>
+      <td>${chainRef(histD.explorer, `/tx/${r.tx}`, `${r.tx.slice(0,10)}…`, r.tx)}</td>
     </tr>`).join('')}</table>` : '';
 }
 
@@ -928,6 +954,9 @@ function auditBadge(){
   const when = new Date(a.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const tip = fs.length ? fs.map(f => `${f.severity.toUpperCase()} ${f.token ? f.token + ' ' : ''}${f.day || ''}: ${f.note}`).join('\n') : 'Every valued row sits near its hourly price and inside what arrived on chain.';
   const shapes = [...new Set(unf.map(f => f.shape))];
+  // Inflow reconciliation needs an explorer API this chain may not have. Say it
+  // is out of scope rather than let the badge read as "everything checks out".
+  if (a.inflowsUnavailable) return ` · <span class="audit warn" title="${esc('Ledger audit ' + when + '\nInflow reconciliation is not available on this chain (' + a.inflowsUnavailable + '), so booked proceeds were not checked against arrivals.\n' + tip)}">audit: inflows n/a</span>`;
   return ` · <span class="audit ${real.length ? (real.some(f => f.severity === 'bad') ? 'bad' : 'warn') : 'ok'}" title="${esc('Ledger audit ' + when + '\n' + tip)}">${real.length ? `${real.length} row${real.length === 1 ? '' : 's'} look${real.length === 1 ? 's' : ''} off` : 'audit clean'}</span>${shapes.length && !READ_ONLY ? ` <button class="msel" id="auditaccept" data-shapes="${esc(shapes.join(','))}" title="${esc('Routes not accepted yet: ' + shapes.join(', ') + '. Check one receipt of each, then accept.')}">accept ${shapes.length} route${shapes.length === 1 ? '' : 's'}</button>` : ''}`;
 }
 function renderLots(){
@@ -1810,7 +1839,7 @@ function renderWatch(d){
   renderHeadline(); // the combined header needs both payloads
   $('#watchlist').innerHTML = shown.map(w => {
     const name = w.label ? `${w.label} <span class="muted">${shortA(w.address)}</span>` : shortA(w.address);
-    const link = `<a href="${d.explorer}/address/${w.address}" target="_blank" rel="noopener" title="${w.address}">${name}</a>`;
+    const link = chainRef(d.explorer, `/address/${w.address}`, name, w.address);
     if (!w.ok) return `<div class="watchwallet"><div class="wh">${link}<span class="idle">${w.error || 'could not load'}</span></div></div>`;
     const t = w.totals;
     const h = w.holdings;

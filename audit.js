@@ -129,6 +129,13 @@ function summaryLine(report) {
  */
 async function fetchInflows({ wallets, since, stable, weth = null, log = () => {} }) {
   const bs = require("./blockscout");
+  // A chain with no queryable explorer cannot be reconciled against, and that is
+  // a different statement from "the money did not arrive". Say so once and hand
+  // back `unavailable` so the report reads as out of scope, not as a shortfall.
+  if (typeof bs.available === "function" && !bs.available()) {
+    log("audit: inflow reconciliation is not available on this chain (no explorer API configured)");
+    return { inflows: [], errors: [], unavailable: "no explorer API on this chain" };
+  }
   const TRANSFER = ethers.id("Transfer(address,address,uint256)");
   const inflows = [], errors = [];
   // An explorer answer that is not a row list is a failed query, never "nothing arrived":
@@ -226,18 +233,20 @@ function create({ cfg, dir = __dirname, port, log = console.log }) {
     try { lotsTokens = (await get("/api/strategy/lots")).tokens || []; } catch (err) { log(`audit: lots view unavailable (${err.message})`); }
     findings.push(...auditLots(lotsTokens));
     const wallets = [...new Set(rows.filter((r) => r.kind === "sold" && r.units).map((r) => String(r.from).toLowerCase()))];
-    let inflowErrors = [];
+    let inflowErrors = [], inflowsUnavailable = null;
     if (wallets.length) {
       const since = Math.min(...rows.filter((r) => r.kind === "sold" && r.units).map((r) => r.t)) - DAY;
-      const { inflows, errors } = inflowsOverride ? { inflows: inflowsOverride, errors: [] } : await fetchInflows({ wallets, since, stable: STABLE, weth: WETH, log });
+      const { inflows, errors, unavailable } = inflowsOverride ? { inflows: inflowsOverride, errors: [] } : await fetchInflows({ wallets, since, stable: STABLE, weth: WETH, log });
       inflowErrors = errors;
+      // Out of scope on this chain: reconcile nothing rather than call every day short.
+      if (unavailable) inflowsUnavailable = unavailable;
       // A wallet whose inflow query failed cannot be reconciled; do not report its days as short.
       const failed = new Set(errors.map((e) => e.split(" ")[1].replace(":", "")));
       if (failed.size) log(`audit: inflow queries failed for ${failed.size} wallet(s); their days are not reconciled (${errors.join("; ").slice(0, 200)})`);
-      findings.push(...reconcile(rows.filter((r) => !failed.has(String(r.from).toLowerCase().slice(0, 8))), inflows, { now }));
+      if (!unavailable) findings.push(...reconcile(rows.filter((r) => !failed.has(String(r.from).toLowerCase().slice(0, 8))), inflows, { now }));
     }
     findings.sort((a, b) => ({ bad: 0, warn: 1, info: 2 }[a.severity] - { bad: 0, warn: 1, info: 2 }[b.severity]) || (b.t || 0) - (a.t || 0));
-    const report = { at: now, days, rows: rows.length, sold: rows.filter((r) => r.kind === "sold").length, findings, summary: summarise(findings), knownShapes, inflowErrors, fingerprint: findings.filter((f) => f.severity !== "info").map((f) => `${f.kind}:${f.tx || f.token || f.day}:${f.logIndex || ""}`).sort().join(",") };
+    const report = { at: now, days, rows: rows.length, sold: rows.filter((r) => r.kind === "sold").length, findings, summary: summarise(findings), knownShapes, inflowErrors, inflowsUnavailable, fingerprint: findings.filter((f) => f.severity !== "info").map((f) => `${f.kind}:${f.tx || f.token || f.day}:${f.logIndex || ""}`).sort().join(",") };
     const tmp = FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(report));
     fs.renameSync(tmp, FILE);

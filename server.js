@@ -35,6 +35,17 @@ const verdict = require("./verdict");
 
 const settings = require("./settings");
 const cfg = settings.load();
+// Ledgers, state files and logs belong to the instance, not to the checkout, so
+// one copy of the code can serve a second chain from its own directory. Code,
+// pages, assets and shell scripts stay on __dirname; only data moves.
+const { DATA_DIR } = require("./data-dir");
+const dataFile = (...parts) => path.join(DATA_DIR, ...parts);
+// Two different things, and a chain can have one without the other: EXPLORER_URL
+// is where a human clicks through to (Arc: arcexplorer.org), BLOCKSCOUT_API is a
+// Blockscout-shaped API to query (Arc: none). Empty means "this chain has none",
+// which callers must report rather than paper over.
+const EXPLORER_URL = cfg.explorer || "";
+const BLOCKSCOUT_API = cfg.blockscout ? `${cfg.blockscout.replace(/\/$/, "")}/api` : "";
 const portArg = process.argv.find((a) => a.startsWith("--port="));
 const PORT = portArg ? Number(portArg.split("=")[1]) : (cfg.dashboard && cfg.dashboard.port) || 8787;
 
@@ -76,7 +87,7 @@ const V4 = cfg.contracts.v4 && cfg.contracts.v4.positionManager
         provider,
         posmAddress: cfg.contracts.v4.positionManager,
         owner: cfg.ownerAddress,
-        explorerApi: "https://robinhoodchain.blockscout.com/api",
+        explorerApi: BLOCKSCOUT_API,
       }),
     }
   : null;
@@ -85,7 +96,13 @@ const V4 = cfg.contracts.v4 && cfg.contracts.v4.positionManager
 const v4Key = (id) => `v4-${id}`;
 const isV4Key = (k) => String(k).startsWith("v4-");
 
-const WETH = cfg.contracts.weth.toLowerCase();
+// The unit of account the read path prices in. On this chain it is the wrapped
+// native token; on one whose unit is already a dollar (Arc's USDC) it is that,
+// and cfg.numeraire.usdRate short-circuits the second hop below. The name WETH
+// is kept because ~50 call sites read it and the meaning is the same: "the
+// token every other price is quoted against".
+const UNIT = cfg.numeraire || { address: cfg.contracts.weth, symbol: "WETH", decimals: 18, usdRate: null };
+const WETH = String(UNIT.address || cfg.contracts.weth || "").toLowerCase();
 
 // Operator address, read from the keystore's public address field — no
 // passphrase involved. Used only to flag open positions the operator cannot
@@ -101,10 +118,15 @@ try {
   // No keystore on this machine: skip approval checks rather than fail reads.
 }
 
-/** WETH price in USD, read straight from a reference stable pool's slot0. */
+/**
+ * The unit of account's price in USD, read from a reference stable pool's slot0.
+ * When the unit is itself a dollar (cfg.numeraire.usdRate, e.g. Arc's USDC)
+ * there is nothing to look up and no pool to depend on.
+ */
 async function getWethUsd(blockTag) {
+  if (UNIT.usdRate != null) return Number(UNIT.usdRate);
   const ref = cfg.usdReference;
-  if (!ref || !ref.stable) return null;
+  if (!ref || !ref.stable || !cfg.contracts.weth) return null;
   try {
     const poolAddr = await factory.getPool(cfg.contracts.weth, ref.stable, ref.feeTier);
     if (poolAddr === ethers.ZeroAddress) return null;
@@ -198,7 +220,7 @@ const portfolio = require("./portfolio").create({
   provider,
   factory,
   cfg,
-  explorerApi: "https://robinhoodchain.blockscout.com/api",
+  explorerApi: BLOCKSCOUT_API,
 });
 // addr -> { amount, fees } in token units, summed over open positions by
 // the last build, for the portfolio's per-token view.
@@ -209,7 +231,7 @@ let lastPoolHoldings = new Map();
 // moment, derived from consecutive snapshots. Persistent and never pruned, so
 // the daily view outlives the 7-day snapshot window. Keyed by the UTC hour
 // (epoch ms); the browser folds hours into its own local days.
-const DAILY_FILE = path.join(__dirname, "fee-daily.json");
+const DAILY_FILE = dataFile("fee-daily.json");
 let daily = { hours: {} };
 try {
   daily = JSON.parse(fs.readFileSync(DAILY_FILE, "utf8"));
@@ -260,7 +282,7 @@ function accrualSince(prev, pos) {
 // so downtime is not counted as either state. Time in range is the share of
 // observed time spent earning, which is the honest measure of whether a range
 // was chosen well, and it weights the projection.
-const RANGE_FILE = path.join(__dirname, "range-log.json");
+const RANGE_FILE = dataFile("range-log.json");
 const RANGE_GAP_MS = 30 * 60 * 1000;
 let rangeLog = { positions: {} };
 try {
@@ -320,7 +342,7 @@ function rangeStats(tokenId, now = Date.now()) {
 }
 
 // -- Fee snapshots: the raw material for accrual rates ------------------------
-const SNAP_FILE = path.join(__dirname, "fee-snapshots.json");
+const SNAP_FILE = dataFile("fee-snapshots.json");
 let snaps = [];
 try {
   snaps = JSON.parse(fs.readFileSync(SNAP_FILE, "utf8"));
@@ -430,7 +452,7 @@ function pxSeriesFor(tokenId) {
 // snapshot within three hours. Keyed by tx and tokenId so it survives the
 // backfill being rebuilt. Collects older than both fall back to today's
 // prices at display time, and are marked as such.
-const PRICE_FILE = path.join(__dirname, "fee-prices.json");
+const PRICE_FILE = dataFile("fee-prices.json");
 let feePrices = {};
 try {
   feePrices = JSON.parse(fs.readFileSync(PRICE_FILE, "utf8"));
@@ -490,7 +512,7 @@ function pricesFromSnapshot(m, t) {
 // USD price of every token worth holding (in a position, or ≥ $1 in any wallet
 // incl. watched ones) once an hour, kept for 400 days, so a collect or reward
 // can always be valued at the price of its own hour instead of today's.
-const PRICE_LOG_FILE = path.join(__dirname, "price-log.json");
+const PRICE_LOG_FILE = dataFile("price-log.json");
 let priceLog = { hours: {} };
 try {
   priceLog = JSON.parse(fs.readFileSync(PRICE_LOG_FILE, "utf8"));
@@ -541,7 +563,7 @@ function pricesFromLog(m, t) {
 // -- Combined portfolio history --------------------------------------------------
 // Hourly total value of the main wallet and each watched wallet, kept forever,
 // for the all-wallets and per-wallet value charts.
-const ALL_FILE = path.join(__dirname, "portfolio-all.json");
+const ALL_FILE = dataFile("portfolio-all.json");
 let allSeries = { points: [] };
 try {
   allSeries = JSON.parse(fs.readFileSync(ALL_FILE, "utf8"));
@@ -625,7 +647,7 @@ async function approvedOperators(provider, mgr, owner) {
 function opsInfo() {
   let gas24h = 0;
   try {
-    const st = JSON.parse(fs.readFileSync(path.join(__dirname, "state.json"), "utf8"));
+    const st = JSON.parse(fs.readFileSync(dataFile("state.json"), "utf8"));
     const cut = Date.now() - 86400 * 1000;
     for (const g of st.gasSpends || []) {
       if (g.t >= cut) gas24h += Number(g.wei) / 1e18;
@@ -635,7 +657,7 @@ function opsInfo() {
   // Last run, with failures attributed per wallet pass (see ops.js).
   let lastRun = null;
   try {
-    const lines = fs.readFileSync(path.join(__dirname, "collector.log"), "utf8").split("\n").slice(-600);
+    const lines = fs.readFileSync(dataFile("collector.log"), "utf8").split("\n").slice(-600);
     lastRun = require("./ops").parseLastRun(lines);
   } catch {}
 
@@ -664,7 +686,7 @@ async function historyWallets() {
 let priceLogCache = { at: 0, hours: {}, sorted: [] };
 function priceLogData() {
   if (Date.now() - priceLogCache.at > 60 * 1000) {
-    try { const pl = JSON.parse(fs.readFileSync(path.join(__dirname, "price-log.json"), "utf8")); const hours = pl.hours || {}; priceLogCache = { at: Date.now(), hours, sorted: Object.keys(hours).map(Number).sort((a, b) => a - b) }; } catch { priceLogCache.at = Date.now(); }
+    try { const pl = JSON.parse(fs.readFileSync(dataFile("price-log.json"), "utf8")); const hours = pl.hours || {}; priceLogCache = { at: Date.now(), hours, sorted: Object.keys(hours).map(Number).sort((a, b) => a - b) }; } catch { priceLogCache.at = Date.now(); }
   }
   return priceLogCache;
 }
@@ -845,7 +867,7 @@ async function historyRows(fresh = false) {
 // Daily per-position value ledger (position-values.json): one point per position per day,
 // { "<wallet>:<id>": [{ t, usd, fees }] }, the time-weighted basis for the 30 d window and
 // the value at a window start for the 30 d net return. The fee snapshots keep 7 days only.
-const POSVAL_FILE = path.join(__dirname, "position-values.json");
+const POSVAL_FILE = dataFile("position-values.json");
 let posValues = {};
 try { posValues = JSON.parse(fs.readFileSync(POSVAL_FILE, "utf8")) || {}; } catch {}
 function recordPositionValues(now, entries) {
@@ -1161,7 +1183,7 @@ async function build() {
     positionManagerV4: V4 ? cfg.contracts.v4.positionManager : null,
     readOnly: READONLY,
     unapproved,
-    explorer: "https://robinhoodchain.blockscout.com",
+    explorer: EXPLORER_URL,
     minWethPerPosition: Number(cfg.thresholds && cfg.thresholds.minWethPerPosition) || 0,
     ops: opsInfo(),
     wethUsd,
@@ -1242,7 +1264,7 @@ const armer = require("./arm");
 const csrf = require("./csrf");
 const treasuryLedger = require("./treasury");
 // The agent (agent.js): one brain for the web panel, Telegram and loopback scripts.
-const agent = require("./agent").create({ port: PORT, dir: __dirname });
+const agent = require("./agent").create({ port: PORT, dir: DATA_DIR });
 /** Channel and role of a chat request: through the gate = web/read; a browser on this machine = web/read; a script on loopback = loopback/full (read when the dashboard is read-only). */
 function chatChannel(req, body) {
   const viaGate = req.headers["x-lp-gate"] === "1";
@@ -1272,10 +1294,10 @@ function publicHost() {
   }
   return publicHostCache.host;
 }
-const strategy = require("./strategy").create({ cfg, dir: __dirname, port: PORT, metaFor: (id) => positionMeta(id) });
+const strategy = require("./strategy").create({ cfg, dir: DATA_DIR, port: PORT, metaFor: (id) => positionMeta(id) });
 let lastDisposalScan = 0;
 // === strategy track record (strategy-track.js): score agent proposals against what happened ===
-const strategyTrack = require("./strategy-track").create({ cfg, dir: __dirname, port: PORT });
+const strategyTrack = require("./strategy-track").create({ cfg, dir: DATA_DIR, port: PORT });
 
 // One portfolio refresh at a time, fed from the latest position build.
 let portfolioInFlight = null;
@@ -1513,7 +1535,7 @@ async function handleRequest(req, res) {
         ok: true, version: v,
         owner: ownerAddr, ownerLabel: ownerEntry.label, operator, posm: ethers.getAddress(mgr),
         chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl,
-        explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets,
+        explorer: EXPLORER_URL, approved, others, wallets,
       }));
     } catch (err) {
       res.writeHead(500);
@@ -1560,7 +1582,7 @@ async function handleRequest(req, res) {
   if (url.pathname === "/api/launches") {
     res.setHeader("Content-Type", "application/json");
     let st = null;
-    try { st = launchScanner ? launchScanner.status : JSON.parse(fs.readFileSync(path.join(__dirname, "launch-scanner-status.json"), "utf8")); } catch {}
+    try { st = launchScanner ? launchScanner.status : JSON.parse(fs.readFileSync(dataFile("launch-scanner-status.json"), "utf8")); } catch {}
     const enabled = !!(cfg.launchScanner && cfg.launchScanner.enabled !== false);
     res.writeHead(200);
     return res.end(JSON.stringify({ ok: true, enabled, running: enabled && !!launchScanner, at: st ? st.at : 0, stale: !st || Date.now() - (st.at || 0) > 20 * 60 * 1000, ...(st || {}), settings: (launchScanner && launchScanner.settings) || cfg.launchScanner || {} }));
@@ -1626,7 +1648,7 @@ async function handleRequest(req, res) {
   if (url.pathname === "/api/risk" || url.pathname === "/api/memecoins") {
     res.setHeader("Content-Type", "application/json");
     try {
-      const st = guardian && guardian.status && guardian.status.at ? JSON.parse(JSON.stringify(guardian.status)) : JSON.parse(fs.readFileSync(path.join(__dirname, "memecoin-status.json"), "utf8"));
+      const st = guardian && guardian.status && guardian.status.at ? JSON.parse(JSON.stringify(guardian.status)) : JSON.parse(fs.readFileSync(dataFile("memecoin-status.json"), "utf8"));
       st.stale = Date.now() - (st.at || 0) > 5 * 60 * 1000; // guardian not running?
       st.watching = (st.positions || []).filter((p) => !p.closed).length;
       for (const p of st.positions || []) {
@@ -1706,7 +1728,7 @@ async function handleRequest(req, res) {
       const digest = require("./digest");
       const text = digest.build(await digest.gather(`http://127.0.0.1:${PORT}`));
       let state = {};
-      try { state = JSON.parse(fs.readFileSync(path.join(__dirname, "digest-state.json"), "utf8")); } catch {}
+      try { state = JSON.parse(fs.readFileSync(dataFile("digest-state.json"), "utf8")); } catch {}
       res.writeHead(200);
       return res.end(JSON.stringify({ ok: true, text, week: digest.isoWeek(new Date()), lastSentWeek: state.lastSentWeek || null, lastSentAt: state.lastSentAt || null, due: digest.due(new Date(), state) }));
     } catch (err) {
@@ -1721,7 +1743,7 @@ async function handleRequest(req, res) {
     res.setHeader("Content-Type", "application/json");
     res.setHeader("Cache-Control", "no-store");
     try {
-      const read = name => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, name), "utf8")); } catch { return null; } };
+      const read = name => { try { return JSON.parse(fs.readFileSync(dataFile(name), "utf8")); } catch { return null; } };
       const pf = read("portfolio.json"), fee = read("fee-daily.json"), state = read("state.json");
       const px = read("price-log.json"), flows = read("token-disposals.json");
       const result = require("./insights").build({
@@ -1743,7 +1765,7 @@ async function handleRequest(req, res) {
       const daily = require("./daily");
       const text = daily.build(await daily.gather(`http://127.0.0.1:${PORT}`));
       let state = {};
-      try { state = JSON.parse(fs.readFileSync(path.join(__dirname, "digest-state.json"), "utf8")); } catch {}
+      try { state = JSON.parse(fs.readFileSync(dataFile("digest-state.json"), "utf8")); } catch {}
       res.writeHead(200);
       return res.end(JSON.stringify({ ok: true, text, settings: daily.settings(cfg), lastDailyDate: state.lastDailyDate || null, lastDailyAt: state.lastDailyAt || null, due: daily.due(cfg, new Date(), state) }));
     } catch (err) {
@@ -1820,7 +1842,7 @@ async function handleRequest(req, res) {
       if (!entry) throw new Error("that wallet is not the main wallet or a wallet listed under wallets in settings.json");
       const data = await approvalsAudit.audit(entry.address, require("./arm").operatorAddress());
       res.writeHead(200);
-      return res.end(JSON.stringify({ ...data, ownerLabel: entry.label, wallets: allowed, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", health: tokenHealth.view().byAddress }));
+      return res.end(JSON.stringify({ ...data, ownerLabel: entry.label, wallets: allowed, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: EXPLORER_URL, health: tokenHealth.view().byAddress }));
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -2048,7 +2070,7 @@ async function handleRequest(req, res) {
       const meta = tokenSet.get(token.toLowerCase());
       const outMeta = q.ok ? (q.currencyOut === ethers.ZeroAddress ? { symbol: "ETH", decimals: 18 } : tokenSet.get(q.currencyOut.toLowerCase()) || (q.currencyOut.toLowerCase() === stable ? { symbol: "USDG", decimals: 6 } : { symbol: "?", decimals: 18 })) : null;
       res.writeHead(200);
-      return res.end(JSON.stringify({ ...q, tokenSymbol: meta ? meta.symbol : null, tokenDecimals: meta ? meta.decimals : null, outSymbol: outMeta && outMeta.symbol, outDecimals: outMeta && outMeta.decimals, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com" }));
+      return res.end(JSON.stringify({ ...q, tokenSymbol: meta ? meta.symbol : null, tokenDecimals: meta ? meta.decimals : null, outSymbol: outMeta && outMeta.symbol, outDecimals: outMeta && outMeta.decimals, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: EXPLORER_URL }));
     } catch (err) {
       res.writeHead(400);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -2102,7 +2124,7 @@ async function handleRequest(req, res) {
         if (main) for (const r of (portfolio.latest && portfolio.latest.rows) || []) { if (!r.native && r.wallet > 0 && (r.price == null || r.wallet * r.price >= 1)) add(r.address, r.symbol, r.price != null ? r.wallet * r.price : null); }
         else { const w = ((watch.latest && watch.latest.wallets) || []).find((x) => x.address && x.address.toLowerCase() === wallet.address.toLowerCase()); for (const t of (w && w.holdings && w.holdings.tokens) || []) if (!t.native && t.amount > 0 && (t.price == null || t.amount * t.price >= 1)) add(t.address, t.symbol, t.price != null ? t.amount * t.price : null); }
         for (const p of positions) { add(p.token0, p.symbol0, null); add(p.token1, p.symbol1, null); }
-        out = { ok: true, wallet, wallets: ours, positions, tokens: [...tokens.values()], usdg: stable, weth: cfg.contracts.weth, permit2: cfg.contracts.v4 && cfg.contracts.v4.permit2, chainId: Number(cfg.chainId), explorer: "https://robinhoodchain.blockscout.com" };
+        out = { ok: true, wallet, wallets: ours, positions, tokens: [...tokens.values()], usdg: stable, weth: cfg.contracts.weth, permit2: cfg.contracts.v4 && cfg.contracts.v4.permit2, chainId: Number(cfg.chainId), explorer: EXPLORER_URL };
       } else if (url.pathname === "/api/mint/pools") {
         out = { ok: true, ...(await mint.pools({ tokenA: q.get("tokenA"), tokenB: q.get("tokenB") })) };
       } else if (url.pathname === "/api/mint/quote") {
@@ -2160,7 +2182,7 @@ async function handleRequest(req, res) {
         owner: cfg.ownerAddress,
         rows: priced,
         totalUsd: priced.reduce((s, r) => s + (r.usd || 0), 0),
-        explorer: "https://robinhoodchain.blockscout.com",
+        explorer: EXPLORER_URL,
       }));
     } catch (err) {
       res.writeHead(500);
@@ -2202,7 +2224,7 @@ async function handleRequest(req, res) {
         backfilled: bf.ready,
         backfilling: bf.building,
         tvSeries: tvSeries(),
-        explorer: "https://robinhoodchain.blockscout.com",
+        explorer: EXPLORER_URL,
       }));
     } catch (err) {
       res.writeHead(500);
@@ -2351,7 +2373,7 @@ async function treasuryView() {
     const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
     balanceUsdg = Number(ethers.formatUnits(raw, dec));
   }
-  return { ok: true, ...ts, balanceUsdg, ...treasuryLedger.summary(), explorer: "https://robinhoodchain.blockscout.com" };
+  return { ok: true, ...ts, balanceUsdg, ...treasuryLedger.summary(), explorer: EXPLORER_URL };
 }
 
 /**
@@ -2577,7 +2599,7 @@ async function backgroundTick() {
     if (ledgerV4) {
       const v4Ids = new Set([...V4.discovery.ids].map(String));
       for (const w of (watch.latest && watch.latest.wallets) || []) {
-        try { for (const id of JSON.parse(fs.readFileSync(path.join(__dirname, `v4-positions-${w.address.toLowerCase()}.json`), "utf8")).ids || []) v4Ids.add(String(id)); } catch {}
+        try { for (const id of JSON.parse(fs.readFileSync(dataFile(`v4-positions-${w.address.toLowerCase()}.json`), "utf8")).ids || []) v4Ids.add(String(id)); } catch {}
       }
       const v4Open = new Set([
         ...((cache.payload.positions || []).filter((p) => p.version === 4).map((p) => String(p.nftId))),
@@ -2671,14 +2693,14 @@ setInterval(backgroundTick, 10 * 60 * 1000);
 
 // Rule edits from the Risk section go through the guardian module (settings.json or memecoin-discovered.json).
 function guardianRules(tokenId, patch) {
-  return (guardian || require("./memecoin-guardian").create({ dir: __dirname, provider, positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets, log: () => {} })).setRule(tokenId, patch);
+  return (guardian || require("./memecoin-guardian").create({ dir: DATA_DIR, provider, positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets, log: () => {} })).setRule(tokenId, patch);
 }
 
 // === background loops === one process, one log: the risk guardian (60 s), fee
 // auto-collect (15 min) and the nightly ledger backup (02:00 local) are timers here.
 if (LOOPS) {
   const stamp = (tag) => (m) => console.log(`${tag}: ${m}`);
-  guardian = require("./memecoin-guardian").create({ dir: __dirname, provider, alerts, log: stamp("guardian"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets });
+  guardian = require("./memecoin-guardian").create({ dir: DATA_DIR, provider, alerts, log: stamp("guardian"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets });
   let guardianBusy = false;
   async function guardianTick() {
     if (guardianBusy) return;
@@ -2690,7 +2712,7 @@ if (LOOPS) {
   setTimeout(guardianTick, 90 * 1000); // after the first build
   setInterval(guardianTick, 60 * 1000);
 
-  autoCollect = require("./memecoin-collect").create({ dir: __dirname, alerts, log: stamp("auto-collect"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets,
+  autoCollect = require("./memecoin-collect").create({ dir: DATA_DIR, alerts, log: stamp("auto-collect"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets,
     treasury: () => treasuryView().catch(() => null), armUrl: `http://127.0.0.1:${PORT}/arm` });
   async function autoCollectTick() {
     // A skipped cycle (previous collector child still running) leaves the heartbeat alone, so a
@@ -2705,7 +2727,7 @@ if (LOOPS) {
   // day is remembered in digest-state.json so a restart after 02:00 does not run it twice).
   const BACKUP_HOUR = Number(process.env.LP_BACKUP_HOUR || 2);
   const backupDay = (d = new Date()) => d.toLocaleDateString("en-CA");
-  function backupState() { try { return JSON.parse(fs.readFileSync(path.join(__dirname, "digest-state.json"), "utf8")); } catch { return {}; } }
+  function backupState() { try { return JSON.parse(fs.readFileSync(dataFile("digest-state.json"), "utf8")); } catch { return {}; } }
   function runBackup(reason = "scheduled") {
     return new Promise((resolve) => {
       const child = spawn("bash", [path.join(__dirname, "backup-ledgers.sh")], { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
@@ -2717,7 +2739,7 @@ if (LOOPS) {
         console.log(`backup (${reason}): exit ${code}${last ? " — " + last : ""}`);
         timers.backup.lastAt = Date.now();
         timers.backup.lastResult = { at: Date.now(), code, line: last };
-        try { fs.writeFileSync(path.join(__dirname, "digest-state.json"), JSON.stringify({ ...backupState(), lastBackupDate: backupDay(), lastBackupAt: new Date().toISOString(), lastBackupCode: code })); } catch {}
+        try { fs.writeFileSync(dataFile("digest-state.json"), JSON.stringify({ ...backupState(), lastBackupDate: backupDay(), lastBackupAt: new Date().toISOString(), lastBackupCode: code })); } catch {}
         if (code !== 0) alerts.send(`⚠️ Nightly ledger backup exited ${code}: ${last.slice(0, 200)}`).catch(() => {});
         resolve(code);
       });
@@ -2766,7 +2788,7 @@ if (LOOPS) {
   // backup's), so a process that restarts 20 times a day does not run the paid model review 20
   // times. First run at max(10 min, lastTasksAt + 6 h − now); then every 6 h.
   const TASKS_EVERY_MS = 6 * 60 * 60 * 1000;
-  function rememberTasksRun(code) { try { fs.writeFileSync(path.join(__dirname, "digest-state.json"), JSON.stringify({ ...backupState(), lastTasksAt: new Date().toISOString(), lastTasksCode: code })); } catch {} }
+  function rememberTasksRun(code) { try { fs.writeFileSync(dataFile("digest-state.json"), JSON.stringify({ ...backupState(), lastTasksAt: new Date().toISOString(), lastTasksCode: code })); } catch {} }
   {
     const st = backupState();
     const lastTasksAt = st.lastTasksAt ? Date.parse(st.lastTasksAt) || 0 : 0;
@@ -2785,7 +2807,7 @@ if (LOOPS) {
 
   // Launch scanner (launch-scanner.js): new v4 pools scored every 5 minutes; alerts through the same Telegram path.
   if (cfg.launchScanner && cfg.launchScanner.enabled !== false) {
-    launchScanner = require("./launch-scanner").create({ cfg, provider, alerts, log: stamp("launch"), dir: __dirname, wethUsd: () => (cache.payload && cache.payload.wethUsd) || lastPrices[WETH] || null });
+    launchScanner = require("./launch-scanner").create({ cfg, provider, alerts, log: stamp("launch"), dir: DATA_DIR, wethUsd: () => (cache.payload && cache.payload.wethUsd) || lastPrices[WETH] || null });
     let launchBusy = false;
     async function launchTick() {
       if (launchBusy) return;

@@ -13,7 +13,10 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const LEDGER_FILE = path.join(__dirname, "fee-split-ledger.json");
+// Ledgers belong to the instance, not the checkout: with --data-dir a second
+// chain keeps its own, and without it this is exactly path.join(__dirname, ...).
+const { dataPath } = require("./data-dir");
+const LEDGER_FILE = dataPath("fee-split-ledger.json");
 
 /**
  * The split percentage actually in force: the NFT contract's feeSplitPct()

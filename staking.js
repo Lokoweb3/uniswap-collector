@@ -16,7 +16,10 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const FILE = path.join(__dirname, "snet-staking.json");
+// Ledgers belong to the instance, not the checkout: with --data-dir a second
+// chain keeps its own, and without it this is exactly path.join(__dirname, ...).
+const { dataPath } = require("./data-dir");
+const FILE = dataPath("snet-staking.json");
 const SAMPLE_MS = 3600 * 1000;
 const ABI = [
   "function balanceOf(address) view returns (uint256)",

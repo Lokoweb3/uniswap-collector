@@ -26,7 +26,10 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
-const STATE_FILE = path.join(__dirname, "alerts-state.json");
+// Ledgers belong to the instance, not the checkout: with --data-dir a second
+// chain keeps its own, and without it this is exactly path.join(__dirname, ...).
+const { dataPath } = require("./data-dir");
+const STATE_FILE = dataPath("alerts-state.json");
 const ALERT_REPEAT_MS = 6 * 3600 * 1000; // re-remind about a standing problem
 const POOL_COOLDOWN_MS = 30 * 60 * 1000; // one message per pool per window, across every source
 const DOWN_GAP_MS = 25 * 60 * 1000; // ticks are 10 min apart; a larger gap = outage

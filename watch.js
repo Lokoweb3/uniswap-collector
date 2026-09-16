@@ -13,10 +13,16 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const EXPLORER = "https://robinhoodchain.blockscout.com";
+// Blockscout base for v4 NFT discovery, from settings rather than one chain
+// baked in. Empty on a chain with no Blockscout: createDiscovery then skips the
+// explorer hop and falls back to its on-chain scan.
+const blockscoutApi = (cfg) => (cfg && cfg.blockscout ? `${String(cfg.blockscout).replace(/\/$/, "")}/api` : "");
 // Fee accrual ledger for watched positions: the last snapshot per position
 // (to diff against) and hourly USD buckets per wallet, kept forever.
-const ACCRUAL_FILE = path.join(__dirname, "watch-accrual.json");
+// Ledgers belong to the instance, not the checkout: with --data-dir a second
+// chain keeps its own, and without it this is exactly path.join(__dirname, ...).
+const { dataPath } = require("./data-dir");
+const ACCRUAL_FILE = dataPath("watch-accrual.json");
 const HOUR = 3600 * 1000;
 const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
@@ -29,7 +35,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   // on the position manager, so the basis is the amounts first observed here
   // (watch-pnl-basis.json), which is close to the mint for positions found
   // within minutes and is marked approximate.
-  const PNL_BASIS_FILE = path.join(__dirname, "watch-pnl-basis.json");
+  const PNL_BASIS_FILE = dataPath("watch-pnl-basis.json");
   let pnlBasis = {};
   try {
     pnlBasis = JSON.parse(fs.readFileSync(PNL_BASIS_FILE, "utf8"));
@@ -189,8 +195,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         provider,
         posmAddress: cfg.contracts.v4.positionManager,
         owner: address,
-        explorerApi: `${EXPLORER}/api`,
-        stateFile: path.join(__dirname, `v4-positions-${address.toLowerCase()}.json`),
+        explorerApi: blockscoutApi(cfg),
+        stateFile: dataPath(`v4-positions-${address.toLowerCase()}.json`),
       });
       discovery.set(address, d);
     }
@@ -342,7 +348,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       const totals = { wallets: out.length, liquidityUsd: sum("liquidityUsd"), feesUsd: sum("feesUsd"), walletUsd: sum("walletUsd") };
       totals.totalUsd = totals.liquidityUsd + totals.feesUsd + totals.walletUsd;
       latest = {
-        ok: true, at: Date.now(), wethUsd, explorer: EXPLORER, wallets: out, totals,
+        ok: true, at: Date.now(), wethUsd, explorer: (cfg && cfg.explorer) || "", wallets: out, totals,
         positionManager: cfg.contracts.positionManager,
         positionManagerV4: V4 ? cfg.contracts.v4.positionManager : null,
       };

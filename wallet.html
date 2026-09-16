@@ -386,16 +386,30 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   .tab button,.tab .btn,.tab .copy-btn,.tab .max-btn{min-height:40px}
   .tab .copy-btn{min-height:32px}
 }
+/* Keep every wallet tool visible, with a full finger-sized target. */
+@media (max-width:640px){
+  body .tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-block:16px}
+  .tabs a{display:flex;align-items:center;justify-content:center;min-height:44px;padding:8px 4px;font-size:13px}
+  .tab button,.tab .btn,.tab .copy-btn,.tab .max-btn{min-height:44px}
+  .tab input:not([type=checkbox]):not([type=radio]),.tab select,.tab textarea{font-size:16px;min-height:44px;max-width:100%;min-width:0}
+  .tab .actions>*{max-width:100%}
+  .tab .actions>button{flex:1 1 auto;white-space:normal}
+  .tab .row{gap:8px;flex-wrap:wrap}
+  .tab .card,.tab .container,.tab .tablewrap{min-width:0;max-width:100%}
+  .tab pre{overflow-wrap:anywhere}
+  #sec-vault .balance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  #sec-vault .form-row{flex-wrap:wrap}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header class="topbar">
   <div class="brand">LP Dashboard</div>
-  <nav class="pages"><a href="/" id="nav-dash">Dashboard</a><a href="/analytics" id="nav-analytics">Analytics</a><a href="/wallet" id="nav-wallet" class="here">Wallet</a></nav>
+  <nav class="pages" aria-label="Pages"><a href="/" id="nav-dash">Dashboard</a><a href="/analytics" id="nav-analytics">Analytics</a><a href="/wallet" id="nav-wallet" class="here">Wallet</a></nav>
 </header>
 <p class="subtitle">Arm, approvals, vault, sell and the operator — everything that needs your wallet.</p>
-<nav class="tabs" id="tabs"><a href="#arm" data-tab="arm">Arm</a><a href="#approvals" data-tab="approvals">Approvals</a><a href="#vault" data-tab="vault">Vault</a><a href="#sell" data-tab="sell">Sell</a><a href="#mint" data-tab="mint">Mint</a><a href="#operator" data-tab="operator">Operator</a></nav>
+<nav class="tabs" id="tabs" aria-label="Wallet tools"><a href="#arm" data-tab="arm">Arm</a><a href="#approvals" data-tab="approvals">Approvals</a><a href="#vault" data-tab="vault">Vault</a><a href="#sell" data-tab="sell">Sell</a><a href="#mint" data-tab="mint">Mint</a><a href="#operator" data-tab="operator">Operator</a></nav>
 
 <section class="tab" id="sec-arm" hidden>
 <div class="wrap">

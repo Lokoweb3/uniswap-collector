@@ -38,7 +38,7 @@
 .lpc-form textarea:focus{border-color:var(--neon-cyan,#22d3ee)}
 .lpc-form button{font:inherit;font-weight:600;color:#06121a;background:var(--neon-cyan,#22d3ee);border:0;border-radius:10px;padding:0 14px;cursor:pointer}
 .lpc-form button:disabled{opacity:.5;cursor:default}
-@media (max-width:600px){.lpc{right:0;bottom:0;width:100vw;height:100dvh;border-radius:0}.lpc-fab{right:14px;bottom:14px}}
+@media (max-width:600px){.lpc{right:0;bottom:0;width:100vw;height:100dvh;border-radius:0}.lpc-fab{right:14px;bottom:calc(14px + env(safe-area-inset-bottom))}.lpc{padding-bottom:env(safe-area-inset-bottom);box-sizing:border-box}.lpc-form textarea{font-size:16px}.lpc-head button,.lpc-form button{min-width:44px;min-height:44px}}
 @media print{.lpc,.lpc-fab{display:none!important}}
 `;
   const style = document.createElement('style');

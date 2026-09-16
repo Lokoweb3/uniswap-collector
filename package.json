@@ -13,7 +13,8 @@
     "smoke": "node test/smoke.js",
     "guardian": "node memecoin-guardian.js --once",
     "digest": "node digest.js --print",
-    "daily": "node daily.js --print"
+    "daily": "node daily.js --print",
+    "test:mobile": "python3 test/mobile-layout.py"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

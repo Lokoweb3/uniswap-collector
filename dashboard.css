@@ -1062,3 +1062,41 @@ button.reload:focus-visible,.armform input:focus-visible,.armform select:focus-v
 }
 .insightcard a,.visit-changes a{color:var(--cyan)}
 select.scope option{background:var(--card);color:var(--ink)}
+
+/* Phone ergonomics shared by Dashboard, Analytics and Wallet. */
+:where(a,button,input,select,textarea,summary):focus-visible{
+  outline:2px solid var(--cyan);outline-offset:3px;
+}
+.etablewrap,.tablewrap{max-width:100%;overscroll-behavior-x:contain}
+@media (max-width:640px){
+  html{scroll-padding-top:16px}
+  body{overflow-wrap:break-word}
+  .wrap{padding-bottom:calc(88px + env(safe-area-inset-bottom))}
+  .topbar-left,.topbar-right,.meta,.ehead,.armform{min-width:0}
+  header.topbar .pages{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:4px}
+  header.topbar .pages a{display:flex;align-items:center;justify-content:center;min-height:44px;padding:8px 6px}
+  .topbar-left .brand{width:100%}
+  .topbar-right .meta{width:100%}
+  .meta button{flex:1}
+  button.reload,select.scope,.msel,#ltsort,.armform input,.armform select{min-height:44px}
+  select.scope,.msel,#ltsort,.armform input,.armform select{font-size:16px;max-width:100%}
+  .addr{overflow-wrap:anywhere}
+  .walletpick{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .walletpick select{min-width:0;flex:1}
+  .ehead{align-items:flex-start;flex-wrap:wrap}
+  .ehead>*{max-width:100%}
+  .etablewrap{border:1px solid var(--rule);border-radius:var(--r-ctl)}
+  .etablewrap:empty{border:0}
+  .etable th,.etable td{padding:12px 10px}
+  .armform{flex-wrap:wrap}
+  .armform input{min-width:0;flex:1 1 180px}
+}
+@media (max-width:520px){
+  .summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .summary .stat,.summary .stat:nth-child(4),.summary .stat:nth-child(5){grid-column:auto;padding:12px;min-width:0}
+  .summary .stat:first-child{grid-column:1/-1}
+  .summary .stat .n{font-size:clamp(20px,5.5vw,28px)}
+  .summary .stat:first-child .n{font-size:30px}
+  .summary .stat .l{font-size:12px}
+  .summary .stat .l.note{flex-wrap:wrap}
+}

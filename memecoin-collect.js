@@ -229,7 +229,14 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
       const kill = setTimeout(() => { signalGroup("SIGKILL"); }, COLLECTOR_TIMEOUT_MS + 30000);
       // If even SIGKILL leaves `exit` unreported (it should not), settle anyway so the cycle can end.
       const settle = setTimeout(() => done({ code: -2, out: `${out}\n[timed out after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; process group killed]`, timedOut: true }), COLLECTOR_TIMEOUT_MS + 60000);
-      const done = (r) => { if (settled) return; settled = true; clearTimeout(term); clearTimeout(kill); clearTimeout(settle); resolve(r); };
+      const done = (r) => {
+        if (settled) return;
+        settled = true;
+        // The wrapper can exit before a descendant that ignores TERM. Finish group
+        // cleanup before cancelling the escalation timer or allowing the next run.
+        if (timedOut) signalGroup("SIGKILL");
+        clearTimeout(term); clearTimeout(kill); clearTimeout(settle); resolve(r);
+      };
       child.stdout.on("data", (d) => (out += d));
       child.stderr.on("data", (d) => (out += d));
       child.on("exit", (code, signal) => done({ code: timedOut ? -2 : code, out: timedOut ? `${out}\n[timed out after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; ${signal || "exited"}]` : out, timedOut }));

@@ -13,10 +13,12 @@
  * plus the local ledgers (state.json gas, price-log.json, portfolio-all.json).
  */
 "use strict";
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 const fs = require("fs");
 const path = require("path");
 
-const STATE_FILE = path.join(__dirname, "digest-state.json");
+const STATE_FILE = dataPath("digest-state.json");
 const SEND_DOW = 1; // Monday
 const SEND_HOUR = 9; // local time
 const WEEK_MS = 7 * 86400000;

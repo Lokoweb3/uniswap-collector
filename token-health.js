@@ -26,8 +26,10 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const { bsFetch } = require("./blockscout");
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 
-const FILE = path.join(__dirname, "token-health.json");
+const FILE = dataPath("token-health.json");
 const REFRESH_MS = 6 * 3600 * 1000;
 const RETRY_MS = 30 * 60 * 1000; // after a failed Blockscout read
 const DAY = 86400000;

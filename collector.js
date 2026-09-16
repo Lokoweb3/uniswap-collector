@@ -28,9 +28,11 @@ const MAX_UINT128 = (1n << 128n) - 1n;
 const treasury = require("./treasury");
 // === pool-scout-and-IL: --compound (fees back into the position; compound.js) ===
 const compound = require("./compound");
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 const COMPOUND = process.argv.includes("--compound");
 // === end pool-scout-and-IL ===
-const STATE_FILE = path.join(__dirname, "state.json");
+const STATE_FILE = dataPath("state.json");
 const LOG_FILE = path.join(__dirname, "collector.log");
 
 const NPM_ABI = [
@@ -102,7 +104,7 @@ function sweepTarget(cfg) { return cl.sweepTarget(cfg); }
 // v4 collects leave no Collect event on the v3 manager, so the dashboard's
 // history (history.js) reads them from this ledger instead. One row per sent
 // collect, in the fee-events shape; the block time is filled in best-effort.
-const V4_LEDGER = path.join(__dirname, "v4-collects.json");
+const V4_LEDGER = dataPath("v4-collects.json");
 function recordV4Collect({ sim, rcpt, owner }) {
   try {
     let rows = [];

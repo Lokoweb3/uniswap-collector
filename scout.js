@@ -7,13 +7,15 @@
  * observation in pool-scout-log.json.
  */
 "use strict";
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
 const SCANNER = process.env.LP_SCANNER_URL || "http://127.0.0.1:3847";
-const STATE_FILE = path.join(__dirname, "pool-scout-state.json");
-const LOG_FILE = path.join(__dirname, "pool-scout-log.json");
+const STATE_FILE = dataPath("pool-scout-state.json");
+const LOG_FILE = dataPath("pool-scout-log.json");
 const BETTER_BY = 1.5; // candidate APR must be ≥ 1.5 × ours
 const DAYS_REQUIRED = 2; // on two consecutive daily checks
 const MIN_TVL = 5000; // ignore dust pools

@@ -1,4 +1,6 @@
-/**
+
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");/**
  * Liquidity ledger, read straight from the chain.
  *
  * Every IncreaseLiquidity and DecreaseLiquidity on the owner's positions,
@@ -25,7 +27,7 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const FILE = path.join(__dirname, "liquidity-ledger.json");
+const FILE = dataPath("liquidity-ledger.json");
 const CHUNK = 2000;
 const PACE_MS = 100;
 

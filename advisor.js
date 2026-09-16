@@ -28,8 +28,10 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const u = require("./univ3");
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 
-const CACHE_FILE = path.join(__dirname, "advisor-cache.json");
+const CACHE_FILE = dataPath("advisor-cache.json");
 const CHUNK = 2000;
 const HOUR = 3600 * 1000;
 const WINDOW_MS = 7 * 24 * HOUR;

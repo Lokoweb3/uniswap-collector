@@ -41,12 +41,14 @@
  *   dry-run    eth_call of the exact execute() from the operator before sending.
  */
 "use strict";
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const SALES_FILE = path.join(__dirname, "token-sales.json");
-const PENDING_FILE = path.join(__dirname, "sales-pending.json");
+const SALES_FILE = dataPath("token-sales.json");
+const PENDING_FILE = dataPath("sales-pending.json");
 const Q96 = 2n ** 96n;
 
 // v4-periphery Actions and universal-router Commands

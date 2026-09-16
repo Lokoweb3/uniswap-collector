@@ -14,6 +14,8 @@
 "use strict";
 const { ethers } = require("ethers");
 const v4 = require("./univ4");
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 
 const ACTION_DECREASE_LIQUIDITY = 0x01;
 const ACTION_TAKE_PAIR = 0x11;
@@ -50,7 +52,9 @@ function create({ provider, cfg, log = console.log }) {
     const ids = new Set(ownerAddress ? [] : (cfg.v4Collect && cfg.v4Collect.tokenIds) || []);
     const file = ownerAddress ? `v4-positions-${String(ownerAddress).toLowerCase()}.json` : "v4-positions.json";
     try {
-      const j = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, file), "utf8"));
+      // Written by watch.js into the instance's data directory; reading it from the
+      // code directory instead made a second chain inherit this one's position ids.
+      const j = JSON.parse(require("fs").readFileSync(dataPath(file), "utf8"));
       for (const id of j.ids || []) ids.add(String(id));
     } catch {}
     return [...ids];

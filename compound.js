@@ -14,11 +14,13 @@
  * Every attempt is logged to compound-log.json.
  */
 "use strict";
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const LOG_FILE = path.join(__dirname, "compound-log.json");
+const LOG_FILE = dataPath("compound-log.json");
 const NPM_INCREASE_ABI = [
   "function increaseLiquidity((uint256 tokenId, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, uint256 deadline)) payable returns (uint128 liquidity, uint256 amount0, uint256 amount1)",
 ];

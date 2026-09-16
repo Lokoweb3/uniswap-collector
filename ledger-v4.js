@@ -42,9 +42,11 @@ const path = require("path");
 const { ethers } = require("ethers");
 const u = require("./univ3");
 const v4 = require("./univ4");
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 
-const FILE = path.join(__dirname, "v4-liquidity-ledger.json");
-const OWNER_COLLECTS = path.join(__dirname, "v4-owner-collects.json");
+const FILE = dataPath("v4-liquidity-ledger.json");
+const OWNER_COLLECTS = dataPath("v4-owner-collects.json");
 const CHUNK = 2000;
 const PACE_MS = 100;
 const STATE_DEPTH = 4000; // blocks back the RPC still answers eth_call for (probed: ~4500)

@@ -18,6 +18,8 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const u = require("./univ3");
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 
 const POSM_ABI = [
   "function ownerOf(uint256 tokenId) view returns (address)",
@@ -162,7 +164,7 @@ async function loadPosition(ctx, tokenId) {
  * finds them owned by someone else.
  */
 function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile }) {
-  const FILE = stateFile || path.join(__dirname, "v4-positions.json");
+  const FILE = stateFile || dataPath("v4-positions.json");
   let state = { lastScanned: 0, ids: [], blockscoutAt: 0 };
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(FILE, "utf8")) };

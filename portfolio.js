@@ -21,8 +21,10 @@ const { ethers } = require("ethers");
 const u = require("./univ3");
 const v4 = require("./univ4");
 const { bsFetch } = require("./blockscout");
+// Ledgers belong to the instance, not the checkout (see data-dir.js).
+const { dataPath } = require("./data-dir");
 
-const FILE = path.join(__dirname, "portfolio.json");
+const FILE = dataPath("portfolio.json");
 const DISCOVER_MS = 6 * 3600 * 1000;
 const POOL_RECHECK_MS = 6 * 3600 * 1000;
 const SERIES_STEP_MS = 3600 * 1000;

@@ -160,8 +160,20 @@ function createProvider(cfg, options = {}) {
   const list = Array.isArray(cfg.rpcUrls) ? cfg.rpcUrls.filter(Boolean) : [];
   const urls = list.length ? list : [cfg.rpcUrl];
   const chainId = Number(cfg.chainId) || undefined;
-  if (urls.length < 2) return new RetryingProvider(urls[0], chainId, { staticNetwork: true, ...options });
-  return new FailoverProvider(urls, chainId, { staticNetwork: true, ...options });
+  // Some chains answer a JSON-RPC batch wrongly rather than refusing it. Arc's
+  // endpoints return empty data for entries inside a batched eth_call, which
+  // surfaces either as "missing revert data" or — worse, because it looks like an
+  // answer — as a fee read that reports nothing. `rpcBatch: false` in the chain
+  // settings sends one request per call. Omitted, batching stays on and every
+  // other chain behaves exactly as before.
+  //
+  // FailoverProvider keeps one JsonRpcProvider and only swaps the URL in
+  // _getConnection(), so this applies to every endpoint in the list, not just
+  // the first. test/rpc-batching.test.js holds that.
+  const batch = cfg.rpcBatch === false ? { batchMaxCount: 1 } : {};
+  const opts = { staticNetwork: true, ...batch, ...options };
+  if (urls.length < 2) return new RetryingProvider(urls[0], chainId, opts);
+  return new FailoverProvider(urls, chainId, opts);
 }
 
 module.exports = { createProvider, RetryingProvider, FailoverProvider, chainIdOf, isTransient, RETRY_MS };

@@ -1524,3 +1524,7 @@ select.scope option{background:var(--card);color:var(--ink)}
   #pchart{padding-right:38px;box-sizing:border-box}
   #pchart svg{overflow:visible}
 }
+
+/* A fee read that failed states so on the card face. Amber, because it is a gap
+   in the data rather than a loss — and never the same colour as a real figure. */
+.pos .vals .f.unavail{color:var(--warn);font-variant-numeric:normal}

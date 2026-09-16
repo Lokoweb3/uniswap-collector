@@ -265,6 +265,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
           pool: pools ? await pools.forPosition({ version, poolAddress: p.poolAddress, token0: p.token0.address, token1: p.token1.address, usd0, usd1, decimals0: p.token0.decimals, decimals1: p.token1.decimals, feePct: p.feeTier != null ? Number(p.feeTier) / 10000 : null, symbol0: p.token0.symbol, symbol1: p.token1.symbol }) : null,
           amount0: a0, amount1: a1, fee0: f0, fee1: f1, usd0, usd1,
           feesOk: p.fees.ok,
+          feesError: p.fees.error || null, // the card face needs the reason, not just the flag
           valueUsd, feesUsd,
           priceCurrent: p.prices.current, priceLower: p.prices.lower, priceUpper: p.prices.upper,
           railPos: Math.max(0, Math.min(1, raw)),

@@ -593,7 +593,10 @@ function renderCoveragePanel(){
   if (trunc) li('warn', `${trunc} watched wallet${trunc === 1 ? '' : 's'} hold more position NFTs than were read; only the newest are shown.`);
   if (d && d.totals && d.totals.pnlApproxCount)
     li('warn', `<b>${d.totals.pnlApproxCount}</b> position${d.totals.pnlApproxCount === 1 ? '' : 's'} left out of LP vs holding: the deposit history behind them is incomplete.`);
-  const feeBad = ((d && d.positions) || []).filter(p => p.feesOk === false).length;
+  // Watched wallets count as well: a failed fee read is a failed fee read
+  // whoever owns the position.
+  const feeBad = [...((d && d.positions) || []),
+    ...(wl || []).flatMap(w => w.positions || [])].filter(p => p.feesOk === false).length;
   if (feeBad) li('warn', `${feeBad} position${feeBad === 1 ? '' : 's'} could not report fees in this read.`);
   li('', 'Collect-by-collect history and fee-token cost basis are loaded on Analytics, not here.');
   ul.innerHTML = items.join('');
@@ -1580,7 +1583,7 @@ function render(d){
         </div>
         <div class="vals">
           <span class="v">${usd(p.valueUsd)}</span>
-          <span class="f ${(p.feesUsd||0) < 0.005 ? 'zero':''}">${usd(p.feesUsd)} uncollected</span>
+          ${feeFace(p)}
           ${claimedLine(p)}
         </div>
       </div>
@@ -1713,6 +1716,17 @@ let lastRenderD = null;
   if (sel) { sel.value = ltPref(); sel.addEventListener('change', e => { setPref('positions:sort', e.target.value); if (lastRenderD) render(lastRenderD); if (typeof lastWatchForPf !== 'undefined' && lastWatchForPf) renderWatch(lastWatchForPf); }); }
 }
 // "claimed $X · N collects · last <date>" for a position card (main, watched and memecoin cards).
+// The uncollected-fee figure on a card face. A read that failed is not zero: it
+// says so, and carries the reason. Dropping to $0.00 here would read as "this
+// position has earned nothing", which is the one thing it does not mean.
+function feeFace(p) {
+  if (p.feesOk === false) {
+    const why = p.feesError ? esc(String(p.feesError)) : 'the fee read did not return a value in this refresh';
+    return `<span class="f unavail" title="Fees unavailable: ${why}. The position itself loaded; only the fee read failed.">Fees unavailable</span>`;
+  }
+  return `<span class="f ${(p.feesUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feesUsd)} uncollected</span>`;
+}
+
 function claimedLine(p){
   const c = p.collected;
   if (!c || !c.count) return '<span class="c zero" title="No fees collected from this position yet">nothing claimed yet</span>';
@@ -1915,7 +1929,7 @@ function renderWatch(d){
           </div>
           <div class="vals">
             <span class="v">${usd(p.valueUsd)}</span>
-            <span class="f ${(p.feesUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feesUsd)} uncollected</span>
+            ${feeFace(p)}
             ${claimedLine(p)}
           </div>
         </div>

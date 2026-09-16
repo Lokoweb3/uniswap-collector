@@ -77,7 +77,12 @@ async function loadPosition(ctx, tokenId) {
     owner = await posm.ownerOf(id);
   } catch (err) {
     const msg = err.shortMessage || err.message || "";
-    // ownerOf reverts for a burned token: that one really is gone.
+    // ownerOf reverts for a burned token: that one really is gone. But
+    // "missing revert data" is ethers' words for a call that came back empty,
+    // which is an RPC that did not answer — not a chain saying the token does
+    // not exist. Arc returns exactly that for entries inside a batched call, and
+    // treating it as a burn made the server forget live positions for good.
+    if (/missing revert data/i.test(msg)) throw err;
     if (/revert|nonexistent|invalid token/i.test(msg) && !/rate|timeout|network|429|503/i.test(msg)) {
       return { tokenId: id.toString(), gone: true };
     }

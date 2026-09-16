@@ -10,7 +10,7 @@ async function scenario(timeout) {
   child.pid = 123; child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
   const timers = new Map(), signals = [];
   const run = vm.runInNewContext(body + '\nrunCollector', {
-    spawn: () => child, path: require('node:path'), dir: '/fixture', log() {},
+    spawn: () => child, path: require('node:path'), dir: '/fixture', codeDir: '/fixture', log() {},
     COLLECTOR_TIMEOUT_MS: 100,
     process: { env: {}, kill: (pid, sig) => signals.push([pid, sig]) },
     setTimeout: (fn, ms) => { timers.set(ms, fn); return ms; },

@@ -117,7 +117,7 @@ node "${dir}/child.cjs" "${dir}/child.pid"
   fs.chmodSync(path.join(dir, "run-collector.sh"), 0o755);
   process.env.LP_COLLECTOR_TIMEOUT_MS = "1000";
   delete require.cache[require.resolve("../memecoin-collect")];
-  const mc = require("../memecoin-collect").create({ dir, log: () => {} });
+  const mc = require("../memecoin-collect").create({ dir, codeDir: dir, log: () => {} });
   const started = Date.now();
   const r = await mc._runCollector();
   assert.equal(r.timedOut, true, "the run timed out");

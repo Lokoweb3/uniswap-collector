@@ -200,7 +200,7 @@ function collectMessages(parsed, trigger) { return collectNotices(parsed, trigge
  *   treasury   async () => the treasury view ({ ok, totalSplitUsdg }) or null
  *   alerts     alerts.js instance or null
  */
-function create({ dir = HERE, positions = () => null, watched = () => null, treasury = async () => null, alerts = null, log = stamp, armUrl = "the dashboard" } = {}) {
+function create({ dir = HERE, codeDir = HERE, positions = () => null, watched = () => null, treasury = async () => null, alerts = null, log = stamp, armUrl = "the dashboard" } = {}) {
   const LOG = path.join(dir, "memecoin-collect-log.json");
   const STATE = path.join(dir, "memecoin-collect-state.json");
   const LEDGER = path.join(dir, "fee-split-ledger.json");
@@ -222,7 +222,13 @@ function create({ dir = HERE, positions = () => null, watched = () => null, trea
   // signals the whole group (-pid) and settles on `exit` plus its own timer, never on `close`.
   function runCollector() {
     return new Promise((resolve) => {
-      const child = spawn(path.join(dir, "run-collector.sh"), ["full", "--quiet"], { cwd: dir, env: process.env, detached: true });
+      // run-collector.sh is CODE, so it lives beside this module (HERE), not in the
+      // instance's data directory — a second chain has ledgers of its own but no copy
+      // of the scripts. The child is told which data directory it belongs to, so a
+      // collector spawned by the Arc instance reads Arc's settings and ledgers and
+      // never the default ones.
+      const child = spawn(path.join(codeDir, "run-collector.sh"), ["full", "--quiet"],
+        { cwd: codeDir, env: { ...process.env, LP_DATA_DIR: dir }, detached: true });
       let out = "", timedOut = false, settled = false;
       const signalGroup = (sig) => { try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch {} } };
       const term = setTimeout(() => { timedOut = true; log(`collector still running after ${Math.round(COLLECTOR_TIMEOUT_MS / 60000)} min; sending SIGTERM to its process group`); signalGroup("SIGTERM"); }, COLLECTOR_TIMEOUT_MS);

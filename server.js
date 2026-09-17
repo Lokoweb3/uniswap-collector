@@ -567,10 +567,46 @@ function START_BLOCK_TIME() { try { return hist.startBlockTime || null; } catch 
 // a little each time the panel is opened, and the cursor is persisted either way.
 const CLAIM_CHUNK = Number(process.env.LP_CLAIM_CHUNK || 9000);
 const CLAIM_BUDGET = Number(process.env.LP_CLAIM_BUDGET || 6);
-/** How far back a scan should reach: the 7-day window is the useful floor. */
-function claimFloor() {
-  const perBlock = Number(process.env.LP_BLOCK_MS || 100);
-  return Math.max(0, (claimStore && claimStore.state.scannedTo ? claimStore.state.scannedTo : 0) - Math.ceil((30 * 24 * 3600 * 1000) / perBlock));
+// How far back a scan reaches for a position whose mint it has not found. The
+// store converts this to a block floor with the chain's measured block time
+// (Arc is ~0.5 s a block, Robinhood ~0.1 s), so no block time is assumed here.
+const CLAIM_LOOKBACK_MS = Number(process.env.LP_CLAIM_LOOKBACK_DAYS || 30) * 86400 * 1000;
+/** Scan every position the cards have described, under the request budget. */
+function scanClaims() {
+  return claimStore.scan(claimMeta, { ids: [...claimMetaIndex.keys()], chunk: CLAIM_CHUNK, budget: CLAIM_BUDGET, lookbackMs: CLAIM_LOOKBACK_MS });
+}
+/**
+ * Fix each of a position's claims at the USD prices of its own moment: the pool
+ * price the scanner read at the claim's block with the numeraire at that block,
+ * else the hourly price log within three hours. A claim with neither keeps no
+ * price, and the summary values it at today's prices and says so. A price once
+ * fixed is kept with the record, so this only does work for new claims.
+ */
+async function priceClaims(id) {
+  let changed = 0;
+  for (const r of claimStore.rows(id)) {
+    if (r.px || r.unavailable) continue;
+    let px = null;
+    try {
+      const [a, b] = await Promise.all([u.getToken(r.token0, provider, Number(cfg.chainId)), u.getToken(r.token1, provider, Number(cfg.chainId))]);
+      if (a.decimalsOk !== true || b.decimalsOk !== true) continue;   // no decimals, no price
+      const m = { t0: { address: r.token0, decimals: a.decimals, symbol: a.symbol }, t1: { address: r.token1, decimals: b.decimals, symbol: b.symbol } };
+      if (r.sqrtP) {
+        const w = await getWethUsd(r.block);
+        if (w != null) {
+          const current = u.priceFromSqrt(BigInt(r.sqrtP), a.decimals, b.decimals);
+          const { usd0, usd1 } = priceSides({ token0: m.t0, token1: m.t1, prices: { current } }, w);
+          if (usd0 != null && usd1 != null && isFinite(usd0) && isFinite(usd1)) px = { p0: usd0, p1: usd1, src: "block" };
+        }
+      }
+      if (!px && r.t) px = pricesFromLog(m, r.t);
+    } catch (err) {
+      console.error(`claims: pricing ${r.key} failed: ${err.shortMessage || err.message}`);
+    }
+    if (px) { claimStore.setPrice(r.key, px); changed++; }
+  }
+  if (changed) claimStore.save();
+  return changed;
 }
 const STATE_DEPTH = 4500; // probed: slot0 answers at -5000 blocks, not at -50000
 
@@ -1157,7 +1193,7 @@ async function build() {
         pnlLegs,
         pnlSource,
         collected: collectSummary(p.tokenId, p.token0.decimals, p.token1.decimals, usd0, usd1),
-        claimed: claimedSummary(p.version === 4 ? `v4-${p.tokenId}` : String(p.tokenId), p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol, p.openedBlock ?? null, { token0: p.token0.address, token1: p.token1.address, owner: cfg.ownerAddress }),
+        claimed: claimedSummary(p.version === 4 && !String(p.tokenId).startsWith("v4-") ? `v4-${p.tokenId}` : String(p.tokenId), p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol, p.openedBlock ?? null, { token0: p.token0.address, token1: p.token1.address, owner: cfg.ownerAddress }),
         liquidity: p.liquidity,
         pair: `${p.token0.symbol} / ${p.token1.symbol}`,
         symbol0: p.token0.symbol,
@@ -2316,14 +2352,19 @@ async function handleRequest(req, res) {
         reason: `this instance serves chain ${cfg.chainId} and manager ${cfg.contracts.v4.positionManager}; the position asked for belongs to a different scope` }));
     }
     try {
-      const meta = claimMeta(id);
-      if (meta) await claimStore.scan(claimMeta, { chunk: CLAIM_CHUNK, budget: CLAIM_BUDGET, floor: claimFloor() });
+      if (claimMeta(id)) { await scanClaims(); await priceClaims(id); }
       const rows = claimStore.rows(id);
-      const st = claimStore.state;
+      const coverage = claimStore.coverage(id);
+      // The same three states the card uses: nothing scanned, a scan that has not
+      // reached this position's opening, and one that has.
       return res.end(JSON.stringify({ ok: true,
-        status: st.complete ? "complete" : "partial",
+        status: !coverage ? "unavailable" : coverage.coversOpening ? "ok" : "partial",
+        ...(!coverage ? { reason: claimMeta(id)
+          ? "no block range has been scanned for this position yet"
+          : "this position has not been loaded by this instance, so the scanner does not know its pair or owner" }
+          : coverage.gap ? { reason: coverage.gap } : {}),
         scope: { chainId: Number(cfg.chainId), positionManager: String(cfg.contracts.v4.positionManager).toLowerCase(), tokenId: id },
-        coverage: { fromBlock: st.scannedFrom, toBlock: st.scannedTo, fromT: st.fromT, toT: st.toT, complete: !!st.complete },
+        coverage,
         rows: await Promise.all(rows.map(async (r) => {
           // Format here, where the token metadata is available and cached; the card
           // must never be handed a raw integer and left to guess at decimals.
@@ -2335,7 +2376,8 @@ async function handleRequest(req, res) {
             } catch { return null; }
           };
           return { t: r.t, block: r.block, tx: r.tx, kind: r.kind, unavailable: r.unavailable,
-                   fee0: await fmt(r.fee0, r.token0), fee1: await fmt(r.fee1, r.token1) };
+                   fee0: await fmt(r.fee0, r.token0), fee1: await fmt(r.fee1, r.token1),
+                   priceSrc: r.px ? r.px.src : null };
         })),
       }));
     } catch (err) {

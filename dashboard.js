@@ -314,21 +314,42 @@ function fillScopeSelect(){
   document.body.classList.add('haspick');
 }
 
+// A refresh that throws is not a quiet no-op. Each load* reports here: the error
+// is logged, and a strip at the top of the page names the section that could not
+// be refreshed, so stale or blank content is never mistaken for current. The
+// entry clears the next time that section loads.
+const loadFails = new Map();
+function loadFailed(section, err) {
+  console.error(`${section}: refresh failed`, err);
+  loadFails.set(section, { msg: String((err && err.message) || err || 'unknown error'), at: Date.now() });
+  drawLoadFails();
+}
+function loadOk(section) {
+  if (loadFails.delete(section)) drawLoadFails();
+}
+function drawLoadFails() {
+  const el = document.getElementById('loadfails');
+  if (!el) return;
+  el.hidden = !loadFails.size;
+  el.innerHTML = [...loadFails].map(([k, v]) =>
+    `<p class="loadfail"><b>${esc(k)}</b> could not be refreshed (${esc(v.msg)}, ${new Date(v.at).toLocaleTimeString()}). What is shown there may be out of date or missing.</p>`).join('');
+}
+
 let allSeriesD = null;
 async function loadAllSeries(){
-  try { const r = await fetch('/api/portfolio-all'); const d = await r.json(); if (d.ok && d.points.length) { allSeriesD = d; if (lastPortfolio) renderPortfolio(); } } catch(e){}
+  try { const r = await fetch('/api/portfolio-all'); const d = await r.json(); loadOk('Portfolio history'); if (d.ok && d.points.length) { allSeriesD = d; if (lastPortfolio) renderPortfolio(); } } catch(e){ loadFailed('Portfolio history', e); }
 }
 
 async function loadBalances(){
   try{
     const r = await fetch('/api/portfolio');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Wallet balances');
     if (r.status === 503){ setTimeout(loadBalances, 15000); return; } // first pass still running
     if (!d.ok || !d.rows || !d.rows.length) return;
     lastPortfolio = d;
     $('#balpanel').hidden = false;
     renderPortfolio();
-  }catch(e){ /* panel stays hidden */ }
+  }catch(e){ loadFailed('Wallet balances', e); }
 }
 
 let lastMain = null;
@@ -628,7 +649,7 @@ function renderCoveragePanel(){
 async function loadRewards(){
   try{
     const r = await fetch('/api/rewards');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Merkl rewards');
     const chip = $('#merklchip');
     if (!d.ok || d.rewards == null){ chip.hidden = true; return; }
     // The chip only appears when there is something to claim; the check
@@ -641,7 +662,7 @@ async function loadRewards(){
         `<b>${amount(x.claimable + x.pending)} ${x.symbol}</b>`).join(' · ')
         + ` — <a href="${d.claimUrl}" target="_blank" rel="noopener" style="color:inherit">claim</a>`;
     }
-  }catch(e){ $('#merklchip').hidden = true; }
+  }catch(e){ loadFailed('Merkl rewards', e); $('#merklchip').hidden = true; }
 }
 
 // 7-day portfolio value line.
@@ -834,7 +855,7 @@ $('#closedtoggle').addEventListener('click', () => {
 async function loadHistory(){
   try{
     const r = await fetch('/api/history');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Collection history');
     if (!d.ok) return;
     $('#earnings').hidden = false;
     historyRows = d.rows;
@@ -859,7 +880,7 @@ async function loadHistory(){
     $('#enote').textContent = 'Fees only — principal from closed positions is excluded.' + basis
       + (d.backfilled ? ' Includes full pre-collector history via Blockscout.' : d.backfilling ? ' Historical backfill in progress…' : '')
       + (d.scanning ? ' Scan catching up…' : '');
-  }catch(e){ /* panel just stays hidden */ }
+  }catch(e){ loadFailed('Collection history', e); }
 }
 
 /* ---- daily revenue ---- */
@@ -949,12 +970,12 @@ let dailyD = null;
 async function loadDaily(){
   try{
     const r = await fetch('/api/daily');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Daily revenue');
     if (!d.ok || !d.hours.length) return;
     dailyD = d;
     renderDaily();
     renderAnalytics();
-  }catch(e){ /* panel stays hidden */ }
+  }catch(e){ loadFailed('Daily revenue', e); }
 }
 
 /* ---- analytics page: fee token lots (cost basis) ---- */
@@ -962,16 +983,16 @@ let lotsD = null;
 async function loadLots(){
   try {
     const r = await fetch('/api/strategy/lots');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Fee token lots');
     if (!d.ok) return;
     lotsD = d;
     renderLots();
     loadAudit();
-  } catch(e){}
+  } catch(e){ loadFailed('Fee token lots', e); }
 }
 let auditD = null;
 async function loadAudit(){
-  try { const r = await fetch('/api/audit', { cache: 'no-store' }); auditD = await r.json(); renderLots(); } catch {}
+  try { const r = await fetch('/api/audit', { cache: 'no-store' }); auditD = await r.json(); loadOk('Ledger audit'); renderLots(); } catch(e){ loadFailed('Ledger audit', e); }
 }
 /** "3 rows look off" next to the lots total, with every finding in the tooltip; an accept button for unfamiliar routes. */
 function auditBadge(){
@@ -1024,11 +1045,11 @@ let trackD = null;
 async function loadTrack(){
   try {
     const r = await fetch('/api/strategy/track');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Strategy track record');
     if (!d.ok) return;
     trackD = d;
     renderTrack();
-  } catch(e){}
+  } catch(e){ loadFailed('Strategy track record', e); }
 }
 function renderTrack(){
   const d = trackD;
@@ -1083,12 +1104,12 @@ let stakingD = null;
 async function loadStaking(){
   try {
     const r = await fetch('/api/staking');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Staking');
     if (!d.ok) return;
     stakingD = d;
     renderStaking();
     renderAnalytics();
-  } catch(e){}
+  } catch(e){ loadFailed('Staking', e); }
 }
 
 function renderStaking(){
@@ -1130,7 +1151,7 @@ function incomeEvents(){
 
 let treasuryD = null;
 async function loadTreasury(){
-  try { const r = await fetch('/api/treasury'); const d = await r.json(); if (d.ok) { treasuryD = d; renderVault(); renderAnalytics(); } } catch(e){}
+  try { const r = await fetch('/api/treasury'); const d = await r.json(); loadOk('Vault'); if (d.ok) { treasuryD = d; renderVault(); renderAnalytics(); } } catch(e){ loadFailed('Vault', e); }
 }
 function renderVault(){
   const d = treasuryD;
@@ -1159,7 +1180,7 @@ function renderVault(){
 
 let watchForAnalytics = null;
 async function loadWatchForAnalytics(){
-  try { const r = await fetch('/api/watch'); const d = await r.json(); if (d && d.ok) { watchForAnalytics = d; renderAnalytics(); } } catch(e){}
+  try { const r = await fetch('/api/watch'); const d = await r.json(); loadOk('Watched wallets'); if (d && d.ok) { watchForAnalytics = d; renderAnalytics(); } } catch(e){ loadFailed('Watched wallets', e); }
 }
 function renderEarnedByWallet(){
   const rows = [];
@@ -1616,24 +1637,41 @@ function claimPanelHtml(d) {
   if (d.status === 'unavailable') {
     return `<p class="chnote warn">Claim history unavailable. ${esc(d.reason || '')}</p>`;
   }
-  const note = d.status === 'complete'
-    ? `<p class="chnote">Scanned ${esc(window_)} \u2014 complete for this position.</p>`
-    : `<p class="chnote warn">Partial: only ${esc(window_)} has been scanned, so collections before that are not listed. Opening this panel extends the scan a little further back each time.</p>`;
+  const complete = d.status === 'ok' && cov && cov.coversOpening;
+  const note = complete
+    ? `<p class="chnote">Scanned ${esc(window_)}, from the block this position was opened in \u2014 complete for this position.</p>`
+    : `<p class="chnote warn">Partial: only ${esc(window_)} has been scanned${d.reason ? ` \u2014 ${esc(d.reason)}` : ''}. Collections before that are not listed.` +
+      `${cov && !cov.reachedLookbackFloor ? ' Opening this panel extends the scan a little further back each time.' : ''}</p>`;
   if (!d.rows.length) {
-    return note + `<p class="chnote">No collections in the scanned range. ${d.status === 'complete'
+    return note + `<p class="chnote">No collections in the scanned range. ${complete
       ? 'This position has never had fees collected.'
       : 'That is not the same as none having happened \u2014 earlier blocks are still unscanned.'}</p>`;
   }
   return note + '<table class="chtable"><caption>Fees only \u2014 withdrawn principal is excluded from every row</caption>' +
-    '<thead><tr><th scope="col">When</th><th scope="col">Kind</th><th scope="col">Fees claimed</th><th scope="col">Tx</th></tr></thead><tbody>' +
+    '<thead><tr><th scope="col">When</th><th scope="col">Kind</th><th scope="col">Fees claimed</th><th scope="col">USD basis</th><th scope="col">Tx</th></tr></thead><tbody>' +
     d.rows.map(r => `<tr><td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown'}</td>` +
       `<td>${r.kind === 'withdrawal' ? '<span title="This transaction also withdrew principal; only the fee part above the principal is counted">withdrawal</span>' : 'collect'}</td>` +
       `<td class="mono">${r.unavailable ? `<span class="unavail" title="${esc(r.unavailable)}">not separable</span>`
         : (r.fee0 == null || r.fee1 == null)
           ? '<span class="unavail" title="A token\u2019s decimals could not be read, so this amount cannot be shown">amount unavailable</span>'
           : `${esc(r.fee0)} + ${esc(r.fee1)}`}</td>` +
+      `<td>${claimPriceLabel(r)}</td>` +
       `<td class="mono">${r.tx ? linkify(r.tx.slice(0, 10) + '\u2026') : '\u2014'}</td></tr>`).join('') +
     '</tbody></table>';
+}
+// Which price a collection's USD value uses. Only "its block" and "its hour" are
+// what was actually received; "today's price" is an approximation and says so.
+function claimPriceLabel(r) {
+  if (r.unavailable) return '\u2014';
+  if (r.priceSrc === 'block') return '<span title="Valued at the pool price read at this collection\u2019s own block">its block</span>';
+  if (r.priceSrc) return '<span title="Valued at the hourly price log, within three hours of this collection">its hour</span>';
+  return '<span class="approx" title="No price from this collection\u2019s moment was found, so the card values it at today\u2019s price \u2014 an approximation, not what was received">today\u2019s price</span>';
+}
+// Short label for the card: how the dollar total was valued.
+function claimBasisShort(c) {
+  return c.usdBasis === 'at-claim' ? 'valued when claimed'
+    : c.usdBasis === 'mixed' ? 'partly at today\u2019s prices'
+    : c.usdBasis === 'today' ? 'at today\u2019s prices' : '';
 }
 // Flip a pair's price orientation from its unit label.
 let lastRender = null;
@@ -1666,7 +1704,7 @@ async function load(fresh){
 /* ---- collect ---- */
 let coTimer = null;
 
-const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
 // ---- Long-term returns (TASK-52): fee APR and net return side by side, from /api/positions
 // longTerm (longterm.js). Last 30 days on the card, since-open in the tooltip; when the
@@ -1775,7 +1813,7 @@ function claimedMetric(p, uid) {
     const from = cov.fromT ? new Date(cov.fromT).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
     const sub = from ? `${c.count} verified since ${from} — partial history`
       : `${c.count} verified in the scanned range — partial history`;
-    return `${open} title="Verified from chain: ${esc(String(c.count))} collection(s) inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}. Earlier blocks are not scanned, so this is a floor, not a total.">` +
+    return `${open} title="Verified from chain: ${esc(String(c.count))} collection(s) inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}. ${esc(c.reason || 'Earlier blocks are not scanned')}, so this is a floor, not a total. ${esc(c.usdMissing || c.basis || '')}">` +
       `<span class="ml">Claimed fees</span><span class="mv partial">${c.usd != null ? usd(c.usd) + '+' : '—'}</span>` +
       `<span class="msub">${esc(sub)}</span></button>`;
   }
@@ -1783,20 +1821,21 @@ function claimedMetric(p, uid) {
     // Zero only when the scan actually reached back past this position's opening.
     // Anything less is an unscanned range, which is not evidence of nothing.
     const cov = c.coverage || {};
-    if (c.status !== 'ok' || !cov.complete) {
+    if (c.status !== 'ok' || !cov.coversOpening) {
       return `${open} title="No collections found inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}, but the scan has not reached this position's opening, so nothing can be concluded.">` +
         `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
         `<span class="msub">scanned range does not reach this position's start</span></button>`;
     }
-    return `${open} title="The scan covers this position from block ${esc(String(cov.fromBlock))} and found no fee collect and no withdrawal. A verified zero, not an assumption.">` +
+    return `${open} title="The scan covers this position from block ${esc(String(cov.fromBlock))}, before its opening at block ${esc(String(cov.openedBlock))}, and found no fee collect and no withdrawal. A verified zero, not an assumption.">` +
       `<span class="ml">Claimed fees</span><span class="mv zero">${usd(0)}</span>` +
       `<span class="msub">none yet · verified from chain</span></button>`;
   }
   const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
-  return `${open} title="${c.count} collection${c.count === 1 ? '' : 's'}. Already paid out to the wallet, so it is not part of the position value.">` +
+  const basis = claimBasisShort(c);
+  return `${open} title="${c.count} collection${c.count === 1 ? '' : 's'}. ${esc(c.usdMissing || c.basis || '')}. Already paid out to the wallet, so it is not part of the position value.">` +
     `<span class="ml">Claimed fees</span>` +
-    `<span class="mv">${c.usd != null ? usd(c.usd) : '—'}</span>` +
-    `<span class="msub">${c.count} collection${c.count === 1 ? '' : 's'}${when ? ' · last ' + esc(when) : ''}</span></button>`;
+    `<span class="mv${c.usdBasis && c.usdBasis !== 'at-claim' ? ' approx' : ''}">${c.usd != null ? (c.usdBasis && c.usdBasis !== 'at-claim' ? '\u2248' : '') + usd(c.usd) : '—'}</span>` +
+    `<span class="msub">${c.count} collection${c.count === 1 ? '' : 's'}${when ? ' · last ' + esc(when) : ''}${c.usd == null && c.usdMissing ? ' · no USD total' : basis ? ' · ' + basis : ''}</span></button>`;
 }
 
 function positionCard(p, d, opts) {
@@ -1922,7 +1961,7 @@ function coverageText(p) {
   const c = p.claimed;
   if (!c || c.status === 'unavailable') return 'Claim history: none scanned for this chain and position manager';
   if (c.status === 'partial') return c.since
-    ? `Claim history: partial, from ${new Date(c.since).toLocaleDateString()}`
+    ? `Claim history: partial, from ${new Date(c.since).toLocaleDateString()}${c.reason ? ' \u2014 ' + esc(c.reason) : ''}`
     : 'Claim history: partial — earlier claims not loaded, so the figure is a floor';
   return `Claim history: complete from ${c.since ? new Date(c.since).toLocaleDateString() : 'this position’s first block'}`;
 }
@@ -1966,7 +2005,7 @@ function claimedLine(p){
     `${c.principalSeparated ? ' Withdrawals are included with their principal removed, so only fees are counted.' : ''}` +
     ' Already paid out to the wallet, so it is not part of the position value above.';
   return `<span class="c" title="${title}">Claimed <b>${amounts}</b>` +
-    `${c.usd != null ? ` · <b>${usd(c.usd)}</b>` : ' <span class="muted">· no USD total (a leg is unpriced)</span>'}` +
+    `${c.usd != null ? ` · <b>${c.usdBasis && c.usdBasis !== 'at-claim' ? '\u2248' : ''}${usd(c.usd)}</b>` : ` <span class="muted" title="${esc(c.usdMissing || '')}">· no USD total (a leg is unpriced)</span>`}` +
     ` · ${c.count}×${when ? ' · last ' + when : ''}</span>`;
 }
 // Tx hashes in the run log become explorer links.
@@ -2145,12 +2184,12 @@ function renderWatch(d){
 async function loadWatch(){
   try {
     const r = await fetch('/api/watch');
-    const d = await r.json();
+    const d = await r.json(); loadOk('Watched wallets');
     if (r.status === 202 || (d && d.refreshing && !d.ok)) setTimeout(loadWatch, 20000); // first build still running
     renderWatch(d);
     lastWatchForPf = d && d.ok ? d : lastWatchForPf;
     if (lastPortfolio) renderPortfolio();
-  } catch(e){}
+  } catch(e){ loadFailed('Watched wallets', e); }
 }
 if (PAGE !== 'analytics') { loadWatch(); setInterval(loadWatch, 120000); }
 
@@ -2177,7 +2216,7 @@ setInterval(() => tick(false), 60000);
 async function loadLaunches(){
   try {
     const r = await fetch('/api/launches', { cache: 'no-store' });
-    const d = await r.json();
+    const d = await r.json(); loadOk('Launch watch');
     const sec = $('#launchsec'); if (!d.ok) return;
     if (!d.enabled) { sec.hidden = true; return; }
     sec.hidden = false;
@@ -2193,7 +2232,7 @@ async function loadLaunches(){
       return `<tr class="${c.alerted ? 'u' : ''}"><td><b>${c.symbol || '?'}</b>/${c.quoteSymbol || 'ETH'}${c.feePct != null ? ' <span class="muted">' + c.feePct + '%</span>' : ''}${c.alerted ? ' 🚀' : ''}</td><td class="u">${fmtM(c.mcapUsd)}</td><td>${c.ageMin == null ? '—' : c.ageMin < 120 ? c.ageMin + ' min' : Math.round(c.ageMin / 60) + ' h'}</td><td><b class="${c.score >= 70 ? 'up' : c.score >= 50 ? 'warn' : ''}">${c.score}</b></td><td class="muted" style="font-size:11px">${checks}${c.honeypot && c.honeypot.sellTaxPct != null ? ' · tax ' + c.honeypot.sellTaxPct + '%' : ''}${c.volume && c.volume.buys != null ? ' · ' + c.volume.buys + ' buys/' + (c.volume.sells || 0) + ' sells' : ''}</td><td>${c.pool ? `<a href="https://app.uniswap.org/explore/pools/robinhood/${c.pool}" target="_blank" rel="noopener">pool</a> · <a href="https://dexscreener.com/robinhoodchain/${c.pool}" target="_blank" rel="noopener">chart</a> · ` : ''}<a href="${(EXPLORER || 'https://robinhoodchain.blockscout.com')}/token/${c.token}" target="_blank" rel="noopener">contract</a></td></tr>`;
     }).join('') : `<tr><td colspan="6" class="muted">No candidate scored 50 or more in the window. Criteria: mcap ${fmtM(d.settings && d.settings.minMcapUsd)}–${fmtM(d.settings && d.settings.maxMcapUsd)}, pool ${(d.settings && d.settings.minAgeMinutes) || 10}–${(d.settings && d.settings.maxAgeMinutes) || 240} min old, ≥ ${fmtM(d.settings && d.settings.minTvlUsd)} in range, sellable with tax under ${(d.settings && d.settings.maxSellTaxPct) || 10}%, ≥ ${(d.settings && d.settings.minHolders) || 20} holders, top wallet under ${(d.settings && d.settings.maxTopHolderPct) || 30}%, ≥ ${(d.settings && d.settings.minBuys10min) || 5} buys in 10 min.</td></tr>`;
     $('#launchrecent').innerHTML = (d.recentAlerts || []).length ? 'Alerted: ' + d.recentAlerts.slice(0, 6).map(a => `${a.symbol || a.token.slice(0, 8)} ${fmtM(a.mcap)} (${a.score}) ${new Date(a.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`).join(' · ') : `Alerts go to Telegram at score ≥ ${(d.settings && d.settings.minScore) || 70}; the same token at most once per ${(d.settings && d.settings.alertCooldownHours) || 24} h, with a follow-up when its market cap triples.`;
-  } catch (e) {}
+  } catch(e){ loadFailed('Launch watch', e); }
 }
 if (PAGE !== 'analytics') { loadLaunches(); setInterval(loadLaunches, 60000); }
 // === end launch-watch ===
@@ -2241,7 +2280,7 @@ function rulesLine(p){
 async function loadRisk(){
   try {
     const r = await fetch('/api/risk', { cache: 'no-store' });
-    const d = await r.json();
+    const d = await r.json(); loadOk('Risk guardian');
     if (!d.ok) return;
     const sec = $('#risksec');
     if (!d.watching && !d.stale) { sec.hidden = true; return; }
@@ -2284,7 +2323,7 @@ async function loadRisk(){
     $('#riskrecent').innerHTML = (d.recent || []).length
       ? 'Recent: ' + d.recent.slice(0, 5).map(r => `${new Date(r.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${r.pair} ${r.status}${r.tx ? ' <a href="' + (EXPLORER || '') + '/tx/' + r.tx + '" target="_blank" rel="noopener">tx</a>' : ''}${r.error ? ' (' + r.error + ')' : ''}`).join(' · ')
       : `One Telegram message per event. Defaults for discovered positions: dump -${df.alertPct ?? 20}%/1h, close-now -${df.closePct ?? 50}% from entry, out of range ${df.outOfRangeMinutes ?? 120} min, liquidity -${df.tvlDropPct ?? 50}% vs 24h high. Auto-close only where switched on; proceeds go to the position's own wallet.`;
-  } catch (e) {}
+  } catch(e){ loadFailed('Risk guardian', e); }
 }
 async function postRule(body){
   const r = await fetch('/api/risk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -2370,11 +2409,11 @@ async function loadAttribution(){
   try {
     const days = Number(($('#attribdays') || {}).value) || 30;
     const r = await fetch('/api/attribution?days=' + days);
-    const d = await r.json();
+    const d = await r.json(); loadOk('Performance attribution');
     if (!d.ok) return;
     attribD = d;
     renderAttribution();
-  } catch(e){}
+  } catch(e){ loadFailed('Performance attribution', e); }
 }
 function attribScope(){
   const sel = $('#attribscope');
@@ -2503,7 +2542,7 @@ if (ANALYTICS) { loadAttribution(); setInterval(loadAttribution, 10 * 60 * 1000)
 let advisorD = null;
 async function loadAdvisor(){
   if (PAGE === 'analytics') return;
-  try { const r = await fetch('/api/advisor'); const d = await r.json(); if (d.ok) { advisorD = d; decorateAdvisor(); } } catch(e){}
+  try { const r = await fetch('/api/advisor'); const d = await r.json(); loadOk('Range advisor'); if (d.ok) { advisorD = d; decorateAdvisor(); } } catch(e){ loadFailed('Range advisor', e); }
 }
 function advisorLine(r){
   if (!r || !r.ranges) return r && r.status ? `<span class="rate advisor muted" title="Range advisor">range advisor: ${r.status}</span>` : '';
@@ -2566,7 +2605,7 @@ function decorateTokenHealth(){
   }
 }
 async function loadTokenHealth(){
-  try { const r = await fetch('/api/token-health'); const d = await r.json(); if (d.ok) { tokenHealthD = d; decorateTokenHealth(); } } catch(e){}
+  try { const r = await fetch('/api/token-health'); const d = await r.json(); loadOk('Token health'); if (d.ok) { tokenHealthD = d; decorateTokenHealth(); } } catch(e){ loadFailed('Token health', e); }
 }
 if (PAGE === 'dashboard'){
   const bt = document.getElementById('baltable');

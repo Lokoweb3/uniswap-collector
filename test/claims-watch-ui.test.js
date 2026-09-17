@@ -18,6 +18,18 @@ function lift(name) {
   return src.slice(from, to);
 }
 const escLine = src.match(/^const esc = .*$/m)[0];
+// A top-level const, including one whose value continues on indented lines.
+function liftConst(name) {
+  const from = src.indexOf(`\nconst ${name} = `);
+  assert.ok(from >= 0, `${name} is gone from dashboard.js`);
+  const lines = src.slice(from + 1).split("\n");
+  const out = [lines[0]];
+  for (let i = 1; i < lines.length && (/^\s/.test(lines[i]) || /^}/.test(lines[i])); i++) out.push(lines[i]);
+  return out.join("\n") + "\n";
+}
+// The claim-state helpers every claimed-fee view reads.
+const claimHelpers = () => ["CLAIM_STATES", "cDate", "cTime", "CLAIM_MIXED_NOTE", "endStop"].map(liftConst).join("") +
+  ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimWhy", "claimRowValue"].map(lift).join("");
 
 // A tiny harness: the lifted functions share one scope with stubbed page state.
 function page() {
@@ -28,6 +40,8 @@ function page() {
     const usd = (n) => '$' + Number(n || 0).toFixed(2);
     const linkify = (s) => esc(s);
     let lastWatchForPf = null, lastPortfolio = null;
+    const fetchedAt = new WeakMap();
+    ${claimHelpers()}
     ${lift("apiOutcome")}${lift("staleNote")}${lift("loadWatch")}${lift("watchFailed")}
     ${lift("claimKindLabel")}${lift("claimPriceLabel")}${lift("claimPanelHtml")}
     const claimPanels = new Map();

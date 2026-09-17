@@ -396,7 +396,8 @@ async function main() {
     // i) adding liquidity realises fees netted against the deposit.
     {
       const L = 1000000000n;
-      const need = u.getAmountsForLiquidity(sqrtP, u.getSqrtRatioAtTick(RANGE[0]), u.getSqrtRatioAtTick(RANGE[1]), L);
+      // what the pool takes for the add: rounded up
+      const need = cs.amountsFor(sqrtP, RANGE[0], RANGE[1], L, true);
       const r = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, L, "8240", "0xad")],
         transfers: { "0xad": [from(OWNER, PM, USDC, need.amount0 - 700n), from(OWNER, PM, ARGUS, need.amount1)] } });
       assert.strictEqual(r.sum.status, "ok");
@@ -407,8 +408,11 @@ async function main() {
 
       // the same add with the full deposit paid (one unit of rounding) is not a claim
       const plain = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, L, "8240", "0xad")],
-        transfers: { "0xad": [from(OWNER, PM, USDC, need.amount0 + 1n), from(OWNER, PM, ARGUS, need.amount1 + 1n)] } });
-      assert.ok(zero(plain), `a plain top-up is still a verified zero, got ${JSON.stringify(plain.sum)}`);
+        transfers: { "0xad": [from(OWNER, PM, USDC, need.amount0), from(OWNER, PM, ARGUS, need.amount1)] } });
+      assert.ok(zero(plain), `a plain top-up (exactly the rounded-up deposit) is a verified zero, got ${JSON.stringify(plain.sum)}`);
+      // the pool rounds adds up: a round-down principal would call this 1 unit of fees
+      const down = u.getAmountsForLiquidity(sqrtP, u.getSqrtRatioAtTick(RANGE[0]), u.getSqrtRatioAtTick(RANGE[1]), L);
+      assert.ok(need.amount0 - down.amount0 <= 1n && need.amount1 - down.amount1 <= 1n);
 
       // the opening deposit, in the mint's own transaction, is never a record
       const opening = await run({ logs: [{ ...mintLog(700, "8240"), transactionHash: "0xop" }, modLog(700, 5, L, "8240", "0xop")],
@@ -451,7 +455,7 @@ async function main() {
     const d = tmp(), f = path.join(d, "claims.json");
     const lo = -600, hi = 600, L = 10n ** 12n;
     const pTx = u.getSqrtRatioAtTick(0), pLater = u.getSqrtRatioAtTick(300), pEarlier = u.getSqrtRatioAtTick(-200);
-    const need = (p) => u.getAmountsForLiquidity(p, u.getSqrtRatioAtTick(lo), u.getSqrtRatioAtTick(hi), L);
+    const need = (p) => cs.amountsFor(p, lo, hi, L, true);
     const swapLog = (index, sqrt, tx = "0xsw" + index) => ({
       address: PM, blockNumber: 900, index, transactionHash: tx,
       topics: [cs.SWAP, "0x" + "ab".repeat(32), pad(POSM_B)],
@@ -479,6 +483,92 @@ async function main() {
     const b = earlier.summary("8240", SUM);
     assert.strictEqual(b.status, "ok", `the price after the earlier swap is used, got ${b.reason}`);
     assert.strictEqual(b.count, 0);
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- 11. one explicit state per history; a zero only when it is a finding -----
+  {
+    const d = tmp();
+    const st = async (world, opts) => {
+      const s = cs.create(ARGS(fakeProvider(world), path.join(d, `${Math.random()}.json`)));
+      if (opts) await s.scan((id) => META[id], { ...IDS, chunk: 100, ...opts });
+      return s.summary("8240", SUM);
+    };
+    const notScanned = await st({ logs: [], transfers: {} }, null);
+    assert.strictEqual(notScanned.state, "not-scanned");
+    assert.strictEqual(notScanned.verifiedZero, false);
+
+    // mint far back, budget runs out: still scanning, and nothing found is not $0
+    const scanning = await st({ logs: [mintLog(10, "8240")], transfers: {} }, { budget: 2, floor: 0 });
+    assert.strictEqual(scanning.state, "scanning");
+    assert.strictEqual(scanning.verifiedZero, false);
+    assert.strictEqual(scanning.usd, null, "an incomplete range with nothing in it is not a $0 floor");
+    assert.match(scanning.reason, /not yet reached/);
+
+    const lookback = await st({ logs: [mintLog(10, "8240"), modLog(950, 1, 0n, "8240", "0xaa")], transfers: { "0xaa": [xfer(USDC, 7n)] } }, { budget: 20, floor: 800 });
+    assert.strictEqual(lookback.state, "lookback-reached");
+    assert.strictEqual(lookback.status, "partial");
+    assert.strictEqual(lookback.raw0, "7", "the floor figure is still shown as what was found");
+    assert.match(lookback.reason, /lookback/);
+
+    // an undecodable record wins over every coverage state, even an incomplete one
+    const undecodable = await st({ logs: [mintLog(10, "8240"), modLog(950, 1, 0n, "8240", "0xaa")],
+      transfers: { "0xaa": [{ address: USDC, topics: [cs.TRANSFER, pad(PM), pad("0x9999999999999999999999999999999999999999")], data: ethers.zeroPadValue("0x05", 32) }] } }, { budget: 2, floor: 0 });
+    assert.strictEqual(undecodable.state, "undecodable");
+    assert.strictEqual(undecodable.verifiedZero, false);
+    assert.strictEqual(undecodable.usd, undefined);
+
+    const zero = await st({ logs: [mintLog(900, "8240")], transfers: {} }, { budget: 20, floor: 0 });
+    assert.strictEqual(zero.state, "complete");
+    assert.strictEqual(zero.verifiedZero, true);
+    assert.strictEqual(zero.usd, 0);
+
+    // a collect that paid nothing is a decoded event with a zero fee: still a verified zero
+    const paidNothing = await st({ logs: [mintLog(900, "8240"), modLog(950, 1, 0n, "8240", "0xaa")], transfers: {} }, { budget: 20, floor: 0 });
+    assert.strictEqual(paidNothing.state, "complete");
+    assert.strictEqual(paidNothing.count, 1);
+    assert.strictEqual(paidNothing.verifiedZero, true);
+
+    const earned = await st({ logs: [mintLog(900, "8240"), modLog(950, 1, 0n, "8240", "0xaa")], transfers: { "0xaa": [xfer(USDC, 3n)] } }, { budget: 20, floor: 0 });
+    assert.strictEqual(earned.state, "complete");
+    assert.strictEqual(earned.verifiedZero, false);
+    assert.deepStrictEqual(earned.priceSources, { block: 0, pricelog: 0, today: 1, none: 0 }, "valued at today's price, and counted as such");
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- 12. a price keeps the moment it was observed -------------------------------
+  {
+    const d = tmp(), f = path.join(d, "claims.json");
+    const s = cs.create(ARGS(fakeProvider({ logs: [mintLog(900, "8240"), modLog(950, 1, 0n, "8240", "0xaa")], transfers: { "0xaa": [xfer(USDC, 3n)] } }), f));
+    await s.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 });
+    const [r] = s.rows("8240");
+    s.setPrice(r.key, { p0: 1, p1: 2, src: "pricelog", t: 1789000000000 });
+    assert.deepStrictEqual(s.rows("8240")[0].px, { p0: 1, p1: 2, src: "pricelog", t: 1789000000000 });
+    assert.deepStrictEqual(s.summary("8240", SUM).priceSources, { block: 0, pricelog: 1, today: 0, none: 0 });
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- 13. v4 rounding: adds up, removals down --------------------------------
+  // Real Arc fee-free add (#8240, tx 0xb297aed9…, block 21093628): the pool took
+  // exactly the rounded-up principal on both legs.
+  {
+    const sq = (x) => BigInt(x);
+    const lo = -887200, hi = 887200;
+    const up = cs.amountsFor(sq(u.getSqrtRatioAtTick(0)), lo, hi, 819041172569578n, true);
+    const down = cs.amountsFor(sq(u.getSqrtRatioAtTick(0)), lo, hi, 819041172569578n, false);
+    const ref = u.getAmountsForLiquidity(u.getSqrtRatioAtTick(0), u.getSqrtRatioAtTick(lo), u.getSqrtRatioAtTick(hi), 819041172569578n);
+    assert.deepStrictEqual(down, ref, "round-down matches the existing removal math");
+    assert.ok(up.amount0 - down.amount0 <= 1n && up.amount0 >= down.amount0 && up.amount1 - down.amount1 <= 1n && up.amount1 >= down.amount1);
+    // below / above the range: single-sided, same rounding rules
+    const below = cs.amountsFor(u.getSqrtRatioAtTick(-887210), -600, 600, 10n ** 12n, true);
+    assert.strictEqual(below.amount1, 0n);
+    const above = cs.amountsFor(u.getSqrtRatioAtTick(887000), -600, 600, 10n ** 12n, false);
+    assert.strictEqual(above.amount0, 0n);
+    // summary keeps sub-cent precision: rounding to cents made $0.0361 read as $0.04
+    const d = tmp(), f = path.join(d, "claims.json");
+    const s = cs.create(ARGS(fakeProvider({ logs: [mintLog(900, "8240"), modLog(950, 1, 0n, "8240", "0xaa")], transfers: { "0xaa": [xfer(USDC, 36149n)] } }), f));
+    await s.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 });
+    assert.strictEqual(s.summary("8240", SUM).usd, 0.036149);
     fs.rmSync(d, { recursive: true, force: true });
   }
 

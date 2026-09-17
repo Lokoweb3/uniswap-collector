@@ -10,6 +10,22 @@ function chainLabel() {
   return CHAIN.name || KNOWN_CHAINS[CHAIN.id] || (CHAIN.id ? 'chain ' + CHAIN.id : '');
 }
 
+// How this instance prices tokens, as the server describes it (`pricing` on
+// /api/positions, /api/watch and /api/portfolio). Without it the page says only
+// what is true everywhere, and names no particular pricing token.
+let PRICING = null;
+const PRICING_FALLBACK = 'Prices come from on-chain pools against this instance\u2019s unit of account; a token with no such pool is left unpriced.';
+function notePricing(d) {
+  if (d && d.pricing && typeof d.pricing.text === 'string' && d.pricing.text.trim()) PRICING = d.pricing;
+  const f = document.getElementById('pricefoot');
+  if (f) f.textContent = pricingText();
+}
+function pricingText() { return (PRICING && PRICING.text) || PRICING_FALLBACK; }
+// Client time of the last successful fetch of each payload, kept apart from the
+// payload's own `at` (when the server last read the data).
+const fetchedAt = new WeakMap();
+const clock = t => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
 document.body.classList.add('page-' + PAGE);
 document.title = PAGE === 'analytics' ? 'LP analytics' : document.title;
 $('#nav-' + (PAGE === 'analytics' ? 'analytics' : 'dash')).classList.add('here');
@@ -63,18 +79,70 @@ function price(p){
   return p.toLocaleString('en-US',{maximumSignificantDigits:4, useGrouping:false});
 }
 
-// Pool statistics line for a card (from the scanner via the server): TVL,
-// 24h volume and fees, fee APR, and the sibling pools of the same pair.
+// Pool statistics line for a card: the scanner's row for the pool, or the v4
+// pool read straight from chain (pools.js directV4), plus sibling pools of the
+// same pair.
 const usdK = n => n == null ? '—' : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'k' : usd(n);
+// A pool fee rate in percent, with precision that suits its size: two
+// significant digits under 1%, one decimal under 100%, whole numbers above.
+// Tiny positive rates read "<0.01%" rather than rounding to a false 0%. No cap.
+function ratePct(v) {
+  if (v == null || typeof v !== 'number' || !Number.isFinite(v)) return null;
+  if (v === 0) return '0%';
+  const a = Math.abs(v), sign = v < 0 ? '−' : '';
+  if (a < 0.01) return v > 0 ? '<0.01%' : '>−0.01%';
+  if (a < 1) return sign + a.toLocaleString('en-US', { maximumSignificantDigits: 2 }) + '%';
+  if (a < 100) return sign + a.toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%';
+  return sign + a.toLocaleString('en-US', { maximumFractionDigits: 0 }) + '%';
+}
+const POOL_RATE_LABEL = 'Estimated annualized pool fee rate';
+const ACTIVE_LIQ_TIP = 'Active (in-range) liquidity: the virtual reserves of the liquidity that is active at the current price, valued at current prices. It is not the pool’s total deposits — out-of-range liquidity is not counted.';
+const DIRECT_RATE_TIP = 'Estimated annualized pool fee rate, read from the v4 pool on chain: 24-h fees ÷ active (in-range) liquidity value × 365. '
+  + 'The fees are the growth of the pool’s fee-growth counters since the earliest hourly sample in the last 24 h, multiplied by the CURRENT active liquidity and valued at CURRENT token prices, '
+  + 'then scaled to 24 h when the window is shorter. It assumes today’s active liquidity was in place for the whole window, so it is a fee rate per unit of in-range liquidity — '
+  + 'not this position’s return (see Fee APR and Net return under Performance). Needs at least 30 minutes of samples.';
+const SCANNER_RATE_TIP = 'Estimated annualized pool fee rate as reported by the external pool scanner (its 24-h fees over its TVL, annualized). A pool-level rate, not this position’s return (see Fee APR and Net return under Performance).';
+// "~0.26%", or "<0.01%" (already a bound, so no "~"), escaped for HTML.
+const approxRate = r => esc((/^[<>]/.test(r) ? '' : '~') + r);
+function poolRateText(q, tip) {
+  const r = ratePct(q.aprPct);
+  return r == null ? '' : ` · <span class="poolrate" title="${esc(tip)}">${POOL_RATE_LABEL} <b>${approxRate(r)}</b></span>`;
+}
 function poolLine(p){
   const q = p.pool;
   if (!q) return '';
-  const own = q.missing ? '<span class="muted">pool not on the scanner</span>'
-    : q.direct
-      ? `pool <span class="muted" title="Read straight from the v4 pool state: active liquidity at the current price, fees from fee-growth samples">(on-chain)</span> active liquidity <b>${usdK(q.tvl)}</b>${q.fees24h != null ? ` · fees <b>${usdK(q.fees24h)}</b>/24h <span class="muted">(from ${q.feesWindowH.toFixed(1)}h)</span>${q.aprPct != null ? ` · ~<b>${q.aprPct.toFixed(0)}%</b> fee APR` : ''}` : ' · fees: sampling, ready in ~30 min'}`
-      : `pool TVL <b>${usdK(q.tvl)}</b> · 24h vol <b>${usdK(q.vol24h)}</b> · fees <b>${usdK(q.fees24h)}</b>${q.aprPct != null ? ` · ~<b>${q.aprPct.toFixed(0)}%</b> fee APR` : ''}${q.stale ? ' <span class="muted" title="scanner data is stale">(stale)</span>' : ''}`;
+  let own;
+  if (q.missing) own = '<span class="muted">pool not on the scanner</span>';
+  else if (q.direct) {
+    const liq = `<span class="liqlabel" title="${esc(ACTIVE_LIQ_TIP)}">active (in-range) liquidity</span> <b>${q.tvl == null ? 'unpriced' : usdK(q.tvl)}</b>`;
+    let fees;
+    if (q.feesWindowH == null) {
+      fees = ' · <span class="muted">fee rate withheld: fewer than 30 minutes of fee-growth samples so far</span>';
+    } else if (q.fees24h == null) {
+      fees = ` · <span class="muted">fee rate withheld: a token in this pool has no price (window ${q.feesWindowH.toFixed(1)} h)</span>`;
+    } else {
+      const extrap = q.feesWindowH < 24;
+      const win = extrap
+        ? `<span class="muted" title="Only ${q.feesWindowH.toFixed(1)} h of samples exist inside the last 24 h; the 24-h figure is that window scaled up">extrapolated to 24 h from ${q.feesWindowH.toFixed(1)} h observed</span>`
+        : `<span class="muted">observed over the last ${q.feesWindowH.toFixed(1)} h</span>`;
+      const rate = q.aprPct != null ? poolRateText(q, DIRECT_RATE_TIP)
+        : ' · <span class="muted">fee rate withheld: active liquidity has no positive value</span>';
+      // The estimate uses today's active liquidity for the whole window; say how far
+      // the sampled liquidity was from that, when it moved materially.
+      const lr = q.liqRange;
+      const liqNote = lr && (lr.min < 0.9 || lr.max > 1.1)
+        ? ` <span class="muted" title="The fee estimate multiplies the window’s fee growth by today’s active liquidity. Over the window the sampled active liquidity ranged ${lr.min}–${lr.max}× today’s (${lr.samples} hourly samples), so the estimate is only as good as that assumption.">(active liquidity ranged ${lr.min.toFixed(2)}–${lr.max.toFixed(2)}× today’s over the window)</span>`
+        : '';
+      fees = ` · fees <b>${usdK(q.fees24h)}</b>/24h ${win}${rate}${liqNote}`;
+    }
+    own = `pool <span class="muted" title="Read straight from the v4 pool state">(on-chain)</span> ${liq}${fees}`;
+  } else {
+    own = `pool TVL <b>${usdK(q.tvl)}</b> · 24h vol <b>${usdK(q.vol24h)}</b> · fees <b>${usdK(q.fees24h)}</b>${poolRateText(q, SCANNER_RATE_TIP)}` +
+      `${q.aprPct == null ? ' · <span class="muted">fee rate withheld: the scanner gives no fees or TVL for this pool</span>' : ''}` +
+      `${q.stale ? ' <span class="muted" title="scanner data is stale">(stale)</span>' : ''}`;
+  }
   const sib = (q.siblings || []).length
-    ? ` · <span class="sibs" title="Other pools for this pair, by 24h fee APR">others: ${q.siblings.map(x => `<span title="TVL ${usdK(x.tvl)} · 24h fees ${usdK(x.fees24h)}">${x.feePct != null ? x.feePct + '%' : x.name} ${x.version}${x.tag ? ' ' + x.tag : ''} <b class="${(x.aprPct || 0) > (q.aprPct || 0) ? '' : 'muted'}">${x.aprPct == null ? '—' : x.aprPct.toFixed(0) + '%'}</b></span>`).join(' · ')}</span>`
+    ? ` · <span class="sibs" title="Other pools for this pair, by ${POOL_RATE_LABEL.toLowerCase()} (from the pool scanner)">other pools’ fee rates: ${q.siblings.map(x => { const r = ratePct(x.aprPct); return `<span title="TVL ${usdK(x.tvl)} · 24h fees ${usdK(x.fees24h)}${r == null ? ' · no fee rate: the scanner gives no fees or TVL' : ''}">${x.feePct != null ? x.feePct + '%' : esc(x.name)} ${x.version}${x.tag ? ' ' + esc(x.tag) : ''} <b class="${(x.aprPct || 0) > (q.aprPct || 0) ? '' : 'muted'}">${r == null ? '—' : approxRate(r)}</b></span>`; }).join(' · ')}</span>`
     : '';
   return `<span class="rate poolstats">${own}${sib}</span>`;
 }
@@ -364,6 +432,7 @@ async function loadBalances(){
     const d = await r.json(); loadOk('Wallet balances');
     if (r.status === 503){ setTimeout(loadBalances, 15000); return; } // first pass still running
     if (!d.ok || !d.rows || !d.rows.length) return;
+    notePricing(d);
     lastPortfolio = d;
     $('#balpanel').hidden = false;
     renderPortfolio();
@@ -487,7 +556,7 @@ function renderPortfolio(){
       <td>${q(x.fees)}</td>
       <td><b>${amount(x.total)}</b></td>
       <td>${x.price == null ? '<span class="unpriced">no pool</span>' : x.via ? `<span title="Priced as ${x.via}, redeemable 1:1">$${price(x.price)} <span class="muted">as ${x.via}</span></span>` : '$' + price(x.price)}</td>
-      <td class="u">${x.thin ? `<span class="approx" title="The pool this is priced from holds only ${usd(x.depthUsd)} of ${x.address ? 'WETH or USDG' : ''}; selling would move it. Treat as a quote, not cash.">≈</span>` : ''}${usd(x.usd)}</td>
+      <td class="u">${x.thin ? `<span class="approx" title="${esc(`The pool this is priced from holds only ${usd(x.depthUsd)} on its pricing side, so selling would move it. Treat as a quote, not cash. ${pricingText()}`)}">≈</span>` : ''}${usd(x.usd)}</td>
       <td>${x.share == null ? '—' : x.share.toFixed(1) + '%'}</td>
       ${chg(x)}
     </tr>`).join('')}</table>` + (dust || showDust
@@ -496,8 +565,8 @@ function renderPortfolio(){
   if (dt) dt.addEventListener('click', e => { e.preventDefault(); setPref('portfolio:dust', showDust ? '0' : '1'); renderPortfolio(); });
   const scopeNote = scope === 'owner' ? '' : ` Showing ${label}; the collectable, PnL and projection tiles cover the main wallet only.${series.length >= 2 ? ' The chart is the hourly total for this selection.' : ' The value chart appears after a few hours of history.'}`;
   $('#pnote').textContent = (series.length >= 2
-    ? `Total = wallet + positions + uncollected fees, at current prices. Chart is hourly since ${new Date(series[0].t).toLocaleDateString(undefined,{month:'short',day:'numeric'})}. Prices come from the deepest WETH or USDG pool for each token; 24h change once a day of history exists.`
-    : 'Total = wallet + positions + uncollected fees, at current prices. Prices come from the deepest WETH or USDG pool for each token; ≈ marks a value larger than that pool holds.' + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
+    ? `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). Chart is hourly since ${new Date(series[0].t).toLocaleDateString(undefined,{month:'short',day:'numeric'})}. ${pricingText()} 24h change once a day of history exists.`
+    : `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). ${pricingText()} ≈ marks a value larger than its pricing pool holds.` + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
   renderSidebar();
 }
 $('#pfscope').addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); });
@@ -575,7 +644,8 @@ function renderWalletPanel(){
   }).join('');
   const unpricedTotal = rows.reduce((s, r) => s + (r.unpriced || 0), 0);
   note.textContent = 'Value = tokens in the wallet + open positions + uncollected fees, at current prices. '
-    + (unpricedTotal ? 'Tokens with no WETH or USDG pool are excluded. ' : '')
+    + pricingText() + ' '
+    + (unpricedTotal ? 'Unpriced tokens are excluded. ' : '')
     + (priced.length < rows.length ? 'Wallets without a value are left out of the shares.' : 'Shares are of the priced total above.');
 }
 
@@ -664,7 +734,7 @@ function renderCoveragePanel(){
   const feeBad = [...((d && d.positions) || []),
     ...(wl || []).flatMap(w => w.positions || [])].filter(p => p.feesOk === false).length;
   if (feeBad) li('warn', `${feeBad} position${feeBad === 1 ? '' : 's'} could not report fees in this read.`);
-  li('', 'Collect-by-collect history and fee-token cost basis are loaded on Analytics, not here.');
+  li('', 'Each position\u2019s collection history opens from its Claimed fees tile, with its coverage and how each claim is valued. Analytics adds the combined collect-by-collect table across positions, its CSV export and the fee-token cost basis.');
   ul.innerHTML = items.join('');
   note.textContent = 'Unavailable is not zero: a figure with no evidence behind it is left out rather than guessed.';
 }
@@ -1451,6 +1521,7 @@ function renderUnlock(unlock){
 
 function render(d){
   lastRender = d;
+  notePricing(d);
   EXPLORER = d.explorer || null;
   $('#owner').textContent = d.owner.slice(0,6) + '…' + d.owner.slice(-4);
   // The address is the configured main wallet, not the owner of everything on
@@ -1672,36 +1743,123 @@ async function refreshClaimPanel(panel, b) {
       `This is a failed read, not a statement that nothing was collected. Close and reopen to retry.</p>`;
 }
 
-// The panel body: covers unavailable, empty, partial and complete. Every one of
-// them says what it knows and what it does not.
+// ---- claimed fees: one state, every view ------------------------------------
+// The server names where a position's claim history stands (`claimed.state`).
+// An older server does not, so the state is derived from status + coverage the
+// same way the server defines it. The tile, the line, the footer and the panel
+// all read it from here, so the four can never disagree.
+const CLAIM_STATES = ['complete', 'scanning', 'lookback-reached', 'undecodable', 'not-scanned', 'unsupported'];
+function claimState(c) {
+  if (!c) return 'not-scanned';
+  if (CLAIM_STATES.includes(c.state)) return c.state;
+  const cov = c.coverage;
+  if (c.status === 'unavailable') return cov ? 'undecodable' : 'not-scanned';
+  if (c.status === 'ok' && cov && cov.coversOpening === true) return 'complete';
+  if (cov && cov.reachedLookbackFloor && cov.coversOpening !== true) return 'lookback-reached';
+  return 'scanning';
+}
+// A zero is a finding only when the server says so. An older server gives no
+// flag: then only a complete history with an explicit count of 0 and $0 counts
+// (or, in the panel, a complete scan that listed no rows). Missing records are
+// never read as zero.
+function claimVerifiedZero(c, rows) {
+  if (!c) return false;
+  if (typeof c.verifiedZero === 'boolean') return c.verifiedZero;
+  if (claimState(c) !== 'complete') return false;
+  if (c.count === 0 && c.usd === 0) return true;
+  return Array.isArray(rows) && rows.length === 0 && c.count == null && c.usd == null;
+}
+const cDate = t => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+const cTime = t => t ? new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
+// How a claimed-fee dollar figure was valued. `short` fits a tile, `text` a tooltip.
+// Historical prices are named for what they are; any share at today's price is
+// called out and marks the figure approximate.
+function claimValuation(c) {
+  const ps = c && c.priceSources;
+  if (ps && typeof ps === 'object') {
+    const b = ps.block || 0, h = ps.pricelog || 0, t = ps.today || 0;
+    const hist = b && h ? `valued at each claim’s transaction price (${b}) or the hourly price log (${h})`
+      : b ? 'valued at each claim’s transaction price'
+      : h ? 'valued at the hourly price log for each claim' : '';
+    const histShort = b && h ? 'valued at claim-time prices (transaction or hourly log)'
+      : b ? 'valued at each claim’s transaction price'
+      : h ? 'valued at the hourly price log' : '';
+    if (!t) return { text: hist, short: histShort, approx: false };
+    if (!b && !h) return { text: 'valued at today’s prices, not the prices when claimed', short: 'at today’s prices', approx: true };
+    return { text: `${hist}; ${t} of ${b + h + t} at today’s prices because no price from their moment was found`,
+      short: 'partly at today’s prices', approx: true };
+  }
+  if (c && c.usdBasis === 'at-claim') return { text: 'valued at each claim’s transaction price or the hourly price log', short: 'valued at claim-time prices', approx: false };
+  if (c && c.usdBasis === 'mixed') return { text: 'partly valued at today’s prices because no price from some claims’ moment was found', short: 'partly at today’s prices', approx: true };
+  if (c && c.usdBasis === 'today') return { text: 'valued at today’s prices, not the prices when claimed', short: 'at today’s prices', approx: true };
+  return { text: '', short: '', approx: false };
+}
+// "$X", "≈$X", "at least $X" or "at least ≈$X"; null when there is no USD total.
+function claimMoney(c, floor) {
+  if (!c || c.usd == null) return null;
+  return (floor ? 'at least ' : '') + (claimValuation(c).approx ? '≈' : '') + usd(c.usd);
+}
+const CLAIM_MIXED_NOTE = 'Claimed fees are valued at historical prices; uncollected fees are valued at current prices, so the two are not one uniform earnings total.';
+// The sentence that explains a non-complete state: the server's reason when it
+// gives one, otherwise a plain statement of the state (never a guessed cause).
+function claimWhy(c, st) {
+  if (c && c.reason) return String(c.reason);
+  return {
+    scanning: 'The history scan has not reached this position’s opening yet.',
+    'lookback-reached': 'The scan reached the configured lookback limit before this position’s opening, so lifetime history is incomplete.',
+    undecodable: 'A payout in the scanned history could not be decoded or attributed to this position.',
+    'not-scanned': 'No block range has been scanned for this position yet.',
+    unsupported: 'Claim history is not supported for this position.',
+  }[st] || '';
+}
+const endStop = s => !s ? '' : /[.!?]$/.test(s) ? s : s + '.';
+
+// The panel body, one branch per state. Every one says what it knows and what it does not.
 function claimPanelHtml(d) {
   const cov = d.coverage;
+  const st = claimState(d);
+  const rows = d.rows || [];
   const window_ = cov && cov.fromT && cov.toT
-    ? `blocks ${cov.fromBlock}\u2013${cov.toBlock} (${new Date(cov.fromT).toLocaleString()} \u2013 ${new Date(cov.toT).toLocaleString()})`
-    : cov && cov.fromBlock ? `blocks ${cov.fromBlock}\u2013${cov.toBlock}` : 'an unrecorded range';
-  if (d.status === 'unavailable') {
-    return `<p class="chnote warn">Claim history unavailable. ${esc(d.reason || '')}</p>`;
-  }
-  const complete = d.status === 'ok' && !!cov && cov.coversOpening === true && !d.rows.some(r => r.unavailable);
-  const note = complete
-    ? `<p class="chnote">Scanned ${esc(window_)}, from the block this position was opened in \u2014 complete for this position.</p>`
-    : `<p class="chnote warn">Partial: only ${esc(window_)} has been scanned${d.reason ? ` \u2014 ${esc(d.reason)}` : ''}. Collections before that are not listed.` +
+    ? `blocks ${cov.fromBlock}–${cov.toBlock} (${new Date(cov.fromT).toLocaleString()} – ${new Date(cov.toT).toLocaleString()})`
+    : cov && cov.fromBlock ? `blocks ${cov.fromBlock}–${cov.toBlock}` : 'an unrecorded range';
+  const why = esc(endStop(claimWhy(d, st)));
+  const val = claimValuation(d);
+  let note;
+  if (st === 'complete') {
+    const money = claimMoney(d, false);
+    note = `<p class="chnote">Complete history: scanned ${esc(window_)}, from the block this position was opened in.` +
+      (money && rows.length ? ` Total <b>${esc(money)}</b>${val.text ? ', ' + esc(val.text) : ''}.` : '') + '</p>';
+  } else if (st === 'scanning') {
+    note = `<p class="chnote warn">Scan in progress: only ${esc(window_)} has been scanned so far. ${why} Collections before that are not listed yet, so anything below is a floor, not a total.` +
       `${cov && !cov.reachedLookbackFloor ? ' Opening this panel extends the scan a little further back each time.' : ''}</p>`;
-  if (!d.rows.length) {
-    return note + `<p class="chnote">No collections in the scanned range. ${complete
-      ? 'This position has never had fees collected.'
-      : 'That is not the same as none having happened \u2014 earlier blocks are still unscanned.'}</p>`;
+  } else if (st === 'lookback-reached') {
+    note = `<p class="chnote warn">Lifetime history incomplete: the scan reached its lookback limit` +
+      `${cov && cov.fromT ? ` and covers only claims since ${esc(cDate(cov.fromT))}` : ''} (${esc(window_)}). ${why} Anything below is a floor, not a lifetime total.</p>`;
+  } else if (st === 'undecodable') {
+    note = `<p class="chnote warn">No figure: ${why} Scanned ${esc(window_)}. No total is given, and this is not a zero.</p>`;
+  } else if (st === 'unsupported') {
+    return `<p class="chnote warn">Claim history not supported: ${why} Nothing is known either way.</p>`;
+  } else {
+    return `<p class="chnote warn">Claim history not scanned yet: ${why} Nothing is known either way — this is not a zero.</p>`;
   }
-  return note + '<table class="chtable"><caption>Fees only \u2014 withdrawn principal and added deposits are excluded from every row</caption>' +
-    '<thead><tr><th scope="col">When</th><th scope="col">Kind</th><th scope="col">Fees claimed</th><th scope="col">USD basis</th><th scope="col">Tx</th></tr></thead><tbody>' +
-    d.rows.map(r => `<tr><td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown'}</td>` +
+  if (!rows.length) {
+    if (st === 'undecodable') return note;
+    return note + `<p class="chnote">${claimVerifiedZero(d, rows)
+      ? 'No collections in the complete history: this position has never had fees collected (verified).'
+      : st === 'complete'
+        ? 'No collections are listed, but the server did not confirm a zero total, so none is shown.'
+        : 'No collections in the scanned range. That is not the same as none having happened — earlier blocks are not covered.'}</p>`;
+  }
+  return note + '<table class="chtable"><caption>Fees only — withdrawn principal and added deposits are excluded from every row. USD is per row, at the price named beside it.</caption>' +
+    '<thead><tr><th scope="col">When</th><th scope="col">Kind</th><th scope="col">Fees claimed</th><th scope="col">USD value</th><th scope="col">Tx</th></tr></thead><tbody>' +
+    rows.map(r => `<tr><td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown'}</td>` +
       `<td>${claimKindLabel(r.kind)}</td>` +
       `<td class="mono">${r.unavailable ? `<span class="unavail" title="${esc(r.unavailable)}">not separable</span>`
         : (r.fee0 == null || r.fee1 == null)
-          ? '<span class="unavail" title="A token\u2019s decimals could not be read, so this amount cannot be shown">amount unavailable</span>'
+          ? '<span class="unavail" title="A token’s decimals could not be read, so this amount cannot be shown">amount unavailable</span>'
           : `<span class="amt">${esc(r.fee0)}</span><span class="amt">${esc(r.fee1)}</span>`}</td>` +
-      `<td>${claimPriceLabel(r)}</td>` +
-      `<td class="mono">${r.tx ? linkify(r.tx.slice(0, 10) + '\u2026') : '\u2014'}</td></tr>`).join('') +
+      `<td>${claimRowValue(r)}</td>` +
+      `<td class="mono">${r.tx ? linkify(r.tx.slice(0, 10) + '…') : '—'}</td></tr>`).join('') +
     '</tbody></table>';
 }
 // What a row was. v4 pays out accrued fees on every liquidity change, so an add
@@ -1711,19 +1869,23 @@ function claimKindLabel(kind) {
   if (kind === 'increase') return '<span title="Liquidity was added. v4 pays out the fees accrued so far at the same time, netted against the deposit; only that fee part is counted">add (fees netted)</span>';
   return 'collect';
 }
-// Which price a collection's USD value uses. Only "its block" and "its hour" are
-// what was actually received; "today's price" is an approximation and says so.
+// Which price a collection's USD value uses, and from when. Only the transaction
+// price and the hourly log describe what was actually received; today's price is
+// an approximation and says so.
 function claimPriceLabel(r) {
-  if (r.unavailable) return '\u2014';
-  if (r.priceSrc === 'block') return '<span title="Valued at the pool price read at this collection\u2019s own block">its block</span>';
-  if (r.priceSrc) return '<span title="Valued at the hourly price log, within three hours of this collection">its hour</span>';
-  return '<span class="approx" title="No price from this collection\u2019s moment was found, so the card values it at today\u2019s price \u2014 an approximation, not what was received">today\u2019s price</span>';
+  if (r.unavailable) return '—';
+  const at = r.priceT ? cTime(r.priceT) : null;
+  if (r.priceSrc === 'block') return `<span class="psrc" title="Valued at the pool price at this claim’s own transaction (after any earlier swap in its block)${at ? ', block time ' + esc(at) : ''}. The token priced against the unit of account comes from this position’s own pool.">transaction price${at ? ' · ' + esc(at) : ''}</span>`;
+  if (r.priceSrc) return `<span class="psrc" title="Valued at the hourly price log${at ? ' entry of ' + esc(at) : ''}, within three hours of this collection">hourly price log${at ? ' · ' + esc(at) : ''}</span>`;
+  return `<span class="psrc approx" title="No price from this collection’s moment was found, so it is valued at today’s price — an approximation, not what was received">today’s price${at ? ' · ' + esc(at) : ''}</span>`;
 }
-// Short label for the card: how the dollar total was valued.
-function claimBasisShort(c) {
-  return c.usdBasis === 'at-claim' ? 'valued when claimed'
-    : c.usdBasis === 'mixed' ? 'partly at today\u2019s prices'
-    : c.usdBasis === 'today' ? 'at today\u2019s prices' : '';
+// A row's USD figure with its source. No figure is "no USD value", never $0.
+function claimRowValue(r) {
+  if (r.unavailable) return '—';
+  const v = typeof r.usd === 'number' && Number.isFinite(r.usd)
+    ? `<b class="mono">${r.priceSrc ? '' : '≈'}${usd(r.usd)}</b>`
+    : '<span class="unavail" title="This row has no USD value in this answer">no USD value</span>';
+  return `<span class="rowusd">${v}<span class="rowsrc">${claimPriceLabel(r)}</span></span>`;
 }
 // Flip a pair's price orientation from its unit label.
 let lastRender = null;
@@ -1743,6 +1905,7 @@ async function load(fresh){
     const r = await fetch('/api/positions' + (fresh ? '?fresh=1' : ''));
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'request failed');
+    fetchedAt.set(d, Date.now());
     render(d);
   }catch(e){
     $('#list').innerHTML = `<div class="err">Could not reach the chain. ${e.message}
@@ -1771,22 +1934,64 @@ function sortLT(arr){
 const ltDate = t => t ? new Date(t).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '?';
 const ltPctText = (v, signed) => v == null ? '—' : (signed ? (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) : v.toFixed(0)) + '%';
 function ltBasisText(m){ return m.basis === 'twa' ? `time-weighted value ${usd(m.basisUsd)}` : m.basis === 'open' ? `value at open ${usd(m.basisUsd)}` : 'no basis (no price at open)'; }
+// What a long-term figure still needs, read from the measure longterm.js returned
+// (measureOne / measureChain). Fee APR = window fees ÷ basis, annualised, and needs
+// a window of at least an hour; net return = net USD ÷ basis. Each missing input
+// is named on its own, so the card never claims both are absent when only one is.
+const LT_NEEDS = {
+  basis: 'an opening value (no price was recorded at the deposit, and the daily value ledger does not cover enough of the window for a time-weighted value)',
+  fees: 'a fee observation at the start of the window (the daily value ledger has no uncollected-fee reading there)',
+  window: 'a window of at least one hour',
+  net: 'every leg of net return (the deposit history behind the price move and impermanent loss is incomplete)',
+};
+function ltNeeds(m) {
+  const basis = m.basisUsd == null || !(m.basisUsd > 0);
+  const out = { fee: [], net: [] };
+  if (basis) { out.fee.push(LT_NEEDS.basis); out.net.push(LT_NEEDS.basis); }
+  if (m.feeAprPct == null) {
+    if (m.feesUsd == null) out.fee.push(LT_NEEDS.fees);
+    if (m.days != null && m.days < 1 / 24) out.fee.push(LT_NEEDS.window);
+  }
+  if (m.netPct == null && m.netUsd == null) out.net.push(LT_NEEDS.net);
+  if (m.feeAprPct != null) out.fee = [];
+  if (m.netPct != null) out.net = [];
+  return out;
+}
+// The Performance group's empty note, when no long-term block could be drawn at all.
+function perfEmptyNote(p) {
+  const lt = p.longTerm;
+  const head = 'No performance figures yet. ';
+  if (!lt) return head + 'Fee APR and net return have not been computed for this position in this read (no long-term record was returned for it).';
+  const src = lt.chained && lt.chain ? lt.chain : lt;
+  if (!src.d30 || !src.sinceOpen) return head + 'Fee APR and net return need the time this position was opened, and no first deposit is recorded for it.';
+  const n = ltNeeds(src.d30);
+  const parts = [];
+  if (n.fee.length) parts.push('Fee APR needs ' + n.fee.join(' and '));
+  if (n.net.length) parts.push('Net return needs ' + n.net.join(' and '));
+  return head + (parts.length ? parts.join('. ') + '.' : 'Nothing is missing, but the figures were not drawn.');
+}
 function longTermLine(p){
   const lt = p.longTerm;
-  if (!lt || !lt.d30 || !lt.sinceOpen) return '';
+  if (!lt) return '';
   const src = lt.chained && lt.chain ? lt.chain : lt;
   const d30 = src.d30, all = src.sinceOpen;
+  if (!d30 || !all) return '';
   const win = d30.days != null && all.days != null && d30.days < all.days ? `last ${d30.days.toFixed(0)} d` : `since open (${(d30.days || 0).toFixed(1)} d)`;
   const approx = d30.approx ? ' ≈ deposit basis taken when the dashboard first saw the position' : '';
   const chainNote = lt.chained ? `\nChained: ${lt.members} positions in this pool counted as one (re-minted within 48 h of a close); this position alone: fee APR ${ltPctText(lt.d30 && lt.d30.feeAprPct)}, net ${ltPctText(lt.d30 && lt.d30.netPct, true)}.` : '';
-  const feeTip = `Fee APR, ${win}: fees ${usd(d30.feesUsd)} on the ${ltBasisText(d30)}, annualised over the actual days${d30.unpricedCollects ? ` (${d30.unpricedCollects} unpriced collect${d30.unpricedCollects === 1 ? '' : 's'} not counted)` : ''}.\nSince open (${(all.days || 0).toFixed(1)} d): ${ltPctText(all.feeAprPct)}, fees ${usd(all.feesUsd)}.${approx}${chainNote}`;
-  const netTip = `Net return, ${win}: fees + price move + IL = ${d30.netUsd == null ? 'unknown (a leg is missing)' : (d30.netUsd >= 0 ? '+' : '−') + usd(Math.abs(d30.netUsd))} on the ${ltBasisText(d30)}.\nSince open: ${all.netUsd == null ? 'unknown' : (all.netUsd >= 0 ? '+' : '−') + usd(Math.abs(all.netUsd)) + ' (' + ltPctText(all.netPct, true) + ')'}.${approx}${chainNote}`;
-  // Both figures rest on an opening value. When there is no price recorded at the
-  // position's open the basis is unknown, so neither percentage exists: say that
-  // plainly and keep the full explanation on hover, rather than showing a bare dash
-  // or quietly substituting a different measure.
-  if (d30.basisUsd == null && d30.feeAprPct == null && d30.netPct == null) {
-    return `<span class="rate lt nobasis" tabindex="0" title="${esc(feeTip + "\n\n" + netTip)}">Opening value unavailable</span>`;
+  const needs = ltNeeds(d30);
+  const feeMissing = needs.fee.length ? `\nUnavailable: needs ${needs.fee.join(' and ')}.` : '';
+  const netMissing = needs.net.length ? `\nUnavailable: needs ${needs.net.join(' and ')}.` : '';
+  const feeTip = `This position's own fee APR, ${win}: fees ${usd(d30.feesUsd)} on the ${ltBasisText(d30)}, annualised over the actual days${d30.unpricedCollects ? ` (${d30.unpricedCollects} unpriced collect${d30.unpricedCollects === 1 ? '' : 's'} not counted)` : ''}.${feeMissing}\nSince open (${(all.days || 0).toFixed(1)} d): ${ltPctText(all.feeAprPct)}, fees ${usd(all.feesUsd)}.${approx}${chainNote}`;
+  const netTip = `Net return, ${win}: fees + price move + IL = ${d30.netUsd == null ? 'unknown (a leg is missing)' : (d30.netUsd >= 0 ? '+' : '−') + usd(Math.abs(d30.netUsd))} on the ${ltBasisText(d30)}.${netMissing}\nSince open: ${all.netUsd == null ? 'unknown' : (all.netUsd >= 0 ? '+' : '−') + usd(Math.abs(all.netUsd)) + ' (' + ltPctText(all.netPct, true) + ')'}.${approx}${chainNote}`;
+  // Neither figure exists: say exactly which inputs are missing, per figure, and
+  // keep the full explanation on hover, rather than a bare dash or a substitute measure.
+  if (d30.feeAprPct == null && d30.netPct == null) {
+    const same = needs.fee.join() === needs.net.join();
+    const text = same
+      ? `Fee APR and net return unavailable — need ${needs.fee.join(' and ')}`
+      : `Fee APR unavailable — needs ${needs.fee.join(' and ') || 'inputs not reported'}; net return unavailable — needs ${needs.net.join(' and ') || 'inputs not reported'}`;
+    return `<span class="rate lt nobasis" tabindex="0" title="${esc(feeTip + "\n\n" + netTip)}">${esc(text)}</span>`;
   }
   const chainHint = lt.chained ? ` <span class="ltchain" title="${esc(`Re-minted ${lt.members - 1}× within 48 h of a close; fees and days run from the first open`)}">⛓ since ${ltDate(lt.chainSince)}</span>` : '';
   return `<span class="rate lt"><span class="ltstat" title="${esc(feeTip)}">Fee APR <b>${ltPctText(d30.feeAprPct)}</b></span><span class="ltstat" title="${esc(netTip)}">Net return <b class="${d30.netPct != null && d30.netPct < 0 ? 'neg' : ''}">${ltPctText(d30.netPct, true)}</b></span>${chainHint}</span>`;
@@ -1824,7 +2029,7 @@ function feeFace(p) {
 // collection history from the rows /api/history already loaded.
 // ---------------------------------------------------------------------------
 function rangeStatus(p, v, near) {
-  if (p.tickLower <= -887000 && p.tickUpper >= 887000) return { text: 'Full range', sub: 'always earning, never idle', cls: '' };
+  if (p.tickLower <= -887000 && p.tickUpper >= 887000) return { text: 'Full range', sub: 'Full range — fees accrue when eligible swaps occur.', cls: '' };
   if (p.inRange) return { text: near ? 'Near the edge' : 'In range',
     sub: `${v.toLower.toFixed(1)}% to the floor · ${v.toUpper.toFixed(1)}% to the ceiling`, cls: near ? 'near' : '' };
   const reenter = v.above ? { dir: 'fall', pct: (1 - v.upper / v.current) * 100 }
@@ -1833,61 +2038,65 @@ function rangeStatus(p, v, near) {
     sub: `needs a ${reenter.pct.toFixed(1)}% ${reenter.dir} to start earning`, cls: 'out' };
 }
 
-// The claimed-fees metric. Same four states as claimedLine(), condensed to a tile:
-// a number only when history actually covers this position.
+// The claimed-fees metric: the state from claimState(), condensed to a tile. A
+// number only with verified records behind it; a floor reads "at least"; a zero
+// only when verified. Its title says how the figure was valued, because the
+// uncollected-fee tile beside it is at current prices.
 function claimedMetric(p, uid) {
   const c = p.claimed;
   const sc = (c && c.scope) || {};
-  const open = `<button type="button" class="metric claimed" aria-expanded="false" aria-controls="${uid}" data-claim="${uid}"` +
+  const st = claimState(c);
+  const cov = (c && c.coverage) || {};
+  const open = `<button type="button" class="metric claimed" aria-expanded="false" aria-controls="${uid}" data-claim="${uid}" data-state="${st}"` +
     ` data-tokenid="${esc(String(sc.tokenId || p.nftId || p.tokenId || ''))}"` +
     ` data-chainid="${esc(String(sc.chainId || ''))}"` +
     ` data-manager="${esc(String(sc.positionManager || ''))}"`;
-  if (!c || c.status === 'unavailable') {
-    const why = c && c.reason ? esc(c.reason) : 'no claim history has been scanned for this chain and position manager';
-    return `${open} title="Claim history unavailable: ${why}. This is not a statement that nothing was claimed — nothing is known either way.">` +
-      `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
-      `<span class="msub">no claim history for this chain</span></button>`;
-  }
-  if (c.status === 'partial') {
-    // A partial window with no known start is still partial: say the figure is a
-    // floor rather than dress an unknown date as one.
-    const since = c.since ? new Date(c.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
-    // A partial figure is only worth showing when the records inside it are
-    // verified. Without that there is nothing to put a "+" on, and a number would
-    // imply an attribution that was never established.
-    const verified = c.count > 0 && c.tokens && c.tokens.length;
-    if (!verified) {
-      return `${open} title="${esc(c.reason || 'No verified collections have been found in the scanned range yet')}">` +
-        `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
-        `<span class="msub">claim history unavailable for this range</span></button>`;
+  const tile = (title, cls, mv, sub, subCls) => `${open} title="${esc(title)}">` +
+    `<span class="ml">Claimed fees</span><span class="mv${cls ? ' ' + cls : ''}">${mv}</span>` +
+    `<span class="msub${subCls ? ' ' + subCls : ''}">${sub}</span></button>`;
+  const n = (c && c.count) || 0;
+  const nClaims = `${n} claim${n === 1 ? '' : 's'}`;
+  const val = claimValuation(c);
+  const why = endStop(claimWhy(c, st));
+  const tail = ' Already paid out to the wallet, so it is not part of the position value. ' + CLAIM_MIXED_NOTE + ' Opens the collection history.';
+  const blocks = cov.fromBlock != null ? ` Scanned blocks ${cov.fromBlock}–${cov.toBlock}${cov.fromT ? ' (since ' + cDate(cov.fromT) + ')' : ''}.` : '';
+  if (st === 'complete') {
+    if (claimVerifiedZero(c)) {
+      return tile(`Complete history: the scan covers this position from its opening${cov.openedBlock != null ? ' at block ' + cov.openedBlock : ''} and every payout decoded; none was found. A verified zero.` + tail,
+        'zero', usd(0), 'none claimed · complete history, verified');
     }
-    const cov = c.coverage || {};
-    const from = cov.fromT ? new Date(cov.fromT).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
-    const sub = from ? `${c.count} verified since ${from} — partial history`
-      : `${c.count} verified in the scanned range — partial history`;
-    return `${open} title="Verified from chain: ${esc(String(c.count))} collection(s) inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}. ${esc(c.reason || 'Earlier blocks are not scanned')}, so this is a floor, not a total. ${esc(c.usdMissing || c.basis || '')}">` +
-      `<span class="ml">Claimed fees</span><span class="mv partial">${c.usd != null ? usd(c.usd) + '+' : '—'}</span>` +
-      `<span class="msub">${esc(sub)}</span></button>`;
-  }
-  if (!c.count) {
-    // Zero only when the scan actually reached back past this position's opening.
-    // Anything less is an unscanned range, which is not evidence of nothing.
-    const cov = c.coverage || {};
-    if (c.status !== 'ok' || cov.coversOpening !== true || c.usd !== 0) {
-      return `${open} title="No collections found inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}, but the scan has not reached this position's opening, so nothing can be concluded.">` +
-        `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
-        `<span class="msub">scanned range does not reach this position's start</span></button>`;
+    if (!n) {
+      return tile(`Complete history, but the server did not confirm a zero total${c.usdMissing ? ' (' + c.usdMissing + ')' : ''}, so no figure is shown.` + tail,
+        'unavail', 'No figure', 'complete history · total not confirmed');
     }
-    return `${open} title="The scan covers this position from block ${esc(String(cov.fromBlock))}, before its opening at block ${esc(String(cov.openedBlock))}, and found no fee collect and no withdrawal. A verified zero, not an assumption.">` +
-      `<span class="ml">Claimed fees</span><span class="mv zero">${usd(0)}</span>` +
-      `<span class="msub">none yet · verified from chain</span></button>`;
+    const money = claimMoney(c, false);
+    const when = cTime(c.last);
+    return tile(`${nClaims} over this position’s complete history (collects, withdrawals and liquidity adds that paid out fees).` +
+      `${val.text ? ' USD ' + val.text + '.' : ''}${c.usdMissing ? ' No USD total: ' + c.usdMissing + '.' : ''}` + tail,
+      money ? (val.approx ? 'approx' : '') : 'unavail', money ? esc(money) : 'No USD total',
+      `${nClaims}${when ? ' · last ' + esc(when) : ''} · complete history${money && val.short ? ' · ' + esc(val.short) : ''}`);
   }
-  const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
-  const basis = claimBasisShort(c);
-  return `${open} title="${c.count} claim${c.count === 1 ? '' : 's'} (collects, withdrawals and liquidity adds that paid out fees). ${esc(c.usdMissing || c.basis || '')}. Already paid out to the wallet, so it is not part of the position value.">` +
-    `<span class="ml">Claimed fees</span>` +
-    `<span class="mv${c.usdBasis && c.usdBasis !== 'at-claim' ? ' approx' : ''}">${c.usd != null ? (c.usdBasis && c.usdBasis !== 'at-claim' ? '\u2248' : '') + usd(c.usd) : '—'}</span>` +
-    `<span class="msub">${c.count} claim${c.count === 1 ? '' : 's'}${when ? ' · last ' + esc(when) : ''}${c.usd == null && c.usdMissing ? ' · no USD total' : basis ? ' · ' + basis : ''}</span></button>`;
+  if (st === 'scanning' || st === 'lookback-reached') {
+    const found = n > 0 && c.tokens && c.tokens.length;
+    const money = found ? claimMoney(c, true) : null;
+    const from = cDate(cov.fromT);
+    const floorNote = found ? ` ${nClaims} verified in that range; the figure is a floor, not a lifetime total.` : ' None found in that range so far, which is not the same as none claimed.';
+    const title = why + blocks + floorNote + (money && val.text ? ' USD ' + val.text + '.' : '') + tail;
+    const label = st === 'scanning' ? 'scan in progress' : 'lifetime history incomplete';
+    const sub = st === 'scanning'
+      ? `${found ? nClaims + ' found so far' : 'none found so far'}${from ? ' since ' + esc(from) : ''} · ${label}`
+      : `${label} · covers ${from ? 'since ' + esc(from) : 'a limited range'}${found ? ' · ' + nClaims : ''}`;
+    if (money) return tile(title, 'partial', esc(money), sub + (val.approx ? ' · ' + esc(val.short) : ''));
+    return tile(title, 'partial', st === 'scanning' ? 'Scanning…' : 'Incomplete', sub);
+  }
+  if (st === 'undecodable') {
+    return tile(why + blocks + ' No figure is given, and this is not a zero.' + tail,
+      'unavail', 'No figure', esc(why), 'reason');
+  }
+  if (st === 'unsupported') {
+    return tile(why + ' Nothing is known either way; this is not a zero.', 'unavail', 'Not supported', esc(why), 'reason');
+  }
+  return tile(why + ' Nothing is known either way; this is not a zero.', 'unavail', 'Not scanned yet', 'no block range scanned yet');
 }
 
 function positionCard(p, d, opts) {
@@ -1895,7 +2104,7 @@ function positionCard(p, d, opts) {
   const v = orient(p);
   const near = p.inRange && (v.toUpper < NEAR || v.toLower < NEAR);
   // Full range: liquidity across the whole tick space, so there is no floor or
-  // ceiling to show and the position is never idle.
+  // ceiling to show; fees accrue whenever eligible swaps occur.
   const full = p.tickLower <= -887000 && p.tickUpper >= 887000;
   const st = rangeStatus(p, v, near);
   const cls = 'pos card2' + (p.inRange ? (near ? ' near' : '') : ' out');
@@ -1975,8 +2184,7 @@ function positionCard(p, d, opts) {
 
         <section class="dgroup">
           <h4>Performance</h4>
-          ${dgroupBody([longTermLine(p), o.perf, sparkline(p.spark)],
-            'No performance figures yet. Fee APR and net return need an opening value for this position and at least one fee observation; neither is available here.')}
+          ${dgroupBody([longTermLine(p), o.perf, sparkline(p.spark)], esc(perfEmptyNote(p)))}
         </section>
 
         <section class="dgroup">
@@ -1985,11 +2193,23 @@ function positionCard(p, d, opts) {
         </section>
       </div>
       <footer class="dfoot">
-        <span>${d && d.at ? 'Last successful update ' + new Date(d.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Last update unknown'}</span>
+        <span>${esc(freshText(d))}</span>
         <span>${coverageText(p)}</span>
       </footer>
     </details>
   </article>`;
+}
+
+// When the data was read and when this page last fetched it, stated separately.
+// `at` is the server's read time; the fetch time is this browser's clock at the
+// last successful fetch. A failed refresh leaves both as they were, and the
+// section's stale warning says so.
+function freshText(d) {
+  if (!d) return 'Last successful update unknown.';
+  const read = d.at ? clock(d.at) : null;
+  const got = fetchedAt.get(d);
+  return `Last successful update: data read ${read || 'at an unrecorded time'}${d.cached ? ' (a cached read)' : ''}` +
+    (got ? ` \u00b7 page last refreshed it ${clock(got)}.` : '.');
 }
 
 // A group with nothing in it says so, rather than rendering a heading over empty
@@ -2005,65 +2225,72 @@ function feeMetric(p) {
     return `<span class="mv unavail">Unavailable</span><span class="msub">${esc(String(p.feesError || 'the fee read did not return a value'))}</span>`;
   }
   return `<span class="mv ${(p.feesUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feesUsd)}</span>` +
-    `<span class="msub">accrued, still in the pool</span>`;
+    `<span class="msub" title="Valued at current prices. The Claimed fees tile beside it uses historical prices, so the two are not one uniform total.">at current prices \u00b7 still in the pool</span>`;
 }
 
 // What the claim history does and does not cover, stated on every card.
 function coverageText(p) {
   const c = p.claimed;
-  if (!c || c.status === 'unavailable') return 'Claim history: none scanned for this chain and position manager';
-  if (c.status === 'partial') return c.since
-    ? `Claim history: partial, from ${new Date(c.since).toLocaleDateString()}${c.reason ? ' \u2014 ' + esc(c.reason) : ''}`
-    : 'Claim history: partial — earlier claims not loaded, so the figure is a floor';
-  return `Claim history: complete from ${c.since ? new Date(c.since).toLocaleDateString() : 'this position’s first block'}`;
+  const st = claimState(c);
+  const cov = (c && c.coverage) || {};
+  const why = esc(endStop(claimWhy(c, st)));
+  if (st === 'complete') {
+    return `Claim history: complete history from this position’s opening` +
+      `${cov.openedT ? ' on ' + esc(cDate(cov.openedT)) : cov.openedBlock != null ? ' at block ' + esc(String(cov.openedBlock)) : ''}` +
+      `${cov.toT ? ' to ' + esc(cTime(cov.toT)) : ''}`;
+  }
+  if (st === 'scanning') {
+    return `Claim history: scan in progress, covering ${cov.fromT ? 'since ' + esc(cDate(cov.fromT)) : 'part of this position’s life'} so far — ${why} Any figure is a floor.`;
+  }
+  if (st === 'lookback-reached') {
+    return `Claim history: lifetime history incomplete, covers only since ${cov.fromT ? esc(cDate(cov.fromT)) : 'the lookback limit'} — ${why} Any figure is a floor.`;
+  }
+  if (st === 'undecodable') return `Claim history: no figure — ${why}`;
+  if (st === 'unsupported') return `Claim history: not supported — ${why}`;
+  return `Claim history: not scanned yet — ${why}`;
 }
 
 function claimedLine(p){
-  // Fees already taken out of this position, scoped to one chain + position manager
-  // + token id. Four states, and only one of them may print a number:
-  //
-  //   unavailable — no claim history covers this position. NOT "nothing claimed
-  //     yet": that asserts a zero nobody verified, and on a chain whose history
-  //     has never been scanned it is simply false.
-  //   partial     — history exists but starts after the position did, so anything
-  //     claimed before that date is missing from the figure. Says since when.
-  //   verified zero — history covers the position's whole life and found no
-  //     collect and no withdrawal. This is the only honest way to show zero.
-  //   ok          — amounts per token, plus a USD total when both legs price,
-  //     with the valuation basis named.
+  // Fees already taken out of this position, scoped to one chain + position
+  // manager + token id, in the same states as the tile (claimState). Only a
+  // complete history prints a total; a scanning or lookback-limited one prints a
+  // floor ("at least"); a zero is printed only when verified.
   //
   // This is money that has ALREADY LEFT the position. It is deliberately not added
   // to the card's value, to uncollected fees, or to any wallet balance: it is
   // already sitting in the wallet as tokens, and counting it again would
   // double-count it in the portfolio total.
   const c = p.claimed;
-  if (!c || c.status === 'unavailable') {
-    const why = c && c.reason ? esc(c.reason) : 'no claim history has been scanned for this chain and position manager';
-    return `<span class="c unavail" title="Claim history unavailable: ${why}. This is not a statement that nothing was claimed — it means nothing is known either way.">Claim history unavailable</span>`;
-  }
+  const st = claimState(c);
+  const why = esc(endStop(claimWhy(c, st)));
+  const val = claimValuation(c);
+  if (st === 'not-scanned') return `<span class="c unavail" title="${why} Nothing is known either way.">Claim history not scanned yet</span>`;
+  if (st === 'unsupported') return `<span class="c unavail" title="${why} Nothing is known either way.">Claim history not supported</span>`;
+  if (st === 'undecodable') return `<span class="c unavail" title="${why} No figure is given, and this is not a zero.">Claimed fees: no figure — ${why}</span>`;
   const amounts = (c.tokens || []).map(t => `${esc(t.amount)} ${esc(t.symbol)}`).join(' + ');
-  if (c.status === 'partial') {
-    const since = c.since ? new Date(c.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'an unknown date';
-    return `<span class="c partial" title="History for this position starts ${since}; anything claimed before that is not in this figure.${c.basis ? ' ' + esc(c.basis) : ''}">` +
-      `Claimed since ${esc(since)} — partial history${amounts ? `: ${amounts}` : ''}` +
-      `${c.usd != null ? ` · ${usd(c.usd)}` : ''}</span>`;
+  const n = c.count || 0;
+  const money = claimMoney(c, st !== 'complete');
+  const valTip = val.text ? ` USD ${esc(val.text)}.` : '';
+  if (st === 'scanning' || st === 'lookback-reached') {
+    const cov = c.coverage || {};
+    const since = cDate(cov.fromT);
+    const label = st === 'scanning' ? 'scan in progress' : 'lifetime history incomplete';
+    if (!n) return `<span class="c partial" title="${why}">No claims found ${since ? 'since ' + esc(since) : 'in the scanned range'} — ${label}; not a zero</span>`;
+    return `<span class="c partial" title="${why} The figure is a floor, not a lifetime total.${valTip} ${esc(CLAIM_MIXED_NOTE)}">` +
+      `Claimed at least <b>${amounts}</b>${money ? ` · <b>${esc(money)}</b>` : ''} ${since ? 'since ' + esc(since) : ''} — ${label}</span>`;
   }
-  if (!c.count) {
-    // Zero only with the same evidence the tile needs: the scan reached this
-    // position's mint and every relevant payout decoded (the server says "ok").
-    if (c.status !== 'ok' || !(c.coverage && c.coverage.coversOpening === true)) {
-      return `<span class="c unavail" title="No collections found in the scanned range, but it does not reach this position's opening, so nothing can be concluded.">Claim history incomplete</span>`;
-    }
-    return `<span class="c zero" title="History covers this position from ${c.since ? new Date(c.since).toLocaleDateString() : 'its first block'} and found no fee collect and no withdrawal. A verified zero, not an assumption.">No fees claimed yet <span class="muted">(verified)</span></span>`;
+  // complete
+  if (claimVerifiedZero(c)) {
+    return `<span class="c zero" title="Complete history from this position's opening; no fee collect and no withdrawal. A verified zero, not an assumption.">No fees claimed yet <span class="muted">(verified, complete history)</span></span>`;
   }
-  const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  const title = `${c.count} claim${c.count === 1 ? '' : 's'} across this position's history.` +
-    `${c.basis ? ' ' + esc(c.basis) : ''}` +
+  if (!n) return `<span class="c unavail" title="Complete history, but the server did not confirm a zero total.">Claimed fees: total not confirmed</span>`;
+  const when = cTime(c.last) || '';
+  const title = `${n} claim${n === 1 ? '' : 's'} across this position's complete history.${valTip}` +
     `${c.principalSeparated ? ' Withdrawals are included with their principal removed, so only fees are counted.' : ''}` +
-    ' Already paid out to the wallet, so it is not part of the position value above.';
-  return `<span class="c" title="${title}">Claimed <b>${amounts}</b>` +
-    `${c.usd != null ? ` · <b>${c.usdBasis && c.usdBasis !== 'at-claim' ? '\u2248' : ''}${usd(c.usd)}</b>` : ` <span class="muted" title="${esc(c.usdMissing || '')}">· no USD total (a leg is unpriced)</span>`}` +
-    ` · ${c.count}×${when ? ' · last ' + when : ''}</span>`;
+    ` Already paid out to the wallet, so it is not part of the position value above. ${CLAIM_MIXED_NOTE}`;
+  return `<span class="c" title="${esc(title)}">Claimed <b>${amounts}</b>` +
+    `${money ? ` · <b>${esc(money)}</b>${val.short ? ` <span class="muted">${esc(val.short)}</span>` : ''}` : ` <span class="muted" title="${esc(c.usdMissing || '')}">· no USD total (a leg is unpriced)</span>`}` +
+    ` · ${n}×${when ? ' · last ' + esc(when) : ''} · complete history</span>`;
 }
 // Tx hashes in the run log become explorer links.
 const linkify = s => EXPLORER
@@ -2190,7 +2417,8 @@ const shortA = a => a ? a.slice(0,6) + '…' + a.slice(-4) : '—';
 function renderWatch(d){
   if (!d || !d.ok || !d.wallets || !d.wallets.length) { $('#watchlist').innerHTML = ''; $('#watchnote').textContent = ''; return; }
   $('#watchsec').hidden = false;
-  $('#watchnote').textContent = 'Watched wallets are read-only and never collected from. Value = tokens in the wallet + open positions + uncollected fees, at current prices; tokens with no WETH or USDG pool are unpriced. Updated ' + new Date(d.at).toLocaleTimeString() + '.';
+  notePricing(d);
+  $('#watchnote').textContent = 'Watched wallets are read-only and never collected from. Value = tokens in the wallet + open positions + uncollected fees, at current prices. ' + pricingText() + ' ' + freshText(d);
   const scopeW = pfScope();
   const shown = scopeW === 'owner' || scopeW === 'all' ? d.wallets : d.wallets.filter(w => w.address.toLowerCase() === scopeW);
   if (scopeW !== 'all' && scopeW !== 'owner') {
@@ -2252,6 +2480,7 @@ async function loadWatch(){
     return;
   }
   if (o.kind === 'error') return watchFailed(o.msg);
+  if (d && typeof d === 'object') fetchedAt.set(d, Date.now());
   try { renderWatch(d); }
   catch(e){ return watchFailed(`the page could not draw the answer (${e.message})`); }
   loadOk('Watched wallets');

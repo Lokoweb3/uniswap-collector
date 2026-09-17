@@ -52,7 +52,27 @@ const BLOCK_MS_FALLBACK = 1000;
 // unattributable payouts are unavailable, a missing receipt fails the chunk.
 // 3: principal and value use the pool price at the transaction, not at the end of
 // its block (a later swap in the same block moved it).
-const DECODER = 3;
+// 4: principal of an add is rounded up, as the pool rounds it (removals down);
+// verified against every fee-free add on Arc, which then reconciles exactly.
+const DECODER = 4;
+
+/**
+ * Token amounts for a liquidity change, rounded the way v4's SqrtPriceMath does:
+ * up for an add (what the pool takes), down for a removal (what it pays).
+ */
+const Q96 = 1n << 96n;
+const divUp = (a, b) => (a % b === 0n ? a / b : a / b + 1n);
+function amountsFor(sqrtP, lo, hi, liquidity, roundUp) {
+  const a = u.getSqrtRatioAtTick(lo), b = u.getSqrtRatioAtTick(hi);
+  const amt0 = (x, y) => {                       // x < y
+    const n1 = liquidity << 96n, n2 = y - x;
+    return roundUp ? divUp(divUp(n1 * n2, y), x) : (n1 * n2) / y / x;
+  };
+  const amt1 = (x, y) => (roundUp ? divUp(liquidity * (y - x), Q96) : (liquidity * (y - x)) / Q96);
+  if (sqrtP <= a) return { amount0: amt0(a, b), amount1: 0n };
+  if (sqrtP < b) return { amount0: amt0(sqrtP, b), amount1: amt1(a, sqrtP) };
+  return { amount0: 0n, amount1: amt1(a, b) };
+}
 const NATIVE_PSEUDO = new Set([
   "0xfffffffffffffffffffffffffffffffffffffffe",
   "0xffffffffffffffffffffffffffffffffffffffff",
@@ -265,14 +285,15 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       let p0 = 0n, p1 = 0n, fee0 = null, fee1 = null;
       if (!unavailable) {
         if (delta !== 0n) {
-          const amt = u.getAmountsForLiquidity(sqrtP, u.getSqrtRatioAtTick(Number(tl)), u.getSqrtRatioAtTick(Number(tu)), delta < 0n ? -delta : delta);
+          const amt = amountsFor(sqrtP, Number(tl), Number(tu), delta < 0n ? -delta : delta, delta > 0n);
           p0 = amt.amount0; p1 = amt.amount1;
         }
         const sign = delta < 0n ? -1n : delta > 0n ? 1n : 0n;
         const fee = (t, p) => flow.out[t] - flow.in[t] + sign * p;
         let f0 = fee(t0, p0), f1 = fee(t1, p1);
-        // Principal is computed with the pool's own rounding direction only to
-        // within a unit; anything more negative means the flows do not fit the model.
+        // Principal uses the pool's own rounding direction, so a fee-free change
+        // reconciles exactly; one unit of slack is kept for a price exactly on a
+        // range edge. Anything more negative means the flows do not fit the model.
         if (f0 < -1n || f1 < -1n) {
           unavailable = `the token flows (${flow.out[t0]}/${flow.out[t1]} out, ${flow.in[t0]}/${flow.in[t1]} in) do not match a ${kind} of this size, so fees cannot be separated`;
         } else {
@@ -423,7 +444,9 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
   /** Attach the USD prices of a record's own moment. `px` = { p0, p1, src }. */
   function setPrice(key, px) {
     const e = S().events[key];
-    if (e && px && isFinite(px.p0) && isFinite(px.p1)) e.px = { p0: +px.p0, p1: +px.p1, src: String(px.src || "unknown") };
+    // `t` is when the price was observed: the block time for a pool read at the
+    // transaction, the hour for the price log.
+    if (e && px && isFinite(px.p0) && isFinite(px.p1)) e.px = { p0: +px.p0, p1: +px.p1, src: String(px.src || "unknown"), t: px.t ?? null };
   }
 
   /** Where one position's history stands; shared by the card summary and /api/claims. */
@@ -448,6 +471,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       openedBlock: opened ?? null, openedT: t.mint != null ? t.mintT ?? null : null,
       coversOpening, reachedLookbackFloor, floorBlock: s.floor ?? null,
       blockMs: s.blockMs ?? null, gap,
+      lookbackDays: s.lookbackMs ? +(s.lookbackMs / 86400000).toFixed(2) : null,
     };
   }
 
@@ -460,27 +484,46 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
    * each. A record with neither makes the total null, with `usdMissing` saying why —
    * distinct from a total that simply has not been priced.
    */
+  /**
+   * Where a position's claim history stands, as one explicit state:
+   *   not-scanned       no block range has been scanned for it yet
+   *   undecodable       a relevant event in the scanned range could not be read or
+   *                     attributed; no figure is given (takes precedence)
+   *   scanning          the scan has not reached the verified mint yet
+   *   lookback-reached  the configured lookback floor was reached without finding
+   *                     the mint, so lifetime history is incomplete
+   *   complete          the scan covers the verified mint and every event decoded
+   */
+  function claimState(cov, bad) {
+    if (!cov) return "not-scanned";
+    if (bad) return "undecodable";
+    if (cov.coversOpening) return "complete";
+    return cov.reachedLookbackFloor ? "lookback-reached" : "scanning";
+  }
+
   function summary(tokenId, { dec0, dec1, sym0, sym1, usd0, usd1 }) {
     const sc = { chainId: Number(chainId), positionManager: posm, tokenId: String(tokenId) };
     const cov = coverage(tokenId);
     if (!cov) {
-      return { status: "unavailable", reason: "no block range has been scanned for this position yet", scope: sc };
+      return { status: "unavailable", state: "not-scanned", verifiedZero: false,
+        reason: "no block range has been scanned for this position yet", scope: sc };
     }
     const mine = rows(tokenId);
     const bad = mine.filter((e) => e.unavailable);
     if (bad.length) {
-      return { status: "unavailable", scope: sc, coverage: cov,
-        reason: `${bad.length} of ${mine.length} records cannot be read in full (${bad[0].unavailable}); a total would be a guess` };
+      return { status: "unavailable", state: claimState(cov, true), verifiedZero: false, scope: sc, coverage: cov,
+        reason: `${bad.length} of ${mine.length} records in the scanned range cannot be read in full (${bad[0].unavailable}); a total would be a guess` };
     }
     let a0 = 0n, a1 = 0n, last = null, withdrawals = 0, usd = 0, atClaim = 0, atToday = 0, unpriced = 0;
     const srcs = new Set();
+    const priceSources = { block: 0, pricelog: 0, today: 0, none: 0 };
     for (const e of mine) {
       const r0 = BigInt(e.fee0 || "0"), r1 = BigInt(e.fee1 || "0");
       a0 += r0; a1 += r1;
       const x0 = Number(ethers.formatUnits(r0, dec0)), x1 = Number(ethers.formatUnits(r1, dec1));
-      if (e.px) { usd += x0 * e.px.p0 + x1 * e.px.p1; atClaim++; srcs.add(e.px.src); }
-      else if (usd0 != null && usd1 != null) { usd += x0 * usd0 + x1 * usd1; atToday++; }
-      else unpriced++;
+      if (e.px) { usd += x0 * e.px.p0 + x1 * e.px.p1; atClaim++; srcs.add(e.px.src); priceSources[e.px.src === "pricelog" ? "pricelog" : "block"]++; }
+      else if (usd0 != null && usd1 != null) { usd += x0 * usd0 + x1 * usd1; atToday++; priceSources.today++; }
+      else { unpriced++; priceSources.none++; }
       if (e.kind === "withdrawal") withdrawals++;
       if (e.t && (!last || e.t > last)) last = e.t;
     }
@@ -488,11 +531,16 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     const usdBasis = !mine.length ? null : unpriced ? null : !atToday ? "at-claim" : !atClaim ? "today" : "mixed";
     const basis = !mine.length ? "token amounts are exact from chain"
       : unpriced ? `token amounts are exact from chain; ${unpriced} of ${mine.length} collections have no price at their time and a leg has no price today, so there is no USD total`
-      : usdBasis === "at-claim" ? "token amounts are exact from chain; USD is valued at the price of each collection's own block or hour"
+      : usdBasis === "at-claim" ? `token amounts are exact from chain; USD is valued at each claim's own moment (${[priceSources.block ? `${priceSources.block} at the pool price at the transaction` : "", priceSources.pricelog ? `${priceSources.pricelog} from the hourly price log` : ""].filter(Boolean).join(", ")})`
       : usdBasis === "today" ? "token amounts are exact from chain; no price of their moment was found, so USD is valued at today's prices"
       : `token amounts are exact from chain; ${atClaim} of ${mine.length} collections are valued at their own moment's price, ${atToday} at today's`;
+    const state = claimState(cov, false);
+    const complete = state === "complete";
     return {
-      status: cov.coversOpening ? "ok" : "partial",
+      status: complete ? "ok" : "partial",
+      state,
+      // Zero is a finding only when the whole life was scanned and read.
+      verifiedZero: complete && a0 === 0n && a1 === 0n,
       ...(cov.gap ? { reason: cov.gap } : {}),
       since: cov.coversOpening ? (cov.openedT ?? cov.fromT) : cov.fromT,
       count: mine.length, last, withdrawals,
@@ -500,8 +548,10 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       tokens: [{ symbol: sym0, amount: f0.toLocaleString("en-US", { maximumFractionDigits: 6 }) },
                { symbol: sym1, amount: f1.toLocaleString("en-US", { maximumFractionDigits: 6 }) }],
       raw0: a0.toString(), raw1: a1.toString(),
-      usd: !mine.length ? 0 : unpriced ? null : +usd.toFixed(2),
-      usdBasis, usdAtClaim: atClaim, usdAtToday: atToday,
+      // Nothing found in an incomplete range is not a $0 floor worth printing.
+      // Full precision: rounding to cents here turned $0.0361 into "$0.040" on the card.
+      usd: !mine.length ? (complete ? 0 : null) : unpriced ? null : +usd.toPrecision(12),
+      usdBasis, usdAtClaim: atClaim, usdAtToday: atToday, priceSources,
       ...(unpriced ? { usdMissing: `${unpriced} collection(s) have no price at their time and a leg has no price today` } : {}),
       principalSeparated: withdrawals > 0,
       coverage: cov,
@@ -514,4 +564,4 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     get readOnly() { return foreign(); }, get scope() { return scope; }, get state() { return S(); } };
 }
 
-module.exports = { create, MODIFY_LIQUIDITY, TRANSFER, SWAP, NATIVE_PSEUDO, ZERO, DECODER };
+module.exports = { create, amountsFor, MODIFY_LIQUIDITY, TRANSFER, SWAP, NATIVE_PSEUDO, ZERO, DECODER };

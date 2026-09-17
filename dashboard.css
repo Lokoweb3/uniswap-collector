@@ -1638,3 +1638,10 @@ button.unit:hover{color:var(--cyan);border-color:var(--cyan)}
 .chtable .amt{display:block;white-space:nowrap}
 .metric .mv.approx{color:var(--muted)}
 .loadfail{margin:var(--s1) 0;font-size:12.5px;color:var(--neg)}
+
+/* Claimed fees and pool-rate presentation corrections */
+.metric .msub.reason{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.chtable .rowusd{display:flex;flex-direction:column;gap:1px}
+.chtable .rowsrc{font-size:11px;color:var(--muted)}
+.chtable .psrc{cursor:help}
+.poolstats .poolrate,.poolstats .liqlabel{cursor:help;border-bottom:1px dotted var(--rule)}

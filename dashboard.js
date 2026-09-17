@@ -1415,7 +1415,9 @@ function renderAnalytics(){
   for (const m of months){ const y = m.key.slice(0,4); if (!years.has(y)) years.set(y, { y, lp: 0, stake: 0, lpN: 0, stakeN: 0, vault: 0 }); const o = years.get(y); o.lp += m.lp; o.stake += m.stake; o.lpN += m.lpN; o.stakeN += m.stakeN; o.vault += m.vault; }
   const grand = ev.reduce((s, e) => s + (e.usd || 0), 0);
   $('#taxsec').hidden = false;
-  $('#taxtotal').textContent = usd(grand);
+  // Scoped on purpose: an empty collector ledger is $0.00 for THIS source, and says
+  // nothing about the fees the wallet settled itself (the chain block below).
+  $('#taxtotal').textContent = ev.length ? usd(grand) : '$0.00 — nothing recorded here';
   const mlabel = k => new Date(k + '-15T12:00:00').toLocaleDateString(undefined, { month: 'long' });
   let rows = '';
   for (const y of [...years.values()].sort((a, b) => b.y.localeCompare(a.y))){
@@ -1465,16 +1467,36 @@ function renderAnalytics(){
 }
 
 // Tax CSV: one row per income event, USD at receipt.
+//
+// Both sources are exported, each row naming its own: this collector's ledger, and
+// the settlements read from chain. They are NOT summed here and must not be summed
+// blindly by the reader — a settlement this collector performed appears in both, so
+// the tx_hash is the key to reconcile them. Where the collector has never run, the
+// chain rows are the only record of the income, which is why exporting the ledger
+// alone would hand back an empty file for a wallet that has settled fees all year.
 $('#taxcsv').addEventListener('click', async e => {
   e.preventDefault();
   const ev = incomeEvents();
   let ledger = [];
   try { ledger = await (await fetch('/fee-split-ledger.json')).json(); } catch(e){}
+  let chain = chainFeesD;
+  if (!chain) { try { const j = await (await fetch('/api/claims/total?wallet=all')).json(); if (j && j.ok) chain = j; } catch(e){} }
   const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const lines = [['date_utc','wallet','type','description','amounts','usd_at_receipt','price_basis','tx_hash','vault_split_usdg'].join(',')];
-  for (const x of ev) lines.push([new Date(x.t).toISOString(), x.wallet || 'Main', x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx, ''].map(q).join(','));
+  const lines = [['date_utc','source','wallet','type','description','amounts','usd_at_receipt','price_basis','tx_hash','vault_split_usdg'].join(',')];
+  for (const x of ev) lines.push([new Date(x.t).toISOString(), 'collector ledger', x.wallet || 'Main', x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx, ''].map(q).join(','));
   // One row per recorded vault split (the treasury's share of a pass's swept USDG).
-  for (const r of ledger) if (r.status !== 'failed' && r.splitUsdg) lines.push([r.timestamp, r.wallet || 'Main', 'Vault split', `${r.wallet} · ${r.pair || ''} · ${r.splitPct}% of ${r.totalCollectedUsdg} USDG`, `${r.splitUsdg} USDG`, Number(r.splitUsdg).toFixed(2), 'at receipt', r.splitTxHash || '', Number(r.splitUsdg).toFixed(2)].map(q).join(','));
+  for (const r of ledger) if (r.status !== 'failed' && r.splitUsdg) lines.push([r.timestamp, 'collector ledger', r.wallet || 'Main', 'Vault split', `${r.wallet} · ${r.pair || ''} · ${r.splitPct}% of ${r.totalCollectedUsdg} USDG`, `${r.splitUsdg} USDG`, Number(r.splitUsdg).toFixed(2), 'at receipt', r.splitTxHash || '', Number(r.splitUsdg).toFixed(2)].map(q).join(','));
+  // Every fee settlement the wallets made, read from chain, valued at its own
+  // transaction. Withdrawn principal is not income and is already excluded.
+  const pairOf = new Map(((chain && chain.positions) || []).map(p => [String(p.tokenId), p.pair || '']));
+  for (const r of (chain && chain.rows) || []) {
+    lines.push([new Date(r.t).toISOString(), 'chain', r.walletLabel || r.wallet, 'LP fees (settled on chain)',
+      `#${r.tokenId} ${pairOf.get(String(r.tokenId)) || ''}`.trim(),
+      (r.tokens || []).map(t => `${t.amount} ${t.symbol}`).join(' + '),
+      r.usd == null ? '' : r.usd.toFixed(2),
+      r.usd == null ? 'unpriced' : r.priceSrc === 'block' ? 'at settlement (same-block swap)' : `at settlement (${r.priceSrc})`,
+      r.tx, ''].map(q).join(','));
+  }
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lp-income-' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
 });
@@ -3532,11 +3554,16 @@ function renderAttribution(){
   // Benchmarks.
   const B = ($('#attribscope').value === 'main' ? d.mainBenchmarks : d.benchmarks) || d.benchmarks;
   const pct = v => v == null ? '<span class="muted">—</span>' : `<span class="${v < 0 ? 'neg' : ''}">${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}%</span>`;
+  // Only compare against assets this chain actually has. Where the unit of account
+  // is itself the dollar there is no separate ETH or USDG to hold, and a +0.00%
+  // column would read as a measurement rather than as an absence.
+  const BA = d.benchmarkAssets || { eth: 'ETH', stable: 'USDG' };
+  const hasEth = !!BA.eth;
   $('#benchtable').innerHTML = `<table class="etable">
-    <tr><th class="l">Window</th><th>Portfolio</th><th>Holding ETH</th><th>Holding USDG</th><th>Staking NET</th><th>vs ETH</th><th>vs staking</th><th class="l">Note</th></tr>
-    ${B.map(b => `<tr><td class="l">${b.windowDays}d</td><td class="u">${pct(b.portfolioPct)}</td><td>${pct(b.ethPct)}</td><td>${pct(b.usdgPct)}</td><td>${pct(b.stakingPct)}</td><td>${b.portfolioPct != null && b.ethPct != null ? pct(b.portfolioPct - b.ethPct) : '—'}</td><td>${b.portfolioPct != null && b.stakingPct != null ? pct(b.portfolioPct - b.stakingPct) : '—'}</td><td class="l muted">${b.note || ''}</td></tr>`).join('')}
+    <tr><th class="l">Window</th><th>Portfolio</th>${hasEth ? `<th>Holding ${esc(BA.eth)}</th><th>Holding ${esc(BA.stable)}</th>` : ''}<th>Staking NET</th>${hasEth ? `<th>vs ${esc(BA.eth)}</th>` : ''}<th>vs staking</th><th class="l">Note</th></tr>
+    ${B.map(b => `<tr><td class="l">${b.windowDays}d</td><td class="u">${pct(b.portfolioPct)}</td>${hasEth ? `<td>${pct(b.ethPct)}</td><td>${pct(b.usdgPct)}</td>` : ''}<td>${pct(b.stakingPct)}</td>${hasEth ? `<td>${b.portfolioPct != null && b.ethPct != null ? pct(b.portfolioPct - b.ethPct) : '—'}</td>` : ''}<td>${b.portfolioPct != null && b.stakingPct != null ? pct(b.portfolioPct - b.stakingPct) : '—'}</td><td class="l muted">${esc(b.note || '')}</td></tr>`).join('')}
   </table>`;
-  $('#benchnote').textContent = d.history && d.history.bookSince ? `Book history since ${new Date(d.history.bookSince).toLocaleString()}; main wallet since ${d.history.mainSince ? new Date(d.history.mainSince).toLocaleDateString() : '—'}. Recorded transfers across the wallet boundary are netted out of the return; a window whose transfers cannot be netted, or whose value change no recorded transfer explains, shows no percentage at all.` : 'No value history yet.';
+  $('#benchnote').textContent = (d.history && d.history.bookSince ? `Book history since ${new Date(d.history.bookSince).toLocaleString()}; main wallet since ${d.history.mainSince ? new Date(d.history.mainSince).toLocaleDateString() : '—'}. Recorded transfers across the wallet boundary are netted out of the return; a window whose transfers cannot be netted, or whose value change no recorded transfer explains, shows no percentage at all.` : 'No value history yet.') + (BA.note ? ' ' + BA.note : '');
   // Per position.
   const P = ($('#attribscope').value === 'book' ? d.positions : d.positions.filter(p => p.key === $('#attribscope').value));
   const wl = k => k === 'main' ? (d.wallets.find(w => w.main) || {}).label || 'Main' : (d.wallets.find(w => w.key === k) || {}).label || shortA(k);

@@ -255,7 +255,7 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
  * `principal`. When the history is shorter than the window, the earliest
  * sample is used and `actualDays` says so.
  */
-function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stakingRewards = null, principal = null, flows = [], flowKey = null, now = Date.now(), windows = [7, 30, 90] }) {
+function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stakingRewards = null, principal = null, flows = [], flowKey = null, ethIsUnit = false, now = Date.now(), windows = [7, 30, 90] }) {
   const out = [];
   for (const w of windows) {
     const from = now - w * DAY;
@@ -282,9 +282,12 @@ function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stak
     else if (Math.abs(netFlows) > 0.25 * startPt.v) whyNoReturn = `deposits and withdrawals (${netFlows >= 0 ? "+" : "−"}$${Math.abs(netFlows).toFixed(2)}) dominate this window, so a percentage would describe funding, not performance`;
     else if (grown > 5) whyNoReturn = `the book went from $${startPt.v.toFixed(2)} to $${endPt.v.toFixed(2)} with no recorded transfer to explain it, so the transfer history is incomplete and a percentage would be meaningless`;
     else portfolioPct = (grown - 1) * 100;
+    // "Holding ETH" only means something on a chain that HAS a separate ETH. Where
+    // the unit of account is itself the dollar (Arc prices in USDC), that series is
+    // a constant 1 and a 0.00% benchmark would look measured rather than absent.
     const e0 = ethSeries.find((p) => p.t >= startPt.t - HOUR) || ethSeries[0];
     const e1 = ethSeries.length ? ethSeries[ethSeries.length - 1] : null;
-    const ethPct = e0 && e1 && e0.p > 0 && e1.t > e0.t ? (e1.p / e0.p - 1) * 100 : null;
+    const ethPct = ethIsUnit ? null : e0 && e1 && e0.p > 0 && e1.t > e0.t ? (e1.p / e0.p - 1) * 100 : null;
     // Staking: rebase rewards only, never the balance change (a stake deposit is not a
     // return). `stakingRewards` is the deposit-netted list from staking.rewards(); the balance
     // samples only supply the base when no principal is known.
@@ -313,7 +316,8 @@ function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stak
     if (stakingNote) notes.push(stakingNote);
     out.push({
       windowDays: w, actualDays: +actualDays.toFixed(2), since: startPt.t,
-      portfolioPct, netFlowsUsd: unpricedFlow ? null : +netFlows.toFixed(2), ethPct, usdgPct: 0, stakingPct,
+      portfolioPct, netFlowsUsd: unpricedFlow ? null : +netFlows.toFixed(2), ethPct,
+      usdgPct: ethIsUnit ? null : 0, stakingPct,
       note: notes.length ? notes.join("; ") : null,
     });
   }
@@ -528,8 +532,20 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, getHist
     }
     const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, holdingsByDay, priceHours, stakingDaily, vaultSplits, gasSpends, positions, flows };
     const result = compute(input, { days, now });
-    result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal, flows, now });
-    result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, stakingRewards, principal, flows, flowKey: MAIN, now });
+    // Is "ETH" a distinct asset on this instance, or just the unit of account? A
+    // numeraire with a fixed usdRate (Arc prices in USDC) makes ethSeries a constant
+    // 1, so "Holding ETH" would report +0.00% for an asset nobody here holds — and
+    // the USDG column is a hardcoded 0 naming a token this chain does not have.
+    const num = cfg.numeraire || {};
+    const ethIsUnit = num.usdRate != null;
+    result.benchmarkAssets = {
+      eth: ethIsUnit ? null : "ETH",
+      stable: ethIsUnit ? null : "USDG",
+      unit: num.symbol || "WETH",
+      note: ethIsUnit ? `This chain prices in ${num.symbol || "its unit of account"}, which is already a dollar: holding it is holding dollars, so there is no ETH or USDG comparison to draw.` : null,
+    };
+    result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal, flows, ethIsUnit, now });
+    result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, stakingRewards, principal, flows, flowKey: MAIN, ethIsUnit, now });
     result.history = { bookSince: bookSeries.length ? bookSeries[0].t : null, mainSince: valueSeries[MAIN].length ? valueSeries[MAIN][0].t : null, priceSince: ethSeries.length ? ethSeries[0].t : null };
     return result;
   }

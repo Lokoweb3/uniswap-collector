@@ -262,9 +262,10 @@
 <section class="earnings analytics" id="taxsec" hidden>
   <div class="ehead">
     <h2>Income for taxes</h2>
-    <span><a class="ecsv" id="taxcsv" href="#">Download tax CSV</a> <span class="etotal" id="taxtotal"></span></span>
+    <span><a class="ecsv" id="taxcsv" href="#">Download tax CSV</a> <span class="etotal muted" id="taxcsvnote">both sources below</span></span>
   </div>
-  <div class="etablewrap" id="taxtable"></div>
+  <div class="ehead"><h3 id="taxledgerhead">Recorded by this collector — its own collects and staking rebases</h3><span class="etotal" id="taxtotal"></span></div>
+  <div class="etablewrap" id="taxtable" aria-labelledby="taxledgerhead"></div>
   <div class="ehead"><h3 id="chaintaxhead">Settled by the wallet — read from chain</h3><span class="etotal" id="chaintaxtotal"></span></div>
   <div id="chaintax" aria-labelledby="chaintaxhead"></div>
   <div class="taxnote">Income is valued in USD at the moment it was received: LP fees when collected (rows marked ≈ have no

@@ -561,7 +561,8 @@ function claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, openedBloc
       scope: { chainId: Number(cfg.chainId), tokenId: id, positionManager: null },
       legacyRowsExist: hasLegacyRows(key) };
   }
-  return claimStore.summary(id, { dec0, dec1, sym0, sym1, usd0, usd1, openedBlock: openedBlock ?? null });
+  // Coverage comes only from the mint the scanner observed; `openedBlock` is not used.
+  return claimStore.summary(id, { dec0, dec1, sym0, sym1, usd0, usd1 });
 }
 /** Does the old ledger hold rows for this key? Reported, never counted. */
 function hasLegacyRows(tokenKey) {

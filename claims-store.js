@@ -39,6 +39,7 @@ const { dataPath } = require("./data-dir");
 
 const MODIFY_LIQUIDITY = ethers.id("ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)");
 const TRANSFER = ethers.id("Transfer(address,address,uint256)");
+const SWAP = ethers.id("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
 const coder = ethers.AbiCoder.defaultAbiCoder();
 
 // One balance behind two interfaces (Arc's native USDC) emits a Transfer under
@@ -46,6 +47,12 @@ const coder = ethers.AbiCoder.defaultAbiCoder();
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ZERO_TOPIC = ethers.zeroPadValue(ZERO, 32);
 const BLOCK_MS_FALLBACK = 1000;
+// Bumped whenever the rules for reading a receipt change. 2: every liquidity
+// change counts, only pool-manager <-> owner flows are attributed, shared or
+// unattributable payouts are unavailable, a missing receipt fails the chunk.
+// 3: principal and value use the pool price at the transaction, not at the end of
+// its block (a later swap in the same block moved it).
+const DECODER = 3;
 const NATIVE_PSEUDO = new Set([
   "0xfffffffffffffffffffffffffffffffffffffffe",
   "0xffffffffffffffffffffffffffffffffffffffff",
@@ -115,6 +122,14 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       delete s.scannedFrom; delete s.scannedTo; delete s.fromT; delete s.toT; delete s.complete;
     }
     if (!s.meta) s.meta = {};
+    // Records decoded under older rules are not evidence under the current ones:
+    // their coverage is dropped (tracked positions are kept) and everything is
+    // rescanned. Old records stay keyed and are overwritten as the scan reaches them.
+    if (s.decoder !== DECODER) {
+      s.tokens = {};
+      for (const k of Object.keys(s.events)) if (s.events[k].decoder !== DECODER) delete s.events[k];
+      s.decoder = DECODER;
+    }
     return s;
   };
   // Written to a temporary file and renamed into place, so a crash or a kill in
@@ -148,57 +163,133 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     return blockMs;
   }
 
-  /** Decode every claim this receipt holds for our manager. */
-  async function claimsInReceipt(receipt, meta) {
-    const out = [];
+  /**
+   * The pool's price at the moment a log was emitted: the price after the last swap
+   * in that pool earlier in the same block (log index order), else the pool's state
+   * at the end of the previous block. Reading the log's own block would return the
+   * price after every swap in that block, including ones that came later.
+   */
+  async function priceAtLog(l) {
+    const swaps = await provider.getLogs({ address: pm, topics: [SWAP, l.topics[1]], fromBlock: l.blockNumber, toBlock: l.blockNumber });
+    const before = swaps.filter((x) => x.index < l.index).sort((a, b) => a.index - b.index);
+    if (before.length) return BigInt(coder.decode(["int128", "int128", "uint160", "uint128", "int24", "uint24"], before[before.length - 1].data)[2]);
+    return BigInt((await sv.getSlot0(l.topics[1], { blockTag: l.blockNumber - 1 }))[0]);
+  }
+
+  const topicAddr = (t) => ("0x" + String(t).slice(26)).toLowerCase();
+  const short = (a) => `${a.slice(0, 6)}\u2026${a.slice(-4)}`;
+
+  /**
+   * Decode every fee realisation this receipt holds for our manager's tracked
+   * positions. A figure is produced only when every token movement in the pair
+   * can be attributed; otherwise the record carries `unavailable` and withholds
+   * the position's total.
+   *
+   * v4 realises accrued fees on any liquidity change, so three kinds count:
+   *   collect     (delta = 0)  fees = paid out − paid in
+   *   withdrawal  (delta < 0)  fees = paid out − paid in − principal removed
+   *   increase    (delta > 0)  fees = paid out − paid in + principal added
+   *                            (fees are netted against the deposit)
+   * The opening deposit (the position's mint is in the same receipt) has no fees
+   * and is not a record. Principal comes from |delta| at the pool price read at
+   * the transaction (see priceAtLog).
+   *
+   * Only Transfers between the PoolManager and the owner are attributed. If the
+   * pair's tokens also move between the PoolManager and anyone else, or another
+   * change in the same transaction could share the payout (same owner and a
+   * shared token, or a position whose pair is unknown), the payout cannot be
+   * split and the record is unavailable.
+   */
+  async function claimsInReceipt(receipt, meta, metaAll = meta) {
+    const ours = [];
     for (const l of receipt.logs) {
       if (l.address.toLowerCase() !== pm || l.topics[0] !== MODIFY_LIQUIDITY) continue;
-      if (("0x" + l.topics[2].slice(26)).toLowerCase() !== posm) continue;
+      if (topicAddr(l.topics[2]) !== posm) continue;
+      // A log from our manager that cannot be decoded throws: the chunk fails and is
+      // retried, instead of the position looking as if nothing happened.
       const [tl, tu, delta, salt] = coder.decode(["int24", "int24", "int256", "bytes32"], l.data);
-      if (delta > 0n) continue;                       // a mint or an add is not a claim
-      const tokenId = BigInt(salt).toString();
-      const m = meta(tokenId);
+      ours.push({ l, tl, tu, delta, tokenId: BigInt(salt).toString() });
+    }
+    const minted = new Set(receipt.logs
+      .filter((x) => x.address.toLowerCase() === posm && x.topics[0] === TRANSFER && x.topics.length === 4 && topicAddr(x.topics[1]) === ZERO)
+      .map((x) => BigInt(x.topics[3]).toString()));
+    const out = [];
+    for (const o of ours) {
+      const m = meta(o.tokenId);
       if (!m) continue;                               // not a position we track
+      if (o.delta > 0n && minted.has(o.tokenId)) continue;   // the opening deposit: no fees yet
+      const { l, tl, tu, delta, tokenId } = o;
       const t0 = String(m.token0).toLowerCase(), t1 = String(m.token1).toLowerCase();
       const owner = String(m.owner).toLowerCase();
-      const paid = { [t0]: 0n, [t1]: 0n };
-      for (const x of receipt.logs) {
-        if (x.topics[0] !== TRANSFER || x.topics.length !== 3) continue;
-        const a = x.address.toLowerCase();
-        if (NATIVE_PSEUDO.has(a) || (a !== t0 && a !== t1)) continue;
-        if (("0x" + x.topics[2].slice(26)).toLowerCase() !== owner) continue;
-        paid[a] += BigInt(x.data);
-      }
-      let fee0 = paid[t0], fee1 = paid[t1], p0 = 0n, p1 = 0n, kind = delta < 0n ? "withdrawal" : "collect", unavailable = null, sqrtP = null;
+      const kind = delta < 0n ? "withdrawal" : delta > 0n ? "increase" : "collect";
+      let unavailable = null;
       // A native-ETH leg is paid by a value transfer, which emits no log. Reading
       // it as zero would print a verified figure that leaves that leg out.
       if (t0 === ZERO || t1 === ZERO) {
         unavailable = "the native ETH leg is paid by a plain value transfer, which emits no log, so its amount cannot be read from the receipt";
       }
-      // The pool price at this block: needed to separate principal on a withdrawal,
-      // and kept on every record so it can be valued at the price of its moment.
+      if (!unavailable) {
+        const sharing = ours.filter((x) => x !== o).filter((x) => {
+          const mm = metaAll(x.tokenId);
+          if (!mm) return true;
+          const a0 = String(mm.token0).toLowerCase(), a1 = String(mm.token1).toLowerCase();
+          return String(mm.owner).toLowerCase() === owner && [a0, a1].some((t) => t === t0 || t === t1);
+        });
+        if (sharing.length) {
+          unavailable = `this transaction holds ${sharing.length} other liquidity change(s) (${sharing.map((x) => "#" + x.tokenId).join(", ")}) that could share this payout, so it cannot be split between them`;
+        }
+      }
+      const flow = { out: { [t0]: 0n, [t1]: 0n }, in: { [t0]: 0n, [t1]: 0n } };
+      const strangers = new Set();
+      for (const x of receipt.logs) {
+        if (x.topics[0] !== TRANSFER || x.topics.length !== 3) continue;
+        const a = x.address.toLowerCase();
+        if (NATIVE_PSEUDO.has(a) || (a !== t0 && a !== t1)) continue;
+        const from = topicAddr(x.topics[1]), to = topicAddr(x.topics[2]);
+        if (from === pm) { if (to === owner) flow.out[a] += BigInt(x.data); else strangers.add(to); }
+        else if (to === pm) { if (from === owner) flow.in[a] += BigInt(x.data); else strangers.add(from); }
+      }
+      if (!unavailable && strangers.size) {
+        unavailable = `the pair's tokens also moved between the pool manager and ${[...strangers].map(short).join(", ")}, not this position's owner, so the payout cannot be attributed`;
+      }
+      // The pool price at this block: needed to separate principal, and kept on
+      // every record so it can be valued at the price of its moment.
+      let sqrtP = null;
       if (sv && !unavailable) {
-        try { sqrtP = BigInt((await sv.getSlot0(l.topics[1], { blockTag: l.blockNumber }))[0]); } catch (err) {
-          if (delta < 0n) unavailable = `the pool price at block ${l.blockNumber} could not be read (${err.shortMessage || err.message})`;
+        try { sqrtP = await priceAtLog(l); if (!(sqrtP > 0n)) throw new Error("the pool had no price yet"); } catch (err) {
+          sqrtP = null;
+          if (delta !== 0n) unavailable = `the pool price at block ${l.blockNumber} could not be read (${err.shortMessage || err.message})`;
         }
       }
-      if (delta < 0n && !unavailable) {
-        if (!sv) unavailable = "no StateView: principal cannot be separated from fees";
-        else {
-          const a = u.getAmountsForLiquidity(sqrtP,
-            u.getSqrtRatioAtTick(Number(tl)), u.getSqrtRatioAtTick(Number(tu)), -delta);
-          p0 = a.amount0; p1 = a.amount1;
-          fee0 = paid[t0] > p0 ? paid[t0] - p0 : 0n;
-          fee1 = paid[t1] > p1 ? paid[t1] - p1 : 0n;
+      if (delta !== 0n && !unavailable && !sv) unavailable = "no StateView: principal cannot be separated from fees";
+      let p0 = 0n, p1 = 0n, fee0 = null, fee1 = null;
+      if (!unavailable) {
+        if (delta !== 0n) {
+          const amt = u.getAmountsForLiquidity(sqrtP, u.getSqrtRatioAtTick(Number(tl)), u.getSqrtRatioAtTick(Number(tu)), delta < 0n ? -delta : delta);
+          p0 = amt.amount0; p1 = amt.amount1;
+        }
+        const sign = delta < 0n ? -1n : delta > 0n ? 1n : 0n;
+        const fee = (t, p) => flow.out[t] - flow.in[t] + sign * p;
+        let f0 = fee(t0, p0), f1 = fee(t1, p1);
+        // Principal is computed with the pool's own rounding direction only to
+        // within a unit; anything more negative means the flows do not fit the model.
+        if (f0 < -1n || f1 < -1n) {
+          unavailable = `the token flows (${flow.out[t0]}/${flow.out[t1]} out, ${flow.in[t0]}/${flow.in[t1]} in) do not match a ${kind} of this size, so fees cannot be separated`;
+        } else {
+          fee0 = f0 < 0n ? 0n : f0; fee1 = f1 < 0n ? 0n : f1;
         }
       }
+      // An increase that realised nothing is a deposit, not a claim.
+      if (kind === "increase" && !unavailable && fee0 === 0n && fee1 === 0n) continue;
       out.push({
         key: `${receipt.hash}:${l.index}`, tokenId, chainId: Number(chainId), positionManager: posm,
         block: l.blockNumber, tx: receipt.hash, kind, verified: true, poolId: l.topics[1],
         sqrtP: sqrtP == null ? null : sqrtP.toString(),
         fee0: unavailable ? null : fee0.toString(), fee1: unavailable ? null : fee1.toString(),
         principal0: p0.toString(), principal1: p1.toString(),
-        token0: t0, token1: t1, unavailable,
+        paidOut0: flow.out[t0].toString(), paidOut1: flow.out[t1].toString(),
+        paidIn0: flow.in[t0].toString(), paidIn1: flow.in[t1].toString(),
+        token0: t0, token1: t1, unavailable, decoder: DECODER,
       });
     }
     return out;
@@ -243,18 +334,18 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       // Only transactions touching a position we track are worth a receipt fetch —
       // this manager serves every position on the chain, and fetching a receipt per
       // transaction made a single 9,000-block chunk take minutes.
+      // Every change counts — adds realise fees too. A log that cannot be decoded
+      // or a receipt the RPC does not return fails the chunk, so the cursor never
+      // moves past a transaction that was not read.
       const byTx = new Set();
       for (const l of logs) {
-        try {
-          const [, , delta, salt] = coder.decode(["int24", "int24", "int256", "bytes32"], l.data);
-          if (delta > 0n) continue;
-          if (needs(BigInt(salt).toString(), l.blockNumber)) byTx.add(l.transactionHash);
-        } catch {}
+        const [, , , salt] = coder.decode(["int24", "int24", "int256", "bytes32"], l.data);
+        if (needs(BigInt(salt).toString(), l.blockNumber)) byTx.add(l.transactionHash);
       }
       for (const h of byTx) {
         const r = await provider.getTransactionReceipt(h);
-        if (!r) continue;
-        for (const c of await claimsInReceipt(r, (id) => (want.has(id) ? meta(id) : null))) {
+        if (!r) throw new Error(`the RPC returned no receipt for ${h}; this chunk is retried`);
+        for (const c of await claimsInReceipt(r, (id) => (want.has(id) ? meta(id) : null), meta)) {
           c.t = await blockTime(c.block);
           const prev = s.events[c.key];
           // keyed by tx:logIndex — a rescan overwrites; a price already fixed for
@@ -336,11 +427,13 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
   }
 
   /** Where one position's history stands; shared by the card summary and /api/claims. */
-  function coverage(tokenId, openedBlock = null) {
+  // A position's history is whole only when its own mint was observed inside the
+  // scanned interval. No other source of an opening block is accepted.
+  function coverage(tokenId) {
     const s = S();
     const t = s.tokens[String(tokenId)];
     if (!t || t.from > t.to) return null;
-    const opened = t.mint != null ? t.mint : openedBlock;
+    const opened = t.mint;
     const coversOpening = opened != null && t.from <= opened;
     const reachedLookbackFloor = s.floor != null && t.from <= s.floor;
     let gap = null;
@@ -367,9 +460,9 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
    * each. A record with neither makes the total null, with `usdMissing` saying why —
    * distinct from a total that simply has not been priced.
    */
-  function summary(tokenId, { dec0, dec1, sym0, sym1, usd0, usd1, openedBlock = null }) {
+  function summary(tokenId, { dec0, dec1, sym0, sym1, usd0, usd1 }) {
     const sc = { chainId: Number(chainId), positionManager: posm, tokenId: String(tokenId) };
-    const cov = coverage(tokenId, openedBlock);
+    const cov = coverage(tokenId);
     if (!cov) {
       return { status: "unavailable", reason: "no block range has been scanned for this position yet", scope: sc };
     }
@@ -421,4 +514,4 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     get readOnly() { return foreign(); }, get scope() { return scope; }, get state() { return S(); } };
 }
 
-module.exports = { create, MODIFY_LIQUIDITY, TRANSFER, NATIVE_PSEUDO, ZERO };
+module.exports = { create, MODIFY_LIQUIDITY, TRANSFER, SWAP, NATIVE_PSEUDO, ZERO, DECODER };

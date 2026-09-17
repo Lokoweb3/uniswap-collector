@@ -310,6 +310,178 @@ async function main() {
     fs.rmSync(d, { recursive: true, force: true });
   }
 
+  // ---- 8. a verified zero needs whole coverage AND every relevant payout read ---
+  // "No records" alone is not zero: each case below finds no usable record, and
+  // only the first may be reported as a verified zero.
+  {
+    const RANGE = [-887200, 887200];
+    const sqrtP = u.getSqrtRatioAtTick(0);
+    const run = async (world, extra = {}) => {
+      const d = tmp(), f = path.join(d, "claims.json");
+      const p = fakeProvider(world);
+      const s = cs.create(ARGS(p, f, extra.args || {}));
+      let err = null;
+      try { await s.scan((id) => (extra.meta || META)[id], { ids: extra.ids || ["8240"], chunk: 500, budget: 5, floor: 0 }); }
+      catch (e) { err = e; }
+      const sum = s.summary("8240", SUM);
+      fs.rmSync(d, { recursive: true, force: true });
+      return { sum, err, rows: s.rows("8240") };
+    };
+    const zero = (r) => r.sum.status === "ok" && r.sum.count === 0;
+    const from = (addr, to, token, v) => ({ address: token, topics: [cs.TRANSFER, pad(addr), pad(to)], data: ethers.zeroPadValue(ethers.toBeHex(v), 32) });
+    const ROUTER = "0x9999999999999999999999999999999999999999";
+
+    // a) mint observed, nothing else: the one honest zero.
+    const ok = await run({ logs: [mintLog(700, "8240")], transfers: {} });
+    assert.ok(zero(ok), `mint covered and no changes is a verified zero, got ${JSON.stringify(ok.sum)}`);
+
+    // b) the mint was never reached: no zero, however empty the range.
+    const noMint = await run({ logs: [], transfers: {} });
+    assert.strictEqual(noMint.sum.status, "partial", "no observed mint, no verified zero");
+
+    // c) the RPC drops a receipt: the chunk fails, the cursor does not move past it.
+    {
+      const d = tmp(), f = path.join(d, "claims.json");
+      const world = { logs: [mintLog(700, "8240"), modLog(900, 3, 0n, "8240", "0xgone")], transfers: {} };
+      const p = fakeProvider(world);
+      p.getTransactionReceipt = async () => null;
+      const s = cs.create(ARGS(p, f));
+      await assert.rejects(s.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 }), /no receipt/);
+      const sum = s.summary("8240", SUM);
+      assert.ok(!(sum.status === "ok" && sum.count === 0), "a dropped receipt must never read as a verified zero");
+      assert.ok(!sum.coverage || sum.coverage.fromBlock > 900, "and the range holding it is not marked scanned");
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+
+    // d) a log from our manager that cannot be decoded fails the chunk.
+    {
+      const bad = { ...modLog(900, 3, 0n, "8240", "0xbad"), data: "0x1234" };
+      const r = await run({ logs: [mintLog(700, "8240"), bad], transfers: {} });
+      assert.ok(r.err, "an undecodable ModifyLiquidity is an error, not an absence");
+      assert.ok(!zero(r), "and never a verified zero");
+    }
+
+    // e) the payout went to someone other than the owner.
+    {
+      const r = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, 0n, "8240", "0xaa")],
+        transfers: { "0xaa": [from(PM, ROUTER, USDC, 5000000n)] } });
+      assert.strictEqual(r.sum.status, "unavailable", `a payout to another address cannot be read as zero, got ${r.sum.status}`);
+      assert.match(r.sum.reason, /cannot be attributed/);
+    }
+
+    // f) a transfer to the owner that did not come from the pool manager is not a fee.
+    {
+      const r = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, 0n, "8240", "0xaa")],
+        transfers: { "0xaa": [xfer(USDC, 100n), from(ROUTER, OWNER, USDC, 999999n)] } });
+      assert.strictEqual(r.sum.raw0, "100", `only pool-manager payouts count, got ${r.sum.raw0}`);
+    }
+
+    // g) two changes in one transaction paying the same wallet in the same tokens.
+    {
+      const meta = { ...META, "8241": META["8240"] };
+      const r = await run({ logs: [mintLog(700, "8240"), mintLog(701, "8241"),
+        modLog(900, 3, 0n, "8240", "0xaa"), modLog(900, 4, 0n, "8241", "0xaa")],
+        transfers: { "0xaa": [xfer(USDC, 100n), xfer(USDC, 50n)] } }, { meta, ids: ["8240", "8241"] });
+      assert.strictEqual(r.sum.status, "unavailable", "a shared payout is not credited twice, nor guessed");
+      assert.match(r.sum.reason, /cannot be split/);
+    }
+
+    // h) another change in the same transaction whose pair is unknown.
+    {
+      const r = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, 0n, "8240", "0xaa"), modLog(900, 4, 0n, "5555", "0xaa")],
+        transfers: { "0xaa": [xfer(USDC, 100n)] } });
+      assert.strictEqual(r.sum.status, "unavailable", "an unknown neighbour could share the payout");
+    }
+
+    // i) adding liquidity realises fees netted against the deposit.
+    {
+      const L = 1000000000n;
+      const need = u.getAmountsForLiquidity(sqrtP, u.getSqrtRatioAtTick(RANGE[0]), u.getSqrtRatioAtTick(RANGE[1]), L);
+      const r = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, L, "8240", "0xad")],
+        transfers: { "0xad": [from(OWNER, PM, USDC, need.amount0 - 700n), from(OWNER, PM, ARGUS, need.amount1)] } });
+      assert.strictEqual(r.sum.status, "ok");
+      assert.strictEqual(r.sum.count, 1, "an add that realised fees is a claim");
+      assert.strictEqual(r.rows[0].kind, "increase");
+      assert.strictEqual(r.sum.raw0, "700", `fees = principal − deposit paid, got ${r.sum.raw0}`);
+      assert.strictEqual(r.sum.raw1, "0");
+
+      // the same add with the full deposit paid (one unit of rounding) is not a claim
+      const plain = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, L, "8240", "0xad")],
+        transfers: { "0xad": [from(OWNER, PM, USDC, need.amount0 + 1n), from(OWNER, PM, ARGUS, need.amount1 + 1n)] } });
+      assert.ok(zero(plain), `a plain top-up is still a verified zero, got ${JSON.stringify(plain.sum)}`);
+
+      // the opening deposit, in the mint's own transaction, is never a record
+      const opening = await run({ logs: [{ ...mintLog(700, "8240"), transactionHash: "0xop" }, modLog(700, 5, L, "8240", "0xop")],
+        transfers: { "0xop": [from(OWNER, PM, USDC, need.amount0 - 700n)] } });
+      assert.ok(zero(opening), "a new position has no fees to realise");
+
+      // a deposit paid by someone else cannot be netted
+      const other = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, L, "8240", "0xad")],
+        transfers: { "0xad": [from(ROUTER, PM, USDC, need.amount0)] } });
+      assert.strictEqual(other.sum.status, "unavailable");
+
+      // flows that do not fit the change are not forced into a number
+      const misfit = await run({ logs: [mintLog(700, "8240"), modLog(900, 3, L, "8240", "0xad")],
+        transfers: { "0xad": [from(OWNER, PM, USDC, need.amount0 + 5000n)] } });
+      assert.strictEqual(misfit.sum.status, "unavailable");
+      assert.match(misfit.sum.reason, /do not match/);
+    }
+  }
+
+  // ---- 9. a file written under older decoding rules is rescanned ---------------
+  {
+    const d = tmp(), f = path.join(d, "claims.json");
+    const scope = "5042:" + POSM_A;
+    fs.writeFileSync(f, JSON.stringify({ v: 1, scopes: { [scope]: {
+      events: { "0xold:1": { key: "0xold:1", tokenId: "8240", chainId: 5042, positionManager: POSM_A, block: 900, fee0: "999", fee1: "0", kind: "collect" } },
+      tokens: { "8240": { from: 1, to: 1000, mint: 10 } },
+      meta: { "8240": META["8240"] },
+    } } }));
+    const s = cs.create(ARGS(fakeProvider({ logs: [], transfers: {} }), f));
+    assert.strictEqual(s.summary("8240", SUM).status, "unavailable", "old coverage is not trusted");
+    assert.strictEqual(s.rows("8240").length, 0, "old records are not counted");
+    assert.deepStrictEqual(s.knownIds(), ["8240"], "tracked positions are kept, so the rescan starts at once");
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- 10. principal uses the price at the transaction, not the end of its block --
+  // Real Arc case (#11989, block 21104381): a swap later in the same block moved the
+  // price, and the end-of-block read made a plain top-up look unreadable.
+  {
+    const d = tmp(), f = path.join(d, "claims.json");
+    const lo = -600, hi = 600, L = 10n ** 12n;
+    const pTx = u.getSqrtRatioAtTick(0), pLater = u.getSqrtRatioAtTick(300), pEarlier = u.getSqrtRatioAtTick(-200);
+    const need = (p) => u.getAmountsForLiquidity(p, u.getSqrtRatioAtTick(lo), u.getSqrtRatioAtTick(hi), L);
+    const swapLog = (index, sqrt, tx = "0xsw" + index) => ({
+      address: PM, blockNumber: 900, index, transactionHash: tx,
+      topics: [cs.SWAP, "0x" + "ab".repeat(32), pad(POSM_B)],
+      data: coder.encode(["int128", "int128", "uint160", "uint128", "int24", "uint24"], [1n, -1n, sqrt, L, 0, 3000]),
+    });
+    const pay = (a) => [
+      { address: USDC, topics: [cs.TRANSFER, pad(OWNER), pad(PM)], data: ethers.zeroPadValue(ethers.toBeHex(a.amount0), 32) },
+      { address: ARGUS, topics: [cs.TRANSFER, pad(OWNER), pad(PM)], data: ethers.zeroPadValue(ethers.toBeHex(a.amount1), 32) },
+    ];
+    // slot0 answers per block: the end of block 899 is the price at the transaction.
+    const sv = { getSlot0: async (_id, { blockTag }) => [blockTag >= 900 ? pLater : pTx, 0, 0, 0] };
+    const inc = modLog(900, 5, L, "8240", "0xinc", POSM_A, lo, hi);
+
+    const later = cs.create(ARGS(fakeProvider({ logs: [mintLog(10, "8240"), inc, swapLog(9, pLater)], transfers: { "0xinc": pay(need(pTx)) } }), f, { stateView: sv }));
+    await later.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 });
+    const a = later.summary("8240", SUM);
+    assert.strictEqual(a.status, "ok", `a swap after the add must not change its principal, got ${a.reason}`);
+    assert.strictEqual(a.count, 0, "a plain top-up is not a claim");
+    assert.strictEqual(later.rows("8240").length, 0);
+
+    // A swap earlier in the block is the price the add actually saw.
+    const f2 = path.join(d, "b.json");
+    const earlier = cs.create(ARGS(fakeProvider({ logs: [mintLog(10, "8240"), swapLog(2, pEarlier), inc], transfers: { "0xinc": pay(need(pEarlier)) } }), f2, { stateView: sv }));
+    await earlier.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 });
+    const b = earlier.summary("8240", SUM);
+    assert.strictEqual(b.status, "ok", `the price after the earlier swap is used, got ${b.reason}`);
+    assert.strictEqual(b.count, 0);
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
   console.log("claims store: scoped by chain and manager, principal excluded, rescans cannot inflate, coverage per position from its mint, block time measured, USD basis stated");
 }
 main().catch((e) => { console.error(e); process.exit(1); });

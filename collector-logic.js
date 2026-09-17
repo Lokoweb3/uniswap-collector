@@ -32,6 +32,26 @@ function gasCapHit(state, capEth, cfg = null) {
   return gasSpentLast24h(state) >= cap;
 }
 
+/**
+ * Is there room in the 24-hour gas budget for one more transaction?
+ *
+ * Checking only what has already been spent lets the next transaction cross the
+ * cap: the guard has to include a conservative estimate of what that transaction
+ * will cost. `estimateWei` is gas units x gas price plus headroom, and the answer
+ * is recomputed from recorded spend each time, so a run that has just paid for a
+ * swap sees the smaller remaining budget before the next one.
+ */
+function budgetAllows({ spentWei, capWei, estimateWei }) {
+  const spent = BigInt(spentWei), cap = BigInt(capWei), est = BigInt(estimateWei);
+  return spent + est <= cap;
+}
+/** Conservative cost of a transaction of `gasUnits` at `gasPrice`, with headroom. */
+function gasEstimate(gasUnits, gasPrice, headroomPct = 25) {
+  return (BigInt(gasUnits) * BigInt(gasPrice) * BigInt(100 + headroomPct)) / 100n;
+}
+/** Rough gas units per kind of transaction this collector sends. */
+const GAS_UNITS = { collect: 400000n, swap: 250000n, approve: 60000n, transfer: 80000n, wrap: 60000n, unwrap: 60000n };
+
 /* ---------------------------------------------------------------------------
  * Config decoding (pure; throws on a bad sweep target config, never reads fs)
  * --------------------------------------------------------------------------- */
@@ -175,6 +195,9 @@ module.exports = {
   unitLabel,
   nativeDecimals,
   nativeLabel,
+  budgetAllows,
+  gasEstimate,
+  GAS_UNITS,
   gasSpentLast24h,
   gasCapHit,
   gasFloat,

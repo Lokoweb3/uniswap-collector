@@ -18,6 +18,7 @@ const path = require("path");
 const { ethers } = require("ethers");
 // === pure decision logic (testable in isolation) ===
 const cl = require("./collector-logic");
+const swapMod = require("./collector-swap");
 // === end pure decision logic ===
 
 // ---------------------------------------------------------------------------
@@ -367,7 +368,16 @@ async function main() {
   const target = sweepTarget(cfg);
   const treasurySettings = await treasury.effectiveSettings(cfg, provider);
   if (treasurySettings.tba) log(`LOKOVault: split ${treasurySettings.pct}% (${treasurySettings.pctSource}) -> ${treasurySettings.tba}`);
-  const ctx = { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target, treasurySettings };
+  // One more transaction only if the budget covers its estimated cost, recomputed
+  // from recorded spend every time it is asked.
+  const budget = (kind) => {
+    if (mode === "simulate") return true;
+    const est = cl.gasEstimate(cl.GAS_UNITS[kind] ?? 200000n, gasPrice);
+    const ok = cl.budgetAllows({ spentWei: gasSpentLast24h(state), capWei: cap, estimateWei: est });
+    if (!ok) log(`24h gas budget: ${nat(gasSpentLast24h(state))} spent of ${cfg.thresholds.dailyGasCapEth} ${NATIVE}; a ${kind} (~${nat(est)}) would cross it — not sending.`);
+    return ok;
+  };
+  const ctx = { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target, treasurySettings, budget };
 
   // Owners: the main wallet, then every settings.json wallet marked collect: true
   // (their fees are delivered back to their own address).
@@ -405,7 +415,7 @@ async function main() {
  * themselves; the main owner keeps the configured sweepDestination.
  */
 async function runOwner(ctx, owner) {
-  const { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target, treasurySettings } = ctx;
+  const { mode, cfg, provider, wallet, npmRead, quoter, weth, state, cap, gasPrice, target, treasurySettings, budget } = ctx;
   log(`--- ${owner.label} (${owner.address}) ---`);
   // Fees are collected to the operator so it can swap them. In collect-only
   // mode there is nothing to swap, so send straight to the owner instead and
@@ -600,6 +610,7 @@ async function runOwner(ctx, owner) {
   const collected = new Map(); // token address -> amount received
 
   for (const sim of eligible) {
+    if (!budget("collect")) { log(`  v3 #${sim.tokenId} left for the next run: the 24h gas budget cannot cover another collect.`); break; }
     try {
       const tx = await npmWrite.collect({
         tokenId: sim.tokenId,
@@ -649,6 +660,7 @@ async function runOwner(ctx, owner) {
         }
         const dry = await v4c.dryRun(sim, recipient, wallet.address);
         if (!dry.ok) { log(`  ! v4 #${sim.tokenId}: simulation reverted (${dry.error}); not sending`); continue; }
+        if (!budget("collect")) { log(`  v4 #${sim.tokenId} left for the next run: the 24h gas budget cannot cover another collect.`); break; }
         const rcpt = await v4c.collect(sim, recipient, wallet);
         const cost = rcpt.gasUsed * rcpt.gasPrice;
         recordGas(state, cost);
@@ -854,56 +866,32 @@ async function runOwner(ctx, owner) {
       }
     }
     const feeTier = feeTierFor.get(tokenAddr);
-    // No usable tier is decided up front (it gates whether we can even quote).
-    if (feeTier === undefined || feeTier === null) {
-      await handBack(`no known fee tier for ${info.symbol}`);
-      continue;
-    }
-    // Fresh quote immediately before the swap, then apply slippage tolerance.
-    const quoted = await quoteToWeth(quoter, tokenAddr, balance, feeTier, weth);
-    const why = cl.handBackReason({ feeTier, quotedWeth: quoted, maxSwapWeth: maxSwap });
-    if (why === "could not quote on a v3 pool") {
-      await handBack(`could not quote ${info.symbol} on a v3 pool`);
-      continue;
-    }
-    if (why === "swap over maxSwapValueWeth") {
-      await handBack(`${info.symbol} swap would be ${unit(quoted)} ${UNIT}, over maxSwapValueWeth (${cfg.thresholds.maxSwapValueWeth} ${UNIT})`);
-      continue;
-    }
-
-    const minOut = (quoted * (10000n - slippageBps)) / 10000n;
-
-    try {
-      const allowance = await erc20.allowance(wallet.address, cfg.contracts.swapRouter02);
-      if (allowance < balance) {
-        // Exact-amount approval rather than unlimited: the operator is a hot
-        // wallet, so leaving a standing infinite allowance is unnecessary risk.
-        const atx = await erc20.approve(cfg.contracts.swapRouter02, balance);
+    // The decision and the sending both live in collector-swap.js, so a test can
+    // run this exact sequence with mocks and prove what was not attempted.
+    await swapMod.convertFeeToken({
+      token: { address: tokenAddr, symbol: info.symbol, decimals: info.decimals },
+      balance, feeTier, maxSwap, slippageBps, weth, recipient: wallet.address,
+      quote: (amountIn) => quoteToWeth(quoter, tokenAddr, amountIn, feeTier, weth),
+      allowanceOf: () => erc20.allowance(wallet.address, cfg.contracts.swapRouter02),
+      approve: async (amount) => {
+        const atx = await erc20.approve(cfg.contracts.swapRouter02, amount);
         log(`approve ${info.symbol} -> ${atx.hash}`);
-        const arcpt = await atx.wait();
-        recordGas(state, arcpt.gasUsed * arcpt.gasPrice);
-      }
-
-      const stx = await router.exactInputSingle({
-        tokenIn: tokenAddr,
-        tokenOut: weth,
-        fee: feeTier,
-        recipient: wallet.address,
-        amountIn: balance,
-        amountOutMinimum: minOut,
-        sqrtPriceLimitX96: 0,
-      });
-      log(
-        `swap ${fmt(balance, info.decimals)} ${info.symbol} -> WETH ` +
-          `(quote ${unit(quoted)}, min ${unit(minOut)}) -> ${stx.hash}`
-      );
-      const srcpt = await stx.wait();
-      recordGas(state, srcpt.gasUsed * srcpt.gasPrice);
-      log(`  confirmed in block ${srcpt.blockNumber}`);
-    } catch (err) {
-      log(`  ! swap failed for ${info.symbol}: ${err.shortMessage || err.message}`);
-      log(`    tokens remain in the operator wallet — swap manually or rerun.`);
-    }
+        return atx.wait();
+      },
+      swap: async (params) => {
+        const stx = await router.exactInputSingle(params);
+        log(`swap ${fmt(balance, info.decimals)} ${info.symbol} -> ${UNIT} -> ${stx.hash}`);
+        const rcpt = await stx.wait();
+        log(`  confirmed in block ${rcpt.blockNumber}`);
+        return rcpt;
+      },
+      handBack: (reason) => handBack(reason),
+      budget,
+      recordGas: (c) => recordGas(state, c),
+      log,
+      fmtUnit: (v) => `${unit(v)} ${UNIT}`,
+      fmtToken: (v) => fmt(v, info.decimals),
+    });
   }
 
   // ETH from v4 sells arrived after the earlier wrap step: wrap what sits
@@ -978,6 +966,7 @@ async function runOwner(ctx, owner) {
             recordGas(state, arcpt.gasUsed * arcpt.gasPrice);
           }
           // The swap pays out to the operator; the split below decides where it goes.
+          if (!budget("swap")) { log(`  ! ${UNIT} -> ${tinfo.symbol} swap not sent: the 24h gas budget cannot cover it. The balance stays in the operator wallet.`); throw new Error("gas budget exhausted before the sweep swap"); }
           const stx = await router.exactInputSingle({
             tokenIn: weth,
             tokenOut: target.address,
@@ -1013,6 +1002,7 @@ async function runOwner(ctx, owner) {
       let splitTx = null, ownerTx = null, status = ts.enabled ? "ok" : "off";
       if (sp.toVault > 0n) {
         try {
+          if (!budget("transfer")) throw new Error("gas budget exhausted before the vault transfer");
           const vtx = await targetC.transfer(ts.tba, sp.toVault);
           log(`treasury split ${fmt(sp.toVault, tinfo.decimals, 2)} ${tinfo.symbol} (${ts.pct}%) -> LOKOVault TBA ${ts.tba} -> ${vtx.hash}`);
           const vr = await vtx.wait();
@@ -1026,6 +1016,7 @@ async function runOwner(ctx, owner) {
         }
       }
       try {
+        if (!budget("transfer")) { log(`  ! delivery to ${owner.sweepTo} not sent: the 24h gas budget cannot cover it. The balance stays in the operator wallet, still owed to ${owner.label}.`); throw new Error("gas budget exhausted before delivery"); }
         const ttx = await targetC.transfer(owner.sweepTo, sp.toOwner);
         log(`send ${fmt(sp.toOwner, tinfo.decimals, 2)} ${tinfo.symbol} -> ${owner.sweepTo} -> ${ttx.hash}`);
         const trcpt = await ttx.wait();

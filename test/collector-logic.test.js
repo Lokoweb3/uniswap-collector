@@ -182,13 +182,77 @@ const cl = require("../collector-logic");
   // the bug this guards: an 18-decimal cap against 6-decimal quotes never fires
   assert.strictEqual(cl.handBackReason({ feeTier: 3000, quotedWeth: over, maxSwapWeth: ethers.parseEther("50") }), null,
     "this is what the old parsing did — the cap could never bite");
-  // and the collector routes that reason to the hand-back path, never to a swap
-  const src = fs.readFileSync(path.join(__dirname, "..", "collector.js"), "utf8");
-  const at = src.indexOf('if (why === "swap over maxSwapValueWeth")');
-  assert.ok(at > 0, "collector.js still branches on that reason");
-  assert.match(src.slice(at, at + 260), /await handBack\(/, "and hands the token back instead of swapping");
-  assert.match(src, /const maxSwap = ethers\.parseUnits\(cfg\.thresholds\.maxSwapValueWeth, UNIT_DEC\)/,
-    "the cap is parsed in the unit of account's decimals");
+  // What the collector then DOES with that reason is proved by executing the
+  // branch with mocks: see test/collector-swap.test.js.
 }
 
-console.log("collector-logic: native gas vs unit of account, daily budget, swap cap, eligibility, hand-back, split, gas budget, pass deltas — all assertions passed");
+// ---- the budget must cover the NEXT transaction, not just the last one ---------
+// Checking recorded spend alone lets the next transaction cross the cap. The guard
+// adds a conservative estimate of what is about to be sent, and is asked again
+// before every later swap or transfer.
+{
+  const cap = ethers.parseUnits("1.0", 18);
+  const price = 20000000000n;                       // 20 gwei
+  const swapEst = cl.gasEstimate(cl.GAS_UNITS.swap, price);
+  assert.strictEqual(swapEst, (250000n * price * 125n) / 100n, "25% headroom over the expected gas");
+  // room for the estimate: allowed
+  assert.strictEqual(cl.budgetAllows({ spentWei: 0n, capWei: cap, estimateWei: swapEst }), true);
+  // spent just under the cap, but the next swap would cross it: refused, even
+  // though a spend-only check would have let it through
+  const nearly = cap - swapEst / 2n;
+  assert.strictEqual(nearly < cap, true, "a spend-only check would allow this");
+  assert.strictEqual(cl.budgetAllows({ spentWei: nearly, capWei: cap, estimateWei: swapEst }), false,
+    "including the pending cost refuses it");
+  // exactly enough is allowed; one wei less is not
+  assert.strictEqual(cl.budgetAllows({ spentWei: cap - swapEst, capWei: cap, estimateWei: swapEst }), true);
+  assert.strictEqual(cl.budgetAllows({ spentWei: cap - swapEst + 1n, capWei: cap, estimateWei: swapEst }), false);
+  // the answer follows recorded spend, so it tightens as a run proceeds
+  const collectEst = cl.gasEstimate(cl.GAS_UNITS.collect, price);
+  let spent = 0n;
+  const steps = [];
+  for (let i = 0; i < 100; i++) {
+    if (!cl.budgetAllows({ spentWei: spent, capWei: cap, estimateWei: collectEst })) break;
+    spent += collectEst;                            // pretend each one cost its estimate
+    steps.push(i);
+  }
+  assert.ok(spent + collectEst > cap, "the loop stops before the cap is crossed, not after");
+  assert.ok(steps.length >= 1 && spent <= cap, `it allowed ${steps.length} collects within ${cap}`);
+  // a dearer gas price shrinks the count for the same cap
+  const dear = cl.gasEstimate(cl.GAS_UNITS.collect, 200000000000n);
+  assert.ok(dear > collectEst * 9n, "at the 200 gwei cap a collect costs ~10x the spot estimate");
+  assert.strictEqual(cl.budgetAllows({ spentWei: cap - collectEst, capWei: cap, estimateWei: dear }), false);
+}
+
+// ---- a failed sweep must not become another wallet's money ---------------------
+// If collection succeeds but the swap or the delivery fails, the tokens sit in the
+// operator wallet. What a LATER pass may treat as its own decides whether they can
+// leak to a different owner.
+{
+  const stranded = ethers.parseUnits("2.07", 6);        // Arc LP's fees, stuck after a failed delivery
+  const produced = ethers.parseUnits("0.50", 6);        // what a later pass actually earns
+
+  // ERC-20 legs (the unit of account and the sweep target) are delta-based: the
+  // later pass snapshots the balance at its own start, so the stranded amount is
+  // invisible to it no matter whose pass it is.
+  assert.strictEqual(cl.passDelta(stranded, stranded + produced), produced,
+    "a later pass sweeps only what it produced");
+  assert.strictEqual(cl.passDelta(stranded, stranded), 0n,
+    "a pass that produced nothing sweeps nothing, however much is sitting there");
+  assert.strictEqual(cl.passDelta(stranded, stranded - 1n), 0n, "and never goes negative");
+
+  // The native (gas-token) leg is NOT symmetric, by design: a watched owner is
+  // held to the same delta rule...
+  assert.strictEqual(cl.ethPassDelta(stranded, stranded + produced, false), stranded + produced,
+    "a watched pass that produced something is handed the balance");
+  assert.strictEqual(cl.ethPassDelta(stranded, stranded, false), 0n,
+    "a watched pass that produced nothing is handed nothing");
+  // ...but the MAIN wallet is handed the whole native balance, which is how a
+  // stranded native amount from an earlier failed pass would reach it on a later
+  // run. This pins the behaviour so it cannot change unnoticed; on a chain whose
+  // fees never arrive as native currency (Arc: fees are ERC-20 USDC) it cannot
+  // arise, and collect-only mode never puts fees in the operator at all.
+  assert.strictEqual(cl.ethPassDelta(stranded, stranded, true), stranded,
+    "known asymmetry: main is handed its whole native balance, including anything stranded there");
+}
+
+console.log("collector-logic: stranded-fund attribution, native gas vs unit of account, forward-looking gas budget, swap cap, eligibility, hand-back, split, gas budget, pass deltas — all assertions passed");

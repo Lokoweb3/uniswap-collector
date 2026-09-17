@@ -335,6 +335,24 @@ function drawLoadFails() {
     `<p class="loadfail"><b>${esc(k)}</b> could not be refreshed (${esc(v.msg)}, ${new Date(v.at).toLocaleTimeString()}). What is shown there may be out of date or missing.</p>`).join('');
 }
 
+// How an /api answer went. `ok:false` is a failure — whatever the HTTP status —
+// unless the server says its first build is still running (202, or `refreshing`
+// with no data yet), which is "not yet", not "failed".
+function apiOutcome(status, d) {
+  if (status < 500 && (status === 202 || (d && d.refreshing === true && d.ok !== true))) return { kind: 'pending' };
+  if (status >= 200 && status < 300 && d && d.ok === true) return { kind: 'ok' };
+  const why = d && d.error ? String(d.error)
+    : `the server answered HTTP ${status}${d && d.ok === false ? ' without data' : ''}`;
+  return { kind: 'error', msg: why };
+}
+// A section that kept its last good data after a failed refresh says so, and how old it is.
+function staleNote(at, msg) {
+  const when = at ? new Date(at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
+  return when
+    ? `Showing the last successful refresh from ${esc(when)}. The latest refresh failed: ${esc(msg)}.`
+    : `Could not load: ${esc(msg)}. Nothing is shown because nothing has loaded yet \u2014 this is not an empty result.`;
+}
+
 let allSeriesD = null;
 async function loadAllSeries(){
   try { const r = await fetch('/api/portfolio-all'); const d = await r.json(); loadOk('Portfolio history'); if (d.ok && d.points.length) { allSeriesD = d; if (lastPortfolio) renderPortfolio(); } } catch(e){ loadFailed('Portfolio history', e); }
@@ -1180,7 +1198,15 @@ function renderVault(){
 
 let watchForAnalytics = null;
 async function loadWatchForAnalytics(){
-  try { const r = await fetch('/api/watch'); const d = await r.json(); loadOk('Watched wallets'); if (d && d.ok) { watchForAnalytics = d; renderAnalytics(); } } catch(e){ loadFailed('Watched wallets', e); }
+  // A failed or ok:false answer keeps the last good payload; the strip says it is stale.
+  try {
+    const r = await fetch('/api/watch'); const d = await r.json();
+    const o = apiOutcome(r.status, d);
+    if (o.kind === 'pending') return;
+    if (o.kind === 'error') throw new Error(o.msg + (watchForAnalytics ? ' (showing the last good data)' : ''));
+    loadOk('Watched wallets');
+    watchForAnalytics = d; renderAnalytics();
+  } catch(e){ loadFailed('Watched wallets', e); }
 }
 function renderEarnedByWallet(){
   const rows = [];
@@ -1606,26 +1632,39 @@ document.addEventListener('click', async e => {
   const open = b.getAttribute('aria-expanded') === 'true';
   b.setAttribute('aria-expanded', open ? 'false' : 'true');
   panel.hidden = open;
-  if (open || panel.dataset.filled) return;
+  if (open) return;
+  await refreshClaimPanel(panel, b);
+});
 
-  // Loaded on demand from /api/claims, not from the analytics bundle: the control
-  // is usable the moment the card renders, whether or not Analytics has run.
-  panel.innerHTML = '<p class="chnote" role="status">Loading this position\u2019s collections\u2026</p>';
+// Loaded on demand from /api/claims, not from the analytics bundle, and fetched
+// again on every open because the background scan keeps extending it. The last
+// good answer is kept per panel: a failed or ok:false refresh shows it with its
+// age and the failure, and never replaces it with an error or an empty table.
+const claimPanels = new Map();   // panel id -> { d, at }
+async function refreshClaimPanel(panel, b) {
+  const last = claimPanels.get(panel.id);
+  panel.innerHTML = last
+    ? claimPanelHtml(last.d) + '<p class="chnote" role="status">Refreshing\u2026</p>'
+    : '<p class="chnote" role="status">Loading this position\u2019s collections\u2026</p>';
   const q = new URLSearchParams({ tokenId: b.dataset.tokenid || '', chainId: b.dataset.chainid || '', manager: b.dataset.manager || '' });
-  let d;
+  let msg = null, d = null;
   try {
     const r = await fetch('/api/claims?' + q);
     d = await r.json();
-    if (!d.ok) throw new Error(d.error || 'the request failed');
-  } catch (err) {
-    // An error is not an empty history. Say which, and leave the panel retryable.
-    panel.innerHTML = `<p class="chnote err" role="alert">Collection history could not be loaded: ${esc(err.message)}. ` +
-      `This is a failed read, not a statement that nothing was collected.</p>`;
+    const o = apiOutcome(r.status, d);
+    if (o.kind !== 'ok') msg = o.kind === 'pending' ? 'the server is still starting' : o.msg;
+  } catch (err) { msg = err.message || String(err); }
+  if (msg == null) {
+    claimPanels.set(panel.id, { d, at: Date.now() });
+    panel.innerHTML = claimPanelHtml(d);
     return;
   }
-  panel.dataset.filled = '1';
-  panel.innerHTML = claimPanelHtml(d);
-});
+  // An error is not an empty history. Say which, keep what was known, stay retryable.
+  panel.innerHTML = last
+    ? `<p class="chnote err" role="alert">${staleNote(last.at, msg)} Close and reopen to retry.</p>` + claimPanelHtml(last.d)
+    : `<p class="chnote err" role="alert">Collection history could not be loaded: ${esc(msg)}. ` +
+      `This is a failed read, not a statement that nothing was collected. Close and reopen to retry.</p>`;
+}
 
 // The panel body: covers unavailable, empty, partial and complete. Every one of
 // them says what it knows and what it does not.
@@ -1637,7 +1676,7 @@ function claimPanelHtml(d) {
   if (d.status === 'unavailable') {
     return `<p class="chnote warn">Claim history unavailable. ${esc(d.reason || '')}</p>`;
   }
-  const complete = d.status === 'ok' && cov && cov.coversOpening;
+  const complete = d.status === 'ok' && !!cov && cov.coversOpening === true && !d.rows.some(r => r.unavailable);
   const note = complete
     ? `<p class="chnote">Scanned ${esc(window_)}, from the block this position was opened in \u2014 complete for this position.</p>`
     : `<p class="chnote warn">Partial: only ${esc(window_)} has been scanned${d.reason ? ` \u2014 ${esc(d.reason)}` : ''}. Collections before that are not listed.` +
@@ -1647,17 +1686,24 @@ function claimPanelHtml(d) {
       ? 'This position has never had fees collected.'
       : 'That is not the same as none having happened \u2014 earlier blocks are still unscanned.'}</p>`;
   }
-  return note + '<table class="chtable"><caption>Fees only \u2014 withdrawn principal is excluded from every row</caption>' +
+  return note + '<table class="chtable"><caption>Fees only \u2014 withdrawn principal and added deposits are excluded from every row</caption>' +
     '<thead><tr><th scope="col">When</th><th scope="col">Kind</th><th scope="col">Fees claimed</th><th scope="col">USD basis</th><th scope="col">Tx</th></tr></thead><tbody>' +
     d.rows.map(r => `<tr><td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown'}</td>` +
-      `<td>${r.kind === 'withdrawal' ? '<span title="This transaction also withdrew principal; only the fee part above the principal is counted">withdrawal</span>' : 'collect'}</td>` +
+      `<td>${claimKindLabel(r.kind)}</td>` +
       `<td class="mono">${r.unavailable ? `<span class="unavail" title="${esc(r.unavailable)}">not separable</span>`
         : (r.fee0 == null || r.fee1 == null)
           ? '<span class="unavail" title="A token\u2019s decimals could not be read, so this amount cannot be shown">amount unavailable</span>'
-          : `${esc(r.fee0)} + ${esc(r.fee1)}`}</td>` +
+          : `<span class="amt">${esc(r.fee0)}</span><span class="amt">${esc(r.fee1)}</span>`}</td>` +
       `<td>${claimPriceLabel(r)}</td>` +
       `<td class="mono">${r.tx ? linkify(r.tx.slice(0, 10) + '\u2026') : '\u2014'}</td></tr>`).join('') +
     '</tbody></table>';
+}
+// What a row was. v4 pays out accrued fees on every liquidity change, so an add
+// realises fees too (netted against the deposit) and is listed with its fee part.
+function claimKindLabel(kind) {
+  if (kind === 'withdrawal') return '<span title="This transaction also withdrew principal; only the fee part above the principal is counted">withdrawal</span>';
+  if (kind === 'increase') return '<span title="Liquidity was added. v4 pays out the fees accrued so far at the same time, netted against the deposit; only that fee part is counted">add (fees netted)</span>';
+  return 'collect';
 }
 // Which price a collection's USD value uses. Only "its block" and "its hour" are
 // what was actually received; "today's price" is an approximation and says so.
@@ -1821,7 +1867,7 @@ function claimedMetric(p, uid) {
     // Zero only when the scan actually reached back past this position's opening.
     // Anything less is an unscanned range, which is not evidence of nothing.
     const cov = c.coverage || {};
-    if (c.status !== 'ok' || !cov.coversOpening) {
+    if (c.status !== 'ok' || cov.coversOpening !== true || c.usd !== 0) {
       return `${open} title="No collections found inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}, but the scan has not reached this position's opening, so nothing can be concluded.">` +
         `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
         `<span class="msub">scanned range does not reach this position's start</span></button>`;
@@ -1832,10 +1878,10 @@ function claimedMetric(p, uid) {
   }
   const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
   const basis = claimBasisShort(c);
-  return `${open} title="${c.count} collection${c.count === 1 ? '' : 's'}. ${esc(c.usdMissing || c.basis || '')}. Already paid out to the wallet, so it is not part of the position value.">` +
+  return `${open} title="${c.count} claim${c.count === 1 ? '' : 's'} (collects, withdrawals and liquidity adds that paid out fees). ${esc(c.usdMissing || c.basis || '')}. Already paid out to the wallet, so it is not part of the position value.">` +
     `<span class="ml">Claimed fees</span>` +
     `<span class="mv${c.usdBasis && c.usdBasis !== 'at-claim' ? ' approx' : ''}">${c.usd != null ? (c.usdBasis && c.usdBasis !== 'at-claim' ? '\u2248' : '') + usd(c.usd) : '—'}</span>` +
-    `<span class="msub">${c.count} collection${c.count === 1 ? '' : 's'}${when ? ' · last ' + esc(when) : ''}${c.usd == null && c.usdMissing ? ' · no USD total' : basis ? ' · ' + basis : ''}</span></button>`;
+    `<span class="msub">${c.count} claim${c.count === 1 ? '' : 's'}${when ? ' · last ' + esc(when) : ''}${c.usd == null && c.usdMissing ? ' · no USD total' : basis ? ' · ' + basis : ''}</span></button>`;
 }
 
 function positionCard(p, d, opts) {
@@ -1997,6 +2043,11 @@ function claimedLine(p){
       `${c.usd != null ? ` · ${usd(c.usd)}` : ''}</span>`;
   }
   if (!c.count) {
+    // Zero only with the same evidence the tile needs: the scan reached this
+    // position's mint and every relevant payout decoded (the server says "ok").
+    if (c.status !== 'ok' || !(c.coverage && c.coverage.coversOpening === true)) {
+      return `<span class="c unavail" title="No collections found in the scanned range, but it does not reach this position's opening, so nothing can be concluded.">Claim history incomplete</span>`;
+    }
     return `<span class="c zero" title="History covers this position from ${c.since ? new Date(c.since).toLocaleDateString() : 'its first block'} and found no fee collect and no withdrawal. A verified zero, not an assumption.">No fees claimed yet <span class="muted">(verified)</span></span>`;
   }
   const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
@@ -2181,15 +2232,34 @@ function renderWatch(d){
     applyWalletOpen(w.address.toLowerCase(), 'wcards-' + w.address.toLowerCase());
   renderSidebar();
 }
+// The watched-wallet cards. A failed read or an ok:false answer never replaces
+// them: the last good cards stay, marked with their age and the failure. Only a
+// successful answer redraws the section.
 async function loadWatch(){
-  try {
-    const r = await fetch('/api/watch');
-    const d = await r.json(); loadOk('Watched wallets');
-    if (r.status === 202 || (d && d.refreshing && !d.ok)) setTimeout(loadWatch, 20000); // first build still running
-    renderWatch(d);
-    lastWatchForPf = d && d.ok ? d : lastWatchForPf;
-    if (lastPortfolio) renderPortfolio();
-  } catch(e){ loadFailed('Watched wallets', e); }
+  let r, d;
+  try { r = await fetch('/api/watch'); d = await r.json(); }
+  catch(e){ return watchFailed(e.message || String(e)); }
+  const o = apiOutcome(r.status, d);
+  if (o.kind === 'pending') {                                  // first build still running
+    setTimeout(loadWatch, 20000);
+    if (!lastWatchForPf) { const n = $('#watchstale'); if (n) { n.hidden = false; n.className = 'chnote'; n.textContent = 'Watched wallets are still loading\u2026'; } }
+    return;
+  }
+  if (o.kind === 'error') return watchFailed(o.msg);
+  try { renderWatch(d); }
+  catch(e){ return watchFailed(`the page could not draw the answer (${e.message})`); }
+  loadOk('Watched wallets');
+  const n = $('#watchstale'); if (n) { n.hidden = true; n.textContent = ''; }
+  lastWatchForPf = d;
+  if (lastPortfolio) renderPortfolio();
+}
+function watchFailed(msg){
+  loadFailed('Watched wallets', new Error(msg));
+  const n = $('#watchstale');
+  if (!n) return;
+  n.hidden = false;
+  n.className = 'loadfail';
+  n.innerHTML = staleNote(lastWatchForPf && lastWatchForPf.at, msg);
 }
 if (PAGE !== 'analytics') { loadWatch(); setInterval(loadWatch, 120000); }
 

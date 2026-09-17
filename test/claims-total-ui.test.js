@@ -56,7 +56,7 @@ const PROVIDED = ["$", "pref", "setPref", "loadOk", "loadFailed", "histScope", "
 
 function page() {
   const el = (x = {}) => ({ hidden: false, innerHTML: "", className: "", textContent: "", title: "", value: "", dataset: {}, ...x });
-  const els = { "#ctotbtn": el(), "#ctbody": el(), "#ctwalletwrap": el({ hidden: true }), "#ctwallet": el(),
+  const els = { "#ctotbtn": el(), "#ctbody": el(), "#chaintax": el(), "#chaintaxtotal": el(), "#ctwalletwrap": el({ hidden: true }), "#ctwallet": el(),
     "#ctstatus": el({ value: "all" }), "#ctfrom": el(), "#ctto": el(),
     "#posfilter": el({ contains: () => false, querySelector: () => null }), "#histsec": el({ hidden: true }), "#histstale": el({ hidden: true }), "#histlist": el() };
   const prefs = new Map();
@@ -75,10 +75,14 @@ function page() {
     const shortA = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
     const ownerLabel = () => 'Arc LP';
     const amount = (n) => String(n), price = (n) => String(n), linkify = (s) => esc(s);
+    let chainFeesD = null;
+    const usd = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     ${lifted(["ctotalQuery", "ctotalHeadline", "ctotalButtonHtml", "ctotalPanelHtml", "ctotalBodyHtml", "ctTokensText",
-      "loadClaimTotal", "renderClaimTotalButton", "renderClaimTotalPanel", "readCtFilters", "ctDay", "ctotalFailHead", "loadPosHistory"], PROVIDED)}
+      "loadClaimTotal", "renderClaimTotalButton", "renderClaimTotalPanel", "readCtFilters", "ctDay", "ctotalFailHead", "loadPosHistory",
+      "renderChainTax"], [...PROVIDED, "usd"])}
     return { ctotalQuery, ctotalHeadline, ctotalButtonHtml, ctotalPanelHtml, ctotalBodyHtml, ctTokensText, ctDay,
-      loadClaimTotal, renderClaimTotalButton, renderClaimTotalPanel, readCtFilters, loadPosHistory, CTOT, HIST };`;
+      loadClaimTotal, renderClaimTotalButton, renderClaimTotalPanel, readCtFilters, loadPosHistory, CTOT, HIST,
+      renderChainTax: (d) => { chainFeesD = d; return renderChainTax(); } };`;
   const api = new Function("document", "fetch", "$", "pref", "setPref", "loadOk", "loadFailed", "histScope", body)(
     document, fetch, (s) => els[s] || null,
     (k) => (prefs.has(k) ? prefs.get(k) : null), (k, v) => prefs.set(k, v),
@@ -387,6 +391,34 @@ async function main() {
     assert.match(strip(e2["#ctotbtn"].innerHTML), /Total claimed fees · Arc LP · Open \+ closed/);
   }
 
-  console.log("claims total UI: read-only button and scope label, a headline per state, tokens by address, historical and today kept apart, subtotals, per-position and collection rows, filter queries, coverage lists, stale panel kept");
+  // ---- income for taxes, read from chain: by month, by wallet, never merged -------
+{
+  const { api, els } = page();
+  const sep = Date.UTC(2026, 8, 16, 5, 0), oct = Date.UTC(2026, 9, 2, 5, 0);
+  api.renderChainTax({ stateLabel: "Verified claimed — complete history", rows: [
+    { t: sep, usd: 143.12, wallet: W1, walletLabel: "Arc LP" },
+    { t: sep + 3600e3, usd: 0.008, wallet: W2, walletLabel: "SEAL wallet" },
+    { t: oct, usd: 12.5, wallet: W1, walletLabel: "Arc LP" },
+    { t: oct, usd: null, wallet: W1, walletLabel: "Arc LP" },
+  ] });
+  const t = strip(els["#chaintax"].innerHTML);
+  assert.match(t, /September 2026 2 \$143\.13/, `two September settlements, summed: ${t}`);
+  assert.match(t, /Arc LP \$143\.12 · SEAL wallet \$0\.01/, "split by wallet");
+  assert.match(t, /October 2026 2 \$12\.50 1 unpriced/, "an unpriced settlement is counted and named, not valued");
+  assert.match(t, /each settlement at its own transaction price/);
+  assert.match(t, /Withdrawn principal is not income/);
+  assert.strictEqual(els["#chaintaxtotal"].textContent, "$155.63");
+  // nothing loaded, or nothing found: never a zero that looks like income
+  const p2 = page();
+  p2.api.renderChainTax(null);
+  assert.match(strip(p2.els["#chaintax"].innerHTML), /not loaded/);
+  assert.strictEqual(p2.els["#chaintaxtotal"].textContent, "");
+  const p3 = page();
+  p3.api.renderChainTax({ stateLabel: "x", rows: [] });
+  assert.match(strip(p3.els["#chaintax"].innerHTML), /No verified settlements/);
+  assert.strictEqual(p3.els["#chaintaxtotal"].textContent, "none");
+}
+
+console.log("claims total UI: chain-derived tax rows, read-only button and scope label, a headline per state, tokens by address, historical and today kept apart, subtotals, per-position and collection rows, filter queries, coverage lists, stale panel kept");
 }
 main().catch((e) => { console.error(e); process.exit(1); });

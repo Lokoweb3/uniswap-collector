@@ -137,6 +137,33 @@ assert.strictEqual(+b[1].stakingPct.toFixed(6), 2);
 assert.strictEqual(b[1].usdgPct, 0);
 assert.strictEqual(b[1].actualDays, 10);
 assert.match(b[1].note, /only 10.0 days/);
+// ---- a percentage return must describe performance, not funding ----------------
+{
+  const eth = [{ t: now - 10 * DAY, p: 2000 }, { t: now, p: 2100 }];
+  // priced transfers inside the window are netted out of the return
+  const withFlows = benchmarks({ bookSeries: [{ t: now - 10 * DAY, v: 1000 }, { t: now, v: 1200 }], ethSeries: eth,
+    flows: [{ t: now - 3 * DAY, key: "main", kind: "received", usd: 100 }], now, windows: [30] });
+  assert.strictEqual(+withFlows[0].portfolioPct.toFixed(6), 10, "a $100 deposit is not a $200 gain");
+  assert.strictEqual(withFlows[0].netFlowsUsd, 100);
+  assert.match(withFlows[0].note, /netted out/);
+  // a transfer with no price cannot be netted: no percentage at all
+  const unpriced = benchmarks({ bookSeries: [{ t: now - 10 * DAY, v: 1000 }, { t: now, v: 1200 }], ethSeries: eth,
+    flows: [{ t: now - 3 * DAY, key: "main", kind: "received", usd: null }], now, windows: [30] });
+  assert.strictEqual(unpriced[0].portfolioPct, null);
+  assert.match(unpriced[0].note, /no recorded price/);
+  // transfers that dwarf the starting value describe funding, not performance
+  const funded = benchmarks({ bookSeries: [{ t: now - 10 * DAY, v: 100 }, { t: now, v: 620 }], ethSeries: eth,
+    flows: [{ t: now - 3 * DAY, key: "main", kind: "received", usd: 500 }], now, windows: [30] });
+  assert.strictEqual(funded[0].portfolioPct, null);
+  assert.match(funded[0].note, /dominate/);
+  // the real case: a book that went from $6.42 to $2,500 with no transfer recorded
+  const unexplained = benchmarks({ bookSeries: [{ t: now - 1.5 * DAY, v: 6.42 }, { t: now, v: 2500 }], ethSeries: eth, flows: [], now, windows: [7, 30, 90] });
+  for (const b of unexplained) {
+    assert.strictEqual(b.portfolioPct, null, "no 8,000 % return from funding");
+    assert.match(b.note, /transfer history is incomplete/);
+  }
+}
+
 const none = benchmarks({ bookSeries: [], ethSeries, stakingSamples, now });
 assert.strictEqual(none[0].portfolioPct, null);
 

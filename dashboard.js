@@ -1012,6 +1012,7 @@ async function renderChainFees(){
   }
   loadOk('Claimed fees (chain)');
   const d = chainFeesD = e.d;
+  renderChainTax();
   const money = d.usd.historical != null ? usd(d.usd.historical)
     : d.usd.pricedRecords ? 'priced subtotal ' + usd(d.usd.pricedSubtotal) : '—';
   if (tot) tot.textContent = d.rows.length ? money : 'no verified settlements';
@@ -1027,6 +1028,39 @@ async function renderChainFees(){
         + `<td>${esc(p.state === 'complete' ? 'complete history' : p.state)}</td></tr>`).join('')
       + `</tbody></table></div>` : '<p class="enote">No verified settlements in this scope.</p>')
     + `<p class="enote">${esc(d.coverage.note || '')}</p>`;
+}
+
+/**
+ * Fee income the wallet settled itself, by month, from the chain-derived history.
+ * The table above it is this collector's ledger; these are different sources and
+ * are never added together. Each settlement is valued at its own transaction.
+ */
+function renderChainTax(){
+  const box = $('#chaintax'), tot = $('#chaintaxtotal');
+  if (!box) return;
+  const d = chainFeesD;
+  if (!d) { box.innerHTML = '<p class="enote">Chain-derived settlements are not loaded.</p>'; if (tot) tot.textContent = ''; return; }
+  const by = new Map();
+  for (const r of d.rows || []) {
+    const k = r.t ? new Date(r.t).toISOString().slice(0, 7) : 'undated';
+    if (!by.has(k)) by.set(k, { k, n: 0, usd: 0, unpriced: 0, wallets: {} });
+    const o = by.get(k);
+    o.n++;
+    if (r.usd == null) o.unpriced++;
+    else { o.usd += r.usd; o.wallets[r.walletLabel || r.wallet] = (o.wallets[r.walletLabel || r.wallet] || 0) + r.usd; }
+  }
+  const months = [...by.values()].sort((a, b) => b.k.localeCompare(a.k));
+  const total = months.reduce((s, m) => s + m.usd, 0);
+  if (tot) tot.textContent = months.length ? usd(total) : 'none';
+  const mlabel = k => k === 'undated' ? 'undated' : new Date(k + '-15T12:00:00').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  box.innerHTML = months.length
+    ? `<div class="etablewrap"><table class="etable"><tr><th class="l">Period</th><th>Settlements</th><th>LP fee income</th><th class="l">By wallet</th><th class="l">Basis</th></tr>`
+      + months.map(m => `<tr><td class="l">${esc(mlabel(m.k))}</td><td>${m.n}</td>`
+        + `<td class="u">${usd(m.usd)}${m.unpriced ? ` <span class="unpriced">${m.unpriced} unpriced</span>` : ''}</td>`
+        + `<td class="l wrap">${Object.entries(m.wallets).sort((a, b) => b[1] - a[1]).map(([w, v]) => `${esc(w)} <b>${usd(v)}</b>`).join(' · ') || '—'}</td>`
+        + `<td class="l muted">each settlement at its own transaction price</td></tr>`).join('')
+      + `</table></div><p class="enote">Read from chain: fees the wallet settled itself, including ones no collector run produced. Withdrawn principal is not income and is excluded. ${esc(d.stateLabel)}.</p>`
+    : '<p class="enote">No verified settlements read from chain yet.</p>';
 }
 
 /* ---- daily revenue ---- */
@@ -1424,7 +1458,10 @@ function renderAnalytics(){
     tile(best ? usd(best.total) : '—', best ? `Best day · ${dayLabel(best.key)}` : 'Best day') +
     tile(usd(st30), 'Staking rewards, 30 days') +
     tile(usd(lpAll), 'LP fees collected, all time');
-  $('#perfnote').textContent = `Collected = cash actually swept; earned = accrual between snapshots. ${ev.length} income events on record.`;
+  // These tiles are the collector's own ledger and the accrual snapshots, for the
+  // main wallet. Fees the wallet settled itself are chain-derived and shown below.
+  $('#perfnote').textContent = `Collected = cash actually swept by this collector; earned = accrual between snapshots. ${ev.length} income events on record here`
+    + ` — this collector's ledger and its snapshots only. Fees the wallet settled itself are in "Claimed fees — read from chain" below, and the two are never added together.`;
 }
 
 // Tax CSV: one row per income event, USD at receipt.
@@ -3499,12 +3536,12 @@ function renderAttribution(){
     <tr><th class="l">Window</th><th>Portfolio</th><th>Holding ETH</th><th>Holding USDG</th><th>Staking NET</th><th>vs ETH</th><th>vs staking</th><th class="l">Note</th></tr>
     ${B.map(b => `<tr><td class="l">${b.windowDays}d</td><td class="u">${pct(b.portfolioPct)}</td><td>${pct(b.ethPct)}</td><td>${pct(b.usdgPct)}</td><td>${pct(b.stakingPct)}</td><td>${b.portfolioPct != null && b.ethPct != null ? pct(b.portfolioPct - b.ethPct) : '—'}</td><td>${b.portfolioPct != null && b.stakingPct != null ? pct(b.portfolioPct - b.stakingPct) : '—'}</td><td class="l muted">${b.note || ''}</td></tr>`).join('')}
   </table>`;
-  $('#benchnote').textContent = d.history && d.history.bookSince ? `Book history since ${new Date(d.history.bookSince).toLocaleString()}; main wallet since ${d.history.mainSince ? new Date(d.history.mainSince).toLocaleDateString() : '—'}. Deposits and withdrawals are not netted out of the return.` : 'No value history yet.';
+  $('#benchnote').textContent = d.history && d.history.bookSince ? `Book history since ${new Date(d.history.bookSince).toLocaleString()}; main wallet since ${d.history.mainSince ? new Date(d.history.mainSince).toLocaleDateString() : '—'}. Recorded transfers across the wallet boundary are netted out of the return; a window whose transfers cannot be netted, or whose value change no recorded transfer explains, shows no percentage at all.` : 'No value history yet.';
   // Per position.
   const P = ($('#attribscope').value === 'book' ? d.positions : d.positions.filter(p => p.key === $('#attribscope').value));
   const wl = k => k === 'main' ? (d.wallets.find(w => w.main) || {}).label || 'Main' : (d.wallets.find(w => w.key === k) || {}).label || shortA(k);
   $('#attribpos').innerHTML = P.length ? `<table class="etable">
-    <tr><th class="l">Wallet</th><th class="l">Position</th><th>Value</th><th>Fees (collected + uncollected)</th><th>Fees today</th><th>Price + IL</th><th>PnL vs HODL</th><th class="l">Since</th></tr>
+    <tr><th class="l">Wallet</th><th class="l">Position</th><th>Value</th><th title="Uncollected fees now plus collects this collector recorded. Fees the wallet settled itself are chain-derived: see Claimed fees — read from chain.">Fees (uncollected + collector collects)</th><th>Fees today</th><th>Price + IL</th><th>PnL vs HODL</th><th class="l">Since</th></tr>
     ${P.map(p => `<tr><td class="l">${wl(p.key)}</td><td class="l">${p.pair} <span class="muted">#${String(p.tokenId).replace('v4-', '')} v${p.version}</span></td><td class="u">${usd(p.valueUsd)}</td><td class="u">${usd(p.fees)}</td><td class="u">${p.feesToday == null ? '<span class="muted">—</span>' : usd(p.feesToday)}</td><td class="u ${cls(p.priceAndIl)}">${sgn(p.priceAndIl)}</td><td class="u ${cls(p.pnlUsd)}"><b>${sgn(p.pnlUsd)}</b>${p.approx ? ' ≈' : ''}</td><td class="l muted">${p.since ? new Date(p.since).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '—'}</td></tr>`).join('')}
   </table>` : '<div class="enote">No open positions.</div>';
   $('#attribnote').textContent = `Exact: ${d.notes.exact.join(', ')}. Approximate: ${d.notes.approximate.join('; ')}. ${d.notes.incompleteDays}.`;

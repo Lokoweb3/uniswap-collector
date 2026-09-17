@@ -255,7 +255,7 @@ function compute(input, { days = 30, now = Date.now() } = {}) {
  * `principal`. When the history is shorter than the window, the earliest
  * sample is used and `actualDays` says so.
  */
-function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stakingRewards = null, principal = null, now = Date.now(), windows = [7, 30, 90] }) {
+function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stakingRewards = null, principal = null, flows = [], flowKey = null, now = Date.now(), windows = [7, 30, 90] }) {
   const out = [];
   for (const w of windows) {
     const from = now - w * DAY;
@@ -266,7 +266,22 @@ function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stak
       continue;
     }
     const actualDays = (endPt.t - startPt.t) / DAY;
-    const portfolioPct = startPt.v > 0 ? (endPt.v / startPt.v - 1) * 100 : null;
+    // A return is what the money earned, not what was paid into it. Transfers across
+    // the wallet boundary inside the window are netted out; when they cannot be
+    // (an unpriced transfer), or when they dwarf the starting value, or when the
+    // history is shorter than the window, no percentage is stated at all — a book
+    // that grew from $6 to $2,500 by funding is not an 8,000 % return.
+    const win = (flows || []).filter((f) => (f.kind === "sent" || f.kind === "received")
+      && (!flowKey || f.key === flowKey) && f.t >= startPt.t && f.t <= endPt.t);
+    const unpricedFlow = win.some((f) => f.usd == null || !Number.isFinite(Number(f.usd)));
+    const netFlows = win.reduce((a, f) => a + (Number(f.usd) || 0), 0);
+    const grown = startPt.v > 0 ? (endPt.v - netFlows) / startPt.v : null;
+    let portfolioPct = null, whyNoReturn = null;
+    if (!(startPt.v > 0)) whyNoReturn = "the window starts with no recorded value";
+    else if (unpricedFlow) whyNoReturn = "a transfer in this window has no recorded price, so it cannot be netted out";
+    else if (Math.abs(netFlows) > 0.25 * startPt.v) whyNoReturn = `deposits and withdrawals (${netFlows >= 0 ? "+" : "−"}$${Math.abs(netFlows).toFixed(2)}) dominate this window, so a percentage would describe funding, not performance`;
+    else if (grown > 5) whyNoReturn = `the book went from $${startPt.v.toFixed(2)} to $${endPt.v.toFixed(2)} with no recorded transfer to explain it, so the transfer history is incomplete and a percentage would be meaningless`;
+    else portfolioPct = (grown - 1) * 100;
     const e0 = ethSeries.find((p) => p.t >= startPt.t - HOUR) || ethSeries[0];
     const e1 = ethSeries.length ? ethSeries[ethSeries.length - 1] : null;
     const ethPct = e0 && e1 && e0.p > 0 && e1.t > e0.t ? (e1.p / e0.p - 1) * 100 : null;
@@ -292,11 +307,13 @@ function benchmarks({ bookSeries = [], ethSeries = [], stakingSamples = [], stak
       if (base > 0 && s1.t > s0.t) stakingPct = ((s1.bal - s0.bal) / base) * 100;
     }
     const notes = [];
-    if (actualDays < w - 0.5) notes.push(`only ${actualDays.toFixed(1)} days of history`);
+    if (whyNoReturn) notes.push(whyNoReturn);
+    else if (actualDays < w - 0.5) notes.push(`only ${actualDays.toFixed(1)} days of history`);
+    if (!whyNoReturn && netFlows) notes.push(`net transfers of ${netFlows >= 0 ? "+" : "−"}$${Math.abs(netFlows).toFixed(2)} netted out`);
     if (stakingNote) notes.push(stakingNote);
     out.push({
       windowDays: w, actualDays: +actualDays.toFixed(2), since: startPt.t,
-      portfolioPct, ethPct, usdgPct: 0, stakingPct,
+      portfolioPct, netFlowsUsd: unpricedFlow ? null : +netFlows.toFixed(2), ethPct, usdgPct: 0, stakingPct,
       note: notes.length ? notes.join("; ") : null,
     });
   }
@@ -511,8 +528,8 @@ function create({ cfg, getPortfolio, getWatch, getPositions, getStaking, getHist
     }
     const input = { wallets, valueSeries, feesByHour, feesByPosition, holdings, holdingsByDay, priceHours, stakingDaily, vaultSplits, gasSpends, positions, flows };
     const result = compute(input, { days, now });
-    result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal, now });
-    result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, stakingRewards, principal, now });
+    result.benchmarks = benchmarks({ bookSeries, ethSeries, stakingSamples, stakingRewards, principal, flows, now });
+    result.mainBenchmarks = benchmarks({ bookSeries: valueSeries[MAIN], ethSeries, stakingSamples, stakingRewards, principal, flows, flowKey: MAIN, now });
     result.history = { bookSince: bookSeries.length ? bookSeries[0].t : null, mainSince: valueSeries[MAIN].length ? valueSeries[MAIN][0].t : null, priceSince: ethSeries.length ? ethSeries[0].t : null };
     return result;
   }

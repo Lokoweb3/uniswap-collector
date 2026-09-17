@@ -25,8 +25,10 @@ function gasSpentLast24h(state) {
 }
 
 /** The 24 h gas cap was reached (spent >= cap). Pure threshold comparison. */
-function gasCapHit(state, capEth) {
-  const cap = ethers.parseEther(String(capEth));
+function gasCapHit(state, capEth, cfg = null) {
+  // The cap is an amount of the chain's native currency, so it is parsed in that
+  // currency's decimals — 18 everywhere this runs today, but never assumed.
+  const cap = ethers.parseUnits(String(capEth), nativeDecimals(cfg));
   return gasSpentLast24h(state) >= cap;
 }
 
@@ -40,8 +42,9 @@ function gasCapHit(state, capEth) {
  * refills itself to out of collected fees before anything is swapped or sent.
  */
 function gasFloat(cfg) {
-  const reserve = ethers.parseEther(String(cfg.sweep.keepGasReserveEth || "0"));
-  let target = cfg.sweep.gasTargetEth != null ? ethers.parseEther(String(cfg.sweep.gasTargetEth)) : reserve;
+  const dec = nativeDecimals(cfg);
+  const reserve = ethers.parseUnits(String(cfg.sweep.keepGasReserveEth || "0"), dec);
+  let target = cfg.sweep.gasTargetEth != null ? ethers.parseUnits(String(cfg.sweep.gasTargetEth), dec) : reserve;
   if (target < reserve) target = reserve;
   return { reserve, target };
 }
@@ -128,7 +131,50 @@ function ethPassDelta(beforeEth, nowEth, main) {
   return main ? nowEth : (nowEth > beforeEth ? nowEth : 0n);
 }
 
+/**
+ * The unit of account the fee thresholds are written in.
+ *
+ * `minWethPerPosition` and `maxSwapValueWeth` are amounts of `contracts.weth` —
+ * the chain's unit of account, not always an 18-decimal WETH. On Arc it is USDC
+ * with 6 decimals, so parsing those settings as ether made every position look
+ * 1e12 times smaller than it is: nothing ever reached the threshold, and the
+ * swap safety cap could never bite. The decimals come from the configured
+ * numeraire; 18 when a chain does not declare one.
+ */
+function unitDecimals(cfg) {
+  const d = cfg && cfg.numeraire && cfg.numeraire.decimals;
+  return Number.isInteger(d) ? d : 18;
+}
+/** What to call that unit in the log ("WETH", "USDC", …). */
+function unitLabel(cfg) {
+  return (cfg && cfg.numeraire && cfg.numeraire.symbol) || "WETH";
+}
+
+/**
+ * Decimals of the chain's NATIVE currency — what gas is paid in, and what every
+ * `…Eth` setting is an amount of (minOperatorGasBalanceEth, dailyGasCapEth,
+ * keepGasReserveEth, gasTargetEth).
+ *
+ * This is a different question from unitDecimals(): on Arc the native currency is
+ * USDC with 18 decimals while the ERC-20 USDC the fees arrive in has 6, and the
+ * two must never be parsed with the same scale. 18 when a chain does not declare
+ * its native currency, which is what every EVM chain used here does.
+ */
+function nativeDecimals(cfg) {
+  const d = cfg && cfg.nativeCurrency && cfg.nativeCurrency.decimals;
+  return Number.isInteger(d) ? d : 18;
+}
+/** What to call the gas currency in the log ("ETH", "USDC", …). */
+function nativeLabel(cfg) {
+  return (cfg && cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "ETH";
+}
+
+
 module.exports = {
+  unitDecimals,
+  unitLabel,
+  nativeDecimals,
+  nativeLabel,
   gasSpentLast24h,
   gasCapHit,
   gasFloat,

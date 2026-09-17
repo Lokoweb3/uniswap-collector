@@ -313,6 +313,11 @@ async function main() {
     process.exit(1);
   }
 
+  // Gas is paid in the chain's NATIVE currency (18-decimal USDC on Arc); the fee
+  // thresholds are amounts of the unit of account (6-decimal USDC there). Two
+  // different scales, never interchangeable: see collector-logic.
+  const NATIVE_DEC = cl.nativeDecimals(cfg), NATIVE = cl.nativeLabel(cfg);
+  const nat = (v) => ethers.formatUnits(v, NATIVE_DEC);
   log(`=== mode=${mode} chainId=${net.chainId} ===`);
 
   // -- Load operator wallet (not needed for simulate) ------------------------
@@ -329,9 +334,9 @@ async function main() {
     log(`Operator: ${wallet.address}`);
 
     const bal = await provider.getBalance(wallet.address);
-    log(`Operator gas float: ${ethers.formatEther(bal)} ETH`);
-    if (bal < ethers.parseEther(cfg.thresholds.minOperatorGasBalanceEth)) {
-      log(`WARNING: operator gas float is below ${cfg.thresholds.minOperatorGasBalanceEth} ETH. Top it up.`);
+    log(`Operator gas float: ${nat(bal)} ${NATIVE}`);
+    if (bal < ethers.parseUnits(String(cfg.thresholds.minOperatorGasBalanceEth), NATIVE_DEC)) {
+      log(`WARNING: operator gas float is below ${cfg.thresholds.minOperatorGasBalanceEth} ${NATIVE}. Top it up.`);
     }
   }
 
@@ -348,9 +353,9 @@ async function main() {
   // -- Daily gas budget ------------------------------------------------------
   const state = loadState();
   const spent24h = gasSpentLast24h(state);
-  const cap = ethers.parseEther(cfg.thresholds.dailyGasCapEth);
+  const cap = ethers.parseUnits(String(cfg.thresholds.dailyGasCapEth), NATIVE_DEC);
   if (mode !== "simulate" && spent24h >= cap) {
-    log(`ABORT: 24h gas cap reached (${ethers.formatEther(spent24h)} / ${cfg.thresholds.dailyGasCapEth} ETH).`);
+    log(`ABORT: 24h gas cap reached (${nat(spent24h)} / ${cfg.thresholds.dailyGasCapEth} ${NATIVE}).`);
     return;
   }
 
@@ -434,7 +439,11 @@ async function runOwner(ctx, owner) {
     return true;
   });
 
-  const minWeth = ethers.parseEther(cfg.thresholds.minWethPerPosition);
+  // Thresholds are amounts of the chain's unit of account, which is not always an
+  // 18-decimal WETH (Arc's is 6-decimal USDC): see collector-logic.unitDecimals.
+  const UNIT_DEC = cl.unitDecimals(cfg), UNIT = cl.unitLabel(cfg);
+  const unit = (v) => ethers.formatUnits(v, UNIT_DEC);
+  const minWeth = ethers.parseUnits(cfg.thresholds.minWethPerPosition, UNIT_DEC);
   const eligible = [];
   let totalWethValue = 0n;
 
@@ -460,11 +469,11 @@ async function runOwner(ctx, owner) {
     log(
       `#${id} ${pair} ${fee / 10000}%  ` +
         `${fmt(amount0, t0.decimals)} ${t0.symbol} + ${fmt(amount1, t1.decimals)} ${t1.symbol}  ` +
-        `≈ ${ethers.formatEther(value)} WETH`
+        `≈ ${unit(value)} ${UNIT}`
     );
 
     if (!cl.isPositionEligible(value, minWeth)) {
-      log(`  below threshold (${cfg.thresholds.minWethPerPosition} WETH) — skipping`);
+      log(`  below threshold (${cfg.thresholds.minWethPerPosition} ${UNIT}) — skipping`);
       continue;
     }
     eligible.push(sim);
@@ -519,8 +528,8 @@ async function runOwner(ctx, owner) {
       const v0 = await val(sim.t0, sim.amount0), v1 = await val(sim.t1, sim.amount1);
       sim.wethValue = v0 + v1;
       totalWethValue += sim.wethValue;
-      log(`v4 #${id} ${sim.t0.symbol}/${sim.t1.symbol} ${sim.fee / 10000}%${sim.hooks && sim.hooks !== ethers.ZeroAddress ? " (hooks)" : ""}  ${fmt(sim.amount0, sim.t0.decimals)} ${sim.t0.symbol} + ${fmt(sim.amount1, sim.t1.decimals)} ${sim.t1.symbol}  ≈ ${ethers.formatEther(sim.wethValue)} WETH`);
-      if (!cl.isPositionEligible(sim.wethValue, minWeth)) { log(`  below threshold (${cfg.thresholds.minWethPerPosition} WETH) — skipping`); continue; }
+      log(`v4 #${id} ${sim.t0.symbol}/${sim.t1.symbol} ${sim.fee / 10000}%${sim.hooks && sim.hooks !== ethers.ZeroAddress ? " (hooks)" : ""}  ${fmt(sim.amount0, sim.t0.decimals)} ${sim.t0.symbol} + ${fmt(sim.amount1, sim.t1.decimals)} ${sim.t1.symbol}  ≈ ${unit(sim.wethValue)} ${UNIT}`);
+      if (!cl.isPositionEligible(sim.wethValue, minWeth)) { log(`  below threshold (${cfg.thresholds.minWethPerPosition} ${UNIT}) — skipping`); continue; }
       eligibleV4.push(sim);
     }
     if (v4Open + v4Closed) log(`v4: ${v4Open} open, ${v4Closed} closed, ${eligibleV4.length} eligible.`);
@@ -528,21 +537,40 @@ async function runOwner(ctx, owner) {
 
   const openCount = ids.length - closedCount;
   log(`Skipped ${closedCount} closed position(s); ${openCount} open.`);
-  log(`Total collectable across open positions: ≈ ${ethers.formatEther(totalWethValue)} WETH`);
+  log(`Total collectable across open positions: ≈ ${unit(totalWethValue)} ${UNIT}`);
   log(`Eligible for collection: ${eligible.length}/${openCount}${v4c ? ` (v3) + ${eligibleV4.length}/${v4Open} (v4)` : ""}`);
 
   if (target.kind === "token") {
     const tinfo = await tokenInfo(target.address, provider);
     const eligibleWeth = [...eligible, ...eligibleV4].reduce((s, e) => s + e.wethValue, 0n);
-    const out = await quoteSingle(quoter, weth, target.address, eligibleWeth, target.feeTier);
-    log(`Sweep target ${tinfo.symbol}: the eligible ≈ ${ethers.formatEther(eligibleWeth)} WETH would convert to ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol} at current prices.`);
+    // On a chain whose sweep target IS the unit of account (Arc sweeps to USDC and
+    // prices in USDC), there is nothing to swap: quoting a token against itself
+    // reverts, and reporting that as "converts to 0.00" understates the sweep.
+    const sameToken = target.address.toLowerCase() === weth.toLowerCase();
+    const out = sameToken ? eligibleWeth : await quoteSingle(quoter, weth, target.address, eligibleWeth, target.feeTier);
+    // Who ends up with what, by address, and under which mode. In collect-only mode
+    // nothing is swapped or swept at all: the fees go straight from the pool to the
+    // position's owner, so the conversion below simply does not apply.
+    log(`Destinations — mode=collect: fees to the owner ${owner.address}. ` +
+      `mode=full: fees to the operator ${wallet ? wallet.address : "(no operator key loaded)"}, swapped there, then delivered to ${owner.sweepTo}` +
+      `${owner.main ? " (collector.sweepDestination)" : " (this wallet itself)"}.`);
+    if (!cfg.sweep || cfg.sweep.enabled !== true) log(`Sweep is disabled in settings (sweep.enabled=false): a real run in full mode would leave the fees in the operator wallet.`);
+    // Two different conversions, and only one of them can be "free": the final
+    // unit -> sweep-target hop is a no-op when they are the same token, but every
+    // fee leg that is NOT the unit of account (ARGUS here) is still swapped into it
+    // first, at the pool's fee and within the slippage tolerance. The figure below
+    // is a quote at this instant, not an amount anyone is guaranteed.
+    const slipPct = Number(cfg.thresholds.slippageBps) / 100;
+    log(`If run in full mode with sweeping on, target ${tinfo.symbol}: the eligible ≈ ${unit(eligibleWeth)} ${UNIT} quotes at ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol} now` +
+      `${sameToken ? ` (no final conversion: the sweep target IS the unit of account)` : `, before ${slipPct}% slippage tolerance and pool fees`}.`);
+    log(`  Fee legs that are not ${UNIT} are swapped into it first (pool fee + up to ${slipPct}% slippage), so the delivered amount can be lower than this quote; it is not a guaranteed amount.`);
     const ts = treasurySettings;
     if (ts.enabled) {
       const sp = treasury.split(out, ts.pct);
       log(`Treasury split: ${fmt(sp.toVault, tinfo.decimals, 2)} ${tinfo.symbol} (${ts.pct}%) → LOKOVault TBA ${ts.tba}`);
-      log(`Owner receives: ${fmt(sp.toOwner, tinfo.decimals, 2)} ${tinfo.symbol} → ${owner.label}`);
+      log(`Owner receives: ≈ ${fmt(sp.toOwner, tinfo.decimals, 2)} ${tinfo.symbol} → ${owner.label} ${owner.sweepTo}`);
     } else {
-      log(`Treasury split: off (vault.tba not set in settings.json); owner receives ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol}.`);
+      log(`Treasury split: off (vault.tba not set in settings.json); ${owner.label} ${owner.sweepTo} would receive ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol}.`);
     }
   }
 
@@ -738,7 +766,7 @@ async function runOwner(ctx, owner) {
 
   // -- Swap non-WETH balances into WETH --------------------------------------
   const router = new ethers.Contract(cfg.contracts.swapRouter02, ROUTER_ABI, wallet);
-  const maxSwap = ethers.parseEther(cfg.thresholds.maxSwapValueWeth);
+  const maxSwap = ethers.parseUnits(cfg.thresholds.maxSwapValueWeth, UNIT_DEC);
   const slippageBps = BigInt(cfg.thresholds.slippageBps);
 
   // Pick the fee tier to route through: use the tier of the position the token
@@ -839,7 +867,7 @@ async function runOwner(ctx, owner) {
       continue;
     }
     if (why === "swap over maxSwapValueWeth") {
-      await handBack(`${info.symbol} swap would be ${ethers.formatEther(quoted)} WETH, over maxSwapValueWeth`);
+      await handBack(`${info.symbol} swap would be ${unit(quoted)} ${UNIT}, over maxSwapValueWeth (${cfg.thresholds.maxSwapValueWeth} ${UNIT})`);
       continue;
     }
 
@@ -867,7 +895,7 @@ async function runOwner(ctx, owner) {
       });
       log(
         `swap ${fmt(balance, info.decimals)} ${info.symbol} -> WETH ` +
-          `(quote ${ethers.formatEther(quoted)}, min ${ethers.formatEther(minOut)}) -> ${stx.hash}`
+          `(quote ${unit(quoted)}, min ${unit(minOut)}) -> ${stx.hash}`
       );
       const srcpt = await stx.wait();
       recordGas(state, srcpt.gasUsed * srcpt.gasPrice);
@@ -938,7 +966,7 @@ async function runOwner(ctx, owner) {
       if (quoted === 0n) {
         log(`  ! could not quote WETH -> ${tinfo.symbol}; WETH left in operator wallet.`);
       } else if (wethBal > maxSwap) {
-        log(`  ! ${ethers.formatEther(wethBal)} WETH is over maxSwapValueWeth. Left in operator wallet — convert by hand.`);
+        log(`  ! ${unit(wethBal)} ${UNIT} is over maxSwapValueWeth. Left in operator wallet — convert by hand.`);
       } else {
         const minOut = (quoted * (10000n - slippageBps)) / 10000n;
         try {
@@ -960,7 +988,7 @@ async function runOwner(ctx, owner) {
             sqrtPriceLimitX96: 0,
           });
           log(
-            `swap ${ethers.formatEther(wethBal)} WETH -> ${tinfo.symbol} ` +
+            `swap ${unit(wethBal)} ${UNIT} -> ${tinfo.symbol} ` +
               `(quote ${fmt(quoted, tinfo.decimals, 2)}, min ${fmt(minOut, tinfo.decimals, 2)}) -> ${stx.hash}`
           );
           const srcpt = await stx.wait();
@@ -1031,8 +1059,8 @@ async function runOwner(ctx, owner) {
       }
     }
 
-    log(`Operator gas float now ${ethers.formatEther(await provider.getBalance(wallet.address))} ETH (reserve ${cfg.sweep.keepGasReserveEth}, target ${ethers.formatEther(gasTarget)}).`);
-    log(`24h gas spend now ${ethers.formatEther(gasSpentLast24h(state))} / ${cfg.thresholds.dailyGasCapEth} ETH`);
+    log(`Operator gas float now ${nat(await provider.getBalance(wallet.address))} ${NATIVE} (reserve ${cfg.sweep.keepGasReserveEth}, target ${nat(gasTarget)}).`);
+    log(`24h gas spend now ${nat(gasSpentLast24h(state))} / ${cfg.thresholds.dailyGasCapEth} ${NATIVE}`);
     log(`=== ${owner.label}: done ===`);
     return;
   }
@@ -1079,7 +1107,7 @@ async function runOwner(ctx, owner) {
     log(`  ! sweep failed: ${err.shortMessage || err.message}`);
   }
 
-  log(`24h gas spend now ${ethers.formatEther(gasSpentLast24h(state))} / ${cfg.thresholds.dailyGasCapEth} ETH`);
+  log(`24h gas spend now ${nat(gasSpentLast24h(state))} / ${cfg.thresholds.dailyGasCapEth} ${NATIVE}`);
   log(`=== ${owner.label}: done ===`);
 }
 

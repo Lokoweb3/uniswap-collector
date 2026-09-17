@@ -1538,3 +1538,10 @@ select.scope option{background:var(--card);color:var(--ink)}
 /* A fee read that failed states so on the card face. Amber, because it is a gap
    in the data rather than a loss — and never the same colour as a real figure. */
 .pos .vals .f.unavail{color:var(--warn);font-variant-numeric:normal}
+
+/* Claimed fees on a position card. Three states read differently on purpose: a
+   verified zero is muted, a partial window is amber because the number is short,
+   and unavailable is amber too because it is an absence of knowledge, not a zero. */
+.c.unavail{color:var(--warn)}
+.c.partial{color:var(--warn)}
+.c.zero{color:var(--muted)}

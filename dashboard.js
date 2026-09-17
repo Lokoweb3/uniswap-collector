@@ -1756,11 +1756,46 @@ function feeFace(p) {
 }
 
 function claimedLine(p){
-  const c = p.collected;
-  if (!c || !c.count) return '<span class="c zero" title="No fees collected from this position yet">nothing claimed yet</span>';
+  // Fees already taken out of this position, scoped to one chain + position manager
+  // + token id. Four states, and only one of them may print a number:
+  //
+  //   unavailable — no claim history covers this position. NOT "nothing claimed
+  //     yet": that asserts a zero nobody verified, and on a chain whose history
+  //     has never been scanned it is simply false.
+  //   partial     — history exists but starts after the position did, so anything
+  //     claimed before that date is missing from the figure. Says since when.
+  //   verified zero — history covers the position's whole life and found no
+  //     collect and no withdrawal. This is the only honest way to show zero.
+  //   ok          — amounts per token, plus a USD total when both legs price,
+  //     with the valuation basis named.
+  //
+  // This is money that has ALREADY LEFT the position. It is deliberately not added
+  // to the card's value, to uncollected fees, or to any wallet balance: it is
+  // already sitting in the wallet as tokens, and counting it again would
+  // double-count it in the portfolio total.
+  const c = p.claimed;
+  if (!c || c.status === 'unavailable') {
+    const why = c && c.reason ? esc(c.reason) : 'no claim history has been scanned for this chain and position manager';
+    return `<span class="c unavail" title="Claim history unavailable: ${why}. This is not a statement that nothing was claimed — it means nothing is known either way.">Claim history unavailable</span>`;
+  }
+  const amounts = (c.tokens || []).map(t => `${esc(t.amount)} ${esc(t.symbol)}`).join(' + ');
+  if (c.status === 'partial') {
+    const since = c.since ? new Date(c.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'an unknown date';
+    return `<span class="c partial" title="History for this position starts ${since}; anything claimed before that is not in this figure.${c.basis ? ' ' + esc(c.basis) : ''}">` +
+      `Claimed since ${esc(since)} — partial history${amounts ? `: ${amounts}` : ''}` +
+      `${c.usd != null ? ` · ${usd(c.usd)}` : ''}</span>`;
+  }
+  if (!c.count) {
+    return `<span class="c zero" title="History covers this position from ${c.since ? new Date(c.since).toLocaleDateString() : 'its first block'} and found no fee collect and no withdrawal. A verified zero, not an assumption.">No fees claimed yet <span class="muted">(verified)</span></span>`;
+  }
   const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  const title = `${c.count} collect${c.count === 1 ? '' : 's'} so far${c.atCollectPrices ? `, ${c.atCollectPrices} valued at the price of their moment` : ''}${c.approx ? ', the rest at today\'s prices' : ''}`;
-  return `<span class="c" title="${title}">claimed ${c.approx ? '≈' : ''}<b>${usd(c.usd)}</b> · ${c.count}×${when ? ' · last ' + when : ''}</span>`;
+  const title = `${c.count} claim${c.count === 1 ? '' : 's'} across this position's history.` +
+    `${c.basis ? ' ' + esc(c.basis) : ''}` +
+    `${c.principalSeparated ? ' Withdrawals are included with their principal removed, so only fees are counted.' : ''}` +
+    ' Already paid out to the wallet, so it is not part of the position value above.';
+  return `<span class="c" title="${title}">Claimed <b>${amounts}</b>` +
+    `${c.usd != null ? ` · <b>${usd(c.usd)}</b>` : ' <span class="muted">· no USD total (a leg is unpriced)</span>'}` +
+    ` · ${c.count}×${when ? ' · last ' + when : ''}</span>`;
 }
 // Tx hashes in the run log become explorer links.
 const linkify = s => EXPLORER

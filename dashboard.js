@@ -1577,7 +1577,7 @@ function render(d){
 // Enter and Space already work and it is in the tab order; this only has to move
 // aria-expanded and fill the panel. Rows come from /api/history, which the page
 // has already loaded — no new request, no new endpoint.
-document.addEventListener('click', e => {
+document.addEventListener('click', async e => {
   const b = e.target.closest('button.claimed[data-claim]');
   if (!b) return;
   const panel = document.getElementById(b.dataset.claim);
@@ -1585,33 +1585,56 @@ document.addEventListener('click', e => {
   const open = b.getAttribute('aria-expanded') === 'true';
   b.setAttribute('aria-expanded', open ? 'false' : 'true');
   panel.hidden = open;
-  if (!open && !panel.dataset.filled) { panel.innerHTML = claimHistoryHtml(b.dataset.claim); panel.dataset.filled = '1'; }
+  if (open || panel.dataset.filled) return;
+
+  // Loaded on demand from /api/claims, not from the analytics bundle: the control
+  // is usable the moment the card renders, whether or not Analytics has run.
+  panel.innerHTML = '<p class="chnote" role="status">Loading this position\u2019s collections\u2026</p>';
+  const q = new URLSearchParams({ tokenId: b.dataset.tokenid || '', chainId: b.dataset.chainid || '', manager: b.dataset.manager || '' });
+  let d;
+  try {
+    const r = await fetch('/api/claims?' + q);
+    d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'the request failed');
+  } catch (err) {
+    // An error is not an empty history. Say which, and leave the panel retryable.
+    panel.innerHTML = `<p class="chnote err" role="alert">Collection history could not be loaded: ${esc(err.message)}. ` +
+      `This is a failed read, not a statement that nothing was collected.</p>`;
+    return;
+  }
+  panel.dataset.filled = '1';
+  panel.innerHTML = claimPanelHtml(d);
 });
 
-// The collection rows for one position, scoped the way the claim figure is:
-// chain, position manager and token id. A row from another chain that happens to
-// share an id is a different position and must not appear here.
-function claimHistoryHtml(uid) {
-  const parts = String(uid).split('-');            // ch-<chainId>-<tokenId>
-  const chainId = parts[1], tokenId = parts.slice(2).join('-');
-  if (!Array.isArray(historyRows)) {
-    return '<p class="chnote">Collection history has not loaded yet. It arrives with the analytics section below.</p>';
+// The panel body: covers unavailable, empty, partial and complete. Every one of
+// them says what it knows and what it does not.
+function claimPanelHtml(d) {
+  const cov = d.coverage;
+  const window_ = cov && cov.fromT && cov.toT
+    ? `blocks ${cov.fromBlock}\u2013${cov.toBlock} (${new Date(cov.fromT).toLocaleString()} \u2013 ${new Date(cov.toT).toLocaleString()})`
+    : cov && cov.fromBlock ? `blocks ${cov.fromBlock}\u2013${cov.toBlock}` : 'an unrecorded range';
+  if (d.status === 'unavailable') {
+    return `<p class="chnote warn">Claim history unavailable. ${esc(d.reason || '')}</p>`;
   }
-  const rows = historyRows.filter(r =>
-    String(r.tokenId).replace(/^v4-/, '') === String(tokenId) &&
-    (r.chainId == null || String(r.chainId) === String(chainId)));
-  if (!rows.length) {
-    return '<p class="chnote">No collection rows for this position in the loaded history. That is not the same as none having happened — it is what this history covers.</p>';
+  const note = d.status === 'complete'
+    ? `<p class="chnote">Scanned ${esc(window_)} \u2014 complete for this position.</p>`
+    : `<p class="chnote warn">Partial: only ${esc(window_)} has been scanned, so collections before that are not listed. Opening this panel extends the scan a little further back each time.</p>`;
+  if (!d.rows.length) {
+    return note + `<p class="chnote">No collections in the scanned range. ${d.status === 'complete'
+      ? 'This position has never had fees collected.'
+      : 'That is not the same as none having happened \u2014 earlier blocks are still unscanned.'}</p>`;
   }
-  return '<table class="chtable"><caption>Collections for this position — fees only; withdrawn principal is excluded</caption>' +
-    '<thead><tr><th scope="col">When</th><th scope="col">Fees</th><th scope="col">Value</th><th scope="col">Tx</th></tr></thead><tbody>' +
-    rows.map(r => `<tr><td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown'}${r.principal ? ' <span class="muted" title="This transaction also withdrew principal; only the fee part is counted here">withdrawal</span>' : ''}</td>` +
-      `<td class="mono">${r.f0 != null || r.f1 != null ? `${amount(r.f0)} ${esc(r.sym0 || '')} · ${amount(r.f1)} ${esc(r.sym1 || '')}` : '—'}</td>` +
-      `<td class="mono">${r.usd == null ? '<span class="unavail">unpriced</span>' : usd(r.usd)}${r.locked ? '' : ' ≈'}</td>` +
-      `<td class="mono">${r.tx ? linkify(r.tx.slice(0, 10) + '…') : '—'}</td></tr>`).join('') +
+  return note + '<table class="chtable"><caption>Fees only \u2014 withdrawn principal is excluded from every row</caption>' +
+    '<thead><tr><th scope="col">When</th><th scope="col">Kind</th><th scope="col">Fees claimed</th><th scope="col">Tx</th></tr></thead><tbody>' +
+    d.rows.map(r => `<tr><td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown'}</td>` +
+      `<td>${r.kind === 'withdrawal' ? '<span title="This transaction also withdrew principal; only the fee part above the principal is counted">withdrawal</span>' : 'collect'}</td>` +
+      `<td class="mono">${r.unavailable ? `<span class="unavail" title="${esc(r.unavailable)}">not separable</span>`
+        : (r.fee0 == null || r.fee1 == null)
+          ? '<span class="unavail" title="A token\u2019s decimals could not be read, so this amount cannot be shown">amount unavailable</span>'
+          : `${esc(r.fee0)} + ${esc(r.fee1)}`}</td>` +
+      `<td class="mono">${r.tx ? linkify(r.tx.slice(0, 10) + '\u2026') : '\u2014'}</td></tr>`).join('') +
     '</tbody></table>';
 }
-
 // Flip a pair's price orientation from its unit label.
 let lastRender = null;
 document.addEventListener('click', e => {
@@ -1643,7 +1666,7 @@ async function load(fresh){
 /* ---- collect ---- */
 let coTimer = null;
 
-const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 // ---- Long-term returns (TASK-52): fee APR and net return side by side, from /api/positions
 // longTerm (longterm.js). Last 30 days on the card, since-open in the tooltip; when the
@@ -1724,7 +1747,11 @@ function rangeStatus(p, v, near) {
 // a number only when history actually covers this position.
 function claimedMetric(p, uid) {
   const c = p.claimed;
-  const open = `<button type="button" class="metric claimed" aria-expanded="false" aria-controls="${uid}" data-claim="${uid}"`;
+  const sc = (c && c.scope) || {};
+  const open = `<button type="button" class="metric claimed" aria-expanded="false" aria-controls="${uid}" data-claim="${uid}"` +
+    ` data-tokenid="${esc(String(sc.tokenId || p.nftId || p.tokenId || ''))}"` +
+    ` data-chainid="${esc(String(sc.chainId || ''))}"` +
+    ` data-manager="${esc(String(sc.positionManager || ''))}"`;
   if (!c || c.status === 'unavailable') {
     const why = c && c.reason ? esc(c.reason) : 'no claim history has been scanned for this chain and position manager';
     return `${open} title="Claim history unavailable: ${why}. This is not a statement that nothing was claimed — nothing is known either way.">` +
@@ -1735,16 +1762,35 @@ function claimedMetric(p, uid) {
     // A partial window with no known start is still partial: say the figure is a
     // floor rather than dress an unknown date as one.
     const since = c.since ? new Date(c.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
-    const sub = since ? `claimed since ${since} — partial history`
-      : 'partial history — earlier claims not loaded';
-    return `${open} title="${esc(c.reason || 'History for this position does not reach back to its opening')}; anything claimed before that is not in this figure, so treat it as a floor, not a total.">` +
+    // A partial figure is only worth showing when the records inside it are
+    // verified. Without that there is nothing to put a "+" on, and a number would
+    // imply an attribution that was never established.
+    const verified = c.count > 0 && c.tokens && c.tokens.length;
+    if (!verified) {
+      return `${open} title="${esc(c.reason || 'No verified collections have been found in the scanned range yet')}">` +
+        `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
+        `<span class="msub">claim history unavailable for this range</span></button>`;
+    }
+    const cov = c.coverage || {};
+    const from = cov.fromT ? new Date(cov.fromT).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+    const sub = from ? `${c.count} verified since ${from} — partial history`
+      : `${c.count} verified in the scanned range — partial history`;
+    return `${open} title="Verified from chain: ${esc(String(c.count))} collection(s) inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}. Earlier blocks are not scanned, so this is a floor, not a total.">` +
       `<span class="ml">Claimed fees</span><span class="mv partial">${c.usd != null ? usd(c.usd) + '+' : '—'}</span>` +
       `<span class="msub">${esc(sub)}</span></button>`;
   }
   if (!c.count) {
-    return `${open} title="History covers this position from ${c.since ? new Date(c.since).toLocaleDateString() : 'its first block'} and found no fee collect and no withdrawal. A verified zero, not an assumption.">` +
+    // Zero only when the scan actually reached back past this position's opening.
+    // Anything less is an unscanned range, which is not evidence of nothing.
+    const cov = c.coverage || {};
+    if (c.status !== 'ok' || !cov.complete) {
+      return `${open} title="No collections found inside blocks ${esc(String(cov.fromBlock))}\u2013${esc(String(cov.toBlock))}, but the scan has not reached this position's opening, so nothing can be concluded.">` +
+        `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
+        `<span class="msub">scanned range does not reach this position's start</span></button>`;
+    }
+    return `${open} title="The scan covers this position from block ${esc(String(cov.fromBlock))} and found no fee collect and no withdrawal. A verified zero, not an assumption.">` +
       `<span class="ml">Claimed fees</span><span class="mv zero">${usd(0)}</span>` +
-      `<span class="msub">none yet · verified</span></button>`;
+      `<span class="msub">none yet · verified from chain</span></button>`;
   }
   const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
   return `${open} title="${c.count} collection${c.count === 1 ? '' : 's'}. Already paid out to the wallet, so it is not part of the position value.">` +

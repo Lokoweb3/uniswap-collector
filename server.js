@@ -196,8 +196,8 @@ const watch = require("./watch").create({
   getCollectSummary: (tokenKey, dec0, dec1, usd0, usd1) => collectSummary(tokenKey, dec0, dec1, usd0, usd1),
   // Watched positions get the same claimed summary as the owner's, so the two
   // kinds of card can never show a different answer for the same question.
-  getClaimedSummary: (tokenKey, dec0, dec1, usd0, usd1, sym0, sym1) =>
-    claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, null),
+  getClaimedSummary: (tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, ctx) =>
+    claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, null, ctx),
 });
 // Liquidity history from the RPC itself; the PnL basis prefers it over
 // Blockscout's, which has dropped transactions on this chain.
@@ -486,6 +486,36 @@ function collectSummary(tokenKey, dec0, dec1, usd0, usd1) {
   return count ? { usd: +usd.toFixed(2), usd7d: +usd7d.toFixed(2), count, last, atCollectPrices: locked, approx: locked < count } : null;
 }
 /**
+ * The chain-derived claim store for this instance's v4 position manager. Its file
+ * lives in DATA_DIR, so two instances on two chains keep separate progress and
+ * separate records. v3 has no equivalent here yet: its claims still sit in the
+ * tokenId-only ledgers, which is exactly why they are reported as unverified.
+ */
+const claimStore = (() => {
+  try {
+    if (!cfg.contracts.v4 || !cfg.contracts.v4.positionManager || !cfg.contracts.v4.poolManager) return null;
+    return require("./claims-store").create({
+      provider, chainId: Number(cfg.chainId),
+      positionManager: cfg.contracts.v4.positionManager,
+      poolManager: cfg.contracts.v4.poolManager,
+      stateView: cfg.contracts.v4.stateView || null,
+      file: dataFile("claims.json"),
+      log: console,
+    });
+  } catch (err) { console.error(`claims store unavailable: ${err.message}`); return null; }
+})();
+/** Pair and owner for a token id, so the scanner knows which positions to fold. */
+function claimMeta(tokenId) {
+  const hit = claimMetaIndex.get(String(tokenId));
+  return hit || null;
+}
+const claimMetaIndex = new Map();
+function rememberClaimMeta(tokenId, token0, token1, owner) {
+  if (!tokenId || !token0 || !token1 || !owner) return;
+  claimMetaIndex.set(String(tokenId), { token0, token1, owner });
+}
+
+/**
  * Claimed fees for one position, in the shape the card renders: token amounts,
  * a USD total when both legs price, the count and the latest collection, and an
  * explicit coverage state.
@@ -501,59 +531,47 @@ function collectSummary(tokenKey, dec0, dec1, usd0, usd1) {
  * has claims this cannot see: that is `partial`, with the date it starts from.
  * No history file at all is `unavailable` — never a zero.
  */
-function claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, openedAt) {
-  const events = typeof hist !== "undefined" ? hist.events : null;
-  if (!events) {
-    return { status: "unavailable", reason: "no collection history is loaded for this instance" };
+function claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, openedBlock, ctx) {
+  const key = String(tokenKey);
+  // Remember what the scanner needs to recognise this position later: its pair and
+  // the wallet the payout lands in. Without this the scan cannot tell one manager's
+  // positions apart from every other position on the chain.
+  if (ctx && ctx.token0 && ctx.token1 && ctx.owner) rememberClaimMeta(key.replace(/^v4-/, ""), ctx.token0, ctx.token1, ctx.owner);
+  const isV4 = key.startsWith("v4-");
+  const id = key.replace(/^v4-/, "");
+  // v3 (and anything else) still comes from the tokenId-only ledgers. Those rows
+  // record no chain and no position manager, so the scope this instance would
+  // attach is an assumption about where they came from, not evidence. An
+  // assumption must not become a displayed figure.
+  if (!isV4 || !claimStore) {
+    return { status: "unavailable",
+      reason: isV4
+        ? "the chain-derived claim scanner is not configured for this instance"
+        : "this position's claims are only in the older token-id-keyed ledger, which records no chain or position manager, so they cannot be attributed to this position with certainty",
+      scope: { chainId: Number(cfg.chainId), tokenId: id, positionManager: null },
+      legacyRowsExist: hasLegacyRows(key) };
   }
-  let a0 = 0n, a1 = 0n, usd = 0, count = 0, last = null, locked = 0, principalSeparated = false;
-  for (const e of events) {
-    if (e.tokenId !== String(tokenKey)) continue;
-    a0 += BigInt(e.fee0 || "0");
-    a1 += BigInt(e.fee1 || "0");
-    if (e.principal) principalSeparated = true;   // a withdrawal whose principal was netted out
-    const f0 = Number(ethers.formatUnits(e.fee0 || "0", dec0)), f1 = Number(ethers.formatUnits(e.fee1 || "0", dec1));
-    const px = feePrices[priceKey(e)];
-    if (px) { usd += f0 * px.p0 + f1 * px.p1; locked++; }
-    else if (usd0 != null && usd1 != null) usd += f0 * usd0 + f1 * usd1;
-    count++;
-    if (e.t && (!last || e.t > last)) last = e.t;
-  }
-  const scope = { chainId: Number(cfg.chainId), tokenId: String(tokenKey),
-                  positionManager: String(tokenKey).startsWith("v4-")
-                    ? (cfg.contracts.v4 && cfg.contracts.v4.positionManager) || null
-                    : cfg.contracts.positionManager || null };
-  // The v3 scan starts at START_BLOCK; the Blockscout backfill is what reaches
-  // further back. Until it is ready, anything claimed before that block is missing
-  // from these totals, and the card must say so rather than imply completeness.
-  const covered = bfDone();
-  const out = {
-    status: covered ? "ok" : "partial",
-    count, last, scope,
-    tokens: [
-      { symbol: sym0, amount: Number(ethers.formatUnits(a0, dec0)).toLocaleString("en-US", { maximumFractionDigits: 6 }) },
-      { symbol: sym1, amount: Number(ethers.formatUnits(a1, dec1)).toLocaleString("en-US", { maximumFractionDigits: 6 }) },
-    ],
-    raw0: a0.toString(), raw1: a1.toString(),
-    usd: usd0 == null || usd1 == null ? null : +usd.toFixed(2),
-    principalSeparated,
-    basis: locked === count && count > 0
-      ? "each collection valued at the prices of its moment"
-      : locked === 0
-        ? "valued at today's prices"
-        : `${locked} of ${count} valued at the prices of their moment, the rest at today's`,
-  };
-  if (!covered) {
-    out.since = typeof hist !== "undefined" && hist.startBlock ? START_BLOCK_TIME() : null;
-    out.reason = "history before the collector's first scanned block is not loaded";
-  }
-  return out;
+  return claimStore.summary(id, { dec0, dec1, sym0, sym1, usd0, usd1, openedBlock: openedBlock ?? null });
 }
+/** Does the old ledger hold rows for this key? Reported, never counted. */
+function hasLegacyRows(tokenKey) {
+  try { return (hist.events || []).some((e) => e.tokenId === String(tokenKey)); } catch { return false; }
+}
+
 /** Has the pre-collector backfill finished, so history reaches a position's open? */
 function bfDone() { try { return typeof bf !== "undefined" && bf.ready === true; } catch { return false; } }
 
 /** Approximate wall-clock time of the history scan floor, for the partial label. */
 function START_BLOCK_TIME() { try { return hist.startBlockTime || null; } catch { return null; } }
+// Scanning is bounded so opening a card cannot stall the request; coverage grows
+// a little each time the panel is opened, and the cursor is persisted either way.
+const CLAIM_CHUNK = Number(process.env.LP_CLAIM_CHUNK || 9000);
+const CLAIM_BUDGET = Number(process.env.LP_CLAIM_BUDGET || 6);
+/** How far back a scan should reach: the 7-day window is the useful floor. */
+function claimFloor() {
+  const perBlock = Number(process.env.LP_BLOCK_MS || 100);
+  return Math.max(0, (claimStore && claimStore.state.scannedTo ? claimStore.state.scannedTo : 0) - Math.ceil((30 * 24 * 3600 * 1000) / perBlock));
+}
 const STATE_DEPTH = 4500; // probed: slot0 answers at -5000 blocks, not at -50000
 
 async function pricesAtBlock(m, block) {
@@ -1139,7 +1157,7 @@ async function build() {
         pnlLegs,
         pnlSource,
         collected: collectSummary(p.tokenId, p.token0.decimals, p.token1.decimals, usd0, usd1),
-        claimed: claimedSummary(p.tokenId, p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol, p.openedAt),
+        claimed: claimedSummary(p.version === 4 ? `v4-${p.tokenId}` : String(p.tokenId), p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol, p.openedBlock ?? null, { token0: p.token0.address, token1: p.token1.address, owner: cfg.ownerAddress }),
         liquidity: p.liquidity,
         pair: `${p.token0.symbol} / ${p.token1.symbol}`,
         symbol0: p.token0.symbol,
@@ -1732,7 +1750,7 @@ async function handleRequest(req, res) {
           const m = await positionMeta(key);
           const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
           p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
-          p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedAt);
+          p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedBlock ?? null, { token0: m.t0.address, token1: m.t1.address, owner: cfg.ownerAddress });
         } catch { p.collected = null; p.claimed = { status: "unavailable", reason: "this position's token metadata could not be read, so its claims cannot be valued" }; }
         // keep / watch / close / hold, from this row plus the collect history and
         // the hourly fee accrual (main wallet only; watched wallets accrue per wallet).
@@ -2274,6 +2292,55 @@ async function handleRequest(req, res) {
       rewards, // null = Merkl unreachable and nothing cached
       claimUrl: `https://app.merkl.xyz/users/${cfg.ownerAddress}`,
     }));
+  }
+
+  // Collection history for ONE position, scoped by chain, position manager and
+  // token id, served independently of the analytics bundle so the card's control
+  // can load it on its own. A scan budget is spent here, so opening the panel is
+  // also what extends coverage backwards.
+  if (url.pathname === "/api/claims") {
+    res.setHeader("Content-Type", "application/json");
+    const id = String(url.searchParams.get("tokenId") || "").replace(/^v4-/, "");
+    const wantChain = url.searchParams.get("chainId");
+    const wantManager = (url.searchParams.get("manager") || "").toLowerCase();
+    if (!/^[0-9]+$/.test(id)) return res.end(JSON.stringify({ ok: false, error: "a numeric tokenId is required" }));
+    if (!claimStore) {
+      return res.end(JSON.stringify({ ok: true, status: "unavailable", rows: [],
+        reason: "this instance has no chain-derived claim scanner configured" }));
+    }
+    // A request for another chain's or another manager's position is answered as
+    // what it is — not this instance's position — rather than with these records.
+    if ((wantChain && Number(wantChain) !== Number(cfg.chainId)) ||
+        (wantManager && wantManager !== String(cfg.contracts.v4.positionManager).toLowerCase())) {
+      return res.end(JSON.stringify({ ok: true, status: "unavailable", rows: [],
+        reason: `this instance serves chain ${cfg.chainId} and manager ${cfg.contracts.v4.positionManager}; the position asked for belongs to a different scope` }));
+    }
+    try {
+      const meta = claimMeta(id);
+      if (meta) await claimStore.scan(claimMeta, { chunk: CLAIM_CHUNK, budget: CLAIM_BUDGET, floor: claimFloor() });
+      const rows = claimStore.rows(id);
+      const st = claimStore.state;
+      return res.end(JSON.stringify({ ok: true,
+        status: st.complete ? "complete" : "partial",
+        scope: { chainId: Number(cfg.chainId), positionManager: String(cfg.contracts.v4.positionManager).toLowerCase(), tokenId: id },
+        coverage: { fromBlock: st.scannedFrom, toBlock: st.scannedTo, fromT: st.fromT, toT: st.toT, complete: !!st.complete },
+        rows: await Promise.all(rows.map(async (r) => {
+          // Format here, where the token metadata is available and cached; the card
+          // must never be handed a raw integer and left to guess at decimals.
+          const fmt = async (raw, addr) => {
+            if (raw == null) return null;
+            try { const t = await u.getToken(addr, provider, Number(cfg.chainId));
+              if (t.decimalsOk !== true) return null;
+              return `${Number(ethers.formatUnits(raw, t.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })} ${t.symbol}`;
+            } catch { return null; }
+          };
+          return { t: r.t, block: r.block, tx: r.tx, kind: r.kind, unavailable: r.unavailable,
+                   fee0: await fmt(r.fee0, r.token0), fee1: await fmt(r.fee1, r.token1) };
+        })),
+      }));
+    } catch (err) {
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
   }
 
   if (url.pathname === "/api/history") {

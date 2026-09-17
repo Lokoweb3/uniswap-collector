@@ -314,7 +314,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         const collected = getCollectSummary ? getCollectSummary(version === 4 ? `v4-${id}` : id.toString(), p.token0.decimals, p.token1.decimals, usd0, usd1) : null;
         const claimKey = version === 4 ? `v4-${id}` : id.toString();
         const claimed = getClaimedSummary
-          ? getClaimedSummary(claimKey, p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol)
+          ? getClaimedSummary(claimKey, p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol,
+              { token0: p.token0.address, token1: p.token1.address, owner: w.address })
           : { status: "unavailable", reason: "this instance exposes no claim history" };
         positions.push({
           ...pnl,

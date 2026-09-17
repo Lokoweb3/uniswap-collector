@@ -221,10 +221,11 @@ function create({ provider, factory, cfg, explorerApi }) {
       const L = liq ? liq[i] : await V4.stateView.getLiquidity(id);
       if (L === 0n) return null;
       const [sqrtP] = await V4.stateView.getSlot0(id);
-      const qMeta = k.quote === ethers.ZeroAddress ? v4.NATIVE : await u.getToken(k.quote, provider);
+      const qMeta = k.quote === ethers.ZeroAddress ? v4.nativeToken(cfg) : await u.getToken(k.quote, provider);
       const tokenIs0 = k.currency0.toLowerCase() === addr.toLowerCase();
       // Quote-side virtual reserve: token1 = L * sqrtP / 2^96, token0 = L * 2^96 / sqrtP.
       const raw = tokenIs0 ? (L * sqrtP) / Q96 : (L * Q96) / sqrtP;
+      if (qMeta.decimalsOk !== true) return null; // no scale, no depth
       const depth = Number(ethers.formatUnits(raw, qMeta.decimals));
       const quoteIsEth = k.quote === ethers.ZeroAddress || k.quote === WETH;
       if (depth < (quoteIsEth ? MIN_QUOTE_WETH : MIN_QUOTE_STABLE)) return null;
@@ -241,9 +242,10 @@ function create({ provider, factory, cfg, explorerApi }) {
     const L = await V4.stateView.getLiquidity(id);
     if (L === 0n) return null;
     const [sqrtP] = await V4.stateView.getSlot0(id);
-    const qMeta = k.quote === ethers.ZeroAddress ? v4.NATIVE : await u.getToken(k.quote, provider);
+    const qMeta = k.quote === ethers.ZeroAddress ? v4.nativeToken(cfg) : await u.getToken(k.quote, provider);
     const tokenIs0 = k.currency0.toLowerCase() === addr;
     const raw = tokenIs0 ? (L * sqrtP) / Q96 : (L * Q96) / sqrtP;
+    if (qMeta.decimalsOk !== true) return null; // no scale, no depth
     const depth = Number(ethers.formatUnits(raw, qMeta.decimals));
     const quoteIsEth = k.quote === ethers.ZeroAddress || k.quote === WETH;
     if (depth < (quoteIsEth ? MIN_QUOTE_WETH : MIN_QUOTE_STABLE)) return null;
@@ -378,6 +380,7 @@ function create({ provider, factory, cfg, explorerApi }) {
         if (pool === ethers.ZeroAddress) return null;
         // Depth = how much of the quote token sits in the pool.
         const raw = await new ethers.Contract(quote, ERC20_BAL, provider).balanceOf(pool);
+        if (qMeta.decimalsOk !== true) return null; // no scale, no depth
         const depth = Number(ethers.formatUnits(raw, qMeta.decimals));
         return depth >= qMin ? { pool, quote, fee, depth } : null;
       });
@@ -397,6 +400,7 @@ function create({ provider, factory, cfg, explorerApi }) {
             const qMeta = await u.getToken(quote, provider);
             const qMin = quote === WETH ? MIN_QUOTE_WETH : MIN_QUOTE_STABLE;
             const raw = await new ethers.Contract(quote, ERC20_BAL, provider).balanceOf(pair);
+            if (qMeta.decimalsOk !== true) return null; // no scale, no depth
             const depth = Number(ethers.formatUnits(raw, qMeta.decimals));
             if (depth >= qMin) cands.push({ pool: pair, quote, fee: null, depth, depthUsd: depth * (quote === WETH ? wethUsd || 0 : 1), v2: true });
           } catch {}
@@ -425,8 +429,12 @@ function create({ provider, factory, cfg, explorerApi }) {
       try {
         const [sqrtP] = await V4.stateView.getSlot0(pc.pool);
         const t = await u.getToken(addr, provider);
-        const q = pc.quote === ethers.ZeroAddress ? v4.NATIVE : await u.getToken(pc.quote, provider);
+        const q = pc.quote === ethers.ZeroAddress ? v4.nativeToken(cfg) : await u.getToken(pc.quote, provider);
         const tokenIs0 = pc.key.currency0.toLowerCase() === addr;
+        // A price derived from decimals that were never read is not a bad price, it is
+        // a number with no scale: one unverified token here produced 1.5e15 per unit
+        // and a wallet total of $1.5 quintillion. No decimals, no price.
+        if (t.decimalsOk !== true || q.decimalsOk !== true) return { price: null, depthUsd: null };
         const p = u.priceFromSqrt(sqrtP, tokenIs0 ? t.decimals : q.decimals, tokenIs0 ? q.decimals : t.decimals);
         const inQuote = tokenIs0 ? p : 1 / p;
         const quoteUsd = quoteIsEth ? wethUsd : 1;

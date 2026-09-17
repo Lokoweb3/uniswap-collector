@@ -57,7 +57,11 @@ const BLOCK_MS_FALLBACK = 1000;
 // 5: every event is attributed to the NFT's owner AT that event (from the
 // position's Transfer history), not to whoever tracks it now; the history of
 // transfers and liquidity changes is kept per position.
-const DECODER = 5;
+// 6: the capital side is kept too — a mint deposit or a fee-free add is stored
+// with `capitalOnly`, so a position's deposits and withdrawals (each at the price
+// of its own transaction) can be read back. They are never claims: the claim
+// summary, its count and its verified zero ignore them.
+const DECODER = 6;
 
 /**
  * Token amounts for a liquidity change, rounded the way v4's SqrtPriceMath does:
@@ -273,7 +277,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     for (const o of ours) {
       const m = meta(o.tokenId);
       if (!m) continue;                               // not a position we track
-      if (o.delta > 0n && minted.has(o.tokenId)) continue;   // the opening deposit: no fees yet
+      // The opening deposit realises no fees, but it is the position's first capital.
       const { l, tl, tu, delta, tokenId } = o;
       const t0 = String(m.token0).toLowerCase(), t1 = String(m.token1).toLowerCase();
       // The owner at this event, not whoever tracks the position now: a previous
@@ -281,9 +285,10 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       const owner = ownerAt ? await ownerAt(tokenId, l.blockNumber, l.index) : String(m.owner).toLowerCase();
       const kind = delta < 0n ? "withdrawal" : delta > 0n ? "increase" : "collect";
       let unavailable = null;
+      const nativeLeg = t0 === ZERO || t1 === ZERO;
       // A native-ETH leg is paid by a value transfer, which emits no log. Reading
       // it as zero would print a verified figure that leaves that leg out.
-      if (t0 === ZERO || t1 === ZERO) {
+      if (nativeLeg) {
         unavailable = "the native ETH leg is paid by a plain value transfer, which emits no log, so its amount cannot be read from the receipt";
       }
       if (!unavailable && !owner) unavailable = "the position's owner at this event could not be established";
@@ -342,17 +347,27 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
           fee0 = f0 < 0n ? 0n : f0; fee1 = f1 < 0n ? 0n : f1;
         }
       }
-      // An increase that realised nothing is a deposit, not a claim.
-      if (kind === "increase" && !unavailable && fee0 === 0n && fee1 === 0n) continue;
+      // An increase that realised nothing is a deposit, not a claim; the mint's own
+      // deposit is not one either. Both are kept for the capital history and
+      // excluded from every fee figure.
+      //
+      // A position's own mint realises nothing by definition — its salt is new, so
+      // there are no prior fees — and that holds whether or not its price can be
+      // read. Only its capital value depends on the price, so an unreadable price
+      // leaves the capital unknown and never makes the FEE history undecodable.
+      const isMintDeposit = delta > 0n && minted.has(tokenId);
+      if (isMintDeposit && unavailable && !nativeLeg) { unavailable = null; fee0 = 0n; fee1 = 0n; }
+      const capitalOnly = delta > 0n && !unavailable && ((kind === "increase" && fee0 === 0n && fee1 === 0n) || isMintDeposit);
       out.push({
         key: `${receipt.hash}:${l.index}`, tokenId, chainId: Number(chainId), positionManager: posm,
         block: l.blockNumber, tx: receipt.hash, kind, verified: true, poolId: l.topics[1],
         sqrtP: sqrtP == null ? null : sqrtP.toString(),
         fee0: unavailable ? null : fee0.toString(), fee1: unavailable ? null : fee1.toString(),
-        principal0: p0.toString(), principal1: p1.toString(),
+        principal0: p0.toString(), principal1: p1.toString(), principalKnown: sqrtP != null,
         paidOut0: flow.out[t0].toString(), paidOut1: flow.out[t1].toString(),
         paidIn0: flow.in[t0].toString(), paidIn1: flow.in[t1].toString(),
         token0: t0, token1: t1, owner, unavailable, decoder: DECODER,
+        ...(capitalOnly ? { capitalOnly: true, kind: minted.has(tokenId) ? "deposit" : "increase" } : {}),
       });
     }
     return out;
@@ -492,7 +507,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
    * NFT (a record whose owner could not be established is kept: it withholds the
    * figure instead of vanishing).
    */
-  function rows(tokenId, wallet = null) {
+  function rows(tokenId, wallet = null, { capital = false } = {}) {
     const s = S();
     const t = s.tokens[String(tokenId)];
     if (!t) return [];
@@ -501,7 +516,25 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       .filter((e) => e.tokenId === String(tokenId) && e.chainId === Number(chainId) && e.positionManager === posm)
       .filter((e) => e.block >= t.from && e.block <= t.to)
       .filter((e) => !w || !e.owner || e.owner === w)
+      .filter((e) => (capital ? true : !e.capitalOnly))
       .sort((a, b) => a.block - b.block || String(a.key).localeCompare(String(b.key)));
+  }
+
+  /**
+   * The position's capital movements for a wallet: what it put in and took out,
+   * each with the principal the pool computed and the price at that transaction.
+   * Fees are not capital and are not included here.
+   */
+  function capital(tokenId, wallet = null) {
+    return rows(tokenId, wallet, { capital: true })
+      .filter((e) => e.capitalOnly || (!e.unavailable && (e.principal0 !== "0" || e.principal1 !== "0")))
+      .map((e) => ({ key: e.key, t: e.t ?? null, block: e.block, tx: e.tx,
+        direction: e.kind === "withdrawal" ? "out" : "in",
+        kind: e.kind, principal0: e.principal0, principal1: e.principal1,
+        // A movement whose pool price could not be read has a size on chain but no
+        // value here: it is listed, and it makes the capital figures unavailable.
+        unpriced: e.principalKnown === false || !e.px,
+        sqrtP: e.sqrtP, px: e.px || null, token0: e.token0, token1: e.token1 }));
   }
 
   /** The position's NFT history inside the scanned interval: mint, transfers, burn. */
@@ -672,7 +705,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     };
   }
 
-  return { scan, rows, summary, coverage, ownership, liquidityHistory, setPrice, save, remember, metaOf, knownIds, acquireWriter,
+  return { scan, rows, capital, summary, coverage, ownership, liquidityHistory, setPrice, save, remember, metaOf, knownIds, acquireWriter,
     /** True while another live process owns the file: read it, never write it. */
     get readOnly() { return foreign(); }, get scope() { return scope; }, get state() { return S(); } };
 }

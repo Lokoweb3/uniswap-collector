@@ -36,10 +36,10 @@ const consts = ["esc", "usd", "usdK", "COPY_ICON", "CLAIM_STATES", "cDate", "cTi
 const fns = ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimSubtotal", "claimCurrent", "claimWhy", "claimRowValue",
   "chainRef", "txRef",
   "claimKindLabel", "claimPriceLabel", "claimPanelHtml", "claimedMetric", "coverageText", "claimedLine",
-  "ratePct", "poolRateText", "poolLine", "rangeStatus", "ltNeeds", "perfEmptyNote", "ltBasisText", "longTermLine",
+  "ratePct", "incomeLine", "poolRateText", "poolLine", "rangeStatus", "ltNeeds", "perfEmptyNote", "ltBasisText", "longTermLine",
   "notePricing", "pricingText", "freshText", "feeMetric", "renderWalletPanel"];
 const exported = ["claimState", "claimVerifiedZero", "claimPanelHtml", "claimedMetric", "coverageText", "claimedLine",
-  "ratePct", "poolLine", "rangeStatus", "perfEmptyNote", "longTermLine", "notePricing", "pricingText", "freshText",
+  "ratePct", "incomeLine", "poolLine", "rangeStatus", "perfEmptyNote", "longTermLine", "notePricing", "pricingText", "freshText",
   "feeMetric", "renderWalletPanel"];
 
 function page() {
@@ -400,4 +400,35 @@ const tokens = [{ symbol: "USDC", amount: "70.85" }, { symbol: "ARGUS", amount: 
   assert.match(lift("positionCard"), /esc\(freshText\(d\)\)/);
 }
 
-console.log("card text: claim states, verified zero, pool fee rate, full range, performance prerequisites, pricing text, freshness");
+// ---- income on the card: earned, on what capital, and what is missing ----------
+{
+  const full = { income: { feesUsd: 27.64, claimedUsd: 20.5, uncollectedUsd: 7.14, twaCapitalUsd: 1000,
+    onCapitalPct: 2.764, feeRatePct: 33.6, days: 30, depositedUsd: 1200, withdrawnUsd: 200, capitalEvents: 4,
+    annualNote: null, basis: "capital at the price of each deposit", missing: [] } };
+  const h = strip(api.incomeLine(full));
+  assert.match(h, /Fees earned \$27\.64/);
+  assert.match(h, /\$20\.50 claimed, at each settlement's price/);
+  assert.match(h, /\$7\.14 still in the pool, at today's price/, "the two bases are named, never merged");
+  assert.match(h, /On capital \$1,000\.00 time-weighted/);
+  assert.match(h, /2\.8% of it/);
+  assert.match(h, /33\.6% a year extrapolated from 30\.0 days/, "an annualised figure names the window it came from");
+  assert.match(h, /Capital in \$1,200\.00 · out \$200\.00 over 4 movements/);
+  assert.ok(!/Income figures need/.test(h));
+
+  // too short to annualise: the plain share stays, the yearly rate does not appear
+  const short = { income: { ...full.income, feeRatePct: null, annualNote: "open for 6.0 h — too short to annualise" } };
+  const sh = strip(api.incomeLine(short));
+  assert.match(sh, /too short to annualise/);
+  assert.ok(!/a year/.test(sh), sh);
+  assert.match(sh, /2\.8% of it/);
+
+  // missing inputs are named, and no figure is invented
+  const gap = { income: { feesUsd: null, claimedUsd: null, uncollectedUsd: null, twaCapitalUsd: null, onCapitalPct: null,
+    feeRatePct: null, depositedUsd: null, withdrawnUsd: null, capitalEvents: 0, days: null, missing: ["no capital movement has been read for this position yet"] } };
+  const g = strip(api.incomeLine(gap));
+  assert.match(g, /Income figures need: no capital movement has been read/);
+  assert.ok(!/\$/.test(g), `no dollar figure without inputs: ${g}`);
+  assert.strictEqual(api.incomeLine({}), "", "a position without the block renders nothing");
+}
+
+console.log("card text: income line, claim states, verified zero, pool fee rate, full range, performance prerequisites, pricing text, freshness");

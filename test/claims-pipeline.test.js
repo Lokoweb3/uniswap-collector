@@ -393,6 +393,38 @@ async function main() {
     assert.ok(byId[8240].key.startsWith(`${CHAIN_ID}:${POSM}:8240:`));
     assert.strictEqual(hist.wallets[0].discovery.complete, true, "discovery reached the manager's deployment");
 
+    // ---- income: capital in and out, fees, and an honest rate ---------------------
+    const inc = byId[8240].income;
+    assert.deepStrictEqual(inc.missing, [], JSON.stringify(inc));
+    assert.strictEqual(inc.capitalEvents, 3, "the mint deposit, the add and the withdrawal are capital movements");
+    assert.ok(inc.depositedUsd > 0 && inc.withdrawnUsd > 0, JSON.stringify(inc));
+    assert.ok(inc.twaCapitalUsd > 0, "capital is time-weighted over the position's life");
+    assert.ok(Math.abs(inc.claimedUsd - a.summary.usd) < 1e-6, "claimed fees are the same figure the card shows");
+    assert.ok(inc.onCapitalPct > 0, "fees as a share of the capital that was working");
+    // an open position is measured to now, so its rate annualises from a real span
+    assert.ok(inc.days > 0);
+    const expectRate = inc.onCapitalPct * (365 / inc.days);
+    assert.ok(Math.abs(inc.feeRatePct - expectRate) / expectRate < 1e-3,
+      `the rate is the share of capital annualised over the actual days: ${inc.feeRatePct} vs ${expectRate}`);
+    // a position that only ever received its deposit: capital, no fees, no invented rate
+    const zinc = byId[11989].income;
+    assert.strictEqual(zinc.capitalEvents, 1);
+    assert.ok(zinc.depositedUsd > 0);
+    assert.strictEqual(zinc.claimedUsd, 0);
+    assert.strictEqual(zinc.feesUsd, 0);
+    assert.strictEqual(zinc.onCapitalPct, 0);
+    // a closed position stops earning at its closure, and its uncollected fees are zero
+    const cinc = byId[6250].income;
+    assert.strictEqual(cinc.uncollectedUsd, 0);
+    // it lived 200 blocks (200 s): annualising that would read as a five-figure rate
+    assert.ok(cinc.days < 1, `${cinc.days}`);
+    assert.strictEqual(cinc.feeRatePct, null, "a rate is not annualised from under a day");
+    assert.match(cinc.annualNote, /too short to annualise/);
+    assert.ok(cinc.onCapitalPct > 0, "the plain share of capital is still given");
+    assert.ok(byId[6250].income.closedT > 0 && byId[6250].income.closedT <= byId[6250].closedAt.t);
+    // capital is never counted as income
+    assert.ok(byId[6250].income.depositedUsd > byId[6250].income.claimedUsd);
+
     // ---- total claimed fees ------------------------------------------------------
     const total = await get(`/api/claims/total?wallet=${OWNER}`);
     assert.strictEqual(total.ok, true, JSON.stringify(total).slice(0, 300));

@@ -580,7 +580,17 @@ function freshClaims(payload) {
     if (!Array.isArray(list)) return;              // e.g. a wallet's `closed` is a count
     for (const p of list) {
       const args = p && p.claimed && claimArgs.get(p.claimed);
-      if (args) { try { p.claimed = claimedSummary(...args); } catch (err) { console.error(`claims: refreshing a card summary failed: ${err.message}`); } }
+      if (args) {
+        try {
+          p.claimed = claimedSummary(...args);
+          const [key, dec0, dec1, , , sym0, sym1, , ctx] = args;
+          if (ctx && ctx.owner) {
+            p.income = positionIncome(String(key).replace(/^v4-/, ""), ctx.owner,
+              { address: ctx.token0, symbol: sym0, decimals: dec0 }, { address: ctx.token1, symbol: sym1, decimals: dec1 },
+              { claimed: p.claimed, uncollectedUsd: p.feesUsd ?? null, valueUsd: p.valueUsd ?? null });
+          }
+        } catch (err) { console.error(`claims: refreshing a card summary failed: ${err.message}`); }
+      }
     }
   };
   fix(payload.positions);
@@ -693,6 +703,84 @@ function claimScope(url) {
   if (!hit) return { error: "wallet is not one of this instance's wallets" };
   return { all: false, wallets: [hit], set: new Set([want]) };
 }
+/**
+ * What a position has actually earned, from the chain-derived history alone:
+ * capital in and out at the price of each transaction, fees claimed at the price
+ * of each settlement, and the fees still in the pool at today's price.
+ *
+ * The fee rate is fees over TIME-WEIGHTED capital: the running net capital (at
+ * the prices it went in and out) integrated over the position's life and divided
+ * by that life. A position that has been emptied still has an honest denominator
+ * this way, and no figure is produced when an input is missing — every gap is
+ * named in `missing` instead.
+ */
+function positionIncome(tokenId, wallet, token0, token1, { claimed, uncollectedUsd = null, valueUsd = null, closedT = null } = {}) {
+  const missing = [];
+  if (!claimStore) return { available: false, missing: ["this instance has no chain-derived claim scanner"] };
+  if (!token0 || !token1 || token0.decimals == null || token1.decimals == null) {
+    return { available: false, missing: ["a token's decimals were not read from chain"] };
+  }
+  const cap = claimStore.capital(tokenId, wallet);
+  const cov = claimStore.coverage(tokenId, wallet);
+  const usdOf = (r, a0, a1) => (r.px ? Number(ethers.formatUnits(a0, token0.decimals)) * r.px.p0 + Number(ethers.formatUnits(a1, token1.decimals)) * r.px.p1 : null);
+  let deposited = 0, withdrawn = 0, unpriced = 0;
+  const events = [];
+  for (const r of cap) {
+    const usd = r.unpriced ? null : usdOf(r, r.principal0, r.principal1);
+    if (usd == null) { unpriced++; continue; }
+    if (r.direction === "in") deposited += usd; else withdrawn += usd;
+    events.push({ t: r.t, usd, direction: r.direction });
+  }
+  if (!cov || !cov.coversOpening) missing.push("the scan has not covered this position's whole life for this wallet");
+  if (unpriced) missing.push(`${unpriced} capital movement(s) have no verified price of their moment`);
+  if (!cap.length) missing.push("no capital movement has been read for this position yet");
+  const openedT = cov ? cov.openedT ?? cov.fromT : null;
+  if (openedT == null) missing.push("the time this position was opened is not known");
+  const endT = closedT || Date.now();
+  const days = openedT != null ? (endT - openedT) / 86400000 : null;
+  // Time-weighted capital over the life, from the events themselves.
+  let twa = null;
+  if (openedT != null && days > 0 && events.length && !unpriced) {
+    const sorted = events.filter((e) => e.t != null).sort((a, b) => a.t - b.t);
+    let running = 0, area = 0, prev = openedT;
+    for (const e of sorted) {
+      area += running * Math.max(0, e.t - prev);
+      running += e.direction === "in" ? e.usd : -e.usd;
+      prev = e.t;
+    }
+    area += running * Math.max(0, endT - prev);
+    twa = area / Math.max(1, endT - openedT);
+  }
+  const claimedUsd = claimed && claimed.usd != null ? claimed.usd : null;
+  if (claimedUsd == null) missing.push("the claimed fees have no historical USD total");
+  const uncollected = uncollectedUsd == null ? 0 : uncollectedUsd;
+  const feesUsd = claimedUsd == null ? null : claimedUsd + uncollected;
+  // Fees against the capital that was actually working, and the annualised rate —
+  // but only from a day's history: annualising six hours reads as a five-figure
+  // percentage and means nothing.
+  const onCapitalPct = feesUsd != null && twa != null && twa > 0 ? (feesUsd / twa) * 100 : null;
+  const feeRatePct = onCapitalPct != null && days >= 1 ? onCapitalPct * (365 / days) : null;
+  const annualNote = onCapitalPct != null && feeRatePct == null
+    ? `open for ${days != null ? (days * 24).toFixed(1) : "?"} h — too short to annualise`
+    : null;
+  return {
+    available: !missing.length,
+    openedT, days: days == null ? null : +days.toFixed(3), closedT: closedT || null,
+    depositedUsd: unpriced ? null : +deposited.toPrecision(12),
+    withdrawnUsd: unpriced ? null : +withdrawn.toPrecision(12),
+    netCapitalUsd: unpriced ? null : +(deposited - withdrawn).toPrecision(12),
+    twaCapitalUsd: twa == null ? null : +twa.toPrecision(12),
+    claimedUsd, uncollectedUsd: uncollectedUsd == null ? null : +uncollected.toPrecision(12),
+    feesUsd: feesUsd == null ? null : +feesUsd.toPrecision(12),
+    onCapitalPct: onCapitalPct == null ? null : +onCapitalPct.toPrecision(6),
+    feeRatePct: feeRatePct == null ? null : +feeRatePct.toPrecision(6),
+    annualNote,
+    valueUsd, capitalEvents: cap.length, claimEvents: claimed ? claimed.count ?? null : null,
+    basis: "capital at the price of each deposit and withdrawal; claimed fees at the price of each settlement; fees still in the pool at today's price",
+    missing,
+  };
+}
+
 /** A registry entry's claim summary, scoped to the wallet that held it. */
 function registryClaim(e) {
   const scope = { chainId: Number(cfg.chainId), positionManager: lcAddr(cfg.contracts.v4.positionManager), tokenId: e.tokenId, wallet: e.wallet };
@@ -724,6 +812,7 @@ async function historyEntry(e) {
     statusReason = `sent to ${sentAway.to} and later burned by its new owner`;
   }
   const noLiquidity = status === "closed" || status === "burned";
+  const claimed = registryClaim(e);
   const closedAt = noLiquidity && lh.closedAt ? { ...(await at(lh.closedAt)), verified: !!lh.closedAt.verified } : null;
   const { checkedAt, poolId, tickSpacing, mintBlock, ...rest } = e;
   return {
@@ -736,7 +825,13 @@ async function historyEntry(e) {
       ? { state: "none", reason: "v4 pays out every accrued fee when liquidity is removed, and this position holds no liquidity" }
       : { state: "unknown", reason: status === "open" ? "shown as uncollected fees on the open card"
         : status === "transferred" ? "the position belongs to another owner now" : "the position could not be read" },
-    claimed: registryClaim(e),
+    claimed,
+    income: positionIncome(e.tokenId, e.wallet, e.token0, e.token1, {
+      claimed,
+      uncollectedFees: null,
+      uncollectedUsd: noLiquidity ? 0 : null,
+      closedT: closedAt ? closedAt.t : null,
+    }),
     checkedAt,
   };
 }
@@ -882,7 +977,9 @@ function priceLogImplausible(lp, r, a, b) {
 }
 async function priceClaims(id) {
   let changed = 0;
-  for (const r of claimStore.rows(id)) {
+  // Capital events are priced too: a deposit's own price is what makes an income
+  // figure possible at all.
+  for (const r of claimStore.rows(id, null, { capital: true })) {
     if (r.px || r.unavailable) continue;
     let px = null;
     try {

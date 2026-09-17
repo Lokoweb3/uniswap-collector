@@ -960,6 +960,7 @@ async function loadHistory(){
     const d = await r.json(); loadOk('Collection history');
     if (!d.ok) return;
     $('#earnings').hidden = false;
+    renderChainFees();                 // the other source, side by side and named
     historyRows = d.rows;
     histD = d;
     renderAnalytics();
@@ -989,6 +990,43 @@ async function loadHistory(){
       + (n === 0 ? ' No rows here means this collector has recorded no collect of its own; it is not a statement about fees the wallet settled itself.' : '')
       + ' Source: this collector\'s ledger — the cards\' Claimed fees and Total claimed fees are read from chain instead, and the two are not interchangeable.';
   }catch(e){ loadFailed('Collection history', e); }
+}
+
+/**
+ * Claimed fees read from chain, shown beside the collected-fees table because the
+ * two are different things: that table is this collector's own runs, this block is
+ * every settlement the wallet made, whoever triggered it. They are never added
+ * together, and a zero in one says nothing about the other.
+ */
+let chainFeesD = null;
+async function renderChainFees(){
+  const box = $('#chainfees'), tot = $('#chainfeestotal');
+  if (!box) return;
+  const e = await apiGet('/api/claims/total?wallet=all');
+  if (e.kind !== 'ok') {
+    if (chainFeesD) { box.insertAdjacentHTML('afterbegin', `<p class="chnote err" role="alert">${staleNote(chainFeesD.at, e.msg)}</p>`); return; }
+    box.innerHTML = `<p class="enote">${e.kind === 'missing' ? 'Chain-derived claim history is not available from this server yet.' : e.kind === 'pending' ? 'Reading the claim history…' : esc('Claim history could not be loaded: ' + e.msg)}</p>`;
+    if (tot) tot.textContent = '';
+    if (e.kind === 'error') loadFailed('Claimed fees (chain)', new Error(e.msg));
+    return;
+  }
+  loadOk('Claimed fees (chain)');
+  const d = chainFeesD = e.d;
+  const money = d.usd.historical != null ? usd(d.usd.historical)
+    : d.usd.pricedRecords ? 'priced subtotal ' + usd(d.usd.pricedSubtotal) : '—';
+  if (tot) tot.textContent = d.rows.length ? money : 'no verified settlements';
+  const rows = (d.positions || []).filter(p => p.records || p.state !== 'complete');
+  box.innerHTML =
+    `<p class="enote"><b>${esc(d.stateLabel)}</b> — ${esc(d.label)}. This is read from chain: every fee settlement the wallet made, including ones no collector run produced. `
+    + `The table above counts only this collector's own runs; the two are different sources and are never added together.</p>`
+    + (rows.length ? `<div class="etablewrap"><table class="etable"><thead><tr><th>Position</th><th>Status</th><th class="u">Claims</th><th class="u">Claimed</th><th class="u">USD (at each claim)</th><th>Last settlement</th><th>History</th></tr></thead><tbody>`
+      + rows.map(p => `<tr><td>#${esc(p.tokenId)} ${esc(p.pair || '')}</td><td>${esc(p.status)}</td><td class="u">${p.records}</td>`
+        + `<td class="u">${(p.tokens || []).map(t => `${amount(t.amount)} ${esc(t.symbol)}`).join(' · ') || '—'}</td>`
+        + `<td class="u">${p.usdHistorical != null ? usd(p.usdHistorical) : p.pricedSubtotal ? 'subtotal ' + usd(p.pricedSubtotal) : '—'}</td>`
+        + `<td>${p.lastT ? new Date(p.lastT).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</td>`
+        + `<td>${esc(p.state === 'complete' ? 'complete history' : p.state)}</td></tr>`).join('')
+      + `</tbody></table></div>` : '<p class="enote">No verified settlements in this scope.</p>')
+    + `<p class="enote">${esc(d.coverage.note || '')}</p>`;
 }
 
 /* ---- daily revenue ---- */
@@ -2785,7 +2823,7 @@ function positionCard(p, d, opts) {
 
         <section class="dgroup">
           <h4>Performance</h4>
-          ${dgroupBody([longTermLine(p), o.perf, sparkline(p.spark)], esc(perfEmptyNote(p)))}
+          ${dgroupBody([incomeLine(p), longTermLine(p), o.perf, sparkline(p.spark)], esc(perfEmptyNote(p)))}
         </section>
 
         <section class="dgroup">
@@ -2896,6 +2934,38 @@ function claimedLine(p){
   return `<span class="c" title="${esc(title)}">Claimed <b>${amounts}</b>` +
     `${money ? ` · <b>${esc(money)}</b>${val.short ? ` <span class="muted">${esc(val.short)}</span>` : ''}` : part ? partHtml : ` <span class="muted" title="${esc(c.usdMissing || '')}">· no USD total (a leg is unpriced)</span>`}` +
     `${curHtml} · ${n}×${when ? ' · last ' + esc(when) : ''} · complete history</span>`;
+}
+// What this position has earned, from the chain-derived history: capital in and
+// out at the price of each transaction, claimed fees at the price of each
+// settlement, and the fees still in the pool at today's price. Every figure says
+// which basis it uses; a missing input is named instead of guessed around.
+function incomeLine(p) {
+  const i = p && p.income;
+  if (!i) return '';
+  const parts = [];
+  if (i.feesUsd != null) {
+    const bits = [];
+    if (i.claimedUsd != null) bits.push(`${usd(i.claimedUsd)} claimed, at each settlement's price`);
+    if (i.uncollectedUsd) bits.push(`${usd(i.uncollectedUsd)} still in the pool, at today's price`);
+    parts.push(`<span class="rate">Fees earned <b>${usd(i.feesUsd)}</b>${bits.length ? ' — ' + esc(bits.join(' + ')) : ''}</span>`);
+  }
+  if (i.twaCapitalUsd != null) {
+    // An annualised figure from a few days is arithmetic, not a forecast: it always
+    // carries the window it was extrapolated from.
+    const rate = i.feeRatePct != null
+      ? ` · <b>${esc(ratePct(i.feeRatePct) || '—')}</b> a year <span class="muted">extrapolated from ${esc(i.days >= 1 ? i.days.toFixed(1) + ' days' : (i.days * 24).toFixed(1) + ' h')}</span>`
+      : i.annualNote ? ` · <span class="muted">${esc(i.annualNote)}</span>` : '';
+    parts.push(`<span class="rate" title="Time-weighted capital: the net capital in this position (valued at the prices it went in and out) averaged over its life, ${esc(String(i.days))} days so far. ${esc(i.basis || '')}">`
+      + `On capital <b>${usd(i.twaCapitalUsd)}</b> time-weighted${i.onCapitalPct != null ? ` · <b>${esc(ratePct(i.onCapitalPct) || '—')}</b> of it` : ''}${rate}</span>`);
+  }
+  if (i.depositedUsd != null) {
+    parts.push(`<span class="rate muted" title="Principal only — fees are not counted here. Each movement is valued at the price of its own transaction.">`
+      + `Capital in <b>${usd(i.depositedUsd)}</b>${i.withdrawnUsd ? ` · out <b>${usd(i.withdrawnUsd)}</b>` : ''} over ${esc(String(i.capitalEvents))} movement${i.capitalEvents === 1 ? '' : 's'}</span>`);
+  }
+  if (i.missing && i.missing.length) {
+    parts.push(`<span class="rate muted">Income figures need: ${esc(i.missing.join('; '))}.</span>`);
+  }
+  return parts.join('');
 }
 // Tx hashes in the run log become explorer links.
 const linkify = s => EXPLORER

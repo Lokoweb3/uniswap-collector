@@ -662,6 +662,16 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
   font-size:11.5px;color:var(--muted)}
 .wbar .wshare{font-family:var(--mono);flex:none}
 
+/* The Wallet overview panel read a step smaller than everything around it: the
+   name/value row at 12.5px and the "N open · LP $x · N unpriced" line at 11.5px,
+   against 14px body text. Scoped to #walletpanel so the other sidebar panels and
+   the analytics tables that share .enote / .etotal are untouched. */
+#walletpanel .ehead h2{font-size:15px}
+#walletpanel .etotal{font-size:15px}
+#walletpanel .wbar .wtop{font-size:14.5px}
+#walletpanel .wbar .wmeta{font-size:13px}
+#walletpanel .enote{font-size:13px;line-height:1.6}
+
 /* Collection activity: last run, then real events. */
 .crun{display:flex;gap:var(--s2);align-items:baseline;font-size:12.5px;color:var(--ink);
   padding:var(--s2) 0;border-bottom:1px solid var(--rule-soft)}

@@ -155,12 +155,13 @@ function priceAtTick(tick, decimals0, decimals1) {
 
 const tokenCache = new Map();
 
-async function getToken(address, provider) {
-  const key = address.toLowerCase();
+async function getToken(address, provider, chainId = null) {
+  // Keyed by chain as well as address: the same address is a different token on a
+  // different chain, and one process can hold more than one chain's metadata.
+  const key = `${chainId == null ? "?" : chainId}:${address.toLowerCase()}`;
   if (tokenCache.has(key)) return tokenCache.get(key);
   const c = new ethers.Contract(address, ERC20_ABI, provider);
   let symbol = address.slice(0, 6);
-  let decimals = 18;
   try {
     // A token's symbol is attacker-controlled text that ends up in HTML and
     // in tool output; keep it to plain printable characters and a sane length.
@@ -168,11 +169,28 @@ async function getToken(address, provider) {
     const clean = raw.replace(/[^A-Za-z0-9 ._$+-]/g, "").trim().slice(0, 16);
     symbol = clean || address.slice(0, 6);
   } catch {}
+  // Decimals decide the magnitude of every amount derived from this token, so a
+  // failed read must not masquerade as a successful one. 18 used to be assumed
+  // silently on failure and cached; on Arc, whose USDC answers 6 through the
+  // ERC-20 interface, one swallowed failure wrote an opening basis 10^12 too
+  // small and froze it. `decimalsOk` says whether the number was actually read.
+  let decimals = null, decimalsOk = false, decimalsError = null;
   try {
-    decimals = Number(await c.decimals());
-  } catch {}
-  const info = { address, symbol, decimals };
-  tokenCache.set(key, info);
+    const d = Number(await c.decimals());
+    if (Number.isInteger(d) && d >= 0 && d <= 36) { decimals = d; decimalsOk = true; }
+    else decimalsError = `decimals() returned ${JSON.stringify(d)}`;
+  } catch (e) {
+    decimalsError = (e && (e.shortMessage || e.message)) || "decimals() failed";
+  }
+  // No guessed number at all. A fallback 18 is indistinguishable from a real 18
+  // once it leaves here, and every amount derived from it looks like a valid
+  // figure. `decimals: null` makes the absence explicit, so a consumer either
+  // handles it or fails loudly instead of quietly reporting a wrong scale.
+  // Never cached, so the next refresh retries rather than inheriting the gap.
+  const info = decimalsOk
+    ? { address, symbol, decimals, decimalsOk: true }
+    : { address, symbol, decimals: null, decimalsOk: false, decimalsError };
+  if (decimalsOk) tokenCache.set(key, info);
   return info;
 }
 
@@ -223,6 +241,18 @@ async function loadPosition(ctx, tokenId) {
     getToken(pos.token0, provider),
     getToken(pos.token1, provider),
   ]);
+
+  // Same rule as the v4 loader: amounts scaled by decimals that were never read
+  // are not figures, they are guesses. Report unavailable and keep the id.
+  for (const [side, t] of [["token0", t0], ["token1", t1]]) {
+    if (!t || t.decimalsOk !== true) {
+      const e = new Error(
+        `#${tokenId}: ${side} decimals were not read from the chain` +
+          (t && t.decimalsError ? ` (${t.decimalsError})` : "") + ", so this position cannot be valued"
+      );
+      e.unverified = true; e.shortMessage = e.message; throw e;
+    }
+  }
 
   const poolAddress = await factory.getPool(pos.token0, pos.token1, pos.fee);
   if (poolAddress === ethers.ZeroAddress) throw new Error(`no pool for #${tokenId}`);

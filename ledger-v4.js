@@ -253,7 +253,7 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
     const pk = await poolKeyOf(id);
     let t0 = null, t1 = null;
     if (pk) {
-      const [c0, c1] = await Promise.all([v4.getCurrency(pk.currency0, provider), v4.getCurrency(pk.currency1, provider)]).catch(() => [null, null]);
+      const [c0, c1] = await Promise.all([v4.getCurrency(pk.currency0, provider, cfg), v4.getCurrency(pk.currency1, provider, cfg)]).catch(() => [null, null]);
       if (c0 && c1) { t0 = { address: c0.address, symbol: c0.symbol, decimals: Number(c0.decimals) }; t1 = { address: c1.address, symbol: c1.symbol, decimals: Number(c1.decimals) }; }
     }
     let fee0 = 0n, fee1 = 0n, recipient = null, nativeLeg = null;

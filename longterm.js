@@ -73,6 +73,7 @@ function openRecord(p, walletAddress) {
     // price-log hour of the first deposit). legs.deposited is the same quantity at TODAY's
     // prices — the HODL comparator — and must never be the APR basis (TASK-82): unknown → null.
     depositedUsd: legs ? num(legs.depositedAtOpen) : null,
+    netOnCapitalUsd: num(p.returnOnCapitalUsd),
     depositedTodayUsd: legs ? num(legs.deposited) : null,
     collectedLegUsd: legs ? num(legs.collected) : null,
     uncollectedUsd: num(p.feesUsd) != null ? num(p.feesUsd) : legs ? num(legs.uncollected) : null,
@@ -238,7 +239,10 @@ function measureChain(members, { collectsById, values, now, from, to }) {
     const whole = m.openedAt != null && from <= m.openedAt + HOUR;
     // A closed member's net needs its withdrawal, which the collect rows do not carry (optional
     // closedWithdrawals input); unknown -> the chain's net is unknown, never a partial sum.
-    const mNet = m.open ? (whole ? m.pnlUsd : null) : (m.depositedUsd != null && m.withdrawnUsd != null ? m.withdrawnUsd + w.feesUsd - m.depositedUsd : null);
+    // basisUsd below is the deposit at OPEN prices, so the numerator has to be the
+    // gain measured against that same opening capital — not pnlUsd, which is the
+    // comparison against holding and is priced today on both sides.
+    const mNet = m.open ? (whole ? m.netOnCapitalUsd : null) : (m.depositedUsd != null && m.withdrawnUsd != null ? m.withdrawnUsd + w.feesUsd - m.depositedUsd : null);
     if (mNet == null) netKnown = false; else netSum += mNet;
     if (m.depositedUsd == null) basisKnown = false; else { basisNum += m.depositedUsd * (mTo - mFrom); basisDen += mTo - mFrom; }
     approx = approx || !!m.approx;

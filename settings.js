@@ -72,6 +72,11 @@ function toLegacy(raw) {
     // wrongly. Only carried when the settings actually say so, so the flat object
     // is unchanged for every chain that does not set it.
     ...(chain.rpcBatch === false ? { rpcBatch: false } : {}),
+    // The native asset, distinct from the pricing numeraire. Carried only when
+    // fully specified; anything less leaves it unverified rather than assumed.
+    ...(chain.nativeCurrency && Number.isInteger(chain.nativeCurrency.decimals) && chain.nativeCurrency.symbol
+      ? { nativeCurrency: { symbol: String(chain.nativeCurrency.symbol), decimals: chain.nativeCurrency.decimals } }
+      : {}),
     chainId: chain.chainId,
     // No fallback to a particular chain's explorer: an empty string means this
     // chain has none, and the page renders identifiers as plain text with a copy
@@ -149,7 +154,7 @@ function fromLegacy(c, w = null, chats = {}) {
   const memecoins = (c.memecoins || []).map(strip);
   return {
     _comment: "LP dashboard + collector settings. One file: edit here, restart the dashboard (./start-all.sh). Secrets (TELEGRAM_TOKEN, BLOCKSCOUT_API_KEY, chat provider keys) live in .env only. settings.example.json is the template.",
-    chain: { rpcUrl: c.rpcUrl, ...(Array.isArray(c.rpcUrls) && c.rpcUrls.length ? { rpcUrls: c.rpcUrls } : {}), ...(c.rpcBatch === false ? { rpcBatch: false } : {}), chainId: c.chainId, explorer: c.explorer || "https://robinhoodchain.blockscout.com", ...(c.blockscout !== undefined ? { blockscout: c.blockscout } : {}) },
+    chain: { rpcUrl: c.rpcUrl, ...(Array.isArray(c.rpcUrls) && c.rpcUrls.length ? { rpcUrls: c.rpcUrls } : {}), ...(c.rpcBatch === false ? { rpcBatch: false } : {}), ...(c.nativeCurrency ? { nativeCurrency: c.nativeCurrency } : {}), chainId: c.chainId, explorer: c.explorer || "https://robinhoodchain.blockscout.com", ...(c.blockscout !== undefined ? { blockscout: c.blockscout } : {}) },
     wallets: {
       _comment: "main: the collector's own wallet (positions read, fees swept back to it). watched: extra wallets shown read-only; collect: true makes the collector also collect that wallet's positions (after it approves the operator on the v3/v4 position managers, Wallet page > Approvals) and deliver the swept fees back to that same wallet.",
       main: { address: c.ownerAddress, label: (w && w.owner && w.owner.label) || "Main" },

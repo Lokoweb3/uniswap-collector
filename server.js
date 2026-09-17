@@ -725,8 +725,8 @@ async function positionMeta(tokenId) {
       if (!V4) throw new Error("v4 not configured");
       const { key } = await V4.posm.getPoolAndPositionInfo(BigInt(String(tokenId).slice(3)));
       const [t0, t1] = await Promise.all([
-        v4.getCurrency(key.currency0, provider),
-        v4.getCurrency(key.currency1, provider),
+        v4.getCurrency(key.currency0, provider, cfg),
+        v4.getCurrency(key.currency1, provider, cfg),
       ]);
       metaCache.set(tokenId, { t0, t1, fee: Number(key.fee) });
     } else {

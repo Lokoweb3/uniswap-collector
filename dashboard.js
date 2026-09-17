@@ -599,6 +599,17 @@ function renderCoveragePanel(){
   if (wUn) li('warn', `<b>${wUn}</b> unpriced balance${wUn === 1 ? '' : 's'} across watched wallets — balances, not unique tokens: one token held in two wallets counts twice.`);
   const partial = wl.filter(w => w.holdings && w.holdings.ok === false).length;
   if (partial) li('warn', `${partial} watched wallet${partial === 1 ? '' : 's'} returned a partial holdings list; only position tokens and ETH were checked.`);
+  // A holding whose decimals were never read cannot be scaled, so it is left out
+  // of the wallet total. Saying so on the page is the whole point: a total that
+  // quietly omits a holding is not a total. The API flags it; this shows it.
+  const unscaled = [
+    ...((pf && pf.unscaled) || []),
+    ...wl.flatMap(w => (w.holdings && w.holdings.unscaled) || []),
+  ];
+  if (unscaled.length) {
+    const names = unscaled.map(u => esc(u.symbol || u.address || '?')).slice(0, 4).join(', ');
+    li('warn', `<b>${unscaled.length}</b> holding${unscaled.length === 1 ? '' : 's'} (${names}${unscaled.length > 4 ? ', …' : ''}) could not be scaled because their decimals were not read from the chain, so they are missing from the totals above.`);
+  }
   const trunc = wl.filter(w => w.truncated).length;
   if (trunc) li('warn', `${trunc} watched wallet${trunc === 1 ? '' : 's'} hold more position NFTs than were read; only the newest are shown.`);
   if (d && d.totals && d.totals.pnlApproxCount)

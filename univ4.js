@@ -41,7 +41,27 @@ const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 const CHUNK = 2000; // the smallest getLogs window we will ask any RPC for
 const MAX_SPAN = 5_000_000; // the widest; quartered down to CHUNK when refused
 
-const NATIVE = { address: ethers.ZeroAddress, symbol: "ETH", decimals: 18 };
+// The chain's native currency, from explicit configuration only.
+//
+// It is NOT the pricing numeraire. They coincide on Arc, where both are USDC, and
+// that coincidence is not a rule: on Robinhood the numeraire is WETH while the
+// native asset is ether. Taking one for the other gets the identity wrong and
+// would get the decimals wrong on any chain where they differ.
+//
+// With no `chain.nativeCurrency` configured the native token is unverified, and
+// every accounting path refuses it rather than assuming 18-decimal ether.
+const NATIVE_UNVERIFIED = {
+  address: ethers.ZeroAddress, symbol: "native", decimals: null, decimalsOk: false,
+  decimalsError: "no chain.nativeCurrency is configured, so the native asset's decimals are unknown",
+};
+function nativeToken(cfg) {
+  const n = cfg && cfg.nativeCurrency;
+  if (n && Number.isInteger(n.decimals) && n.decimals >= 0 && n.decimals <= 36 && n.symbol) {
+    return { address: ethers.ZeroAddress, symbol: String(n.symbol), decimals: n.decimals, decimalsOk: true, fromSettings: true };
+  }
+  return NATIVE_UNVERIFIED;
+}
+const NATIVE = NATIVE_UNVERIFIED; // kept for callers that only want the address/shape
 
 /** PositionInfo is packed: poolId (top 25 bytes) | tickUpper | tickLower | hasSubscriber. */
 function unpackInfo(info) {
@@ -61,8 +81,8 @@ function poolIdOf(key) {
   );
 }
 
-async function getCurrency(address, provider) {
-  return address === ethers.ZeroAddress ? NATIVE : u.getToken(address, provider);
+async function getCurrency(address, provider, cfg = null) {
+  return address === ethers.ZeroAddress ? nativeToken(cfg) : u.getToken(address, provider, cfg && cfg.chainId);
 }
 
 /** Build the full picture for one v4 position, in univ3.loadPosition's shape. */
@@ -280,10 +300,27 @@ async function loadPosition(ctx, tokenId) {
   const poolId = poolIdOf(key);
 
   const [t0, t1, slot0] = await Promise.all([
-    getCurrency(key.currency0, provider),
-    getCurrency(key.currency1, provider),
+    getCurrency(key.currency0, provider, cfg),
+    getCurrency(key.currency1, provider, cfg),
     stateView.getSlot0(poolId),
   ]);
+
+  // Every amount below is scaled by these decimals. If either was not read from
+  // the chain there is no honest figure to produce, so the position is reported
+  // unavailable with the reason rather than valued on a guess. The id is kept:
+  // this is a failed read, not a position that stopped existing.
+  for (const [side, t] of [["token0", t0], ["token1", t1]]) {
+    if (!t || t.decimalsOk !== true) {
+      const e = new Error(
+        `#${id}: ${side} decimals were not read from the chain` +
+          (t && t.decimalsError ? ` (${t.decimalsError})` : "") +
+          ", so amounts, fees and values cannot be computed"
+      );
+      e.unverified = true;
+      e.shortMessage = e.message;
+      throw e;
+    }
+  }
 
   const currentTick = Number(slot0.tick);
   const sqrtCurrent = slot0.sqrtPriceX96;
@@ -554,6 +591,7 @@ module.exports = {
   verifyGone,
   nonexistentEvidence,
   NATIVE,
+  nativeToken,
   poolIdOf,
   unpackInfo,
   getCurrency,

@@ -12,6 +12,7 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const basisLedger = require("./position-basis");
 
 // Blockscout base for v4 NFT discovery, from settings rather than one chain
 // baked in. Empty on a chain with no Blockscout: createDiscovery then skips the
@@ -63,14 +64,51 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     }
     if (depositedUsd == null) {
       const key = `${version}-${id}`;
+      // Record raw integer amounts with the decimals, chain and addresses they were
+      // read with. Nothing derived is stored, so a later metadata change is
+      // detectable instead of silently frozen in. If the metadata is not solid,
+      // record nothing and try again next refresh: an absent basis is recoverable,
+      // a wrong one divides into every return figure for the life of the position.
       if (!pnlBasis[key]) {
-        pnlBasis[key] = { t: Date.now(), a0, a1 };
+        const built = basisLedger.buildRecord({
+          chainId: cfg.chainId,
+          token0: p.token0, token1: p.token1,
+          raw0: p.amounts.amount0, raw1: p.amounts.amount1,
+          liquidity: p.liquidity, blockNumber: p.blockNumber,
+        });
+        if (!built.record) {
+          out.pnlUnavailable = `opening basis not recorded yet: ${built.why}`;
+          return out;
+        }
+        pnlBasis[key] = built.record;
         try { fs.writeFileSync(PNL_BASIS_FILE, JSON.stringify(pnlBasis)); } catch {}
       }
+      const read = basisLedger.readRecord(pnlBasis[key], {
+        chainId: cfg.chainId, token0: p.token0, token1: p.token1, liquidity: p.liquidity,
+      });
+      if (!read.ok) {
+        // Never divide by a figure that cannot be true, and never repair it here:
+        // the original record is left exactly as written.
+        out.pnlUnavailable = read.reason;
+        return out;
+      }
       const b = pnlBasis[key];
-      depositedUsd = b.a0 * usd0 + b.a1 * usd1;
-      since = b.t; approx = true; source = "first-seen";
-      depositedAtOpen = atOpen(b.a0, b.a1, b.t);
+      depositedUsd = read.a0 * usd0 + read.a1 * usd1;
+      since = b.t; approx = true; source = read.legacy ? "first-seen (legacy record)" : "first-seen";
+      depositedAtOpen = atOpen(read.a0, read.a1, b.t);
+      // Capital moved after the basis was taken, or we cannot tell. Either way the
+      // opening amounts no longer describe the capital at risk, and this path has no
+      // deposit or withdrawal ledger to reconcile against — `adds` and `withdrawn`
+      // are only populated by the v3 basis source. A percentage measured against a
+      // denominator that no longer matches the capital is not approximate, it is
+      // wrong, so it is withheld rather than badged.
+      if (read.liquidityChanged !== false) {
+        out.pnlLiquidityChanged = read.liquidityChanged;
+        out.pnlUnavailable = read.liquidityChanged === true
+          ? "liquidity changed after the opening basis was recorded, and the deposits and withdrawals behind that change are not recorded, so no denominator matches the capital at risk"
+          : "whether liquidity changed since the opening basis was recorded is unknown, so the capital at risk cannot be established";
+        return out;
+      }
     }
     let collectedUsd = 0, collects = 0;
     for (const e of (getCollectEvents ? getCollectEvents(version === 4 ? `v4-${id}` : id.toString()) : []) || []) {
@@ -79,9 +117,35 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       collects++;
     }
     if (!(depositedUsd > 0)) return out;
-    const pnlUsd = (valueUsd || 0) + (feesUsd || 0) + collectedUsd + withdrawnUsd - depositedUsd;
+    // Two different questions, each answered with one set of prices on both sides.
+    // Mixing them — a holding-comparison numerator over a deployed-capital
+    // denominator — answers neither.
+    //
+    //   versus holding    what the position is worth now against what the same
+    //                     opening tokens would be worth now. Current prices both
+    //                     sides. This is pnlUsd / pnlPct.
+    //   return on capital the same gain against the capital as it was priced when
+    //                     it went in. Opening prices both sides. Null when those
+    //                     prices are not on record.
+    //
+    // Collected fees appear once, in collectedUsd; feesUsd is the uncollected
+    // balance still in the position. They are disjoint, so adding both is not double
+    // counting — but a consumer that reads pnlUsd must not add either again,
+    // because pnlUsd already contains both.
+    const gainVsHolding = (valueUsd || 0) + (feesUsd || 0) + collectedUsd + withdrawnUsd - depositedUsd;
+    const gainOnCapital = depositedAtOpen == null
+      ? null
+      : (valueUsd || 0) + (feesUsd || 0) + collectedUsd + withdrawnUsd - depositedAtOpen;
+    const pnlUsd = gainVsHolding;
     return {
       pnlUsd, pnlPct: (pnlUsd / depositedUsd) * 100, pnlSince: since, pnlApprox: approx, pnlSource: source,
+      pnlBasisKind: "vs-holding: the opening tokens valued at today's prices",
+      returnOnCapitalUsd: gainOnCapital,
+      returnOnCapitalPct: gainOnCapital != null && depositedAtOpen > 0 ? (gainOnCapital / depositedAtOpen) * 100 : null,
+      returnOnCapitalBasisUsd: depositedAtOpen,
+      returnOnCapitalUnavailable: depositedAtOpen == null
+        ? "the opening prices for this position are not on record, so a return on deployed capital cannot be measured"
+        : undefined,
       pnlLegs: { deposited: depositedUsd, depositedAtOpen, adds, withdrawn: withdrawnUsd, collected: collectedUsd, collects, held: valueUsd || 0, uncollected: feesUsd || 0 },
     };
   }
@@ -312,7 +376,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     return {
       ...w, ok: true, positions, closed, errors, known, truncated, earned, collector, discovery,
       holdings: holdings
-        ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, tokens: holdings.rows, tokenCount: holdings.rows.length }
+        ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, unscaled: holdings.unscaled || [], partialTotals: holdings.partialTotals, tokens: holdings.rows, tokenCount: holdings.rows.length }
         : null,
       totals: {
         count: positions.length,

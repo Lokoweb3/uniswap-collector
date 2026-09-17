@@ -325,10 +325,20 @@ function create({ provider, factory, cfg, explorerApi }) {
     const held = await mapLimit([...addrs], CONCURRENCY, async (addr) => {
       const meta = await u.getToken(addr, provider);
       const raw = await new ethers.Contract(addr, ERC20_BAL, provider).balanceOf(address);
+      // A balance cannot be scaled without decimals that were actually read. Show
+      // the holding as unpriced with the reason rather than a number on a guess.
+      if (meta.decimalsOk !== true) {
+        return { addr, meta, amount: null, unavailable: meta.decimalsError || "token decimals were not read from the chain" };
+      }
       const amount = Number(ethers.formatUnits(raw, meta.decimals));
       return amount > 0 ? { addr, meta, amount } : null;
     });
     const priced = await mapLimit(held.filter(Boolean), CONCURRENCY, async (x) => {
+      // Nothing to price when the amount could not be scaled. The row is carried so
+      // the holding stays visible, with no number pretending to be one.
+      if (x.unavailable) {
+        return { symbol: x.meta.symbol, address: x.meta.address, native: false, amount: null, price: null, unavailable: x.unavailable };
+      }
       let price = prices[x.addr], depthUsd = null, via = null;
       if (price == null) ({ price, depthUsd, via = null } = await priceOf(x.addr, wethUsd));
       return { symbol: x.meta.symbol, address: x.meta.address, native: false, amount: x.amount, price, depthUsd, via: via ? (await u.getToken(via, provider)).symbol : null };
@@ -336,13 +346,16 @@ function create({ provider, factory, cfg, explorerApi }) {
     rows.push(...priced.filter(Boolean));
     save(); // pool choices made above
     for (const r of rows) {
-      r.usd = r.price == null ? null : r.amount * r.price;
+      r.usd = r.price == null || r.amount == null ? null : r.amount * r.price;
       r.thin = r.depthUsd != null && r.usd != null && r.usd > r.depthUsd;
     }
     rows.sort((a, b) => (b.usd || 0) - (a.usd || 0));
     return {
       ok: discoveryOk,
       walletUsd: rows.reduce((s, r) => s + (r.usd || 0), 0),
+      // A total that silently omits a holding it could not scale is not a total.
+      partialTotals: rows.some((r) => r.unavailable) || undefined,
+      unscaled: rows.filter((r) => r.unavailable).map((r) => ({ symbol: r.symbol, address: r.address, reason: r.unavailable })),
       unpricedCount: rows.filter((r) => r.usd == null).length,
       rows,
     };

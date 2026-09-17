@@ -96,11 +96,37 @@ tx(4500, [mlog(POOL_A, 5555, 0n), xfer(USDC, PM, STRANGER, 9_000000n)]);
 const POOL_X = "0x" + "c3".repeat(32);
 tx(3500, [nft(8888), mlog(POOL_X, 8888, L)]);
 tx(4700, [mlog(POOL_X, 8888, 0n), xfer(USDC, PM, OWNER, 2_000000n), xfer(ARGUS, PM, OWNER, 10n * 10n ** 18n)]);
+// #6250: opened, collected, fully withdrawn: closed (liquidity zero, still ours)
+tx(3600, [nft(6250), mlog(POOL_A, 6250, L), xfer(USDC, OWNER, PM, need(P_TX, L).amount0), xfer(ARGUS, OWNER, PM, need(P_TX, L).amount1)]);
+tx(3700, [mlog(POOL_A, 6250, 0n), xfer(USDC, PM, OWNER, 3_000000n), xfer(ARGUS, PM, OWNER, 20n * 10n ** 18n)]);
+tx(3800, [mlog(POOL_A, 6250, -L), xfer(USDC, PM, OWNER, pays(P_TX, L).amount0 + 1_000000n), xfer(ARGUS, PM, OWNER, pays(P_TX, L).amount1)]);
+// #4444: withdrawn with a fee, then burned
+tx(3650, [nft(4444), mlog(POOL_A, 4444, L), xfer(USDC, OWNER, PM, need(P_TX, L).amount0), xfer(ARGUS, OWNER, PM, need(P_TX, L).amount1)]);
+tx(3750, [mlog(POOL_A, 4444, -L), xfer(USDC, PM, OWNER, pays(P_TX, L).amount0 + 400000n), xfer(ARGUS, PM, OWNER, pays(P_TX, L).amount1)]);
+tx(3760, [{ address: POSM, topics: [TRANSFER, pad(OWNER), pad(ZERO), pad(ethers.toBeHex(4444n))], data: "0x" }]);
+// #3333: ours for a while, then sent to NEW_OWNER, who collects afterwards
+const NEW_OWNER = "0x7777777777777777777777777777777777777777";
+tx(3620, [nft(3333), mlog(POOL_A, 3333, L), xfer(USDC, OWNER, PM, need(P_TX, L).amount0), xfer(ARGUS, OWNER, PM, need(P_TX, L).amount1)]);
+tx(3630, [mlog(POOL_A, 3333, 0n), xfer(USDC, PM, OWNER, 600000n)]);
+tx(3640, [{ address: POSM, topics: [TRANSFER, pad(OWNER), pad(NEW_OWNER), pad(ethers.toBeHex(3333n))], data: "0x" }]);
+tx(3660, [mlog(POOL_A, 3333, 0n), xfer(USDC, PM, NEW_OWNER, 9_900000n)]);
 // #7777: opened long before the lookback floor
 tx(1000, [nft(7777), mlog(POOL_A, 7777, L)]);
 tx(4600, [mlog(POOL_A, 7777, 0n), xfer(USDC, PM, OWNER, 1_000000n)]);
 
 const SLOT0 = ethers.id("getSlot0(bytes32)").slice(0, 10);
+const OWNER_OF = ethers.id("ownerOf(uint256)").slice(0, 10);
+const posmIface = new ethers.Interface(require("../univ4").POSM_ABI);
+const NEXT_ID = ethers.id("nextTokenId()").slice(0, 10);
+const POOL_OF = { 8240: POOL_A, 5555: POOL_A, 7777: POOL_A, 6250: POOL_A, 4444: POOL_A, 3333: POOL_A, 8888: POOL_X, 11989: POOL_E };
+const KEY_OF = (id) => POOL_OF[id] === POOL_E ? [USDC, EURC, 500, 10, ZERO] : [USDC, ARGUS, 3000, 60, ZERO];
+const INFO = (BigInt(HI & 0xffffff) << 32n) | (BigInt(LO & 0xffffff) << 8n);
+const NOT_MINTED = "0x08c379a0" + coder.encode(["string"], ["NOT_MINTED"]).slice(2);
+const burnedAt = (id, at) => logs.some((x) => x.address === POSM && x.topics.length === 4 && BigInt(x.topics[3]).toString() === id && x.topics[2] === pad(ZERO) && x.blockNumber <= at);
+const liqAt = (id, at) => logs.filter((x) => x.address === PM && x.topics[0] === ML && x.blockNumber <= at)
+  .map((x) => coder.decode(["int24", "int24", "int256", "bytes32"], x.data)).filter((d) => BigInt(d[3]).toString() === id)
+  .reduce((a, d) => a + d[2], 0n);
+class Revert extends Error { constructor(data) { super("execution reverted: NOT_MINTED"); this.data = data; } }
 const iface = new ethers.Interface(["function symbol() view returns (string)", "function decimals() view returns (uint8)", "function name() view returns (string)"]);
 const rpcLog = (l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: hex(l.blockNumber),
   transactionHash: l.transactionHash, transactionIndex: "0x0", blockHash: ethers.id(`block-${l.blockNumber}`), logIndex: hex(l.index), removed: false });
@@ -116,6 +142,33 @@ function call({ to, data }, tag) {
     const hit = slot0.filter((s) => s.pool === pool && s.fromBlock <= at).pop();
     if (!hit) throw new Error("execution reverted");
     return coder.encode(["uint160", "int24", "uint24", "uint24"], [hit.sqrt, 0, 0, 0]);
+  }
+  if (addr === POSM && data.startsWith(NEXT_ID)) {
+    // ids are issued in sequence on a real manager; here: one past the largest minted by `tag`
+    const at = blockNum(tag);
+    const ids = logs.filter((x) => x.address === POSM && x.topics.length === 4 && x.topics[1] === pad(ZERO) && x.blockNumber <= at).map((x) => BigInt(x.topics[3]));
+    return coder.encode(["uint256"], [ids.reduce((m, v) => (v > m ? v : m), 0n) + 1n]);
+  }
+  if (addr === POSM && !data.startsWith(OWNER_OF)) {
+    const f = posmIface.parseTransaction({ data });
+    const id = f.args[0].toString(), at = blockNum(tag);
+    if (f.name === "getPoolAndPositionInfo") {
+      if (burnedAt(id, at) || !POOL_OF[id]) return posmIface.encodeFunctionResult(f.name, [[ZERO, ZERO, 0, 0, ZERO], 0n]);
+      return posmIface.encodeFunctionResult(f.name, [KEY_OF(id), INFO]);
+    }
+    if (f.name === "getPositionLiquidity") return posmIface.encodeFunctionResult(f.name, [liqAt(id, at)]);
+    throw new Error("execution reverted");
+  }
+  if (addr === POSM && data.startsWith(OWNER_OF)) {
+    const id = BigInt("0x" + data.slice(10)).toString();
+    const at = blockNum(tag);
+    if (burnedAt(id, at)) throw new Revert(NOT_MINTED);
+    // the owner at `at`: replay the NFT transfers up to that block
+    let who = null;
+    for (const l of logs.filter((x) => x.address === POSM && x.topics[0] === TRANSFER && x.topics.length === 4 && BigInt(x.topics[3]).toString() === id && x.blockNumber <= at)
+      .sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index)) who = "0x" + l.topics[2].slice(26);
+    if (!who || who === ZERO) throw new Error("execution reverted");
+    return coder.encode(["address"], [who]);
   }
   const t = TOKENS[addr];
   if (t) {
@@ -148,7 +201,7 @@ function answer(m, p) {
     }
     case "eth_call": return call(p[0], p[1]);
     case "eth_getBalance": return "0x0";
-    case "eth_getCode": return "0x";
+    case "eth_getCode": return String(p[0]).toLowerCase() === POSM && blockNum(p[1]) >= 100 ? "0x6001" : "0x";
     case "eth_gasPrice": return "0x1";
     default: throw new Error(`method ${m} not supported by the fake chain`);
   }
@@ -158,7 +211,7 @@ const rpc = http.createServer((req, res) => {
   req.on("data", (c) => (body += c));
   req.on("end", () => {
     const one = (r) => { try { return { jsonrpc: "2.0", id: r.id, result: answer(r.method, r.params || []) }; }
-      catch (e) { return { jsonrpc: "2.0", id: r.id, error: { code: 3, message: e.message, data: "0x" } }; } };
+      catch (e) { return { jsonrpc: "2.0", id: r.id, error: { code: 3, message: e.message, data: e.data || "0x" } }; } };
     const q = JSON.parse(body || "null");
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(Array.isArray(q) ? q.map(one) : one(q)));
@@ -188,7 +241,7 @@ function writeSettings(rpcPort) {
 }
 function startServer() {
   const env = { ...process.env, TELEGRAM_TOKEN: "", TELEGRAM_CHAT_ID: "", LP_BLOCKSCOUT_KEY: "", LP_READONLY: "1",
-    LP_CLAIM_SCAN_DELAY_MS: "0", LP_CLAIM_PAUSE_MS: "5", LP_CLAIM_CHUNK: "500", LP_CLAIM_LOOKBACK_DAYS: "0.02" };
+    LP_CLAIM_SCAN_DELAY_MS: "0", LP_REGISTRY_DELAY_MS: "0", LP_CLAIM_PAUSE_MS: "5", LP_CLAIM_CHUNK: "500", LP_CLAIM_LOOKBACK_DAYS: "0.02" };
   const log = fs.openSync(path.join(DIR, "server.log"), "a");
   return spawn(process.execPath, ["server.js", `--data-dir=${DIR}`, `--port=${PORT}`, "--no-loops", "--no-services", "--claim-scan"],
     { cwd: ROOT, env, stdio: ["ignore", log, log] });
@@ -310,6 +363,91 @@ async function main() {
     assert.deepStrictEqual(noPool.summary.priceSources, { block: 0, pricelog: 0, today: 0, none: 1 });
     assert.match(fs.readFileSync(path.join(DIR, "server.log"), "utf8"), /price-log row for .* rejected/);
 
+    // ---- position history: every position the wallet held, with its status ----
+    let hist = null;
+    for (let i = 0; i < 240 && !hist; i++) {
+      const r = await fetch(`http://127.0.0.1:${PORT}/api/positions/history?wallet=${OWNER}`);
+      const d = await r.json();
+      if (r.status === 200 && d.ok && d.positions.length >= 8 && d.positions.every((p) => p.claimed && p.claimed.state !== "not-scanned")) hist = d;
+      else await sleep(500);
+    }
+    assert.ok(hist, "the position history loads");
+    const byId = Object.fromEntries(hist.positions.map((p) => [p.tokenId, p]));
+    assert.deepStrictEqual(hist.counts, { open: 5, closed: 1, burned: 1, transferred: 1, unavailable: 0, all: 8 }, JSON.stringify(hist.counts));
+    assert.strictEqual(byId[6250].status, "closed");
+    assert.deepStrictEqual([byId[6250].closedAt.block, byId[6250].closedAt.verified, byId[6250].closedAt.t], [3800, true, (T0 + 3800) * 1000]);
+    assert.strictEqual(byId[6250].unsettledFees.state, "none");
+    assert.strictEqual(byId[6250].claimed.state, "complete");
+    assert.strictEqual(byId[6250].claimed.raw0, "4000000", "collect + the withdrawal's excess; the withdrawn principal is not a fee");
+    assert.strictEqual(byId[4444].status, "burned");
+    assert.strictEqual(byId[4444].burnedAt.block, 3760);
+    assert.strictEqual(byId[4444].closedAt.block, 3750);
+    assert.strictEqual(byId[4444].claimed.raw0, "400000");
+    assert.strictEqual(byId[3333].status, "transferred", "a transferred position is not called closed");
+    assert.strictEqual(byId[3333].transferredAt.to, NEW_OWNER);
+    assert.strictEqual(byId[3333].currentOwner, NEW_OWNER);
+    assert.strictEqual(byId[3333].claimed.raw0, "600000", "the new owner's later collect is not this wallet's");
+    assert.strictEqual(byId[3333].claimed.count, 1);
+    assert.strictEqual(byId[8240].status, "open");
+    assert.strictEqual(byId[8240].pair, "USDC / ARGUS");
+    assert.ok(byId[8240].key.startsWith(`${CHAIN_ID}:${POSM}:8240:`));
+    assert.strictEqual(hist.wallets[0].discovery.complete, true, "discovery reached the manager's deployment");
+
+    // ---- total claimed fees ------------------------------------------------------
+    const total = await get(`/api/claims/total?wallet=${OWNER}`);
+    assert.strictEqual(total.ok, true, JSON.stringify(total).slice(0, 300));
+    assert.strictEqual(total.label, "Total claimed fees · Main · Open + closed");
+    assert.strictEqual(total.state, "partial", "an undecodable and a lookback-limited position keep the total partial");
+    assert.strictEqual(total.stateLabel, "Verified claimed so far — partial history");
+    assert.strictEqual(total.verifiedZero, false);
+    const usdcTotal = total.tokens.find((t) => t.address === USDC);
+    // 8240 (7,000,700) + 7777 (1,000,000) + 8888 (2,000,000) + 6250 (4,000,000) + 4444 (400,000) + 3333 (600,000)
+    assert.strictEqual(usdcTotal.raw, String(7_000700 + 1_000000 + 2_000000 + 4_000000 + 400000 + 600000), JSON.stringify(total.tokens));
+    const argusTotal = total.tokens.find((t) => t.address === ARGUS);
+    assert.strictEqual(argusTotal.raw, (105n * 10n ** 18n + 10n * 10n ** 18n + 20n * 10n ** 18n).toString());
+    assert.ok(total.coverage.unsupported.some((x) => x.tokenId === "5555" && x.state === "undecodable"), "the undecodable position is listed and excluded");
+    assert.ok(total.coverage.partial.some((x) => x.tokenId === "7777" && x.state === "lookback-reached"));
+    assert.ok(!total.rows.some((r) => r.tokenId === "5555"), "and none of its rows are counted");
+    // the aggregate reconciles to its positions and its rows
+    const sumRows = (addr) => total.rows.reduce((a, r) => a + BigInt(r.tokens.find((t) => t.address === addr).raw), 0n).toString();
+    assert.strictEqual(sumRows(USDC), usdcTotal.raw);
+    const sumPos = total.positions.filter((p) => p.included).reduce((a, p) => a + BigInt((p.tokens.find((t) => t.address === USDC) || { raw: "0" }).raw), 0n).toString();
+    assert.strictEqual(sumPos, usdcTotal.raw);
+    const subs = total.subtotals;
+    assert.strictEqual(BigInt(subs.open.tokens.find((t) => t.address === USDC).raw) + BigInt(subs.closed.tokens.find((t) => t.address === USDC).raw)
+      + BigInt(subs.other.tokens.find((t) => t.address === USDC).raw), BigInt(usdcTotal.raw));
+    assert.strictEqual(subs.closed.tokens.find((t) => t.address === USDC).raw, "4000000");
+    assert.strictEqual(subs.other.tokens.find((t) => t.address === USDC).raw, "1000000", "burned 400,000 + transferred 600,000");
+    // #8888 has no historical price: a priced subtotal, never a full historical total
+    assert.strictEqual(total.usd.historical, null);
+    assert.strictEqual(total.usd.unpricedRecords, 1);
+    assert.ok(total.usd.excluded.some((x) => x.tokenId === "8888"));
+    const pricedRows = total.rows.filter((r) => r.usd != null).reduce((a, r) => a + r.usd, 0);
+    assert.ok(Math.abs(pricedRows - total.usd.pricedSubtotal) < 1e-6, "the priced subtotal is the sum of the priced rows");
+    assert.ok(total.rows.every((r) => r.recipient === OWNER), "every counted settlement was paid to this wallet");
+    assert.deepStrictEqual([...new Set(total.rows.map((r) => r.kind))].sort(), ["collect", "increase", "withdrawal"]);
+
+    // closed only: one complete position, fully priced
+    const closedOnly = await get(`/api/claims/total?wallet=${OWNER}&status=closed`);
+    assert.strictEqual(closedOnly.state, "complete");
+    assert.strictEqual(closedOnly.stateLabel, "Verified claimed — complete history");
+    assert.strictEqual(closedOnly.label, "Total claimed fees · Main · Closed");
+    assert.strictEqual(closedOnly.tokens.find((t) => t.address === USDC).raw, "4000000");
+    assert.ok(closedOnly.usd.historical > 0);
+    assert.strictEqual(closedOnly.positions.length, 1);
+    // a date range narrows the settlements, not the coverage
+    const dated = await get(`/api/claims/total?wallet=${OWNER}&status=closed&from=${(T0 + 3750) * 1000}`);
+    assert.strictEqual(dated.tokens.find((t) => t.address === USDC).raw, "1000000", "only the withdrawal's fee is after the start");
+    assert.strictEqual(dated.rows.length, 1);
+    // bad input is refused
+    assert.strictEqual((await get(`/api/claims/total?wallet=0x0000000000000000000000000000000000000001`)).ok, false);
+    assert.strictEqual((await get(`/api/claims/total?status=bogus`)).ok, false);
+    // the per-position panel reads the wallet's own rows
+    const t3333 = await get(`/api/claims?tokenId=3333&chainId=${CHAIN_ID}&manager=${POSM}&wallet=${OWNER}`);
+    assert.strictEqual(t3333.rows.length, 1);
+    assert.strictEqual(t3333.rows[0].recipient, OWNER);
+    assert.strictEqual(t3333.state, "complete");
+
     // the card, from the same answers
     const card = cardFns();
     const tile = (d, id) => card.claimedMetric({ nftId: String(id), claimed: { ...d.summary, scope: d.scope } }, `u${id}`);
@@ -335,6 +473,9 @@ async function main() {
     assert.strictEqual(z2.verifiedZero, true);
     assert.strictEqual(bad2.state, "undecodable");
     assert.strictEqual(old2.state, "lookback-reached");
+    const total2 = await get(`/api/claims/total?wallet=${OWNER}`);
+    assert.deepStrictEqual(total2.tokens, total.tokens, "a restart does not change the aggregate");
+    assert.strictEqual(total2.rows.length, total.rows.length);
     console.log("claims pipeline: scanner -> store -> /api/claims -> card: complete, verified zero, undecodable and lookback-limited histories stay distinct; a restart counts nothing twice");
   } finally {
     await stop(server).catch(() => {});

@@ -28,8 +28,9 @@ function liftConst(name) {
   return out.join("\n") + "\n";
 }
 // The claim-state helpers every claimed-fee view reads.
-const claimHelpers = () => ["CLAIM_STATES", "cDate", "cTime", "CLAIM_MIXED_NOTE", "endStop"].map(liftConst).join("") +
-  ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimWhy", "claimRowValue"].map(lift).join("");
+const claimHelpers = () => ["CLAIM_STATES", "cDate", "cTime", "CLAIM_MIXED_NOTE", "endStop", "COPY_ICON"].map(liftConst).join("") +
+  ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimSubtotal", "claimCurrent", "claimWhy", "claimRowValue",
+   "chainRef", "txRef"].map(lift).join("");
 
 // A tiny harness: the lifted functions share one scope with stubbed page state.
 function page() {
@@ -39,6 +40,7 @@ function page() {
     ${escLine}
     const usd = (n) => '$' + Number(n || 0).toFixed(2);
     const linkify = (s) => esc(s);
+    let EXPLORER = null;
     let lastWatchForPf = null, lastPortfolio = null;
     const fetchedAt = new WeakMap();
     ${claimHelpers()}

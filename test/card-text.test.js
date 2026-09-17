@@ -30,10 +30,11 @@ function liftConst(name) {
   return out.join("\n") + "\n";
 }
 
-const consts = ["esc", "usd", "usdK", "CLAIM_STATES", "cDate", "cTime", "CLAIM_MIXED_NOTE", "endStop",
+const consts = ["esc", "usd", "usdK", "COPY_ICON", "CLAIM_STATES", "cDate", "cTime", "CLAIM_MIXED_NOTE", "endStop",
   "POOL_RATE_LABEL", "approxRate", "ACTIVE_LIQ_TIP", "DIRECT_RATE_TIP", "SCANNER_RATE_TIP", "LT_NEEDS",
   "PRICING_FALLBACK", "fetchedAt", "clock", "ltPctText", "ltDate"];
-const fns = ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimWhy", "claimRowValue",
+const fns = ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimSubtotal", "claimCurrent", "claimWhy", "claimRowValue",
+  "chainRef", "txRef",
   "claimKindLabel", "claimPriceLabel", "claimPanelHtml", "claimedMetric", "coverageText", "claimedLine",
   "ratePct", "poolRateText", "poolLine", "rangeStatus", "ltNeeds", "perfEmptyNote", "ltBasisText", "longTermLine",
   "notePricing", "pricingText", "freshText", "feeMetric", "renderWalletPanel"];
@@ -50,7 +51,7 @@ function page() {
   const document = { getElementById: (id) => els[id] || null };
   const state = { main: null, pf: null, watch: null };
   const body = `
-    let PRICING = null;
+    let PRICING = null, EXPLORER = null;
     const linkify = (s) => esc(s);
     ${consts.map(liftConst).join("")}
     ${fns.map(lift).join("")}

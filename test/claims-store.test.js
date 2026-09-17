@@ -41,13 +41,20 @@ function fakeProvider(world, head = 1000, secPerBlock = 1) {
   const receiptCalls = [];
   const match = (l, address, topics) =>
     (!address || l.address.toLowerCase() === address.toLowerCase()) &&
-    (topics || []).every((t, i) => t == null || (l.topics[i] || "").toLowerCase() === t.toLowerCase());
+    (topics || []).every((t, i) => t == null || [].concat(t).map((x) => x.toLowerCase()).includes((l.topics[i] || "").toLowerCase()));
+  const ownerIface = new ethers.Interface(["function ownerOf(uint256) view returns (address)"]);
   return {
     receiptCalls,
     async getBlockNumber() { return head; },
     async getBlock(n) { return { timestamp: Math.floor(1789000000 + n * secPerBlock) }; },
     async getLogs({ address, topics, fromBlock, toBlock }) {
       return world.logs.filter((l) => l.blockNumber >= fromBlock && l.blockNumber <= toBlock && match(l, address, topics));
+    },
+    // ownerOf(id): world.owners[id] if set, else the test owner; a burned id reverts.
+    async call(tx) {
+      const [id] = ownerIface.decodeFunctionData("ownerOf", tx.data);
+      if ((world.burned || []).includes(id.toString())) throw new Error("execution reverted: NOT_MINTED");
+      return ownerIface.encodeFunctionResult("ownerOf", [(world.owners || {})[id.toString()] || OWNER]);
     },
     async getTransactionReceipt(h) {
       receiptCalls.push(h);
@@ -259,16 +266,29 @@ async function main() {
     const [r1, r2] = s.rows("8240");
     assert.ok(r1.sqrtP, "the pool price at the record's block is kept for valuation");
     const today = { ...SUM, usd0: 1, usd1: 3 };
-    assert.strictEqual(s.summary("8240", today).usdBasis, "today");
-    assert.strictEqual(s.summary("8240", today).usd, 8);
+    // No verified price of their moment: token amounts stay, historical USD is absent,
+    // and today's valuation is a separate, labelled figure — never folded in.
+    const bare = s.summary("8240", today);
+    assert.strictEqual(bare.usdBasis, "none");
+    assert.strictEqual(bare.usd, null, "no historical total without historical prices");
+    assert.strictEqual(bare.usdPricedSubtotal, 0);
+    assert.strictEqual(bare.unpricedRecords, 2);
+    assert.strictEqual(bare.raw0, "2000000", "the verified token amounts are kept");
+    assert.deepStrictEqual(bare.usdCurrent, { usd: 8, note: bare.usdCurrent.note });
+    assert.match(bare.usdCurrent.note, /today's prices/);
     s.setPrice(r1.key, { p0: 1, p1: 10, src: "block" });
-    const mixed = s.summary("8240", today);
-    assert.strictEqual(mixed.usdBasis, "mixed");
-    assert.strictEqual(mixed.usd, 15, "one at its own price (11) plus one at today's (4)");
+    const part = s.summary("8240", today);
+    assert.strictEqual(part.usdBasis, "partial");
+    assert.strictEqual(part.usd, null, "a partly priced history has no historical total");
+    assert.strictEqual(part.usdPricedSubtotal, 11, "only the priced claim is in the subtotal");
+    assert.strictEqual(part.pricedRecords, 1);
+    assert.strictEqual(part.usdCurrent.usd, 8, "today's figure is unchanged by historical pricing");
+    assert.match(part.usdMissing, /1 of 2 claims/);
     s.setPrice(r2.key, { p0: 1, p1: 20, src: "pricelog" });
     const locked = s.summary("8240", { ...SUM, usd0: null, usd1: null });
     assert.strictEqual(locked.usdBasis, "at-claim", "every record at its own price needs no price today");
     assert.strictEqual(locked.usd, 32);
+    assert.strictEqual(locked.usdCurrent, null, "no current prices, no current figure");
     const none = cs.create(ARGS(fakeProvider(world), path.join(d, "b.json")));
     await none.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 800 });
     const unpriced = none.summary("8240", { ...SUM, usd0: 1, usd1: null });
@@ -278,6 +298,7 @@ async function main() {
     s.state.tokens["8240"] = { from: 1001, to: 1000, mint: null };
     await s.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 800 });
     assert.strictEqual(s.summary("8240", today).usdBasis, "at-claim");
+    assert.strictEqual(s.summary("8240", today).usd, 32);
     fs.rmSync(d, { recursive: true, force: true });
   }
 
@@ -532,7 +553,9 @@ async function main() {
     const earned = await st({ logs: [mintLog(900, "8240"), modLog(950, 1, 0n, "8240", "0xaa")], transfers: { "0xaa": [xfer(USDC, 3n)] } }, { budget: 20, floor: 0 });
     assert.strictEqual(earned.state, "complete");
     assert.strictEqual(earned.verifiedZero, false);
-    assert.deepStrictEqual(earned.priceSources, { block: 0, pricelog: 0, today: 1, none: 0 }, "valued at today's price, and counted as such");
+    assert.deepStrictEqual(earned.priceSources, { block: 0, pricelog: 0, today: 0, none: 1 }, "an unpriced claim is counted as unpriced, never as today's price");
+    assert.strictEqual(earned.usd, null);
+    assert.strictEqual(earned.usdCurrent.usd, 0.000003);
     fs.rmSync(d, { recursive: true, force: true });
   }
 
@@ -568,7 +591,93 @@ async function main() {
     const d = tmp(), f = path.join(d, "claims.json");
     const s = cs.create(ARGS(fakeProvider({ logs: [mintLog(900, "8240"), modLog(950, 1, 0n, "8240", "0xaa")], transfers: { "0xaa": [xfer(USDC, 36149n)] } }), f));
     await s.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 });
+    s.setPrice(s.rows("8240")[0].key, { p0: 1, p1: 0, src: "block" });
     assert.strictEqual(s.summary("8240", SUM).usd, 0.036149);
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- 14. settlements belong to the owner at the time -------------------------
+  {
+    const NEW = "0x7777777777777777777777777777777777777777";
+    const nftMove = (block, from, to, tx) => ({ address: POSM_A, blockNumber: block, index: 0, transactionHash: tx,
+      topics: [cs.TRANSFER, pad(from), pad(to), pad(ethers.toBeHex(8240n))], data: "0x" });
+    const toNew = { address: USDC, topics: [cs.TRANSFER, pad(PM), pad(NEW)], data: ethers.zeroPadValue("0x05", 32) };
+    const world = {
+      logs: [mintLog(100, "8240"), modLog(200, 1, 0n, "8240", "0xa1"), nftMove(300, OWNER, NEW, "0xmv"), modLog(400, 1, 0n, "8240", "0xa2")],
+      transfers: { "0xa1": [xfer(USDC, 7n)], "0xa2": [toNew] },
+      owners: { 8240: NEW },
+    };
+    const d = tmp(), f = path.join(d, "claims.json");
+    const st = cs.create(ARGS(fakeProvider(world), f));
+    await st.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 });
+    const before = st.summary("8240", { ...SUM, wallet: OWNER });
+    assert.strictEqual(before.state, "complete", "the first owner's history runs from the mint");
+    assert.strictEqual(before.count, 1, "only the settlement made while it owned the position");
+    assert.strictEqual(before.raw0, "7");
+    const after = st.summary("8240", { ...SUM, wallet: NEW });
+    assert.strictEqual(after.state, "complete", `the new owner's history runs from its transfer in: ${after.reason}`);
+    assert.strictEqual(after.count, 1);
+    assert.strictEqual(after.raw0, "5", "the new owner's collect is decoded against the new owner, not flagged as a stranger");
+    assert.strictEqual(after.coverage.openedBlock, 300);
+    assert.deepStrictEqual(st.rows("8240", OWNER).map((r) => r.owner), [OWNER]);
+    const own = st.ownership("8240");
+    assert.strictEqual(own.mint.block, 100);
+    assert.deepStrictEqual(own.transfers.map((x) => [x.block, x.to]), [[100, OWNER], [300, NEW]]);
+    assert.strictEqual(own.burn, null);
+    // the default wallet is the one the position is tracked for
+    st.remember("8240", META["8240"]);
+    assert.strictEqual(st.summary("8240", SUM).raw0, "7");
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- 15. closure: verified from the mint, unverified without it, burn recorded --
+  {
+    const L = 1000n;
+    const sq = u.getSqrtRatioAtTick(0);
+    const need = cs.amountsFor(sq, -887200, 887200, L, true), pays = cs.amountsFor(sq, -887200, 887200, L, false);
+    const burnLog = { address: POSM_A, blockNumber: 310, index: 0, transactionHash: "0xburn",
+      topics: [cs.TRANSFER, pad(OWNER), pad(cs.ZERO), pad(ethers.toBeHex(8240n))], data: "0x" };
+    const world = {
+      logs: [{ ...mintLog(100, "8240"), transactionHash: "0xmint" }, modLog(100, 1, L, "8240", "0xmint"),
+             modLog(300, 1, -L, "8240", "0xout"), burnLog],
+      transfers: { "0xmint": [xfer(USDC, 0n)].slice(1).concat([{ address: USDC, topics: [cs.TRANSFER, pad(OWNER), pad(PM)], data: ethers.zeroPadValue(ethers.toBeHex(need.amount0), 32) }]),
+                   "0xout": [xfer(USDC, pays.amount0 + 9n), xfer(ARGUS, pays.amount1)] },
+      burned: ["8240"],
+    };
+    const d = tmp(), f = path.join(d, "claims.json");
+    const st = cs.create(ARGS(fakeProvider(world), f));
+    await st.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 });
+    const lh = st.liquidityHistory("8240");
+    assert.strictEqual(lh.complete, true);
+    assert.strictEqual(lh.liquidity, "0");
+    assert.deepStrictEqual(lh.closedAt, { block: 300, index: 1, tx: "0xout", verified: true });
+    assert.strictEqual(st.ownership("8240").burn.block, 310, "the burn is recorded; a burned token needs no ownerOf");
+    const sum = st.summary("8240", SUM);
+    assert.strictEqual(sum.state, "complete");
+    assert.strictEqual(sum.raw0, "9", "only the fee part of the withdrawal, never the principal");
+    assert.strictEqual(sum.withdrawals, 1);
+    fs.rmSync(d, { recursive: true, force: true });
+
+    // same history, but the scan stops above the mint: closure is only a candidate
+    const d2 = tmp();
+    const st2 = cs.create(ARGS(fakeProvider(world), path.join(d2, "c.json")));
+    await st2.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 200 });
+    const lh2 = st2.liquidityHistory("8240");
+    assert.strictEqual(lh2.complete, false);
+    assert.strictEqual(lh2.liquidity, null, "no running total without the mint");
+    assert.strictEqual(lh2.closedAt.verified, false);
+    fs.rmSync(d2, { recursive: true, force: true });
+  }
+
+  // ---- 16. an owner that cannot be read fails the chunk; nothing is guessed ------
+  {
+    const world = { logs: [mintLog(100, "8240"), modLog(200, 1, 0n, "8240", "0xa1")], transfers: { "0xa1": [xfer(USDC, 7n)] } };
+    const p = fakeProvider(world);
+    p.call = async () => { throw new Error("timeout"); };
+    const d = tmp(), f = path.join(d, "claims.json");
+    const st = cs.create(ARGS(p, f));
+    await assert.rejects(st.scan((id) => META[id], { ...IDS, chunk: 500, budget: 5, floor: 0 }), /ownerOf\(#8240\).*retried/);
+    assert.strictEqual(st.rows("8240").length, 0, "no record is attributed to an assumed owner");
     fs.rmSync(d, { recursive: true, force: true });
   }
 

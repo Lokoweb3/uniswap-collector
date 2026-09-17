@@ -433,7 +433,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     return inFlight;
   }
 
-  return { refresh, readWallets, ownerLabel, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
+  // discoveryFor: the position registry reads the same per-wallet discovery (ids and tombstones).
+  return { refresh, readWallets, ownerLabel, discoveryFor, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
 }
 
 /**

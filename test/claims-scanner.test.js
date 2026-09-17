@@ -40,7 +40,11 @@ function fakeProvider(world, head) {
       p.getLogsCalls++;
       if (p.fail) throw new Error("429 too many requests");
       return world.logs.filter((l) => l.blockNumber >= fromBlock && l.blockNumber <= toBlock &&
-        l.address === address && topics.every((t, i) => t == null || l.topics[i] === t));
+        l.address === address && topics.every((t, i) => t == null || [].concat(t).includes(l.topics[i])));
+    },
+    async call(tx) {
+      const i = new ethers.Interface(["function ownerOf(uint256) view returns (address)"]);
+      return i.encodeFunctionResult("ownerOf", [OWNER]);
     },
     async getTransactionReceipt(h) {
       return { hash: h, logs: world.logs.filter((l) => l.transactionHash === h).concat(world.transfers[h] || []) };

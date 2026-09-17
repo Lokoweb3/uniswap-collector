@@ -54,7 +54,10 @@ const BLOCK_MS_FALLBACK = 1000;
 // its block (a later swap in the same block moved it).
 // 4: principal of an add is rounded up, as the pool rounds it (removals down);
 // verified against every fee-free add on Arc, which then reconciles exactly.
-const DECODER = 4;
+// 5: every event is attributed to the NFT's owner AT that event (from the
+// position's Transfer history), not to whoever tracks it now; the history of
+// transfers and liquidity changes is kept per position.
+const DECODER = 5;
 
 /**
  * Token amounts for a liquidity change, rounded the way v4's SqrtPriceMath does:
@@ -147,9 +150,13 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     // rescanned. Old records stay keyed and are overwritten as the scan reaches them.
     if (s.decoder !== DECODER) {
       s.tokens = {};
+      s.nft = {};
+      s.liq = {};
       for (const k of Object.keys(s.events)) if (s.events[k].decoder !== DECODER) delete s.events[k];
       s.decoder = DECODER;
     }
+    if (!s.nft) s.nft = {};      // tokenId -> { "tx:logIndex": { block, index, from, to, tx } }
+    if (!s.liq) s.liq = {};      // tokenId -> { "tx:logIndex": { block, index, delta, tx } }
     return s;
   };
   // Written to a temporary file and renamed into place, so a crash or a kill in
@@ -197,6 +204,35 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
   }
 
   const topicAddr = (t) => ("0x" + String(t).slice(26)).toLowerCase();
+  const posmRead = new ethers.Contract(posm, ["function ownerOf(uint256) view returns (address)"], provider);
+  const after = (a, b) => a.block > b.block || (a.block === b.block && a.index > b.index);
+
+  /**
+   * Who owned `tokenId` when the log at (block, index) was emitted. The first
+   * recorded NFT transfer after that point names it (its `from`); with no later
+   * transfer the owner is today's, read from chain at the scan head. Transfers
+   * after an event are always recorded before the event is decoded: scans run
+   * from the head backwards, and a chunk's transfers are folded before its
+   * receipts. Returns null only when the owner cannot be established.
+   */
+  function ownerAtFactory(s, headOwners, head) {
+    return async function ownerAt(tokenId, block, index) {
+      const id = String(tokenId);
+      const later = Object.values(s.nft[id] || {}).filter((x) => after(x, { block, index }))
+        .sort((a, b) => a.block - b.block || a.index - b.index);
+      if (later.length) return later[0].from;
+      if (!headOwners.has(id)) {
+        let who = null;
+        try { who = String(await posmRead.ownerOf(BigInt(id), { blockTag: head })).toLowerCase(); } catch (err) {
+          // A token with no later transfer still exists (a burn is a transfer), so a
+          // failed read is an RPC problem: fail the chunk and retry, never guess.
+          throw new Error(`ownerOf(#${id}) at block ${head} could not be read (${err.shortMessage || err.message}); this chunk is retried`);
+        }
+        headOwners.set(id, who);
+      }
+      return headOwners.get(id);
+    };
+  }
   const short = (a) => `${a.slice(0, 6)}\u2026${a.slice(-4)}`;
 
   /**
@@ -220,7 +256,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
    * shared token, or a position whose pair is unknown), the payout cannot be
    * split and the record is unavailable.
    */
-  async function claimsInReceipt(receipt, meta, metaAll = meta) {
+  async function claimsInReceipt(receipt, meta, metaAll = meta, ownerAt = null) {
     const ours = [];
     for (const l of receipt.logs) {
       if (l.address.toLowerCase() !== pm || l.topics[0] !== MODIFY_LIQUIDITY) continue;
@@ -240,7 +276,9 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       if (o.delta > 0n && minted.has(o.tokenId)) continue;   // the opening deposit: no fees yet
       const { l, tl, tu, delta, tokenId } = o;
       const t0 = String(m.token0).toLowerCase(), t1 = String(m.token1).toLowerCase();
-      const owner = String(m.owner).toLowerCase();
+      // The owner at this event, not whoever tracks the position now: a previous
+      // owner's settlements are theirs.
+      const owner = ownerAt ? await ownerAt(tokenId, l.blockNumber, l.index) : String(m.owner).toLowerCase();
       const kind = delta < 0n ? "withdrawal" : delta > 0n ? "increase" : "collect";
       let unavailable = null;
       // A native-ETH leg is paid by a value transfer, which emits no log. Reading
@@ -248,13 +286,17 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       if (t0 === ZERO || t1 === ZERO) {
         unavailable = "the native ETH leg is paid by a plain value transfer, which emits no log, so its amount cannot be read from the receipt";
       }
+      if (!unavailable && !owner) unavailable = "the position's owner at this event could not be established";
       if (!unavailable) {
-        const sharing = ours.filter((x) => x !== o).filter((x) => {
+        const sharing = [];
+        for (const x of ours) {
+          if (x === o) continue;
           const mm = metaAll(x.tokenId);
-          if (!mm) return true;
+          if (!mm) { sharing.push(x); continue; }
           const a0 = String(mm.token0).toLowerCase(), a1 = String(mm.token1).toLowerCase();
-          return String(mm.owner).toLowerCase() === owner && [a0, a1].some((t) => t === t0 || t === t1);
-        });
+          const xo = ownerAt ? await ownerAt(x.tokenId, x.l.blockNumber, x.l.index) : String(mm.owner).toLowerCase();
+          if (xo === owner && [a0, a1].some((t) => t === t0 || t === t1)) sharing.push(x);
+        }
         if (sharing.length) {
           unavailable = `this transaction holds ${sharing.length} other liquidity change(s) (${sharing.map((x) => "#" + x.tokenId).join(", ")}) that could share this payout, so it cannot be split between them`;
         }
@@ -310,7 +352,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
         principal0: p0.toString(), principal1: p1.toString(),
         paidOut0: flow.out[t0].toString(), paidOut1: flow.out[t1].toString(),
         paidIn0: flow.in[t0].toString(), paidIn1: flow.in[t1].toString(),
-        token0: t0, token1: t1, unavailable, decoder: DECODER,
+        token0: t0, token1: t1, owner, unavailable, decoder: DECODER,
       });
     }
     return out;
@@ -337,19 +379,28 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     for (const id of tracked) if (!s.tokens[id]) s.tokens[id] = { from: head + 1, to: head, mint: null, fromT: null, toT: null };
     const T = (id) => s.tokens[id];
     let folded = 0, chunks = 0;
+    const headOwners = new Map();
+    const ownerAt = ownerAtFactory(s, headOwners, head);
 
     // Fold [from, to] for the positions in `want` (id -> lowest/highest block that
     // position still needs inside this range). Mints are recorded for the same set.
     const range = async (from, to, want) => {
       const needs = (id, block) => { const w = want.get(id); return !!w && block >= w.lo && block <= w.hi; };
-      const [logs, mints] = await Promise.all([
-        provider.getLogs({ address: pm, topics: [MODIFY_LIQUIDITY, null, ethers.zeroPadValue(posm, 32)], fromBlock: from, toBlock: to }),
-        provider.getLogs({ address: posm, topics: [TRANSFER, ZERO_TOPIC], fromBlock: from, toBlock: to }),
-      ]);
-      for (const l of mints) {
-        if (l.topics.length !== 4 || l.address.toLowerCase() !== posm) continue;
+      // Every NFT transfer of the positions in `want` (mint = from zero, burn = to
+      // zero), queried by token id so the chain's other positions cost nothing.
+      const idTopics = [...want.keys()].map((id) => ethers.zeroPadValue(ethers.toBeHex(BigInt(id)), 32));
+      const nftLogs = [];
+      for (let i = 0; i < idTopics.length; i += 50) {
+        nftLogs.push(...await provider.getLogs({ address: posm, topics: [TRANSFER, null, null, idTopics.slice(i, i + 50)], fromBlock: from, toBlock: to }));
+      }
+      const logs = await provider.getLogs({ address: pm, topics: [MODIFY_LIQUIDITY, null, ethers.zeroPadValue(posm, 32)], fromBlock: from, toBlock: to });
+      for (const l of nftLogs) {
+        if (l.topics.length !== 4 || l.address.toLowerCase() !== posm || l.topics[0] !== TRANSFER) continue;
         const id = BigInt(l.topics[3]).toString();
-        if (want.has(id) && (T(id).mint == null || l.blockNumber < T(id).mint)) T(id).mint = l.blockNumber;
+        if (!want.has(id)) continue;
+        const rec = { block: l.blockNumber, index: l.index, from: topicAddr(l.topics[1]), to: topicAddr(l.topics[2]), tx: l.transactionHash };
+        (s.nft[id] = s.nft[id] || {})[`${l.transactionHash}:${l.index}`] = rec;   // keyed: a rescan overwrites
+        if (rec.from === ZERO && (T(id).mint == null || l.blockNumber < T(id).mint)) T(id).mint = l.blockNumber;
       }
       // `salt` is in the log data, so the token id is readable without a receipt.
       // Only transactions touching a position we track are worth a receipt fetch —
@@ -360,13 +411,17 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       // moves past a transaction that was not read.
       const byTx = new Set();
       for (const l of logs) {
-        const [, , , salt] = coder.decode(["int24", "int24", "int256", "bytes32"], l.data);
-        if (needs(BigInt(salt).toString(), l.blockNumber)) byTx.add(l.transactionHash);
+        const [, , delta, salt] = coder.decode(["int24", "int24", "int256", "bytes32"], l.data);
+        const id = BigInt(salt).toString();
+        if (!needs(id, l.blockNumber)) continue;
+        byTx.add(l.transactionHash);
+        // The position's full liquidity history, for its closure and current size.
+        (s.liq[id] = s.liq[id] || {})[`${l.transactionHash}:${l.index}`] = { block: l.blockNumber, index: l.index, delta: delta.toString(), tx: l.transactionHash };
       }
       for (const h of byTx) {
         const r = await provider.getTransactionReceipt(h);
         if (!r) throw new Error(`the RPC returned no receipt for ${h}; this chunk is retried`);
-        for (const c of await claimsInReceipt(r, (id) => (want.has(id) ? meta(id) : null), meta)) {
+        for (const c of await claimsInReceipt(r, (id) => (want.has(id) ? meta(id) : null), meta, ownerAt)) {
           c.t = await blockTime(c.block);
           const prev = s.events[c.key];
           // keyed by tx:logIndex — a rescan overwrites; a price already fixed for
@@ -430,15 +485,58 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
   /** Every position this scope has been asked to track. */
   function knownIds() { return Object.keys(S().meta); }
 
-  /** Every verified record for one position inside its scanned interval, oldest first. */
-  function rows(tokenId) {
+  const lc = (a) => (a == null ? null : String(a).toLowerCase());
+  /**
+   * Every verified record for one position inside its scanned interval, oldest
+   * first. With `wallet`, only the settlements made while that wallet owned the
+   * NFT (a record whose owner could not be established is kept: it withholds the
+   * figure instead of vanishing).
+   */
+  function rows(tokenId, wallet = null) {
     const s = S();
     const t = s.tokens[String(tokenId)];
     if (!t) return [];
+    const w = lc(wallet);
     return Object.values(s.events)
       .filter((e) => e.tokenId === String(tokenId) && e.chainId === Number(chainId) && e.positionManager === posm)
       .filter((e) => e.block >= t.from && e.block <= t.to)
-      .sort((a, b) => a.block - b.block);
+      .filter((e) => !w || !e.owner || e.owner === w)
+      .sort((a, b) => a.block - b.block || String(a.key).localeCompare(String(b.key)));
+  }
+
+  /** The position's NFT history inside the scanned interval: mint, transfers, burn. */
+  function ownership(tokenId) {
+    const s = S();
+    const list = Object.values(s.nft[String(tokenId)] || {}).sort((a, b) => a.block - b.block || a.index - b.index);
+    return {
+      mint: list.find((x) => x.from === ZERO) || null,
+      burn: list.find((x) => x.to === ZERO) || null,
+      transfers: list,
+    };
+  }
+
+  /**
+   * Liquidity changes inside the scanned interval, and when the position reached
+   * zero. The running total is only meaningful from the mint, so `complete` says
+   * whether the mint is covered; without it a closure is reported unverified.
+   */
+  function liquidityHistory(tokenId) {
+    const s = S();
+    const cov = coverage(tokenId);
+    const list = Object.values(s.liq[String(tokenId)] || {}).sort((a, b) => a.block - b.block || a.index - b.index);
+    const complete = !!(cov && cov.mintCovered);
+    let sum = 0n, closedAt = null;
+    for (const e of list) {
+      sum += BigInt(e.delta);
+      if (BigInt(e.delta) < 0n && sum === 0n) closedAt = { block: e.block, index: e.index, tx: e.tx };
+      else if (sum > 0n) closedAt = null;
+    }
+    // Without the mint, the last removal is the best candidate, unverified.
+    if (!complete) {
+      const lastRemoval = [...list].reverse().find((e) => BigInt(e.delta) < 0n);
+      closedAt = lastRemoval ? { block: lastRemoval.block, index: lastRemoval.index, tx: lastRemoval.tx } : null;
+    }
+    return { complete, events: list, liquidity: complete ? sum.toString() : null, closedAt: closedAt ? { ...closedAt, verified: complete } : null };
   }
 
   /** Attach the USD prices of a record's own moment. `px` = { p0, p1, src }. */
@@ -452,11 +550,16 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
   /** Where one position's history stands; shared by the card summary and /api/claims. */
   // A position's history is whole only when its own mint was observed inside the
   // scanned interval. No other source of an opening block is accepted.
-  function coverage(tokenId) {
+  // For a wallet, "opening" is when that wallet received the NFT (its mint, or a
+  // transfer in); history before that belongs to someone else.
+  function coverage(tokenId, wallet = null) {
     const s = S();
     const t = s.tokens[String(tokenId)];
     if (!t || t.from > t.to) return null;
-    const opened = t.mint;
+    const w = lc(wallet);
+    const received = w ? ownership(tokenId).transfers.filter((x) => x.to === w) : [];
+    const opened = w ? (received.length ? received[0].block : null) : t.mint;
+    const mintCovered = t.mint != null && t.from <= t.mint;
     const coversOpening = opened != null && t.from <= opened;
     const reachedLookbackFloor = s.floor != null && t.from <= s.floor;
     let gap = null;
@@ -468,7 +571,9 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     }
     return {
       fromBlock: t.from, toBlock: t.to, fromT: t.fromT, toT: t.toT,
-      openedBlock: opened ?? null, openedT: t.mint != null ? t.mintT ?? null : null,
+      openedBlock: opened ?? null, openedT: opened != null && opened === t.mint ? t.mintT ?? null : null,
+      openedTx: w ? (received[0] ? received[0].tx : null) : null,
+      mintBlock: t.mint ?? null, mintCovered,
       coversOpening, reachedLookbackFloor, floorBlock: s.floor ?? null,
       blockMs: s.blockMs ?? null, gap,
       lookbackDays: s.lookbackMs ? +(s.lookbackMs / 86400000).toFixed(2) : null,
@@ -501,41 +606,47 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     return cov.reachedLookbackFloor ? "lookback-reached" : "scanning";
   }
 
-  function summary(tokenId, { dec0, dec1, sym0, sym1, usd0, usd1 }) {
-    const sc = { chainId: Number(chainId), positionManager: posm, tokenId: String(tokenId) };
-    const cov = coverage(tokenId);
+  function summary(tokenId, { dec0, dec1, sym0, sym1, usd0, usd1, wallet = null }) {
+    const w = lc(wallet) || lc((S().meta[String(tokenId)] || {}).owner);
+    const sc = { chainId: Number(chainId), positionManager: posm, tokenId: String(tokenId), wallet: w };
+    const cov = coverage(tokenId, w);
     if (!cov) {
       return { status: "unavailable", state: "not-scanned", verifiedZero: false,
         reason: "no block range has been scanned for this position yet", scope: sc };
     }
-    const mine = rows(tokenId);
+    const mine = rows(tokenId, w);
     const bad = mine.filter((e) => e.unavailable);
     if (bad.length) {
       return { status: "unavailable", state: claimState(cov, true), verifiedZero: false, scope: sc, coverage: cov,
         reason: `${bad.length} of ${mine.length} records in the scanned range cannot be read in full (${bad[0].unavailable}); a total would be a guess` };
     }
-    let a0 = 0n, a1 = 0n, last = null, withdrawals = 0, usd = 0, atClaim = 0, atToday = 0, unpriced = 0;
-    const srcs = new Set();
+    let a0 = 0n, a1 = 0n, last = null, withdrawals = 0, hist = 0, priced = 0, unpriced = 0;
     const priceSources = { block: 0, pricelog: 0, today: 0, none: 0 };
     for (const e of mine) {
       const r0 = BigInt(e.fee0 || "0"), r1 = BigInt(e.fee1 || "0");
       a0 += r0; a1 += r1;
       const x0 = Number(ethers.formatUnits(r0, dec0)), x1 = Number(ethers.formatUnits(r1, dec1));
-      if (e.px) { usd += x0 * e.px.p0 + x1 * e.px.p1; atClaim++; srcs.add(e.px.src); priceSources[e.px.src === "pricelog" ? "pricelog" : "block"]++; }
-      else if (usd0 != null && usd1 != null) { usd += x0 * usd0 + x1 * usd1; atToday++; priceSources.today++; }
+      // Historical USD only from a verified price of the claim's own moment. A
+      // record without one keeps its exact token amounts and simply has no
+      // historical value; today's price is never substituted into this figure.
+      if (e.px) { hist += x0 * e.px.p0 + x1 * e.px.p1; priced++; priceSources[e.px.src === "pricelog" ? "pricelog" : "block"]++; }
       else { unpriced++; priceSources.none++; }
       if (e.kind === "withdrawal") withdrawals++;
       if (e.t && (!last || e.t > last)) last = e.t;
     }
     const f0 = Number(ethers.formatUnits(a0, dec0)), f1 = Number(ethers.formatUnits(a1, dec1));
-    const usdBasis = !mine.length ? null : unpriced ? null : !atToday ? "at-claim" : !atClaim ? "today" : "mixed";
-    const basis = !mine.length ? "token amounts are exact from chain"
-      : unpriced ? `token amounts are exact from chain; ${unpriced} of ${mine.length} collections have no price at their time and a leg has no price today, so there is no USD total`
-      : usdBasis === "at-claim" ? `token amounts are exact from chain; USD is valued at each claim's own moment (${[priceSources.block ? `${priceSources.block} at the pool price at the transaction` : "", priceSources.pricelog ? `${priceSources.pricelog} from the hourly price log` : ""].filter(Boolean).join(", ")})`
-      : usdBasis === "today" ? "token amounts are exact from chain; no price of their moment was found, so USD is valued at today's prices"
-      : `token amounts are exact from chain; ${atClaim} of ${mine.length} collections are valued at their own moment's price, ${atToday} at today's`;
     const state = claimState(cov, false);
     const complete = state === "complete";
+    const usdBasis = !mine.length ? null : unpriced ? (priced ? "partial" : "none") : "at-claim";
+    const src = [priceSources.block ? `${priceSources.block} at the pool price at the transaction` : "", priceSources.pricelog ? `${priceSources.pricelog} from the hourly price log` : ""].filter(Boolean).join(", ");
+    const basis = !mine.length ? "token amounts are exact from chain"
+      : !unpriced ? `token amounts are exact from chain; USD is valued at each claim's own moment (${src}). The pool price is the one that produced the payout, not an independent valuation: other venues' prices for the same token can differ materially.`
+      : priced ? `token amounts are exact from chain; ${priced} of ${mine.length} claims have a verified price of their moment (${src}), ${unpriced} have none, so only a priced subtotal is given`
+      : "token amounts are exact from chain; no claim has a verified price of its moment, so there is no historical USD figure";
+    // Today's prices, as a separate, labelled figure over ALL verified amounts.
+    const usdCurrent = mine.length && usd0 != null && usd1 != null
+      ? { usd: +(f0 * usd0 + f1 * usd1).toPrecision(12), note: "all claimed token amounts at today's prices; not what they were worth when claimed" }
+      : null;
     return {
       status: complete ? "ok" : "partial",
       state,
@@ -548,18 +659,20 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       tokens: [{ symbol: sym0, amount: f0.toLocaleString("en-US", { maximumFractionDigits: 6 }) },
                { symbol: sym1, amount: f1.toLocaleString("en-US", { maximumFractionDigits: 6 }) }],
       raw0: a0.toString(), raw1: a1.toString(),
-      // Nothing found in an incomplete range is not a $0 floor worth printing.
-      // Full precision: rounding to cents here turned $0.0361 into "$0.040" on the card.
-      usd: !mine.length ? (complete ? 0 : null) : unpriced ? null : +usd.toPrecision(12),
-      usdBasis, usdAtClaim: atClaim, usdAtToday: atToday, priceSources,
-      ...(unpriced ? { usdMissing: `${unpriced} collection(s) have no price at their time and a leg has no price today` } : {}),
+      // Historical total only when every claim is priced; nothing found in an
+      // incomplete range is not a $0 floor worth printing.
+      usd: !mine.length ? (complete ? 0 : null) : unpriced ? null : +hist.toPrecision(12),
+      usdPricedSubtotal: +hist.toPrecision(12), pricedRecords: priced, unpricedRecords: unpriced,
+      usdCurrent,
+      usdBasis, priceSources,
+      ...(unpriced ? { usdMissing: `${unpriced} of ${mine.length} claims have no verified price of their moment` } : {}),
       principalSeparated: withdrawals > 0,
       coverage: cov,
       basis,
     };
   }
 
-  return { scan, rows, summary, coverage, setPrice, save, remember, metaOf, knownIds, acquireWriter,
+  return { scan, rows, summary, coverage, ownership, liquidityHistory, setPrice, save, remember, metaOf, knownIds, acquireWriter,
     /** True while another live process owns the file: read it, never write it. */
     get readOnly() { return foreign(); }, get scope() { return scope; }, get state() { return S(); } };
 }

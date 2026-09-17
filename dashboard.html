@@ -117,6 +117,26 @@
     <span class="etotal" id="watchtotal"></span>
     <span class="enote" id="ltlegend" title="Fee APR: collected plus uncollected fees over the last 30 days (or since open), annualised over the actual days, on the value at open or the time-weighted value — never today's value. Net return: fees + price move + IL over the same window. A ⛓ marks a position re-minted within 48 h of a close, counted together with its predecessors.">Fee APR · Net return <label>sort <select id="ltsort"><option value="default">default</option><option value="fee">by fee APR</option><option value="net">by net return</option></select></label></span>
   </div>
+  <div class="posbar" id="posbar">
+    <div class="posfilter" id="posfilter" role="radiogroup" aria-label="Which positions to list"></div>
+    <div class="ctwrap">
+      <button type="button" class="ctotbtn" id="ctotbtn" aria-expanded="false" aria-controls="ctotalpanel"
+        title="Read-only history — no transaction"><span class="ctl">Total claimed fees</span><span class="ctv muted">Loading…</span><span class="cthint">Read-only history — no transaction</span></button>
+    </div>
+  </div>
+  <section class="ctpanel" id="ctotalpanel" aria-labelledby="ctotaltitle" hidden>
+    <div class="ehead"><h3 id="ctotaltitle">Total claimed fees</h3><span class="enote">Read-only history of fees already paid out to the wallet. Nothing here sends a transaction, and none of it is added to the portfolio value.</span></div>
+    <form class="ctfilters" id="ctfilters" aria-label="Filter the claimed-fee total">
+      <label class="ctf" id="ctwalletwrap" hidden><span>Wallet</span><select id="ctwallet" class="msel"><option value="">All wallets</option></select></label>
+      <label class="ctf"><span>Positions</span><select id="ctstatus" class="msel">
+        <option value="all">Open + closed (all)</option><option value="open">Open</option><option value="closed">Closed</option><option value="other">Burned, transferred or unavailable</option>
+      </select></label>
+      <label class="ctf"><span>From</span><input type="date" id="ctfrom" class="msel"></label>
+      <label class="ctf"><span>To</span><input type="date" id="ctto" class="msel"></label>
+      <button type="reset" class="reload" id="ctreset">Reset filters</button>
+    </form>
+    <div id="ctbody" aria-live="polite"><p class="chnote">Open the total to load it.</p></div>
+  </section>
   <div class="pstats" id="watchstats"></div>
   <div class="watchwallet owneronly" id="ownergroup">
     <div class="wh" id="ownerhead"></div>
@@ -129,6 +149,11 @@
   </div>
   <div class="loadfail" id="watchstale" role="status" hidden></div>
   <div id="watchlist"></div>
+  <section class="histsec" id="histsec" aria-labelledby="histtitle" hidden>
+    <div class="ehead"><h3 id="histtitle">No longer open</h3><span class="enote">Closed, burned, transferred or unreadable positions for this wallet scope · read-only</span></div>
+    <div class="loadfail" id="histstale" role="status" hidden></div>
+    <div id="histlist"></div>
+  </section>
   <div class="enote" id="watchnote"></div>
 </section>
 

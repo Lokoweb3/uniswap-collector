@@ -500,7 +500,7 @@ function renderPortfolio(){
     : 'Total = wallet + positions + uncollected fees, at current prices. Prices come from the deepest WETH or USDG pool for each token; ≈ marks a value larger than that pool holds.' + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
   renderSidebar();
 }
-$('#pfscope').addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); });
+$('#pfscope').addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); });
 
 /* ---- sidebar panels -------------------------------------------------------
  * Wallet overview, collection activity and data coverage are drawn from the
@@ -530,6 +530,12 @@ function renderWalletPanel(){
   const m = lastMain, pf = lastPortfolio, W = lastWatchForPf;
   const box = $('#walletbars'), note = $('#walletpanelnote'), tot = $('#walletpaneltotal');
   if (!box) return;
+  // The overview compares wallets with each other, so it is shown only when the
+  // Wallet picker is on "All wallets"; a single-wallet view hides it.
+  const sec = $('#walletpanel');
+  const all = !!$('#pfscope') && !$('#pfscope').hidden && pfScope() === 'all';
+  if (sec) sec.hidden = !all;
+  if (!all) return;
   const rows = [];
   if (m){
     const tokens = pf ? pf.totals.walletUsd : null;

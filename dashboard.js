@@ -677,7 +677,7 @@ function renderCollectPanel(){
     out.push(`<div class="cevent"><span class="ctext">${t.eligibleCount} position${t.eligibleCount === 1 ? '' : 's'} over the threshold`
       + ` · <b class="mono">${usd(t.collectableUsd)}</b> ready</span><span class="cstatus pending">pending</span></div>`);
   } else {
-    out.push(`<div class="cevent"><span class="ctext">Nothing over the ${d.minWethPerPosition} WETH per-position threshold.</span>`
+    out.push(`<div class="cevent"><span class="ctext">Nothing over the ${d.minWethPerPosition} ${esc((PRICING && PRICING.unit) || 'WETH')} per-position threshold.</span>`
       + `<span class="cstatus skipped">idle</span></div>`);
   }
   if (d.unlock && !d.unlock.armed)
@@ -689,7 +689,12 @@ function renderCollectPanel(){
     out.push(`<div class="cevent">${since ? `<span class="ctime">since ${esc(since)}</span>` : ''}<span class="ctext">${esc(line)}</span></div>`);
   }
   box.innerHTML = out.join('');
-  note.innerHTML = 'Per-collect rows, amounts and the CSV live on <a href="/analytics#earnings">Analytics</a>; this panel reads the collector\'s own status only.';
+  // Two different things are easy to confuse: this panel and the Analytics
+  // earnings table count what THIS collector swept (its own ledger), while the
+  // cards' Claimed fees are read from chain and include every settlement the
+  // wallet made itself. Zero here says nothing about the chain-derived figure.
+  note.innerHTML = 'Per-collect rows, amounts and the CSV live on <a href="/analytics#earnings">Analytics</a>; this panel and that table count only this collector\'s own runs. '
+    + 'Fees settled by the wallet itself (or by anything else) are not collector runs: those are the chain-derived <b>Claimed fees</b> on each card and in <b>Total claimed fees</b>. A zero here is not a zero there.';
 }
 
 function renderCoveragePanel(){
@@ -974,9 +979,15 @@ async function loadHistory(){
       : lk === n ? ' Each collect is valued at the prices of its moment.'
       : ' Collects since ' + new Date(d.lockedSince).toLocaleDateString(undefined,{month:'short',day:'numeric'})
         + ' are valued at the prices of their moment; the ' + (n - lk) + ' earlier ones (≈) at today\'s prices.';
+    // This table is the collector's own ledger (what this instance swept, plus any
+    // backfill it could read). It is a different scope and a different source from
+    // the cards' chain-derived Claimed fees, which include settlements the wallet
+    // made itself — so an empty table here does not mean nothing was ever claimed.
     $('#enote').textContent = 'Fees only — principal from closed positions is excluded.' + basis
       + (d.backfilled ? ' Includes full pre-collector history via Blockscout.' : d.backfilling ? ' Historical backfill in progress…' : '')
-      + (d.scanning ? ' Scan catching up…' : '');
+      + (d.scanning ? ' Scan catching up…' : '')
+      + (n === 0 ? ' No rows here means this collector has recorded no collect of its own; it is not a statement about fees the wallet settled itself.' : '')
+      + ' Source: this collector\'s ledger — the cards\' Claimed fees and Total claimed fees are read from chain instead, and the two are not interchangeable.';
   }catch(e){ loadFailed('Collection history', e); }
 }
 
@@ -1534,8 +1545,9 @@ function render(d){
   CHAIN = { id: d.chainId, name: d.chainName || null };
   const ol = $('#ownerline');
   if (ol) ol.firstChild && (ol.firstChild.textContent = PAGE === 'analytics' ? 'Main wallet ' : 'Positions held by ');
+  // The unit of account is this instance's, not ETH everywhere: on Arc it is USDC.
   $('#blockinfo').textContent = 'block ' + d.blockNumber.toLocaleString('en-US')
-    + (d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : '');
+    + (d.wethUsd ? ' · ' + ((PRICING && PRICING.unit) || (d.pricing && d.pricing.unit) || 'ETH') + ' ' + usd(d.wethUsd) : '');
   $('#pulse').className = 'pulse' + (d.cached ? ' stale' : '');
 
   renderUnlock(d.unlock);

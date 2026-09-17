@@ -2902,7 +2902,10 @@ async function handleRequest(req, res) {
       return res.end("dashboard.html not found next to server.js or in public/");
     }
     const html = fs.readFileSync(found);
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    // The page shell carries the markup the script fills, so a browser holding an
+    // older copy shows a page whose controls simply do not exist. The scripts are
+    // already no-cache; the shell must be too.
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     return res.end(html);
   }
 

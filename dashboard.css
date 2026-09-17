@@ -1739,3 +1739,17 @@ body.pf-closed .histsec .ehead:has(h3){margin-top:0;padding-top:0;border-top:0}
 .hfacts dt{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
 .hfacts dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
 .ctrows td.ctaddr,.ctrows td:first-child{white-space:nowrap}
+
+/* ---- approved wide card ------------------------------------------------------
+   One position per row at every width: the card owns the full column, so the four
+   metrics sit across it, the rail spans it, and the expanded details fall into two
+   columns. Rows are sized to their own content (`align-items:start`), so opening
+   one card's details never stretches its neighbours. */
+.wcards,#ownergroup #list,#histlist{grid-template-columns:minmax(0,1fr);align-items:start}
+.pos .metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+.pos .detailgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:1100px){.pos .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:720px){
+  .pos .metrics{grid-template-columns:minmax(0,1fr)}
+  .pos .detailgrid{grid-template-columns:minmax(0,1fr)}
+}

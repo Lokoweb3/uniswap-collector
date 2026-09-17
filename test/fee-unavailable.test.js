@@ -69,12 +69,27 @@ const feeFace = new Function("usd", "esc", src.slice(from, to) + "; return feeFa
   assert.ok(html.includes("$3.00 uncollected"), "an absent flag is not a failure: " + html);
 }
 
-// ---- both card faces route through it ---------------------------------------
+// ---- both card faces route through the guarded renderer ---------------------
+// The owner card and the watched card are now one function, positionCard(), and
+// it is the single place the uncollected figure is printed. Assert that: one
+// shared card, used by both renderers, and it goes through feeMetric().
 {
-  const uses = (src.match(/\$\{feeFace\(p\)\}/g) || []).length;
-  assert.strictEqual(uses, 2, "the owner card and the watched card must both use it, found " + uses);
-  // The helper itself legitimately contains that template; check everything else.
-  const outside = src.slice(0, from) + src.slice(to);
+  const uses = (src.match(/positionCard\(p, d, \{/g) || []).length;   // calls, not the definition
+  assert.strictEqual(uses, 2,
+    "the owner card and the watched card must both render through positionCard(), found " + uses);
+  assert.ok(/\$\{feeMetric\(p\)\}/.test(src),
+    "positionCard must print the uncollected figure through feeMetric(), which carries the failure check");
+
+  // feeMetric applies the same rule as feeFace: a failed read is never a figure.
+  const mFrom = src.indexOf("function feeMetric(");
+  assert.ok(mFrom > 0, "feeMetric must exist");
+  const mSrc = src.slice(mFrom, src.indexOf("\n}", mFrom));
+  assert.ok(/feesOk === false/.test(mSrc), "feeMetric must check feesOk before printing");
+  assert.ok(mSrc.indexOf("feesOk === false") < mSrc.indexOf("usd(p.feesUsd)"),
+    "the failure check has to come before the figure, or a failed read prints a number first");
+
+  // Nothing outside the two guarded helpers prints the raw figure.
+  const outside = (src.slice(0, from) + src.slice(to)).replace(mSrc, "");
   assert.ok(!/usd\(p\.feesUsd\)\} uncollected/.test(outside),
     "a card face is still printing the raw figure without the failure check");
 }

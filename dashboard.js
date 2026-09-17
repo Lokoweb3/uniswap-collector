@@ -1562,114 +1562,54 @@ function render(d){
   $('#list').innerHTML = sortLT(d.positions).map(p => {
     const v = orient(p);
     const near = p.inRange && (v.toUpper < NEAR || v.toLower < NEAR);
-    const cls = 'pos' + (p.inRange ? (near ? ' near' : '') : ' out');
-
-    let state = 'In range';
-    if (!p.inRange) state = v.above ? 'Above range · idle' : 'Below range · idle';
-    else if (near) state = 'Near the edge';
-
-    // Marker sits at the tick fraction, which is already log-spaced -- so a
-    // linear position on the rail is a true log position on price.
-    const pct = (v.railPos * 100).toFixed(2);
-
-    // Keep the price flag on-page at the extremes instead of letting it hang
-    // off the edge.
-    const flagCls = v.railPos < 0.12 ? ' left' : v.railPos > 0.88 ? ' right' : '';
-    const flagPos = v.railPos < 0.12 ? 'left:0' : v.railPos > 0.88 ? 'left:100%' : `left:${pct}%`;
-
-    // For an idle position the useful number is the move needed to re-enter.
-    const reenter = p.inRange ? null
-      : v.above
-        ? { dir: 'fall', pct: (1 - v.upper / v.current) * 100 }
-        : { dir: 'rise', pct: (v.lower / v.current - 1) * 100 };
-
-    const idleNote = reenter
-      ? `<span class="h idle">needs a ${reenter.pct.toFixed(1)}% ${reenter.dir} to start earning</span>`
-      : '';
-    const lowH = p.inRange
-      ? `<span class="h ${v.toLower<NEAR?'warn':''}">&larr; ${v.toLower.toFixed(1)}%</span>`
-      : (reenter.dir === 'rise' ? idleNote : '');
-    const highH = p.inRange
-      ? `<span class="h ${v.toUpper<NEAR?'warn':''}">${v.toUpper.toFixed(1)}% &rarr;</span>`
-      : (reenter.dir === 'fall' ? idleNote : '');
-
-    const s0 = p.share0 == null ? 50 : p.share0;
-    const s1 = p.share1 == null ? 50 : p.share1;
-
-    return `
-    <article class="${cls}">
-      <div class="top">
-        <div class="name">
-          <h3>${p.pair}</h3>
-          <span class="tier">${p.feeTierLabel}</span>
-          ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}. Collected like v3 once the wallet has approved the operator on the v4 position manager (/approve-v4).">v4</span>` : ''}
-          <span class="nft mono">${nftLink(d, p, '#' + (p.nftId || p.tokenId))}</span>
-          <span class="state ${p.inRange ? (near?'near':'') : 'out'}">${state}</span>
-          ${p.approved === false ? '<span class="tag-noappr">not approved</span>' : ''}
-          ${p.eligible === true ? '<span class="tag-elig">collectable</span>' : ''}
-          ${etaBadge(p, d)}
-        </div>
-        <div class="vals">
-          <span class="v">${usd(p.valueUsd)}</span>
-          ${feeFace(p)}
-          ${claimedLine(p)}
-        </div>
-      </div>
-
-      <div class="rail">
-        <div class="track">
-          <div class="bar"></div>
-          <div class="cap l"></div><div class="cap r"></div><div class="mid"></div>
-          <div class="flag${flagCls}" style="${flagPos}">${price(v.current)}</div>
-          <div class="stem" style="left:${pct}%"></div>
-          <div class="marker" style="left:${pct}%"></div>
-        </div>
-        <div class="ends">
-          <span><span class="mono">${price(v.lower)}</span> &nbsp;${lowH}</span>
-          <span class="unit" data-key="${v.key}" data-invert="${v.invert ? 1 : 0}" title="Prices in ${v.unit}. Click to show ${v.invert ? p.symbol1 + ' per ' + p.symbol0 : p.symbol0 + ' per ' + p.symbol1} instead.">${v.unit} &#8646;</span>
-          <span>${highH}&nbsp; <span class="mono">${price(v.upper)}</span></span>
-        </div>
-      </div>
-
-      <!-- The face of the card is what the owner scans: Fee APR, Net return and the
-           real 48h sparkline. Everything else is kept, one disclosure down. -->
-      <div class="comp perf">
-        ${longTermLine(p)}
-        ${sparkline(p.spark)}
-      </div>
-      <details class="posmore">
-        <summary>View details</summary>
-        <div class="comp">
-        <div class="split" role="img" aria-label="${s0.toFixed(0)} percent ${p.symbol0}, ${s1.toFixed(0)} percent ${p.symbol1}">
-          <i class="a" style="width:${s0}%"></i><i class="b" style="width:${s1}%"></i>
-        </div>
-        <span class="amts"><b>${amount(p.amount0)}</b> ${p.symbol0} · <b>${amount(p.amount1)}</b> ${p.symbol1}</span>
-        ${p.feesOk ? '' : '<span class="amts">fee read unavailable</span>'}
-        ${poolLine(p)}
-        ${!p.inRange && p.dailyUsd > 0 ? `<span class="rate">not earning while out of range · was <b class="was">${usd(p.dailyUsd)}/day</b> in range${
-          ageDays(p) != null && ageDays(p) >= PROJECT_AFTER_DAYS
-            ? (rangeW(p) != null
-              ? ` · expected <b class="was">${usd(expectedDaily(p))}/day</b> at ${p.range.pctInRange.toFixed(0)}% time in range · next 7d <b>${usd(expectedDaily(p) * 7)}</b> · 30d <b>${usd(expectedDaily(p) * 30)}</b>`
-              : ' · projection <b class="was">$0</b> until back in range')
-            : ''}</span>` : ''}
-        ${p.range && p.range.trackedHours >= 1 ? `<span class="rate">in range <b class="${p.range.pctInRange >= 50 ? '' : 'neg'}">${p.range.pctInRange.toFixed(0)}%</b> of the last ${spanText(p.range.trackedHours)} · ${p.range.flips ? p.range.flips + ' flip' + (p.range.flips === 1 ? '' : 's') : 'no flips'} · ${p.range.streakInRange ? 'in' : 'out'} since ${new Date(p.range.streakSince).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>` : ''}
-        ${p.inRange && p.dailyUsd != null && (p.dailyUsd > 0 || (p.feesUsd||0) > 0.005) ? `<span class="rate">earning <b>${usd(p.dailyUsd)}/day</b>${
-          p.aprPct != null && p.rateWindowH >= 6 && (p.valueUsd||0) >= 50
-            ? ' · ~' + p.aprPct.toFixed(1) + '% APR' : ''}${
-          p.rateWindowH != null && p.rateWindowH < 24
-            ? ` <span title="extrapolated from a short window">(over ${p.rateWindowH.toFixed(1)}h)</span>` : ''}${
-          p.dailyUsd > 0 && ageDays(p) != null && ageDays(p) >= PROJECT_AFTER_DAYS ? ` · next 7d <b>${usd(expectedDaily(p) * 7)}</b> · 30d <b>${usd(expectedDaily(p) * 30)}</b>${rangeW(p) != null ? ' at ' + p.range.pctInRange.toFixed(0) + '% time in range' : ''}`
-          : p.dailyUsd > 0 && ageDays(p) != null ? ` · <span title="Projections start once a position has been open ${PROJECT_AFTER_DAYS} days">projection in ${Math.max(1, Math.ceil(PROJECT_AFTER_DAYS - ageDays(p)))}d</span>` : ''}</span>` : ''}
-        ${p.pnlUsd != null ? `<span class="rate pnl" tabindex="0">PnL vs HODL <b class="${p.pnlUsd < 0 ? 'neg' : ''}">${
-          p.pnlUsd >= 0 ? '+' : '−'}${usd(Math.abs(p.pnlUsd))}${
-          p.pnlPct != null ? ' (' + (p.pnlPct >= 0 ? '+' : '−') + Math.abs(p.pnlPct).toFixed(1) + '%)' : ''}</b>${
-          p.pnlApprox ? ' ≈' : ''}${
-          p.pnlSince ? ' · since ' + new Date(p.pnlSince).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : ''}${pnlTip(p)}</span>` : ''}
-        </div>
-        ${pxChart(p, v)}
-      </details>
-    </article>`;
+    // Extras the owner's cards carry that a watched wallet's do not.
+    const perf = [
+      !p.inRange && p.dailyUsd > 0 ? `<span class="rate">not earning while out of range · was <b class="was">${usd(p.dailyUsd)}/day</b> in range</span>` : '',
+      p.range && p.range.trackedHours >= 1 ? `<span class="rate">in range <b class="${p.range.pctInRange >= 50 ? '' : 'neg'}">${p.range.pctInRange.toFixed(0)}%</b> of the last ${spanText(p.range.trackedHours)} · ${p.range.flips ? p.range.flips + ' flip' + (p.range.flips === 1 ? '' : 's') : 'no flips'}</span>` : '',
+      p.inRange && p.dailyUsd != null && (p.dailyUsd > 0 || (p.feesUsd||0) > 0.005) ? `<span class="rate">earning <b>${usd(p.dailyUsd)}/day</b>${p.aprPct != null && p.rateWindowH >= 6 && (p.valueUsd||0) >= 50 ? ' · ~' + p.aprPct.toFixed(1) + '% APR' : ''}${p.rateWindowH != null && p.rateWindowH < 24 ? ` <span title="extrapolated from a short window">(over ${p.rateWindowH.toFixed(1)}h)</span>` : ''}</span>` : '',
+      p.pnlUsd != null ? `<span class="rate pnl" tabindex="0">PnL vs HODL <b class="${p.pnlUsd < 0 ? 'neg' : ''}">${p.pnlUsd >= 0 ? '+' : '−'}${usd(Math.abs(p.pnlUsd))}${p.pnlPct != null ? ' (' + (p.pnlPct >= 0 ? '+' : '−') + Math.abs(p.pnlPct).toFixed(1) + '%)' : ''}</b>${p.pnlApprox ? ' ≈' : ''}${p.pnlSince ? ' · since ' + new Date(p.pnlSince).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : ''}${pnlTip(p)}</span>` : '',
+    ].filter(Boolean).join('');
+    return positionCard(p, d, { wallet: d.ownerLabel || 'Main', eta: etaBadge(p, d), perf });
   }).join('');
+}
+
+// Claimed fees opens this position's collection history. A real <button> means
+// Enter and Space already work and it is in the tab order; this only has to move
+// aria-expanded and fill the panel. Rows come from /api/history, which the page
+// has already loaded — no new request, no new endpoint.
+document.addEventListener('click', e => {
+  const b = e.target.closest('button.claimed[data-claim]');
+  if (!b) return;
+  const panel = document.getElementById(b.dataset.claim);
+  if (!panel) return;
+  const open = b.getAttribute('aria-expanded') === 'true';
+  b.setAttribute('aria-expanded', open ? 'false' : 'true');
+  panel.hidden = open;
+  if (!open && !panel.dataset.filled) { panel.innerHTML = claimHistoryHtml(b.dataset.claim); panel.dataset.filled = '1'; }
+});
+
+// The collection rows for one position, scoped the way the claim figure is:
+// chain, position manager and token id. A row from another chain that happens to
+// share an id is a different position and must not appear here.
+function claimHistoryHtml(uid) {
+  const parts = String(uid).split('-');            // ch-<chainId>-<tokenId>
+  const chainId = parts[1], tokenId = parts.slice(2).join('-');
+  if (!Array.isArray(historyRows)) {
+    return '<p class="chnote">Collection history has not loaded yet. It arrives with the analytics section below.</p>';
+  }
+  const rows = historyRows.filter(r =>
+    String(r.tokenId).replace(/^v4-/, '') === String(tokenId) &&
+    (r.chainId == null || String(r.chainId) === String(chainId)));
+  if (!rows.length) {
+    return '<p class="chnote">No collection rows for this position in the loaded history. That is not the same as none having happened — it is what this history covers.</p>';
+  }
+  return '<table class="chtable"><caption>Collections for this position — fees only; withdrawn principal is excluded</caption>' +
+    '<thead><tr><th scope="col">When</th><th scope="col">Fees</th><th scope="col">Value</th><th scope="col">Tx</th></tr></thead><tbody>' +
+    rows.map(r => `<tr><td>${r.t ? new Date(r.t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown'}${r.principal ? ' <span class="muted" title="This transaction also withdrew principal; only the fee part is counted here">withdrawal</span>' : ''}</td>` +
+      `<td class="mono">${r.f0 != null || r.f1 != null ? `${amount(r.f0)} ${esc(r.sym0 || '')} · ${amount(r.f1)} ${esc(r.sym1 || '')}` : '—'}</td>` +
+      `<td class="mono">${r.usd == null ? '<span class="unavail">unpriced</span>' : usd(r.usd)}${r.locked ? '' : ' ≈'}</td>` +
+      `<td class="mono">${r.tx ? linkify(r.tx.slice(0, 10) + '…') : '—'}</td></tr>`).join('') +
+    '</tbody></table>';
 }
 
 // Flip a pair's price orientation from its unit label.
@@ -1753,6 +1693,192 @@ function feeFace(p) {
     return `<span class="f unavail" title="Fees unavailable: ${why}. The position itself loaded; only the fee read failed.">Fees unavailable</span>`;
   }
   return `<span class="f ${(p.feesUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feesUsd)} uncollected</span>`;
+}
+
+
+// ---------------------------------------------------------------------------
+// One position card, used for the owner's positions and for watched wallets so
+// the two can never drift apart. Everything it prints comes from the position
+// object the API already returns; nothing here computes a value of its own.
+//
+//   header   pair, wallet, id, protocol, fee tier, status badge
+//   metrics  Position value | Uncollected fees | Claimed fees | Range status
+//   rail     full-width, log-spaced (railPos is a tick fraction, already log)
+//   details  collapsed; two columns on desktop, stacked narrow
+//
+// Claimed fees is a real <button>: it is in the tab order, answers Enter and
+// Space for free, carries aria-expanded/aria-controls, and opens this position's
+// collection history from the rows /api/history already loaded.
+// ---------------------------------------------------------------------------
+function rangeStatus(p, v, near) {
+  if (p.tickLower <= -887000 && p.tickUpper >= 887000) return { text: 'Full range', sub: 'always earning, never idle', cls: '' };
+  if (p.inRange) return { text: near ? 'Near the edge' : 'In range',
+    sub: `${v.toLower.toFixed(1)}% to the floor · ${v.toUpper.toFixed(1)}% to the ceiling`, cls: near ? 'near' : '' };
+  const reenter = v.above ? { dir: 'fall', pct: (1 - v.upper / v.current) * 100 }
+                          : { dir: 'rise', pct: (v.lower / v.current - 1) * 100 };
+  return { text: v.above ? 'Above range · idle' : 'Below range · idle',
+    sub: `needs a ${reenter.pct.toFixed(1)}% ${reenter.dir} to start earning`, cls: 'out' };
+}
+
+// The claimed-fees metric. Same four states as claimedLine(), condensed to a tile:
+// a number only when history actually covers this position.
+function claimedMetric(p, uid) {
+  const c = p.claimed;
+  const open = `<button type="button" class="metric claimed" aria-expanded="false" aria-controls="${uid}" data-claim="${uid}"`;
+  if (!c || c.status === 'unavailable') {
+    const why = c && c.reason ? esc(c.reason) : 'no claim history has been scanned for this chain and position manager';
+    return `${open} title="Claim history unavailable: ${why}. This is not a statement that nothing was claimed — nothing is known either way.">` +
+      `<span class="ml">Claimed fees</span><span class="mv unavail">Unavailable</span>` +
+      `<span class="msub">no claim history for this chain</span></button>`;
+  }
+  if (c.status === 'partial') {
+    // A partial window with no known start is still partial: say the figure is a
+    // floor rather than dress an unknown date as one.
+    const since = c.since ? new Date(c.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+    const sub = since ? `claimed since ${since} — partial history`
+      : 'partial history — earlier claims not loaded';
+    return `${open} title="${esc(c.reason || 'History for this position does not reach back to its opening')}; anything claimed before that is not in this figure, so treat it as a floor, not a total.">` +
+      `<span class="ml">Claimed fees</span><span class="mv partial">${c.usd != null ? usd(c.usd) + '+' : '—'}</span>` +
+      `<span class="msub">${esc(sub)}</span></button>`;
+  }
+  if (!c.count) {
+    return `${open} title="History covers this position from ${c.since ? new Date(c.since).toLocaleDateString() : 'its first block'} and found no fee collect and no withdrawal. A verified zero, not an assumption.">` +
+      `<span class="ml">Claimed fees</span><span class="mv zero">${usd(0)}</span>` +
+      `<span class="msub">none yet · verified</span></button>`;
+  }
+  const when = c.last ? new Date(c.last).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
+  return `${open} title="${c.count} collection${c.count === 1 ? '' : 's'}. Already paid out to the wallet, so it is not part of the position value.">` +
+    `<span class="ml">Claimed fees</span>` +
+    `<span class="mv">${c.usd != null ? usd(c.usd) : '—'}</span>` +
+    `<span class="msub">${c.count} collection${c.count === 1 ? '' : 's'}${when ? ' · last ' + esc(when) : ''}</span></button>`;
+}
+
+function positionCard(p, d, opts) {
+  const o = opts || {};
+  const v = orient(p);
+  const near = p.inRange && (v.toUpper < NEAR || v.toLower < NEAR);
+  // Full range: liquidity across the whole tick space, so there is no floor or
+  // ceiling to show and the position is never idle.
+  const full = p.tickLower <= -887000 && p.tickUpper >= 887000;
+  const st = rangeStatus(p, v, near);
+  const cls = 'pos card2' + (p.inRange ? (near ? ' near' : '') : ' out');
+  const uid = `ch-${(p.chainId || (d && d.chainId) || 'c')}-${(p.nftId || p.tokenId)}`;
+  const pctPos = (v.railPos * 100).toFixed(2);
+  const flagCls = v.railPos < 0.12 ? ' left' : v.railPos > 0.88 ? ' right' : '';
+  const flagPos = v.railPos < 0.12 ? 'left:0' : v.railPos > 0.88 ? 'left:100%' : `left:${pctPos}%`;
+  const s0 = p.share0 != null ? p.share0
+    : (p.usd0 != null && p.usd1 != null && (p.amount0 * p.usd0 + p.amount1 * p.usd1) > 0
+        ? (p.amount0 * p.usd0) / (p.amount0 * p.usd0 + p.amount1 * p.usd1) * 100 : 50);
+  const s1 = 100 - s0;
+
+  return `
+  <article class="${cls}">
+    <header class="pchead">
+      <div class="pcid">
+        <h3>${p.pair}</h3>
+        ${o.wallet ? `<span class="pcwallet" title="Held by ${esc(o.wallet)}">${esc(o.wallet)}</span>` : ''}
+        <span class="nft mono">${nftLink(d, p, '#' + (p.nftId || p.tokenId))}</span>
+        <span class="tier">${p.version === 4 ? 'v4' : 'v3'}</span>
+        <span class="tier">${p.feeTierLabel}</span>
+        ${full ? '<span class="full" title="Liquidity across the whole price range">full range</span>' : ''}
+        ${p.approved === false ? '<span class="tag-noappr">not approved</span>' : ''}
+        ${p.eligible === true ? '<span class="tag-elig">collectable</span>' : ''}
+        ${o.eta || ''}
+      </div>
+      <span class="state ${st.cls}">${st.text}</span>
+    </header>
+
+    <div class="metrics">
+      <div class="metric"><span class="ml">Position value</span><span class="mv">${usd(p.valueUsd)}</span>
+        <span class="msub">${p.symbol0} + ${p.symbol1}</span></div>
+      <div class="metric"><span class="ml">Uncollected fees</span>${feeMetric(p)}</div>
+      ${claimedMetric(p, uid)}
+      <div class="metric"><span class="ml">Range status</span><span class="mv ${st.cls}">${st.text}</span>
+        <span class="msub">${st.sub}</span></div>
+    </div>
+
+    <div class="rail wide">
+      <div class="track">
+        <div class="bar"></div>
+        <div class="cap l"></div><div class="cap r"></div><div class="mid"></div>
+        <div class="flag${flagCls}" style="${flagPos}">${price(v.current)}</div>
+        <div class="stem" style="left:${pctPos}%"></div>
+        <div class="marker" style="left:${pctPos}%"></div>
+      </div>
+      <div class="ends">
+        <span><span class="rl">min</span> <span class="mono">${full ? '0' : price(v.lower)}</span></span>
+        <button type="button" class="unit" data-key="${v.key}" data-invert="${v.invert ? 1 : 0}"
+          title="Prices in ${v.unit}. Switch to ${v.invert ? p.symbol1 + ' per ' + p.symbol0 : p.symbol0 + ' per ' + p.symbol1}.">${v.unit} &#8646;</button>
+        <span><span class="mono">${full ? '∞' : price(v.upper)}</span> <span class="rl">max</span></span>
+      </div>
+    </div>
+
+    <div class="claimhist" id="${uid}" hidden></div>
+
+    <details class="posmore">
+      <summary>View details</summary>
+      <div class="detailgrid">
+        <section class="dgroup">
+          <h4>Position composition</h4>
+          <div class="split" role="img" aria-label="${s0.toFixed(0)} percent ${p.symbol0}, ${s1.toFixed(0)} percent ${p.symbol1}">
+            <i class="a" style="width:${s0}%"></i><i class="b" style="width:${s1}%"></i>
+          </div>
+          <span class="amts"><b>${amount(p.amount0)}</b> ${p.symbol0} · <b>${amount(p.amount1)}</b> ${p.symbol1}</span>
+          <span class="rate muted">${s0.toFixed(0)}% ${p.symbol0} / ${s1.toFixed(0)}% ${p.symbol1} at current prices</span>
+        </section>
+
+        <section class="dgroup">
+          <h4>Uncollected fee breakdown</h4>
+          ${p.feesOk === false
+            ? `<span class="amts unavail">Fee read unavailable — ${esc(String(p.feesError || 'the read did not return a value'))}</span>`
+            : `<span class="amts"><b>${amount(p.fee0)}</b> ${p.symbol0} · <b>${amount(p.fee1)}</b> ${p.symbol1}</span>
+               <span class="rate muted">${usd(p.feesUsd)} at current prices · not yet withdrawn, still in the pool</span>`}
+          ${o.collectHint || ''}
+        </section>
+
+        <section class="dgroup">
+          <h4>Performance</h4>
+          ${dgroupBody([longTermLine(p), o.perf, sparkline(p.spark)],
+            'No performance figures yet. Fee APR and net return need an opening value for this position and at least one fee observation; neither is available here.')}
+        </section>
+
+        <section class="dgroup">
+          <h4>Pool statistics</h4>
+          ${dgroupBody([poolLine(p), pxChart(p, v)], 'No pool statistics for this pool yet.')}
+        </section>
+      </div>
+      <footer class="dfoot">
+        <span>${d && d.at ? 'Last successful update ' + new Date(d.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Last update unknown'}</span>
+        <span>${coverageText(p)}</span>
+      </footer>
+    </details>
+  </article>`;
+}
+
+// A group with nothing in it says so, rather than rendering a heading over empty
+// space that reads as a rendering fault.
+function dgroupBody(parts, emptyNote) {
+  const body = parts.filter(x => x && String(x).trim()).join('');
+  return body || `<span class="rate muted">${emptyNote}</span>`;
+}
+
+// The uncollected-fee metric body. A failed read is not zero and says so.
+function feeMetric(p) {
+  if (p.feesOk === false) {
+    return `<span class="mv unavail">Unavailable</span><span class="msub">${esc(String(p.feesError || 'the fee read did not return a value'))}</span>`;
+  }
+  return `<span class="mv ${(p.feesUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feesUsd)}</span>` +
+    `<span class="msub">accrued, still in the pool</span>`;
+}
+
+// What the claim history does and does not cover, stated on every card.
+function coverageText(p) {
+  const c = p.claimed;
+  if (!c || c.status === 'unavailable') return 'Claim history: none scanned for this chain and position manager';
+  if (c.status === 'partial') return c.since
+    ? `Claim history: partial, from ${new Date(c.since).toLocaleDateString()}`
+    : 'Claim history: partial — earlier claims not loaded, so the figure is a floor';
+  return `Claim history: complete from ${c.since ? new Date(c.since).toLocaleDateString() : 'this position’s first block'}`;
 }
 
 function claimedLine(p){
@@ -1959,75 +2085,11 @@ function renderWatch(d){
       ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
       : '';
     if (!w.positions.length) return `<div class="watchwallet">${head}${toks}<div class="wempty">No open positions.</div></div>`;
-    const cards = sortLT(w.positions).map(p => {
-      const full = p.tickLower <= -887000 && p.tickUpper >= 887000;
-      const v = orient(p);
-      const near = !full && p.inRange && (v.toUpper < NEAR || v.toLower < NEAR);
-      const cls = 'pos' + (p.inRange ? (near ? ' near' : '') : ' out');
-      let state = 'In range';
-      if (!p.inRange) state = v.above ? 'Above range · idle' : 'Below range · idle';
-      else if (near) state = 'Near the edge';
-      const railPos = full ? 0.5 : v.railPos;
-      const pct = (railPos * 100).toFixed(2);
-      const flagCls = railPos < 0.12 ? ' left' : railPos > 0.88 ? ' right' : '';
-      const flagPos = railPos < 0.12 ? 'left:0' : railPos > 0.88 ? 'left:100%' : `left:${pct}%`;
-      const reenter = p.inRange ? null : v.above
-        ? { dir: 'fall', pct: (1 - v.upper / v.current) * 100 }
-        : { dir: 'rise', pct: (v.lower / v.current - 1) * 100 };
-      const idleNote = reenter ? `<span class="h idle">needs a ${reenter.pct.toFixed(1)}% ${reenter.dir} to start earning</span>` : '';
-      const lowH = full ? '' : p.inRange ? `<span class="h ${v.toLower < NEAR ? 'warn' : ''}">&larr; ${v.toLower.toFixed(1)}%</span>` : (reenter.dir === 'rise' ? idleNote : '');
-      const highH = full ? '' : p.inRange ? `<span class="h ${v.toUpper < NEAR ? 'warn' : ''}">${v.toUpper.toFixed(1)}% &rarr;</span>` : (reenter.dir === 'fall' ? idleNote : '');
-      const val0 = p.usd0 == null ? null : p.amount0 * p.usd0, val1 = p.usd1 == null ? null : p.amount1 * p.usd1;
-      const s0 = val0 != null && val1 != null && val0 + val1 > 0 ? (val0 / (val0 + val1)) * 100 : 50;
-      const nft = nftLink(d, p, '#' + p.nftId);
-      return `<article class="${cls}">
-        <div class="top">
-          <div class="name">
-            <h3>${p.pair}</h3>
-            <span class="tier">${p.feeTierLabel}</span>
-            ${p.version === 4 ? `<span class="tier v4" title="Uniswap v4 position${p.hooks ? ' · hooks ' + p.hooks : ''}. Collected like v3 once this wallet has approved the operator on the v4 position manager (/approve-v4).">v4</span>` : ''}
-            ${full ? '<span class="full" title="Liquidity across the whole price range: always earning, never idle">full range</span>' : ''}
-            <span class="nft mono">${nft}</span>
-            <span class="state ${p.inRange ? (near ? 'near' : '') : 'out'}">${state}</span>
-          </div>
-          <div class="vals">
-            <span class="v">${usd(p.valueUsd)}</span>
-            ${feeFace(p)}
-            ${claimedLine(p)}
-          </div>
-        </div>
-        <div class="rail">
-          <div class="track">
-            <div class="bar"></div>
-            <div class="cap l"></div><div class="cap r"></div><div class="mid"></div>
-            <div class="flag${flagCls}" style="${flagPos}">${price(v.current)}</div>
-            <div class="stem" style="left:${pct}%"></div>
-            <div class="marker" style="left:${pct}%"></div>
-          </div>
-          <div class="ends">
-            <span><span class="mono">${full ? '0' : price(v.lower)}</span> &nbsp;${lowH}</span>
-            <span class="unit" data-key="${v.key}" data-invert="${v.invert ? 1 : 0}" title="Prices in ${v.unit}. Click to show ${v.invert ? p.symbol1 + ' per ' + p.symbol0 : p.symbol0 + ' per ' + p.symbol1} instead.">${v.unit} &#8646;</span>
-            <span>${highH}&nbsp; <span class="mono">${full ? '∞' : price(v.upper)}</span></span>
-          </div>
-        </div>
-          <!-- Same shape as the owner cards: the rate is the face, everything else -->
-          <!-- is one disclosure down and spans the full card width when opened. -->
-          <div class="comp perf">
-          ${longTermLine(p)}
-          </div>
-          <details class="posmore">
-            <summary>View details</summary>
-            <div class="comp">
-          <div class="split"><i class="a" style="width:${s0}%"></i><i class="b" style="width:${100 - s0}%"></i></div>
-          <span class="amts"><b>${amount(p.amount0)}</b> ${p.symbol0} · <b>${amount(p.amount1)}</b> ${p.symbol1}</span>
-          ${(p.fee0 || 0) > 0 || (p.fee1 || 0) > 0 ? `<span class="amts">fees <b>${amount(p.fee0)}</b> ${p.symbol0} · <b>${amount(p.fee1)}</b> ${p.symbol1}</span>` : ''}
-          ${p.feesOk ? '' : '<span class="amts">fee read unavailable</span>'}
-          ${poolLine(p)}
-          ${typeof pnlLine === 'function' ? pnlLine(p) : ''}
-            </div>
-          </details>
-      </article>`;
-    }).join('');
+    const cards = sortLT(w.positions).map(p =>
+      // The same card as the owner's, so the two can never drift apart. The wallet
+      // label rides in the header because a watched card is read out of context.
+      positionCard(p, d, { wallet: w.label || shortA(w.address) })
+    ).join('');
     return `<div class="watchwallet">${head}${toks}<div class="wcards" id="${cardsId}">${cards}</div></div>`;
   }).join('');
   for (const w of shown) if (w.ok && w.positions && w.positions.length)

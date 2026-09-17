@@ -194,6 +194,10 @@ const watch = require("./watch").create({
   },
   getCollectEvents: (tokenId) => (typeof hist !== "undefined" ? hist.events.filter((e) => e.tokenId === String(tokenId)) : []),
   getCollectSummary: (tokenKey, dec0, dec1, usd0, usd1) => collectSummary(tokenKey, dec0, dec1, usd0, usd1),
+  // Watched positions get the same claimed summary as the owner's, so the two
+  // kinds of card can never show a different answer for the same question.
+  getClaimedSummary: (tokenKey, dec0, dec1, usd0, usd1, sym0, sym1) =>
+    claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, null),
 });
 // Liquidity history from the RPC itself; the PnL basis prefers it over
 // Blockscout's, which has dropped transactions on this chain.
@@ -481,6 +485,75 @@ function collectSummary(tokenKey, dec0, dec1, usd0, usd1) {
   }
   return count ? { usd: +usd.toFixed(2), usd7d: +usd7d.toFixed(2), count, last, atCollectPrices: locked, approx: locked < count } : null;
 }
+/**
+ * Claimed fees for one position, in the shape the card renders: token amounts,
+ * a USD total when both legs price, the count and the latest collection, and an
+ * explicit coverage state.
+ *
+ * Scope. Rows are keyed by token id alone in the ledgers, so the scope is carried
+ * here and stated on the card rather than pretended away: this instance serves one
+ * chain (cfg.chainId) and one pair of position managers, and `scope` records which.
+ * claimed-fees.js is the chain-derived replacement that keys rows by
+ * chainId:positionManager:tokenId; until its scanner is wired in, this reads the
+ * existing ledgers and is honest about what they cover.
+ *
+ * Coverage. The v3 scan starts at START_BLOCK, so a position opened before that
+ * has claims this cannot see: that is `partial`, with the date it starts from.
+ * No history file at all is `unavailable` — never a zero.
+ */
+function claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, openedAt) {
+  const events = typeof hist !== "undefined" ? hist.events : null;
+  if (!events) {
+    return { status: "unavailable", reason: "no collection history is loaded for this instance" };
+  }
+  let a0 = 0n, a1 = 0n, usd = 0, count = 0, last = null, locked = 0, principalSeparated = false;
+  for (const e of events) {
+    if (e.tokenId !== String(tokenKey)) continue;
+    a0 += BigInt(e.fee0 || "0");
+    a1 += BigInt(e.fee1 || "0");
+    if (e.principal) principalSeparated = true;   // a withdrawal whose principal was netted out
+    const f0 = Number(ethers.formatUnits(e.fee0 || "0", dec0)), f1 = Number(ethers.formatUnits(e.fee1 || "0", dec1));
+    const px = feePrices[priceKey(e)];
+    if (px) { usd += f0 * px.p0 + f1 * px.p1; locked++; }
+    else if (usd0 != null && usd1 != null) usd += f0 * usd0 + f1 * usd1;
+    count++;
+    if (e.t && (!last || e.t > last)) last = e.t;
+  }
+  const scope = { chainId: Number(cfg.chainId), tokenId: String(tokenKey),
+                  positionManager: String(tokenKey).startsWith("v4-")
+                    ? (cfg.contracts.v4 && cfg.contracts.v4.positionManager) || null
+                    : cfg.contracts.positionManager || null };
+  // The v3 scan starts at START_BLOCK; the Blockscout backfill is what reaches
+  // further back. Until it is ready, anything claimed before that block is missing
+  // from these totals, and the card must say so rather than imply completeness.
+  const covered = bfDone();
+  const out = {
+    status: covered ? "ok" : "partial",
+    count, last, scope,
+    tokens: [
+      { symbol: sym0, amount: Number(ethers.formatUnits(a0, dec0)).toLocaleString("en-US", { maximumFractionDigits: 6 }) },
+      { symbol: sym1, amount: Number(ethers.formatUnits(a1, dec1)).toLocaleString("en-US", { maximumFractionDigits: 6 }) },
+    ],
+    raw0: a0.toString(), raw1: a1.toString(),
+    usd: usd0 == null || usd1 == null ? null : +usd.toFixed(2),
+    principalSeparated,
+    basis: locked === count && count > 0
+      ? "each collection valued at the prices of its moment"
+      : locked === 0
+        ? "valued at today's prices"
+        : `${locked} of ${count} valued at the prices of their moment, the rest at today's`,
+  };
+  if (!covered) {
+    out.since = typeof hist !== "undefined" && hist.startBlock ? START_BLOCK_TIME() : null;
+    out.reason = "history before the collector's first scanned block is not loaded";
+  }
+  return out;
+}
+/** Has the pre-collector backfill finished, so history reaches a position's open? */
+function bfDone() { try { return typeof bf !== "undefined" && bf.ready === true; } catch { return false; } }
+
+/** Approximate wall-clock time of the history scan floor, for the partial label. */
+function START_BLOCK_TIME() { try { return hist.startBlockTime || null; } catch { return null; } }
 const STATE_DEPTH = 4500; // probed: slot0 answers at -5000 blocks, not at -50000
 
 async function pricesAtBlock(m, block) {
@@ -1066,6 +1139,7 @@ async function build() {
         pnlLegs,
         pnlSource,
         collected: collectSummary(p.tokenId, p.token0.decimals, p.token1.decimals, usd0, usd1),
+        claimed: claimedSummary(p.tokenId, p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol, p.openedAt),
         liquidity: p.liquidity,
         pair: `${p.token0.symbol} / ${p.token1.symbol}`,
         symbol0: p.token0.symbol,
@@ -1658,7 +1732,8 @@ async function handleRequest(req, res) {
           const m = await positionMeta(key);
           const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
           p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
-        } catch { p.collected = null; }
+          p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedAt);
+        } catch { p.collected = null; p.claimed = { status: "unavailable", reason: "this position's token metadata could not be read, so its claims cannot be valued" }; }
         // keep / watch / close / hold, from this row plus the collect history and
         // the hourly fee accrual (main wallet only; watched wallets accrue per wallet).
         const feeHours = {};

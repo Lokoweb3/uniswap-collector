@@ -541,6 +541,16 @@ own timers last completed a cycle (guardian, auto-collect, backup); it alerts on
   next 7 days from realised volatility (capped at 150%).
 - **Pool scout** (`scout.js`): hourly; when a sibling pool's 24h fee APR beats the position's pool by
   50% for two consecutive days, one Telegram suggestion per week; `pool-scout-log.json`.
+- **Claimed fees** (`claims-store.js`, `claims-scanner.js`, `/api/claims?tokenId=`): fees already taken out
+  of each v4 position, read from `PoolManager.ModifyLiquidity` for this chain and position manager, with
+  withdrawn principal removed and each collection valued at its own block's price. A background scan
+  starts with the main dashboard and walks every position back to its mint (or a 30-day floor, in blocks
+  from the chain's measured block time), one chunk at a time behind the dashboard's own requests; it
+  saves after every chunk to `claims.json`, so a restart continues where it stopped. Only one process may
+  write that file (`claims.json.lock`); any other server on the same data directory only reads it.
+  `LP_CLAIM_SCAN=1` (or `--claim-scan`) turns the scan on for a read-only or preview instance,
+  `LP_CLAIM_SCAN=0` turns it off; `LP_CLAIM_LOOKBACK_DAYS` (30), `LP_CLAIM_CHUNK` (9000 blocks) and
+  `LP_CLAIM_PAUSE_MS` (500) tune it. The file is rebuildable from chain.
 - **Auto-compound** (`compound.js`, `./run-collector.sh full --compound`): opt-in; after the vault's
   share, v3 fees are reinvested into the same position instead of swept; v4 positions are skipped.
   Not used by the scheduled run.

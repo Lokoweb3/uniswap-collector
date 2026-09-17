@@ -507,12 +507,22 @@ const claimStore = (() => {
 /** Pair and owner for a token id, so the scanner knows which positions to fold. */
 function claimMeta(tokenId) {
   const hit = claimMetaIndex.get(String(tokenId));
-  return hit || null;
+  // Persisted with the scan progress, so a restarted process can keep scanning
+  // before the first build has described any position.
+  return hit || (claimStore && claimStore.metaOf(tokenId)) || null;
+}
+/** Every position the scanner should track: this process's cards plus the persisted ones. */
+function trackedClaimIds() {
+  return [...new Set([...claimMetaIndex.keys(), ...(claimStore ? claimStore.knownIds() : [])])];
 }
 const claimMetaIndex = new Map();
 function rememberClaimMeta(tokenId, token0, token1, owner) {
   if (!tokenId || !token0 || !token1 || !owner) return;
   claimMetaIndex.set(String(tokenId), { token0, token1, owner });
+  if (claimStore) {
+    try { claimStore.remember(tokenId, { token0, token1, owner }); }
+    catch (err) { console.error(`claims: could not persist position ${tokenId}: ${err.message}`); }
+  }
 }
 
 /**
@@ -573,8 +583,29 @@ const CLAIM_BUDGET = Number(process.env.LP_CLAIM_BUDGET || 6);
 const CLAIM_LOOKBACK_MS = Number(process.env.LP_CLAIM_LOOKBACK_DAYS || 30) * 86400 * 1000;
 /** Scan every position the cards have described, under the request budget. */
 function scanClaims() {
-  return claimStore.scan(claimMeta, { ids: [...claimMetaIndex.keys()], chunk: CLAIM_CHUNK, budget: CLAIM_BUDGET, lookbackMs: CLAIM_LOOKBACK_MS });
+  return claimStore.scan(claimMeta, { ids: trackedClaimIds(), chunk: CLAIM_CHUNK, budget: CLAIM_BUDGET, lookbackMs: CLAIM_LOOKBACK_MS });
 }
+// The background scan (claims-scanner.js): runs from server start, one chunk at a
+// time behind the dashboard's own requests, until every tracked position reaches
+// its mint or the lookback floor, then follows the head. On in the main process;
+// a read-only or preview instance opts in with LP_CLAIM_SCAN=1 or --claim-scan
+// (only one process per data directory should run it). LP_CLAIM_SCAN=0 turns it off.
+let activeRequests = 0;
+const CLAIM_SCAN = !!claimStore && process.env.LP_CLAIM_SCAN !== "0" &&
+  (process.env.LP_CLAIM_SCAN === "1" || process.argv.includes("--claim-scan") || LOOPS);
+// Only one process may own claims.json; if another live one does, this one reads.
+const CLAIM_WRITER = CLAIM_SCAN && claimStore.acquireWriter();
+if (CLAIM_SCAN && !CLAIM_WRITER) console.error(`claims scan: not started, another process holds ${dataFile("claims.json")}.lock; this one only reads its progress`);
+const claimScanner = CLAIM_WRITER ? require("./claims-scanner").create({
+  store: claimStore, meta: claimMeta, ids: trackedClaimIds,
+  busy: () => activeRequests > 0,
+  chunk: CLAIM_CHUNK, lookbackMs: CLAIM_LOOKBACK_MS,
+  pauseMs: Number(process.env.LP_CLAIM_PAUSE_MS || 500),
+  // New records are priced at their own block right away, so the cards' dollar
+  // figure does not wait for someone to open the panel.
+  onFolded: async () => { for (const id of trackedClaimIds()) await priceClaims(id).catch((err) => console.error(`claims: pricing ${id}: ${err.message}`)); },
+}) : null;
+
 /**
  * Fix each of a position's claims at the USD prices of its own moment: the pool
  * price the scanner read at the claim's block with the numeraire at that block,
@@ -1454,6 +1485,11 @@ function refreshPortfolio() {
 // route sent a 200 header, then its view failed on a 403 from the RPC) took the whole
 // dashboard down with ERR_HTTP_HEADERS_SENT.
 const server = http.createServer((req, res) => {
+  // Counted so the background claim scan can step aside while requests run.
+  activeRequests++;
+  let counted = true;
+  const done = () => { if (counted) { counted = false; activeRequests--; } };
+  res.on("finish", done); res.on("close", done);
   handleRequest(req, res).catch((err) => {
     console.error(`request ${req.method} ${String(req.url).slice(0, 80)} failed: ${err && (err.shortMessage || err.message || err)}`);
     try {
@@ -2352,7 +2388,12 @@ async function handleRequest(req, res) {
         reason: `this instance serves chain ${cfg.chainId} and manager ${cfg.contracts.v4.positionManager}; the position asked for belongs to a different scope` }));
     }
     try {
-      if (claimMeta(id)) { await scanClaims(); await priceClaims(id); }
+      // With the background scan running, the request never scans on its own and
+      // never waits for it: it answers from the progress saved so far.
+      if (claimMeta(id)) {
+        if (!claimScanner && !claimStore.readOnly) await scanClaims();
+        await priceClaims(id);
+      }
       const rows = claimStore.rows(id);
       const coverage = claimStore.coverage(id);
       // The same three states the card uses: nothing scanned, a scan that has not
@@ -2365,6 +2406,7 @@ async function handleRequest(req, res) {
           : coverage.gap ? { reason: coverage.gap } : {}),
         scope: { chainId: Number(cfg.chainId), positionManager: String(cfg.contracts.v4.positionManager).toLowerCase(), tokenId: id },
         coverage,
+        scanner: claimScanner ? claimScanner.status() : null,
         rows: await Promise.all(rows.map(async (r) => {
           // Format here, where the token metadata is available and cached; the card
           // must never be handed a raw integer and left to guess at decimals.
@@ -3100,6 +3142,11 @@ if (process.env.LP_RESTARTED_BY === "watchdog" && LOOPS) {
   setTimeout(() => { alerts.send(`♻️ Dashboard restarted by the watchdog after it exited (${process.env.LP_RESTART_REASON || "process gone"}). Check server.log for the cause.`).catch(() => {}); }, 20000);
 }
 server.listen(PORT, HOST, () => {
+  if (claimScanner) {
+    // After the listener is up, so the first requests are never behind it.
+    setTimeout(() => claimScanner.start(), Number(process.env.LP_CLAIM_SCAN_DELAY_MS || 15000)).unref();
+    console.log(`claims scan: background scan on (chain ${cfg.chainId}, ${trackedClaimIds().length} position(s) persisted)`);
+  }
   console.log(`Dashboard running at http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`);
   if (HOST === "0.0.0.0") console.log("Bound to all interfaces -- reachable from your network.");
   console.log(`Watching ${cfg.ownerAddress} on chain ${cfg.chainId}`);

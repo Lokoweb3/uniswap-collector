@@ -64,10 +64,48 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     : typeof stateView === "object" && typeof stateView.getSlot0 === "function" ? stateView
     : new ethers.Contract(stateView, ["function getSlot0(bytes32) view returns (uint160,int24,uint24,uint24)"], provider);
 
-  let state;
-  try { state = JSON.parse(fs.readFileSync(FILE, "utf8")); } catch { state = { v: 1, scopes: {} }; }
-  if (!state.scopes) state.scopes = {};
+  let state, loadedMtime = 0;
+  function load() {
+    try { loadedMtime = fs.statSync(FILE).mtimeMs; } catch { loadedMtime = 0; }
+    try { state = JSON.parse(fs.readFileSync(FILE, "utf8")); } catch { state = { v: 1, scopes: {} }; }
+    if (!state.scopes) state.scopes = {};
+  }
+  load();
+
+  // One writer per file. Several servers can share a data directory (the main
+  // dashboard, a preview, the smoke test); a process that saved its own in-memory
+  // copy would overwrite the scanner's progress with a stale one. The scanning
+  // process takes `<file>.lock`; while a live process holds it, every other
+  // process only reads, and re-reads the file whenever it has changed.
+  const LOCK = `${FILE}.lock`;
+  let owner = false;
+  function lockHolder() {
+    let pid;
+    try { pid = Number(fs.readFileSync(LOCK, "utf8").trim()); } catch { return null; }
+    if (!pid || pid === process.pid) return null;
+    try { process.kill(pid, 0); return pid; } catch (e) { return e.code === "EPERM" ? pid : null; }
+  }
+  function acquireWriter() {
+    if (owner) return true;
+    const holder = lockHolder();
+    if (holder) return false;
+    try { fs.unlinkSync(LOCK); } catch {}              // stale: its process is gone
+    try { fs.writeFileSync(LOCK, String(process.pid), { flag: "wx" }); } catch { return false; }
+    owner = true;
+    process.on("exit", () => {
+      try { if (Number(fs.readFileSync(LOCK, "utf8")) === process.pid) fs.unlinkSync(LOCK); } catch {}
+    });
+    if (fs.existsSync(FILE)) load();                   // start from what is on disk now
+    return true;
+  }
+  const foreign = () => !owner && lockHolder() != null;
+  function refresh() {
+    let m = 0;
+    try { m = fs.statSync(FILE).mtimeMs; } catch {}
+    if (m && m !== loadedMtime) load();
+  }
   const S = () => {
+    if (foreign()) refresh();
     const s = (state.scopes[scope] = state.scopes[scope] || { events: {} });
     if (!s.tokens) {
       // Older files kept one cursor for the whole scope, which cannot say which
@@ -76,13 +114,23 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       s.tokens = {};
       delete s.scannedFrom; delete s.scannedTo; delete s.fromT; delete s.toT; delete s.complete;
     }
+    if (!s.meta) s.meta = {};
     return s;
   };
-  const save = () => fs.writeFileSync(FILE, JSON.stringify(state));
+  // Written to a temporary file and renamed into place, so a crash or a kill in
+  // the middle of a write leaves the previous progress intact, never a torn file
+  // that would parse as nothing and restart every scan from the head.
+  const save = () => {
+    if (foreign()) return;                              // another live process owns the file
+    const tmp = `${FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, FILE);
+  };
 
   const blockT = new Map();
   async function blockTime(n) {
     if (blockT.has(n)) return blockT.get(n);
+    if (blockT.size > 5000) blockT.clear();     // a long background scan touches many boundaries
     let t = null;
     try { const b = await provider.getBlock(n); t = b ? b.timestamp * 1000 : null; } catch {}
     blockT.set(n, t);
@@ -163,7 +211,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
    * to track. The floor is `floor` when given, else `lookbackMs` converted to
    * blocks with this chain's measured block time.
    */
-  async function scan(meta, { ids = null, chunk = 9000, budget = 12, floor = null, lookbackMs = null } = {}) {
+  async function scan(meta, { ids = null, chunk = 9000, budget = 12, floor = null, lookbackMs = null, forward = true } = {}) {
     const s = S();
     const head = await provider.getBlockNumber();
     const ms = await measureBlockMs(head);
@@ -219,7 +267,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     };
 
     // Forward first, so the newest claims appear soonest.
-    while (chunks < budget) {
+    while (forward && chunks < budget) {
       const lag = tracked.filter((id) => T(id).to < head);
       if (!lag.length) break;
       const from = Math.min(...lag.map((id) => T(id).to)) + 1;
@@ -248,8 +296,27 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     }
     s.floor = floor; s.head = head; s.blockMs = ms; s.lookbackMs = lookbackMs;
     save();
-    return { chunks, folded, floor, blockMs: ms, pending: tracked.filter((id) => !done(T(id))).length };
+    const lag = tracked.length ? head - Math.min(...tracked.map((id) => T(id).to)) : 0;
+    return { chunks, folded, floor, blockMs: ms, lag, pending: tracked.filter((id) => !done(T(id))).length };
   }
+
+  /**
+   * Remember what the scanner needs for a position (pair and owner), persisted
+   * with the progress so a restarted process can resume before any card renders.
+   */
+  function remember(tokenId, m) {
+    if (!m || !m.token0 || !m.token1 || !m.owner) return;
+    const s = S(), id = String(tokenId);
+    const next = { token0: String(m.token0).toLowerCase(), token1: String(m.token1).toLowerCase(), owner: String(m.owner).toLowerCase() };
+    const cur = s.meta[id];
+    if (cur && cur.token0 === next.token0 && cur.token1 === next.token1 && cur.owner === next.owner) return;
+    s.meta[id] = next;
+    save();
+  }
+  /** The persisted pair and owner for a position, or null. */
+  function metaOf(tokenId) { return S().meta[String(tokenId)] || null; }
+  /** Every position this scope has been asked to track. */
+  function knownIds() { return Object.keys(S().meta); }
 
   /** Every verified record for one position inside its scanned interval, oldest first. */
   function rows(tokenId) {
@@ -349,7 +416,9 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     };
   }
 
-  return { scan, rows, summary, coverage, setPrice, save, get scope() { return scope; }, get state() { return S(); } };
+  return { scan, rows, summary, coverage, setPrice, save, remember, metaOf, knownIds, acquireWriter,
+    /** True while another live process owns the file: read it, never write it. */
+    get readOnly() { return foreign(); }, get scope() { return scope; }, get state() { return S(); } };
 }
 
 module.exports = { create, MODIFY_LIQUIDITY, TRANSFER, NATIVE_PSEUDO, ZERO };

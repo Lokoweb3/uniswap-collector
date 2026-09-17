@@ -60,6 +60,9 @@ memecoin-collect-log.json
 memecoin-collect-state.json
 memecoin-collect-heartbeat.json
 advisor-cache.json
+claims.json
+claims.json.lock
+claims.json.*.tmp
 pool-scout-state.json
 pool-scout-log.json
 compound-log.json

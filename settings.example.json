@@ -3,6 +3,11 @@
   "chain": {
     "rpcUrl": "https://rpc.mainnet.chain.robinhood.com",
     "chainId": 4663,
+    "nativeCurrency": {
+      "symbol": "ETH",
+      "decimals": 18
+    },
+    "_nativeCurrencyComment": "The chain's native asset. NOT the pricing numeraire \u2014 they differ: here the numeraire is WETH while the native asset is ether, and on Arc the native asset is USDC at 18 decimals through getBalance() while the ERC-20 interface for the same balance reports 6. Verify both against the chain before setting this: getBalance() and the token's balanceOf() should resolve to the same human figure. Omit the key and the native asset is treated as unverified, and accounting refuses it rather than assuming 18-decimal ether.",
     "explorer": "https://robinhoodchain.blockscout.com"
   },
   "wallets": {

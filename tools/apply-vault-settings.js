@@ -114,7 +114,9 @@ async function main() {
   if (!APPLY) { console.log("\nNothing written. Re-run with --apply to write it."); return; }
   const backup = `${SETTINGS}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   fs.copyFileSync(SETTINGS, backup);
-  fs.writeFileSync(SETTINGS, JSON.stringify(after, null, 1));
+  // Same shape settings.js writes: two spaces and a trailing newline, so a small
+  // change does not land as a whole-file reformat.
+  fs.writeFileSync(SETTINGS, JSON.stringify(after, null, 2) + "\n");
   console.log(`\nWritten. Previous file kept at ${backup}`);
 }
 

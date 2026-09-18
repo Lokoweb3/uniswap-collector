@@ -89,7 +89,9 @@ async function main() {
   fs.copyFileSync(SETTINGS, backup);
   const next = JSON.parse(JSON.stringify(cfg));
   Object.assign(next.collector.thresholds, after);
-  fs.writeFileSync(SETTINGS, JSON.stringify(next, null, 1));
+  // Same shape settings.js writes: two spaces and a trailing newline, so a three
+  // line change does not land as a whole-file reformat.
+  fs.writeFileSync(SETTINGS, JSON.stringify(next, null, 2) + "\n");
   console.log(`\nWritten. Previous file kept at ${backup}`);
 }
 

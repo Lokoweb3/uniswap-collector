@@ -43,9 +43,15 @@ const hoursAgo = (n) => String(Math.floor((now - n * HOUR) / HOUR) * HOUR);
   // the wallet would look like it had stopped earning.
   const buckets = { [hoursAgo(1)]: 1, [hoursAgo(2)]: 1, [hoursAgo(3)]: 1 };
   const e = make(buckets)("0xw");
-  assert.ok(e.perHour > 0.7, `the rate reflects the hours lived, got ${e.perHour}`);
-  assert.ok(e.rateWindowH >= 2.9 && e.rateWindowH <= 3.2, `the window is stated: ${e.rateWindowH}h`);
+  // Buckets are floored to the hour, so the oldest of three "hours ago" began
+  // anywhere up to 59 minutes before that: the observed window is 3 to 4 hours
+  // depending on the time of day, and $3 over it is $0.75 to $1.00 an hour. Pinning
+  // this tighter would pass or fail on the minute the suite happened to run.
+  assert.ok(e.perHour > 0.7 && e.perHour <= 1.01, `the rate reflects the hours lived, got ${e.perHour}`);
+  assert.ok(e.rateWindowH >= 2.9 && e.rateWindowH <= 4.1, `the window is stated: ${e.rateWindowH}h`);
   assert.ok(e.rateWindowH < 24, "and is not claimed to be a day");
+  // The point of the window: a flat 24 would have read this as $0.125 an hour.
+  assert.ok(e.perHour > (e.h24 / 24) * 5, "and is far above what dividing by a full day would give");
 }
 
 // ---- 3. too little history is no rate at all ----------------------------------

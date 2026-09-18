@@ -622,7 +622,7 @@ async function runOwner(ctx, owner) {
       const rcpt = await tx.wait();
       const cost = rcpt.gasUsed * rcpt.gasPrice;
       recordGas(state, cost);
-      log(`  confirmed in block ${rcpt.blockNumber}, gas ${ethers.formatEther(cost)} ETH`);
+      log(`  confirmed in block ${rcpt.blockNumber}, gas ${nat(cost)} ${NATIVE}`);
       sim.collectedOk = true;
 
       for (const [addr, amt] of [
@@ -664,7 +664,7 @@ async function runOwner(ctx, owner) {
         const rcpt = await v4c.collect(sim, recipient, wallet);
         const cost = rcpt.gasUsed * rcpt.gasPrice;
         recordGas(state, cost);
-        log(`  confirmed in block ${rcpt.blockNumber}, gas ${ethers.formatEther(cost)} ETH`);
+        log(`  confirmed in block ${rcpt.blockNumber}, gas ${nat(cost)} ${NATIVE}`);
         for (const [t, amt] of [[sim.t0, sim.amount0], [sim.t1, sim.amount1]]) {
           if (amt > 0n && !t.native) collected.set(t.address, (collected.get(t.address) || 0n) + amt);
         }

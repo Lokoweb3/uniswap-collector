@@ -49,16 +49,20 @@ function compile(name) {
   const implAddr = await impl.getAddress();
   console.log("   implementation:", implAddr);
 
-  console.log("3. TreasuryNFT (LOKOVault), registry passed in");
+  console.log("3. TreasuryNFT (LOKOVault), registry and chain name passed in");
   const nftArt = compile("TreasuryNFT");
-  const nft = await (await new ethers.ContractFactory(nftArt.abi, nftArt.bytecode, deployer).deploy(implAddr, registry)).waitForDeployment();
+  const nft = await (await new ethers.ContractFactory(nftArt.abi, nftArt.bytecode, deployer).deploy(implAddr, registry, "Arc")).waitForDeployment();
   const nftAddr = await nft.getAddress();
   console.log("   nft:", nftAddr);
   ok((await nft.REGISTRY()).toLowerCase() === registry.toLowerCase(), "the NFT points at the registry we deployed");
   try {
-    await new ethers.ContractFactory(nftArt.abi, nftArt.bytecode, deployer).deploy(implAddr, MAIN);
+    await new ethers.ContractFactory(nftArt.abi, nftArt.bytecode, deployer).deploy(implAddr, MAIN, "Arc");
     ok(false, "a registry address with no code must be rejected");
   } catch { ok(true, "a registry address with no code is rejected at deployment"); }
+  try {
+    await new ethers.ContractFactory(nftArt.abi, nftArt.bytecode, deployer).deploy(implAddr, registry, "");
+    ok(false, "a nameless chain must be rejected");
+  } catch { ok(true, "an empty chain name is rejected at deployment"); }
 
   console.log("4. mint #1 to the main wallet");
   const r = await (await nft.mint(MAIN)).wait();
@@ -69,7 +73,19 @@ function compile(name) {
   ok((await reg.account(implAddr, ethers.ZeroHash, 5042, nftAddr, 1)).toLowerCase() === tba.toLowerCase(),
     "the registry derives the same address for it");
 
-  console.log("5. control");
+  console.log("5. the token says which chain it is on");
+  {
+    const meta = JSON.parse(Buffer.from((await nft.tokenURI(1)).split(",")[1], "base64").toString("utf8"));
+    const trait = (t) => (meta.attributes.find((x) => x.trait_type === t) || {}).value;
+    ok(trait("Chain") === "Arc", `the Chain trait reads "${trait("Chain")}"`);
+    ok(trait("Chain ID") === "5042", `the Chain ID trait reads "${trait("Chain ID")}" — from block.chainid, not a literal`);
+    ok(/ on Arc\./.test(meta.description), "the description names Arc");
+    ok(!/Robinhood|4663/.test(JSON.stringify(meta)), "nothing anywhere still claims Robinhood Chain");
+    const svg = Buffer.from(meta.image.split(",")[1], "base64").toString("utf8");
+    ok(svg.includes("Chain 5042") && svg.includes("#1 Arc"), "the artwork agrees with the metadata");
+  }
+
+  console.log("6. control");
   const acct = new ethers.Contract(tba, accArt.abi, p);
   const [cid, tc, tid] = await acct.token();
   ok(Number(cid) === 5042 && tc.toLowerCase() === nftAddr.toLowerCase() && Number(tid) === 1,
@@ -82,7 +98,7 @@ function compile(name) {
   // "transfer amount exceeds balance" when overdrawn). So the ERC-20 path is
   // rehearsed with ARGUS, a plain token the fork handles faithfully, and the native
   // path with value transfers — the same two code paths a sweep and a withdrawal use.
-  console.log("6. money in, money out");
+  console.log("7. money in, money out");
   const ARGUS = "0xece5ca8bf9220718e5727754026757512212cb3c";
   await p.send("anvil_impersonateAccount", [ARCLP]);
   await p.send("anvil_setBalance", [ARCLP, "0x56BC75E2D63100000"]);
@@ -111,7 +127,7 @@ function compile(name) {
   ok((await p.getBalance(tba)) === 0n && (await p.getBalance(MAIN)) > natBefore - ethers.parseUnits("0.1", 18),
     "and the native balance, to itself");
 
-  console.log("7. the NFT carries control: transfer it, and the new holder controls the vault");
+  console.log("8. the NFT carries control: transfer it, and the new holder controls the vault");
   await (await new ethers.Contract(nftAddr, nftArt.abi, holder).transferFrom(MAIN, strangerAddr, 1)).wait();
   ok((await acct.owner()).toLowerCase() === strangerAddr.toLowerCase(), "control followed the NFT");
   try { await (await new ethers.Contract(tba, accArt.abi, holder).withdrawAllETH(MAIN)).wait(); ok(false, "the old holder must lose control"); }

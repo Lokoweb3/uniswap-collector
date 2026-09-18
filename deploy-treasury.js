@@ -27,6 +27,9 @@ const CONFIG = {
   keystorePath: process.env.LP_KEYSTORE_PATH ||
                 path.join(process.env.HOME || '', '.lp-collector', 'operator-keystore.json'),
   registry:     '0x000000006551c19487814612e58FE06813775758',
+  // Baked into the token's metadata permanently. This script deploys to Robinhood
+  // Chain; tools/deploy-vault-arc.js is the one for Arc, and passes "Arc".
+  chainName:    process.env.LP_CHAIN_NAME || 'Robinhood Chain',
   owner:        '0x0000000000000000000000000000000000000001',
   explorerUrl:  'https://robinhoodchain.blockscout.com',
   telegramToken: process.env.TELEGRAM_TOKEN,
@@ -168,7 +171,7 @@ async function main() {
     nftArtifact.bytecode,
     signer
   );
-  const nftContract = await nftFactory.deploy(accountAddress);
+  const nftContract = await nftFactory.deploy(accountAddress, CONFIG.registry, CONFIG.chainName);
   await nftContract.waitForDeployment();
   const nftAddress = await nftContract.getAddress();
   console.log('✅ TreasuryNFT:', nftAddress);

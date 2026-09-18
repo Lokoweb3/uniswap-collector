@@ -9,8 +9,10 @@
  *                                    to the registry already running on Robinhood,
  *                                    only the trailing metadata blob differs)
  *   2. TreasuryAccount              the account implementation
- *   3. TreasuryNFT (LOKOVault #1)   which takes the registry address as an argument
- *                                    rather than the hardcoded canonical one
+ *   3. TreasuryNFT (LOKOVault #1)   which takes the registry address and this
+ *                                    chain's name as arguments rather than the
+ *                                    hardcoded canonical registry and "Robinhood
+ *                                    Chain" its metadata used to claim
  *   4. mint #1 to the holder        which creates the token-bound account itself
  *
  * and then hands the NFT contract's admin role to the holder, because the deployer
@@ -24,6 +26,11 @@
  * and sends nothing. --execute is the only way to broadcast, and it refuses any chain
  * that is not Arc. The whole sequence is rehearsed against a fork of live Arc by
  * tools/rehearse-arc-vault.js; run that first.
+ *
+ * Replacing a vault: --replace=<current tba> re-deploys only the NFT and mints #1,
+ * reusing the registry and account implementation already on Arc. The old vault is
+ * not touched and does not disappear -- whatever is still in it must be moved out
+ * first, because nothing here moves money.
  *
  *   node tools/deploy-vault-arc.js                      # dry run
  *   node tools/deploy-vault-arc.js --execute            # deploy for real
@@ -39,6 +46,10 @@ const solc = require("solc");
 
 const ROOT = path.join(__dirname, "..");
 const ARC_CHAIN_ID = 5042;
+// The name the token will describe itself by, forever, in metadata no setter reaches.
+// The id inside the contract comes from block.chainid and cannot be wrong; this is
+// only the human label beside it.
+const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc" };
 const REGISTRY_SRC = path.join(__dirname, "erc6551", "ERC6551Registry.sol");
 
 const arg = (name, dflt = null) => {
@@ -110,6 +121,7 @@ async function main() {
   const cfg = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
   const rpc = arg("rpc", cfg.chain.rpcUrl);
   const holder = ethers.getAddress(arg("holder", cfg.wallets.main.address));
+  const chainName = arg("chain-name", cfg.chainName || KNOWN_CHAIN_NAMES[ARC_CHAIN_ID]);
   const provider = new ethers.JsonRpcProvider(rpc, undefined, { staticNetwork: true });
   const chainId = Number((await provider.getNetwork()).chainId);
   const local = /127\.0\.0\.1|localhost/.test(rpc);
@@ -119,8 +131,32 @@ async function main() {
   log(`  chain id       : ${chainId}`);
   log(`  settings       : ${settingsPath()}`);
   log(`  vault holder   : ${holder}   <- whoever holds LOKOVault #1 controls the money`);
+  log(`  chain name     : ${chainName}   <- baked into the metadata permanently`);
+  if (!chainName) throw new Error("refusing to run: no chain name (pass --chain-name=)");
   if (chainId !== ARC_CHAIN_ID) throw new Error(`refusing to run: chain ${chainId} is not Arc (${ARC_CHAIN_ID})`);
-  if (cfg.vault && cfg.vault.tba) throw new Error(`refusing to run: settings already record a vault at ${cfg.vault.tba}`);
+
+  // Replacing an existing vault is a different job from creating the first one: the
+  // registry and the account implementation on Arc are already right and are reused,
+  // so only the NFT is deployed again. Naming the vault being replaced is what
+  // distinguishes "deliberately replacing it" from "forgot one already exists".
+  const replacing = arg("replace");
+  const current = (cfg.vault && cfg.vault.tba) || null;
+  if (current && !replacing) throw new Error(`refusing to run: settings already record a vault at ${current} (pass --replace=${current} to deploy a replacement)`);
+  if (replacing) {
+    if (!current) throw new Error("--replace was given but settings record no vault to replace");
+    if (ethers.getAddress(replacing) !== ethers.getAddress(current)) throw new Error(`--replace names ${replacing}, but the recorded vault is ${current}`);
+  }
+  const reuse = {
+    registry: replacing ? ethers.getAddress(arg("registry", cfg.vault.registry)) : null,
+    implementation: replacing ? ethers.getAddress(arg("implementation", cfg.vault.implementation)) : null,
+  };
+  if (replacing) {
+    log(`  replacing      : ${current}   <- left in place; move its balance out yourself first`);
+    log(`  reusing        : registry ${reuse.registry}, implementation ${reuse.implementation}`);
+    for (const [what, addr] of Object.entries(reuse)) {
+      if ((await provider.getCode(addr)) === "0x") throw new Error(`the ${what} at ${addr} has no code on this chain`);
+    }
+  }
 
   log("\nCompiling…");
   const art = await artifacts();
@@ -142,13 +178,14 @@ async function main() {
   if (Number(price) / 1e9 > cap) log(`  note: above the collector's own ceiling of ${cap} gwei — that ceiling does not gate this script.`);
 
   if (!EXECUTE) {
-    log("\nDry run: nothing was sent. The four steps and their measured cost on a fork of live Arc:");
-    log("  ERC-6551 registry               ~176,589 gas");
-    log("  TreasuryAccount implementation  ~712,610 gas");
-    log("  TreasuryNFT (LOKOVault)       ~2,413,573 gas");
-    log("  mint #1 + create the account    ~194,373 gas");
-    log("  hand admin to the holder         ~27,290 gas");
-    log(`  TOTAL ~3,524,435 gas  =  ${ethers.formatUnits(3524435n * price, 18).slice(0, 8)} ${cfg.chain.nativeCurrency.symbol} at this gas price`);
+    const steps = replacing
+      ? [["TreasuryNFT (LOKOVault)", 2413573n], ["mint #1 + create the account", 194373n], ["hand admin to the holder", 27290n]]
+      : [["ERC-6551 registry", 176589n], ["TreasuryAccount implementation", 712610n], ["TreasuryNFT (LOKOVault)", 2413573n],
+        ["mint #1 + create the account", 194373n], ["hand admin to the holder", 27290n]];
+    const total = steps.reduce((t, [, g]) => t + g, 0n);
+    log(`\nDry run: nothing was sent. The ${steps.length} steps and their measured cost on a fork of live Arc:`);
+    for (const [what, gas] of steps) log(`  ${what.padEnd(32)}~${gas.toLocaleString()} gas`);
+    log(`  TOTAL ~${total.toLocaleString()} gas  =  ${ethers.formatUnits(total * price, 18).slice(0, 8)} ${cfg.chain.nativeCurrency.symbol} at this gas price`);
     log("\nRun tools/rehearse-arc-vault.js against a fork first, then re-run with --execute.");
     return;
   }
@@ -160,7 +197,7 @@ async function main() {
   const bal = await provider.getBalance(wallet.address);
   log(`\nDeployer: ${wallet.address}`);
   log(`Balance : ${ethers.formatUnits(bal, cfg.chain.nativeCurrency.decimals)} ${cfg.chain.nativeCurrency.symbol}`);
-  const need = 3524435n * price * 2n;
+  const need = (replacing ? 2635236n : 3524435n) * price * 2n;
   if (bal < need) throw new Error(`not enough gas: ${ethers.formatUnits(need, 18)} wanted (twice the measured cost)`);
 
   if (!local) {
@@ -176,22 +213,30 @@ async function main() {
   let nonce = await provider.getTransactionCount(wallet.address, "latest");
   log(`\nStarting nonce: ${nonce}`);
 
-  log("\n1/4 ERC-6551 registry…");
-  let r = await (await wallet.sendTransaction({ data: art.registry.bytecode, nonce: nonce++ })).wait();
-  sent.registry = r.contractAddress; log(`    ${sent.registry}  (${r.gasUsed} gas)`);
-  if (!sent.registry || (await provider.getCode(sent.registry)) === "0x") throw new Error("the registry has no code — stopping");
+  let r;
+  const n = replacing ? 2 : 4;
+  if (replacing) {
+    sent.registry = reuse.registry;
+    sent.implementation = reuse.implementation;
+    log(`\nReusing the registry and implementation already on Arc; only the NFT is new.`);
+  } else {
+    log("\n1/4 ERC-6551 registry…");
+    r = await (await wallet.sendTransaction({ data: art.registry.bytecode, nonce: nonce++ })).wait();
+    sent.registry = r.contractAddress; log(`    ${sent.registry}  (${r.gasUsed} gas)`);
+    if (!sent.registry || (await provider.getCode(sent.registry)) === "0x") throw new Error("the registry has no code — stopping");
 
-  log("2/4 TreasuryAccount implementation…");
-  const impl = await new ethers.ContractFactory(art.account.abi, art.account.bytecode, wallet).deploy({ nonce: nonce++ });
-  await impl.waitForDeployment(); sent.implementation = await impl.getAddress();
-  log(`    ${sent.implementation}`);
+    log("2/4 TreasuryAccount implementation…");
+    const impl = await new ethers.ContractFactory(art.account.abi, art.account.bytecode, wallet).deploy({ nonce: nonce++ });
+    await impl.waitForDeployment(); sent.implementation = await impl.getAddress();
+    log(`    ${sent.implementation}`);
+  }
 
-  log("3/4 TreasuryNFT (LOKOVault)…");
-  const nft = await new ethers.ContractFactory(art.nft.abi, art.nft.bytecode, wallet).deploy(sent.implementation, sent.registry, { nonce: nonce++ });
+  log(`${n - 1}/${n} TreasuryNFT (LOKOVault)…`);
+  const nft = await new ethers.ContractFactory(art.nft.abi, art.nft.bytecode, wallet).deploy(sent.implementation, sent.registry, chainName, { nonce: nonce++ });
   await nft.waitForDeployment(); sent.nft = await nft.getAddress();
   log(`    ${sent.nft}`);
 
-  log(`4/4 mint #1 to ${holder}…`);
+  log(`${n}/${n} mint #1 to ${holder}…`);
   r = await (await nft.mint(holder, { nonce: nonce++ })).wait();
   sent.tba = await nft.tbaAddress();
   log(`    account: ${sent.tba}  (${r.gasUsed} gas)`);
@@ -203,14 +248,34 @@ async function main() {
   if ((await acct.owner()).toLowerCase() !== holder.toLowerCase()) throw new Error("the account does not answer to the holder — stopping");
   log(`    verified: bound to (chain ${cid}, ${tc}, #${tid}), controlled by ${holder}`);
 
+  // The whole point of this deployment: the token must say which chain it is on.
+  const meta = JSON.parse(Buffer.from((await nft.tokenURI(1)).split(",")[1], "base64").toString("utf8"));
+  const trait = (t) => (meta.attributes.find((x) => x.trait_type === t) || {}).value;
+  if (trait("Chain ID") !== String(chainId) || trait("Chain") !== chainName) {
+    throw new Error(`the token describes itself as ${trait("Chain")} (${trait("Chain ID")}) — stopping`);
+  }
+  log(`    metadata: "${trait("Chain")}", chain id ${trait("Chain ID")}`);
+
+  // A fresh NFT starts at the contract's 10% default. The collector reads the split
+  // from the NFT, so a replacement that kept the default would quietly halve what the
+  // vault receives. Carry the split across while the deployer is still admin.
+  const wantSplit = replacing ? Number(cfg.vault.feeSplitPct) : null;
+  if (wantSplit !== null && Number(await nft.feeSplitPct()) !== wantSplit) {
+    log(`    carrying the fee split across: ${await nft.feeSplitPct()}% -> ${wantSplit}%…`);
+    await (await nft.setFeeSplitPct(wantSplit, { nonce: nonce++ })).wait();
+    if (Number(await nft.feeSplitPct()) !== wantSplit) throw new Error("the fee split did not take — stopping");
+  }
+
   if (wallet.address.toLowerCase() !== holder.toLowerCase()) {
     log("    handing the NFT contract's admin role to the holder…");
     await (await nft.transferOwnership(holder, { nonce: nonce++ })).wait();
     log(`    admin: ${await nft.owner()}`);
   }
 
+  if (replacing && sent.tba.toLowerCase() === current.toLowerCase()) throw new Error("the new account has the old address — stopping");
   log("\nDeployed. Nothing in settings.json has been changed — the vault section to apply:");
-  log(JSON.stringify({ vault: { nft: sent.nft, tokenId: 1, tba: sent.tba, implementation: sent.implementation, registry: sent.registry, feeSplitPct: 0, feeSplitMax: 20, withdrawAlertUsdg: 1000 } }, null, 2));
+  log(JSON.stringify({ vault: { nft: sent.nft, tokenId: 1, tba: sent.tba, implementation: sent.implementation, registry: sent.registry, feeSplitPct: Number(await nft.feeSplitPct()), feeSplitMax: 20, withdrawAlertUsdg: 1000 } }, null, 2));
+  if (replacing) log(`\nThe old vault ${current} still exists and still holds whatever was in it. Move that out before the collector points anywhere new.`);
   log("\nReview it, then apply it yourself or with tools/apply-vault-settings.js. The collector stays disabled either way.");
 }
 

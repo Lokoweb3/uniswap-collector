@@ -127,6 +127,12 @@ contract TreasuryNFT is IERC165, IERC721, IERC721Metadata {
     // there needs its own. An immutable keeps it as cheap to read as the constant
     // was, and it can never be changed after deployment.
     address public immutable REGISTRY;
+
+    /// Human name of the chain this vault lives on, for the metadata and the art.
+    /// The id is never stored: block.chainid cannot be wrong, while a literal can,
+    /// and did -- the Arc deployment described itself as "Robinhood Chain" (4663)
+    /// in text no setter could reach.
+    string public chainName;
     address public implementation; // TreasuryAccount address
 
     // ERC-721 storage
@@ -154,12 +160,14 @@ contract TreasuryNFT is IERC165, IERC721, IERC721Metadata {
     }
 
     // ── Constructor ────────────────────────────────────────────────────────────
-    constructor(address _implementation, address _registry) {
+    constructor(address _implementation, address _registry, string memory _chainName) {
         require(_implementation != address(0), "No implementation");
         require(_registry.code.length > 0, "Registry has no code");
+        require(bytes(_chainName).length > 0, "No chain name");
         owner = msg.sender;
         implementation = _implementation;
         REGISTRY = _registry;
+        chainName = _chainName;
     }
 
     // ── Mint ───────────────────────────────────────────────────────────────────
@@ -208,14 +216,14 @@ contract TreasuryNFT is IERC165, IERC721, IERC721Metadata {
         string memory svgBase64 = Base64.encode(bytes(svg));
         string memory json = string(abi.encodePacked(
             '{"name":"LOKOVault #1",',
-            '"description":"LOKOVault - LP fee treasury on Robinhood Chain. NFT holder controls all accumulated fees. ',
+            '"description":"LOKOVault - LP fee treasury on ', chainName, '. NFT holder controls all accumulated fees. ',
             Strings.toString(feeSplitPct),
             '% of every LP collect flows here automatically.",',
             '"image":"data:image/svg+xml;base64,', svgBase64, '",',
             '"attributes":[',
             '{"trait_type":"Protocol","value":"Uniswap V3/V4"},',
-            '{"trait_type":"Chain","value":"Robinhood Chain"},',
-            '{"trait_type":"Chain ID","value":"4663"},',
+            '{"trait_type":"Chain","value":"', chainName, '"},',
+            '{"trait_type":"Chain ID","value":"', Strings.toString(block.chainid), '"},',
             '{"trait_type":"Type","value":"Treasury"},',
             '{"trait_type":"Fee Split","value":"', Strings.toString(feeSplitPct), '%"}',
             ']}'
@@ -258,10 +266,10 @@ contract TreasuryNFT is IERC165, IERC721, IERC721Metadata {
             '<rect x="430" y="170" width="80" height="30" rx="15" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/>',
             '<text x="470" y="191" text-anchor="middle" font-size="13" fill="#bfdbfe" font-weight="700" font-family="sans-serif">', pct, '%</text>',
             '<rect x="170" y="170" width="100" height="24" rx="12" fill="#0f2744" stroke="#2563eb" stroke-width="1"/>',
-            '<text x="220" y="187" text-anchor="middle" font-size="11" fill="#93c5fd" font-family="sans-serif">Chain 4663</text>',
+            '<text x="220" y="187" text-anchor="middle" font-size="11" fill="#93c5fd" font-family="sans-serif">Chain ', Strings.toString(block.chainid), '</text>',
             '<text x="340" y="510" text-anchor="middle" font-size="28" fill="#e2e8f0" font-weight="700" font-family="sans-serif">LOKOVault</text>',
             '<text x="340" y="540" text-anchor="middle" font-size="13" fill="#64748b" font-family="sans-serif">EIP-6551 Token Bound Account</text>',
-            '<text x="340" y="570" text-anchor="middle" font-size="11" fill="#475569" font-family="sans-serif">#1 Robinhood Chain</text>',
+            '<text x="340" y="570" text-anchor="middle" font-size="11" fill="#475569" font-family="sans-serif">#1 ', chainName, '</text>',
             '<line x1="200" y1="590" x2="480" y2="590" stroke="#1e3a5f" stroke-width="1"/>',
             '</svg>'
         ));

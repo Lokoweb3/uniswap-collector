@@ -66,6 +66,17 @@ for (const f of ["server.js", "approve-serve.js"]) {
     "the vault tab reads the chain it is served from");
   assert.ok(/ethers\.formatUnits\(ethBal, nat\.decimals\)/.test(code),
     "the native balance is scaled by this chain's decimals, not assumed to be ether");
+
+  // The vault balance and the line describing it must name the same thing. The
+  // subtitle used the chain's NATIVE currency while the figure used the treasury's
+  // unit, so Robinhood read "501.03 USDG ... reported in ETH". They agree on Arc
+  // only because its native asset and its treasury token are one contract.
+  assert.ok(/reported in \$\{REPORTING_UNIT\}/.test(code),
+    "the balance subtitle names the unit the balance is reported in");
+  assert.ok(!/reported in \$\{UNIT_SYMBOL\}/.test(code),
+    "and never the chain's native currency");
+  assert.ok(/REPORTING_UNIT = \(t && t\.unit\) \|\| '';/.test(code),
+    "the reporting unit comes from the treasury alone: falling back to the native symbol is how ETH got onto a USDG balance");
 }
 
 console.log("chain identity: both servers state their own chain, the wallet page hardcodes none, and no native asset is guessed");

@@ -1506,7 +1506,11 @@ function paintChainIdentity() {
   const est = document.querySelector('[data-id="est-chain"]');
   if (est) est.textContent = named ? ` · ${CHAIN_NAME}` : '';
   const un = document.querySelector('[data-id="vault-unit-note"]');
-  if (un) un.textContent = UNIT_SYMBOL && named ? ` · reported in ${UNIT_SYMBOL} on ${CHAIN_NAME}` : '';
+  // The unit the BALANCE is reported in, not the chain's native currency. UNIT_SYMBOL
+  // is the native asset -- ETH on Robinhood -- while the vault's balance is USDG, so
+  // this line read "501.03 USDG ... reported in ETH". They coincide on Arc only
+  // because its native asset and its treasury token are the same contract.
+  if (un) un.textContent = REPORTING_UNIT && named ? ` · reported in ${REPORTING_UNIT} on ${CHAIN_NAME}` : '';
   document.querySelectorAll('[data-chain-name]').forEach(el => { el.textContent = CHAIN_NAME; });
   document.querySelectorAll('[data-chain-id]').forEach(el => { el.textContent = CHAIN_ID ? 'chain ' + CHAIN_ID : ''; });
   const row = document.getElementById('kv-chain');
@@ -1576,8 +1580,13 @@ async function resolveUnit() {
   if (unitResolved) return REPORTING_UNIT;
   await chainReady;
   const t = await treasuryInfo();
-  REPORTING_UNIT = (t && t.unit) || UNIT_SYMBOL || '';
+  // The treasury's own unit if it states one. Falling back to the native currency is
+  // a last resort: on Robinhood that is ETH for a vault holding USDG, so it is used
+  // only when the instance says nothing at all, and the subtitle is repainted once
+  // the real answer arrives -- it is drawn before this resolves.
+  REPORTING_UNIT = (t && t.unit) || '';
   unitResolved = true;
+  paintChainIdentity();
   return REPORTING_UNIT;
 }
 // A figure and its ticker, or the figure alone. Never a bare currency sign.

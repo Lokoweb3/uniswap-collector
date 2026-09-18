@@ -120,7 +120,39 @@ const pos = [{ wallet: "T", tokenId: "1", pair: "A / B", version: 3, poolAddress
     assert.ok(!fs.existsSync(beside) || fs.statSync(beside).mtimeMs < STARTED,
       `${f} beside the code was written during this test`);
   }
+  // ---- the window is measured in this chain's blocks, not Robinhood's ----------
+  //
+  // BLOCK_MS was hardcoded to 100, Robinhood's rate. Arc produces a block every
+  // 507 ms, so a "7 day" floor of 6,048,000 blocks reached back 36 days; every swap
+  // was dated by that offset and the total was then scaled UP as if the window were
+  // short. Those numbers drive "Next 7d: +$X fees" and the tighten/widen advice.
+  //
+  // The scan walks backward in bounded chunks, so one pass looks the same whichever
+  // floor applies -- only where it STOPS differs. Hence the floor is asserted here.
+  {
+    const { windowFloor, WINDOW_MS, BLOCK_MS_FALLBACK } = require("../advisor");
+    const head = 21_000_000;
+    // Both rates measured from the live chains; the spans are 604,800,000 ms divided
+    // by each, so they stand on their own rather than being recomputed by the code
+    // under test.
+    const measured = [["Robinhood", 100.8, 6_000_000], ["Arc", 507.2, 1_192_430]];
+    for (const [chain, ms, expected] of measured) {
+      const spanned = head - windowFloor(head, ms);
+      assert.ok(Math.abs(spanned - expected) <= 2, `${chain} at ${ms} ms/block: ${spanned} blocks, expected ~${expected}`);
+    }
+    // The regression itself: Arc's real rate must not produce Robinhood's span.
+    assert.notStrictEqual(head - windowFloor(head, 507.2), 6_048_000, "507 ms must not yield the 100 ms window");
+    assert.ok(head - windowFloor(head, 507.2) < 2_000_000, "a 7-day window on Arc is about 1.2M blocks, not 6M");
+    assert.strictEqual(head - windowFloor(head, 100), 6_048_000, "and the old constant still describes a 100 ms chain");
+    // A window never reaches before genesis, and an unusable rate falls back rather
+    // than dividing by zero or NaN.
+    assert.strictEqual(windowFloor(1000, 100), 0, "clamped at the start of the chain");
+    assert.strictEqual(windowFloor(head, 0), head - Math.ceil(WINDOW_MS / BLOCK_MS_FALLBACK), "zero falls back");
+    assert.strictEqual(windowFloor(head, null), head - Math.ceil(WINDOW_MS / BLOCK_MS_FALLBACK), "null falls back");
+    assert.strictEqual(windowFloor(head, "507.2"), windowFloor(head, 507.2), "a numeric string is a rate");
+  }
+
   global.fetch = realFetch;
   fs.rmSync(tmp, { recursive: true, force: true });
-  console.log("advisor: range comparison, scaling, IL forecast and scout assertions passed");
+  console.log("advisor: range comparison, scaling, IL forecast, scout, and a 7-day window measured in this chain's own blocks");
 })().catch((e) => { global.fetch = realFetch; console.error("FAIL", e.message); process.exit(1); });

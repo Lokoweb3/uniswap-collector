@@ -35,7 +35,21 @@ const CACHE_FILE = dataPath("advisor-cache.json");
 const CHUNK = 2000;
 const HOUR = 3600 * 1000;
 const WINDOW_MS = 7 * 24 * HOUR;
-const BLOCK_MS = 100; // Robinhood Chain: ~0.1 s blocks
+const BLOCK_MS_FALLBACK = 100;   // Robinhood Chain: ~0.1 s blocks. NOT a constant of nature.
+/**
+ * The oldest block a 7-day window reaches on a chain with this block time.
+ *
+ * A function, and exported, because the value it returns was wrong for a year on
+ * any chain that is not Robinhood and nothing could see it: the scan walks backward
+ * in bounded chunks, so a single pass looks identical whether the floor is 1.2M or
+ * 6M blocks away. Only where it STOPS differs, and that takes hundreds of passes to
+ * observe. Here it can be asserted directly.
+ */
+function windowFloor(head, msPerBlock, windowMs = WINDOW_MS) {
+  const ms = Number(msPerBlock) > 0 ? Number(msPerBlock) : BLOCK_MS_FALLBACK;
+  return Math.max(0, head - Math.ceil(windowMs / ms));
+}
+
 const V3_SWAP = new ethers.Interface(["event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"]);
 const V4_SWAP = new ethers.Interface(["event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"]);
 
@@ -46,6 +60,37 @@ function create({ provider, cfg, log = console }) {
   const STABLE = ((cfg.usdReference && cfg.usdReference.stable) || "").toLowerCase();
   const POOL_MANAGER = cfg.contracts.v4 && cfg.contracts.v4.poolManager ? cfg.contracts.v4.poolManager : null;
   let state = { pools: {}, results: {}, at: 0 };
+
+  /**
+   * Milliseconds per block on THIS chain, measured once.
+   *
+   * This was hardcoded to 100 -- Robinhood's rate. Arc produces a block every 507 ms,
+   * so a "7 day" window of 6,048,000 blocks reached back 36 days, every swap in it
+   * was dated by that same wrong offset, and the result was then scaled UP as though
+   * the window were short. The figures that came out drive "consider tightening" and
+   * the "Next 7d: +$X fees" line, so the error was not internal.
+   *
+   * Settings may state chain.blockMs; otherwise it is measured from two real blocks
+   * and remembered for the process. A measurement that fails falls back, loudly.
+   */
+  let blockMsCache = null;
+  async function blockMs() {
+    if (blockMsCache) return blockMsCache;
+    if (Number(cfg.blockMs) > 0) { blockMsCache = Number(cfg.blockMs); return blockMsCache; }
+    try {
+      const head = await provider.getBlockNumber();
+      const span = Math.min(20000, Math.max(1000, head - 1));
+      const [a, b] = await Promise.all([blockTime(head - span), blockTime(head)]);
+      if (a && b && b > a) {
+        blockMsCache = ((b - a) / span);
+        return blockMsCache;
+      }
+    } catch (err) {
+      log.error(`advisor: could not measure block time (${err.shortMessage || err.message}); assuming ${BLOCK_MS_FALLBACK} ms`);
+    }
+    blockMsCache = BLOCK_MS_FALLBACK;
+    return blockMsCache;
+  }
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")) };
   } catch {}
@@ -64,7 +109,7 @@ function create({ provider, cfg, log = console }) {
   }
 
   /** Fold swap logs into the pool's hourly buckets (keyed by hour ms). */
-  function fold(pool, logs, iface, headTime, headBlock) {
+  function fold(pool, logs, iface, headTime, headBlock, msPerBlock) {
     for (const l of logs) {
       let e;
       try {
@@ -72,7 +117,7 @@ function create({ provider, cfg, log = console }) {
       } catch {
         continue;
       }
-      const t = headTime - (headBlock - l.blockNumber) * BLOCK_MS; // block time by offset; hourly resolution is all we need
+      const t = headTime - (headBlock - l.blockNumber) * msPerBlock; // block time by offset; hourly resolution is all we need
       const h = String(Math.floor(t / HOUR) * HOUR);
       const b = (pool.buckets[h] = pool.buckets[h] || { in0: "0", in1: "0", liqSum: "0", n: 0, closeBlock: 0, sqrtClose: null });
       const a0 = BigInt(e.args.amount0), a1 = BigInt(e.args.amount1);
@@ -96,7 +141,8 @@ function create({ provider, cfg, log = console }) {
     const pool = (state.pools[key] = state.pools[key] || { buckets: {}, newest: 0, oldest: 0 });
     const head = await provider.getBlockNumber();
     const headTime = (await blockTime(head)) || Date.now();
-    const floorBlock = Math.max(0, head - Math.ceil(WINDOW_MS / BLOCK_MS));
+    const msPerBlock = await blockMs();
+    const floorBlock = windowFloor(head, msPerBlock);
     const filter = ver === "v4" ? { address: POOL_MANAGER, topics: [V4_SWAP.getEvent("Swap").topicHash, id] } : { address: id, topics: [V3_SWAP.getEvent("Swap").topicHash] };
     const iface = ver === "v4" ? V4_SWAP : V3_SWAP;
     let chunks = 0;
@@ -118,7 +164,7 @@ function create({ provider, cfg, log = console }) {
       let from = pool.newest + 1;
       while (from <= head && chunks < maxChunks) {
         const to = Math.min(from + CHUNK - 1, head);
-        fold(pool, await fetch(from, to), iface, headTime, head);
+        fold(pool, await fetch(from, to), iface, headTime, head, msPerBlock);
         pool.newest = to;
         from = to + 1;
         chunks++;
@@ -131,7 +177,7 @@ function create({ provider, cfg, log = console }) {
     while (pool.oldest - 1 >= floorBlock && chunks < maxChunks) {
       const to = pool.oldest - 1;
       const from = Math.max(floorBlock, to - CHUNK + 1);
-      fold(pool, await fetch(from, to), iface, headTime, head);
+      fold(pool, await fetch(from, to), iface, headTime, head, msPerBlock);
       pool.oldest = from;
       chunks++;
     }
@@ -313,4 +359,4 @@ function create({ provider, cfg, log = console }) {
   return { refresh, view, evaluate, feesForRange, ilForecast, hourlyVol, liquidityForValue, fold, get state() { return state; } };
 }
 
-module.exports = { create };
+module.exports = { windowFloor, WINDOW_MS, BLOCK_MS_FALLBACK, create };

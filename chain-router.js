@@ -43,9 +43,11 @@ const HOST = arg("host", "127.0.0.1");
 const COOKIE = "lpchain";
 
 // The only targets that exist. A request cannot name anything outside this list.
+// accent: each chain gets its own colour so the bar reads as "which chain" at a
+// glance, before any word is read.
 const CHAINS = [
-  { key: "robinhood", label: "Robinhood", port: Number(arg("robinhood-port", 8787)) },
-  { key: "arc", label: "Arc", port: Number(arg("arc-port", 8797)) },
+  { key: "robinhood", label: "Robinhood", accent: "#34d399", port: Number(arg("robinhood-port", 8787)) },
+  { key: "arc", label: "Arc", accent: "#38bdf8", port: Number(arg("arc-port", 8797)) },
 ];
 const DEFAULT = arg("default", "robinhood");
 const byKey = (k) => CHAINS.find((c) => c.key === k) || null;
@@ -77,20 +79,41 @@ function restoreCookieHeader(raw, key) {
 
 const PICKER_ID = "lp-chain-picker";
 function pickerHtml(current) {
-  const opts = CHAINS.map((c) => `<option value="${c.key}"${c.key === current.key ? " selected" : ""}>${c.label}</option>`).join("");
+  // A dropdown was easy to miss: it read as page furniture, and the chain a figure
+  // belongs to is the one thing here that must never be misread. So: every chain
+  // visible at once, the current one filled in its own colour and marked as current,
+  // the others plainly clickable. Nothing is hidden behind an interaction.
+  //
+  // Anchors, not buttons, so it works with JavaScript off, opens in a new tab on
+  // middle click, and can be tabbed to. The click handler only adds preserving the
+  // rest of the query string, which a bare href cannot do.
+  const tabs = CHAINS.map((c) => {
+    const here = c.key === current.key;
+    return `<a href="?chain=${encodeURIComponent(c.key)}" data-chain="${c.key}"${here ? ' aria-current="page"' : ""}
+      title="${here ? `Showing ${c.label}` : `Switch to ${c.label}`}"
+      style="display:flex;align-items:center;gap:6px;text-decoration:none;border-radius:7px;padding:6px 11px;
+      font-weight:${here ? 700 : 500};letter-spacing:.2px;white-space:nowrap;
+      color:${here ? "#0b1220" : "#cbd5e1"};background:${here ? c.accent : "transparent"};
+      border:1px solid ${here ? c.accent : "rgba(148,163,184,.3)"}">
+      <span style="width:7px;height:7px;border-radius:50%;background:${here ? "#0b1220" : c.accent};opacity:${here ? 0.75 : 1}"></span>
+      ${c.label}</a>`;
+  }).join("");
   // Fixed, always visible, and it names the chain in the page's own words: a picker
   // you cannot see is how someone reads Arc's numbers believing they are Robinhood's.
   return `
-<div id="${PICKER_ID}" style="position:fixed;top:8px;right:10px;z-index:99999;display:flex;gap:6px;align-items:center;
-  background:rgba(15,23,42,.92);border:1px solid rgba(148,163,184,.35);border-radius:8px;padding:5px 8px;
-  font:12px/1.2 system-ui,-apple-system,Segoe UI,sans-serif;color:#e2e8f0;box-shadow:0 2px 10px rgba(0,0,0,.35)">
-  <span style="opacity:.7">chain</span>
-  <select aria-label="Chain" style="background:#0f172a;color:#e2e8f0;border:1px solid rgba(148,163,184,.35);
-    border-radius:6px;padding:2px 6px;font:inherit">${opts}</select>
+<div id="${PICKER_ID}" role="navigation" aria-label="Chain"
+  style="position:fixed;top:10px;right:12px;z-index:99999;display:flex;gap:8px;align-items:center;
+  background:rgba(15,23,42,.96);border:1px solid ${current.accent}66;border-radius:11px;padding:7px 9px;
+  font:13px/1.2 system-ui,-apple-system,Segoe UI,sans-serif;color:#e2e8f0;
+  box-shadow:0 6px 22px rgba(0,0,0,.45),0 0 0 3px ${current.accent}1f">
+  <span style="font-size:10px;text-transform:uppercase;letter-spacing:.9px;opacity:.6;padding-left:2px">Chain</span>
+  <span style="display:flex;gap:5px">${tabs}</span>
 </div>
 <script>(function(){var d=document.getElementById(${JSON.stringify(PICKER_ID)});if(!d)return;
-d.querySelector('select').addEventListener('change',function(e){
-  var u=new URL(location.href);u.searchParams.set('chain',e.target.value);location.href=u.toString();});})();</script>`;
+d.addEventListener('click',function(e){var a=e.target.closest('a[data-chain]');
+  if(!a||e.metaKey||e.ctrlKey||e.shiftKey||e.button)return;
+  e.preventDefault();
+  var u=new URL(location.href);u.searchParams.set('chain',a.getAttribute('data-chain'));location.href=u.toString();});})();</script>`;
 }
 
 function injectPicker(html, chain) {

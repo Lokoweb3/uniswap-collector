@@ -49,7 +49,14 @@ const url = (q = "") => new URL(`http://x/page${q}`);
 {
   const html = injectPicker("<html><body><h1>Dashboard</h1></body></html>", CHAINS[1]);
   assert.ok(html.includes("lp-chain-picker"), "a picker is injected");
-  assert.ok(/<option value="arc" selected>/.test(html), "the current chain is the selected one");
+  // Every chain is on screen at once rather than hidden inside a dropdown, and the
+  // one being shown is marked as current -- reading Arc's figures as Robinhood's is
+  // the mistake this exists to prevent, so which chain is in view cannot be subtle.
+  for (const c of CHAINS) assert.ok(html.includes(`data-chain="${c.key}"`), `${c.label} is visible without opening anything`);
+  assert.ok(/data-chain="arc" aria-current="page"/.test(html), "the current chain is marked as current");
+  assert.strictEqual((html.match(/aria-current="page"/g) || []).length, 1, "and only one chain is");
+  // Plain links, so the picker survives JavaScript being off or still loading.
+  assert.ok(/<a href="\?chain=robinhood"/.test(html), "the other chain is a real link, not a script-only control");
   assert.ok(html.indexOf("lp-chain-picker") < html.indexOf("</body>"), "inside the body");
   // Injecting twice would stack pickers on every proxied response.
   assert.strictEqual(injectPicker(html, CHAINS[1]), html, "injection is idempotent");

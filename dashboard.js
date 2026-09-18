@@ -1826,7 +1826,7 @@ function render(d){
   if (d.operatorGas){
     gas.hidden = false;
     gas.className = 'chip' + (d.operatorGas.low ? ' warn' : '');
-    gas.innerHTML = 'Operator gas <b>' + d.operatorGas.eth.toFixed(4) + ' ETH</b>'
+    gas.innerHTML = 'Operator gas <b>' + d.operatorGas.eth.toFixed(4) + ' ' + esc(d.operatorGas.symbol || (PRICING && PRICING.native) || '') + '</b>'
       + (d.operatorGas.low ? ' — running low, top up' : '');
   } else {
     gas.hidden = true;

@@ -1465,8 +1465,13 @@ async function build() {
     operatorWei == null
       ? null
       : {
-          eth: Number(ethers.formatEther(operatorWei)),
-          low: Number(ethers.formatEther(operatorWei)) < minGas,
+          // `eth` is the field name the page has always read; what it holds is this
+          // chain's native currency, which is USDC on Arc at 18 decimals. formatEther
+          // is right for the scale and wrong for the name, so the symbol travels with
+          // it rather than being assumed by every consumer.
+          eth: Number(ethers.formatUnits(operatorWei, cl.nativeDecimals(cfg))),
+          symbol: cl.nativeLabel(cfg),
+          low: Number(ethers.formatUnits(operatorWei, cl.nativeDecimals(cfg))) < minGas,
         };
 
   const deny = new Set((cfg.denylist || []).map(String));

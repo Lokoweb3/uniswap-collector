@@ -34,7 +34,9 @@ function attention(d, now) {
   if (p) {
     for (const loop of Object.values(p.loops || {})) if (loop.stale)
       add(1, `${loop.label || "Background loop"} stopped reporting`, "Check its last run in Operator.", "/wallet#operator");
-    if (p.operatorGas && p.operatorGas.low) add(2, "Top up operator gas", `${p.operatorGas.eth} ETH remaining.`, "/wallet#operator");
+    // "ETH remaining" on a chain whose gas is USDC sends someone to top up the wrong
+    // asset; the payload names the currency now.
+    if (p.operatorGas && p.operatorGas.low) add(2, "Top up operator gas", `${p.operatorGas.eth} ${p.operatorGas.symbol || ""} remaining.`.trim(), "/wallet#operator");
     if (p.unlock && !p.unlock.armed) add(3, "Collector is locked", "Scheduled collections need an active arm window.", "/wallet#arm");
     else if (p.unlock && p.unlock.minutesLeft < 360) add(3, "Arm window expires soon", `${Math.max(0, Math.round(p.unlock.minutesLeft))} minutes remaining.`, "/wallet#arm");
     const run = p.ops && p.ops.lastRun;

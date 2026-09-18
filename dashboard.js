@@ -1177,15 +1177,21 @@ function dailyChart(m, coll){
 }
 
 let dailyD = null;
+// 'loading' until the request comes back, then what came back. An empty series is a
+// real answer -- this instance has tracked nothing for the owner wallet -- and saying
+// "loading…" forever in its place describes work that finished long ago.
+let dailyState = 'loading';
 async function loadDaily(){
   try{
     const r = await fetch('/api/daily');
     const d = await r.json(); noteOutcome('Daily revenue', r.status, d);
-    if (!d.ok || !d.hours.length) return;
+    if (!d.ok) { dailyState = 'failed'; return; }
+    if (!d.hours.length) { dailyState = 'empty'; renderAnalytics(); return; }
+    dailyState = 'ok';
     dailyD = d;
     renderDaily();
     renderAnalytics();
-  }catch(e){ loadFailed('Daily revenue', e); }
+  }catch(e){ dailyState = 'failed'; loadFailed('Daily revenue', e); }
 }
 
 /* ---- analytics page: fee token lots (cost basis) ---- */
@@ -1412,9 +1418,17 @@ async function loadWatchForAnalytics(){
 }
 function renderEarnedByWallet(){
   const rows = [];
+  // Wallets this instance has never tracked on this chain are not rows of zeros: a
+  // zero says "we watched and it earned nothing", which is a claim, and a false one.
+  // The Arc instance is configured with every wallet but only Arc LP was ever used
+  // there, so four wallets were reporting $0.00 as if measured. They are counted
+  // below the table instead, so nothing disappears without being accounted for.
+  const untracked = [];
   // The Main wallet is never missing from this table: while its daily series is still loading
   // the row says so, instead of the wallet silently not being there.
-  if (!dailyD) rows.push({ name: ownerName(), today: null, d7: null, d30: null, all: null, since: 'loading…' });
+  if (dailyState === 'loading') rows.push({ name: ownerName(), today: null, d7: null, d30: null, all: null, since: 'loading…' });
+  if (dailyState === 'failed') rows.push({ name: ownerName(), today: null, d7: null, d30: null, all: null, since: 'could not be read' });
+  if (dailyState === 'empty') untracked.push(ownerName());
   if (dailyD){
     const m = dailyModel(dailyD);
     const now = Date.now();
@@ -1424,13 +1438,21 @@ function renderEarnedByWallet(){
   }
   for (const w of (watchForAnalytics && watchForAnalytics.wallets) || []){
     if (!w.ok || !w.earned) continue;
+    // Tracked here means: there is a date this instance started watching it, or a
+    // figure it actually measured. Neither, and it has never been seen on this chain.
+    const measured = [w.earned.today, w.earned.d7, w.earned.d30, w.earned.all].some((v) => v != null && Number(v) !== 0);
+    if (!w.earned.since && !measured) { untracked.push(walletName(w)); continue; }
     rows.push({ name: walletName(w), today: w.earned.today, d7: w.earned.d7, d30: w.earned.d30, all: w.earned.all, since: w.earned.since ? dayLabel(w.earned.since) : '' });
   }
-  if (!rows.length) return;
+  if (!rows.length && !untracked.length) return;
+  const nothingHere = untracked.length
+    ? `<div class="muted" style="margin-top:6px;font-size:12px">${untracked.length === 1 ? 'One other wallet is' : untracked.length + ' other wallets are'} configured but ${untracked.length === 1 ? 'has' : 'have'} never been tracked on this chain: ${untracked.join(', ')}. Not shown rather than shown as zero.</div>`
+    : '';
+  if (!rows.length) { $('#walletearn').innerHTML = nothingHere; return; }
   $('#walletearn').innerHTML = `<table class="etable">
     <tr><th class="l" title="Fees as they accrued in each position, per hour, by calendar day: the Main wallet from its fee ledger, watched wallets from their accrual snapshots. Attribution's 7-day fee total uses rolling 7 × 24 h windows, so the two can differ by up to a day of fees.">Earned by wallet <span class="muted" style="font-weight:400">accrued, by calendar day</span></th><th>Today</th><th>7 days</th><th>30 days</th><th>All tracked</th><th class="l">Tracking since</th></tr>
     ${rows.map(r => `<tr><td class="l">${r.name}</td><td class="u">${r.today == null ? '—' : usd(r.today)}</td><td class="u">${r.d7 == null ? '—' : usd(r.d7)}</td><td class="u">${r.d30 == null ? '—' : usd(r.d30)}</td><td class="u">${r.all == null ? '—' : usd(r.all)}</td><td class="l muted">${r.since}</td></tr>`).join('')}
-  </table>`;
+  </table>${nothingHere}`;
 }
 
 function renderAnalytics(){

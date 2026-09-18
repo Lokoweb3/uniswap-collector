@@ -756,19 +756,40 @@ async function runOwner(ctx, owner) {
     feeTierFor.set(ethers.getAddress(addr), Number(tier));
   }
 
+  // Where the fees were earned is not where they have to be sold. The pool a
+  // position lives in may not even exist on the router the collector swaps through
+  // -- a v4 position's fee is not a v3 tier -- so the tier is chosen by quoting the
+  // candidates and taking the best output. Recorded per token for the pass.
+  const positionFeeOf = new Map();
   for (const sim of [...eligible, ...eligibleV4]) {
     for (const t of [sim.t0.address, sim.t1.address]) {
       if (t === ethers.ZeroAddress || t.toLowerCase() === weth.toLowerCase()) continue;
-      const known = feeTierFor.get(t);
-      if (known === undefined) {
-        feeTierFor.set(t, sim.fee);
-      } else if (known !== sim.fee && overrides[t] === undefined) {
-        // Same token, two tiers, no override: refuse rather than guess.
-        log(`  ! ${sim.t0.symbol}/${sim.t1.symbol} appears at both ${known / 10000}% and ${sim.fee / 10000}%.`);
-        log(`    Set collector.swapFeeTierOverrides for this token in settings.json. Not swapping it.`);
-        feeTierFor.set(t, null);
-      }
+      if (!positionFeeOf.has(t)) positionFeeOf.set(t, sim.fee);
     }
+  }
+  const routeNote = new Map();   // token -> what to say about the route in the log
+  async function resolveRoute(tokenAddr, amountIn, decimals, symbol) {
+    if (feeTierFor.has(tokenAddr) && feeTierFor.get(tokenAddr) !== undefined) return feeTierFor.get(tokenAddr);
+    const route = await cl.pickSwapRoute({
+      override: overrides[tokenAddr] ?? overrides[tokenAddr.toLowerCase()] ?? null,
+      positionFee: positionFeeOf.get(tokenAddr) ?? null,
+      quote: (fee) => quoteToWeth(quoter, tokenAddr, amountIn, fee, weth),
+    });
+    if (route && route.fee != null) {
+      feeTierFor.set(tokenAddr, route.fee);
+      routeNote.set(tokenAddr, `${symbol} -> ${target.kind === "token" ? "target" : "WETH"} via the ${route.fee / 10000}% pool`
+        + `${route.source === "override" ? " (override)" : ""}, quoting ${fmt(route.out, target.kind === "token" ? 6 : 18)} for ${fmt(amountIn, decimals)} ${symbol}`
+        + `${route.tried.filter((t) => t.out).length > 1 ? ` — best of ${route.tried.filter((t) => t.out).length} pools` : ""}`);
+      return route.fee;
+    }
+    feeTierFor.set(tokenAddr, null);
+    if (route && route.failedOverride != null) {
+      routeNote.set(tokenAddr, `${symbol}: swapFeeTierOverrides pins the ${route.failedOverride / 10000}% pool, which cannot quote this amount. Not falling back to another pool.`);
+    } else {
+      const tried = route && route.tried ? route.tried.map((t) => t.fee / 10000 + "%").join(", ") : cl.V3_FEE_TIERS.map((f) => f / 10000 + "%").join(", ");
+      routeNote.set(tokenAddr, `${symbol}: no pool quotes it at ${tried}`);
+    }
+    return null;
   }
 
   let soldEthWei = 0n; // native ETH received from v4 sells in this loop; wrapped below so it joins the sweep
@@ -806,7 +827,8 @@ async function runOwner(ctx, owner) {
     // No v3 route (launchpad tokens): sell in the v4 pool the fees came from,
     // under the memecoinSell policy; whatever is not sold is handed back below.
     const v4keys = v4KeysFor.get(tokenAddr.toLowerCase());
-    if (seller.ready && v4keys && v4keys.length && (feeTierFor.get(tokenAddr) === undefined || feeTierFor.get(tokenAddr) === null || !(await quoteToWethAny(quoter, tokenAddr, balance, [feeTierFor.get(tokenAddr)], weth)))) {
+    const v3Route = await resolveRoute(tokenAddr, balance, info.decimals, info.symbol);
+    if (seller.ready && v4keys && v4keys.length && v3Route == null) {
       const usdOf = async (cur, amt) => {
         if (target.kind !== "token") return null;
         if (cur.toLowerCase() === target.address.toLowerCase()) return Number(fmt(amt, 6, 6));
@@ -825,8 +847,10 @@ async function runOwner(ctx, owner) {
         balance = res.remaining;
       }
     }
-    const feeTier = feeTierFor.get(tokenAddr);
-    // No usable tier is decided up front (it gates whether we can even quote).
+    // Quoted with the amount actually being swapped: the best pool for a dust
+    // amount is not always the best pool for a large one.
+    const feeTier = await resolveRoute(tokenAddr, balance, info.decimals, info.symbol);
+    if (routeNote.has(tokenAddr)) { log(`  ${routeNote.get(tokenAddr)}`); routeNote.delete(tokenAddr); }
     if (feeTier === undefined || feeTier === null) {
       await handBack(`no known fee tier for ${info.symbol}`);
       continue;

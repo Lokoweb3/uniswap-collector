@@ -18,7 +18,7 @@ const acorn = require("acorn");
 const walk = require("acorn-walk");
 
 const ROOT = path.join(__dirname, "..");
-const FILES = ["collector.js", "collector-logic.js", "collector-swap.js", "logs.js"];
+const FILES = ["collector.js", "collector-logic.js", "collector-swap.js", "logs.js", "tools/recover-stranded.js"];
 const HOST = new Set([
   ...Object.getOwnPropertyNames(globalThis),
   "require", "module", "exports", "__dirname", "__filename", "process", "console", "Buffer", "fetch",

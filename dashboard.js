@@ -415,6 +415,23 @@ function apiOutcome(status, d) {
     : `the server answered HTTP ${status}${d && d.ok === false ? ' without data' : ''}`;
   return { kind: 'error', msg: why };
 }
+/**
+ * Record how a refresh went, from the response rather than from the fact that a
+ * response arrived.
+ *
+ * Every caller used to run loadOk() immediately after r.json(), before looking at
+ * the status or the body. An endpoint that answers HTTP 500 with a parseable
+ * {ok:false} therefore CLEARED the staleness banner -- the one mechanism the page
+ * has for admitting it is showing old numbers -- and then returned early, leaving
+ * yesterday's figures on screen with nothing to say so.
+ */
+function noteOutcome(section, status, d) {
+  const o = apiOutcome(status, d);
+  if (o.kind === 'ok') loadOk(section);
+  else if (o.kind === 'error') loadFailed(section, new Error(o.msg));
+  return o.kind;                     // 'pending' leaves the previous state alone
+}
+
 // A section that kept its last good data after a failed refresh says so, and how old it is.
 function staleNote(at, msg) {
   const when = at ? new Date(at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
@@ -425,13 +442,13 @@ function staleNote(at, msg) {
 
 let allSeriesD = null;
 async function loadAllSeries(){
-  try { const r = await fetch('/api/portfolio-all'); const d = await r.json(); loadOk('Portfolio history'); if (d.ok && d.points.length) { allSeriesD = d; if (lastPortfolio) renderPortfolio(); } } catch(e){ loadFailed('Portfolio history', e); }
+  try { const r = await fetch('/api/portfolio-all'); const d = await r.json(); noteOutcome('Portfolio history', r.status, d); if (d.ok && d.points.length) { allSeriesD = d; if (lastPortfolio) renderPortfolio(); } } catch(e){ loadFailed('Portfolio history', e); }
 }
 
 async function loadBalances(){
   try{
     const r = await fetch('/api/portfolio');
-    const d = await r.json(); loadOk('Wallet balances');
+    const d = await r.json(); noteOutcome('Wallet balances', r.status, d);
     if (r.status === 503){ setTimeout(loadBalances, 15000); return; } // first pass still running
     if (!d.ok || !d.rows || !d.rows.length) return;
     notePricing(d);
@@ -751,7 +768,7 @@ function renderCoveragePanel(){
 async function loadRewards(){
   try{
     const r = await fetch('/api/rewards');
-    const d = await r.json(); loadOk('Merkl rewards');
+    const d = await r.json(); noteOutcome('Merkl rewards', r.status, d);
     const chip = $('#merklchip');
     if (!d.ok || d.rewards == null){ chip.hidden = true; return; }
     // The chip only appears when there is something to claim; the check
@@ -961,7 +978,7 @@ $('#closedtoggle').addEventListener('click', () => {
 async function loadHistory(){
   try{
     const r = await fetch('/api/history');
-    const d = await r.json(); loadOk('Collection history');
+    const d = await r.json(); noteOutcome('Collection history', r.status, d);
     if (!d.ok) return;
     $('#earnings').hidden = false;
     renderChainFees();                 // the other source, side by side and named
@@ -1154,7 +1171,7 @@ let dailyD = null;
 async function loadDaily(){
   try{
     const r = await fetch('/api/daily');
-    const d = await r.json(); loadOk('Daily revenue');
+    const d = await r.json(); noteOutcome('Daily revenue', r.status, d);
     if (!d.ok || !d.hours.length) return;
     dailyD = d;
     renderDaily();
@@ -1167,7 +1184,7 @@ let lotsD = null;
 async function loadLots(){
   try {
     const r = await fetch('/api/strategy/lots');
-    const d = await r.json(); loadOk('Fee token lots');
+    const d = await r.json(); noteOutcome('Fee token lots', r.status, d);
     if (!d.ok) return;
     lotsD = d;
     renderLots();
@@ -1176,7 +1193,7 @@ async function loadLots(){
 }
 let auditD = null;
 async function loadAudit(){
-  try { const r = await fetch('/api/audit', { cache: 'no-store' }); auditD = await r.json(); loadOk('Ledger audit'); renderLots(); } catch(e){ loadFailed('Ledger audit', e); }
+  try { const r = await fetch('/api/audit', { cache: 'no-store' }); auditD = await r.json(); noteOutcome('Ledger audit', r.status, auditD); renderLots(); } catch(e){ loadFailed('Ledger audit', e); }
 }
 /** "3 rows look off" next to the lots total, with every finding in the tooltip; an accept button for unfamiliar routes. */
 function auditBadge(){
@@ -1229,7 +1246,7 @@ let trackD = null;
 async function loadTrack(){
   try {
     const r = await fetch('/api/strategy/track');
-    const d = await r.json(); loadOk('Strategy track record');
+    const d = await r.json(); noteOutcome('Strategy track record', r.status, d);
     if (!d.ok) return;
     trackD = d;
     renderTrack();
@@ -1288,7 +1305,7 @@ let stakingD = null;
 async function loadStaking(){
   try {
     const r = await fetch('/api/staking');
-    const d = await r.json(); loadOk('Staking');
+    const d = await r.json(); noteOutcome('Staking', r.status, d);
     if (!d.ok) return;
     stakingD = d;
     renderStaking();
@@ -1339,7 +1356,7 @@ function incomeEvents(){
 
 let treasuryD = null;
 async function loadTreasury(){
-  try { const r = await fetch('/api/treasury'); const d = await r.json(); loadOk('Vault'); if (d.ok) { treasuryD = d; renderVault(); renderAnalytics(); } } catch(e){ loadFailed('Vault', e); }
+  try { const r = await fetch('/api/treasury'); const d = await r.json(); noteOutcome('Vault', r.status, d); if (d.ok) { treasuryD = d; renderVault(); renderAnalytics(); } } catch(e){ loadFailed('Vault', e); }
 }
 function renderVault(){
   const d = treasuryD;
@@ -3470,7 +3487,7 @@ if (PAGE === 'dashboard') {
 async function loadLaunches(){
   try {
     const r = await fetch('/api/launches', { cache: 'no-store' });
-    const d = await r.json(); loadOk('Launch watch');
+    const d = await r.json(); noteOutcome('Launch watch', r.status, d);
     const sec = $('#launchsec'); if (!d.ok) return;
     if (!d.enabled) { sec.hidden = true; return; }
     sec.hidden = false;
@@ -3534,7 +3551,7 @@ function rulesLine(p){
 async function loadRisk(){
   try {
     const r = await fetch('/api/risk', { cache: 'no-store' });
-    const d = await r.json(); loadOk('Risk guardian');
+    const d = await r.json(); noteOutcome('Risk guardian', r.status, d);
     if (!d.ok) return;
     const sec = $('#risksec');
     if (!d.watching && !d.stale) { sec.hidden = true; return; }
@@ -3663,7 +3680,7 @@ async function loadAttribution(){
   try {
     const days = Number(($('#attribdays') || {}).value) || 30;
     const r = await fetch('/api/attribution?days=' + days);
-    const d = await r.json(); loadOk('Performance attribution');
+    const d = await r.json(); noteOutcome('Performance attribution', r.status, d);
     if (!d.ok) return;
     attribD = d;
     renderAttribution();
@@ -3804,7 +3821,7 @@ if (ANALYTICS) { loadAttribution(); setInterval(loadAttribution, 10 * 60 * 1000)
 let advisorD = null;
 async function loadAdvisor(){
   if (PAGE === 'analytics') return;
-  try { const r = await fetch('/api/advisor'); const d = await r.json(); loadOk('Range advisor'); if (d.ok) { advisorD = d; decorateAdvisor(); } } catch(e){ loadFailed('Range advisor', e); }
+  try { const r = await fetch('/api/advisor'); const d = await r.json(); noteOutcome('Range advisor', r.status, d); if (d.ok) { advisorD = d; decorateAdvisor(); } } catch(e){ loadFailed('Range advisor', e); }
 }
 function advisorLine(r){
   if (!r || !r.ranges) return r && r.status ? `<span class="rate advisor muted" title="Range advisor">range advisor: ${r.status}</span>` : '';
@@ -3867,7 +3884,7 @@ function decorateTokenHealth(){
   }
 }
 async function loadTokenHealth(){
-  try { const r = await fetch('/api/token-health'); const d = await r.json(); loadOk('Token health'); if (d.ok) { tokenHealthD = d; decorateTokenHealth(); } } catch(e){ loadFailed('Token health', e); }
+  try { const r = await fetch('/api/token-health'); const d = await r.json(); noteOutcome('Token health', r.status, d); if (d.ok) { tokenHealthD = d; decorateTokenHealth(); } } catch(e){ loadFailed('Token health', e); }
 }
 if (PAGE === 'dashboard'){
   const bt = document.getElementById('baltable');

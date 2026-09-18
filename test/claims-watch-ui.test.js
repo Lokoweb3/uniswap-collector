@@ -44,12 +44,12 @@ function page() {
     let lastWatchForPf = null, lastPortfolio = null;
     const fetchedAt = new WeakMap();
     ${claimHelpers()}
-    ${lift("apiOutcome")}${lift("staleNote")}${lift("loadWatch")}${lift("watchFailed")}
+    ${lift("apiOutcome")}${lift("noteOutcome")}${lift("staleNote")}${lift("loadWatch")}${lift("watchFailed")}
     ${lift("claimKindLabel")}${lift("claimPriceLabel")}${lift("claimPanelHtml")}
     const claimPanels = new Map();
     ${lift("refreshClaimPanel")}
     ${lift("claimedMetric")}${lift("claimedLine")}
-    return { apiOutcome, loadWatch, refreshClaimPanel, claimedMetric, claimedLine, claimPanelHtml,
+    return { apiOutcome, noteOutcome, loadWatch, refreshClaimPanel, claimedMetric, claimedLine, claimPanelHtml,
              get last() { return lastWatchForPf; } };`;
   const fetch = async () => {
     const a = h.answers.shift();
@@ -65,6 +65,34 @@ function page() {
 }
 
 async function main() {
+  // ---- noteOutcome: a failed refresh must not clear the staleness banner ---------
+  //
+  // Every loader used to call loadOk() straight after r.json(), before looking at
+  // the status or the body. /api/treasury and /api/history answer HTTP 500 with a
+  // parseable {ok:false}, so r.json() succeeds, the banner that says "could not be
+  // refreshed - what is shown may be out of date" was cleared, and the loader then
+  // returned early leaving the previous numbers on screen with nothing to say so.
+  {
+    const { api, h } = page();
+    assert.strictEqual(api.noteOutcome("Vault", 200, { ok: true }), "ok");
+    assert.deepStrictEqual(h.oks, ["Vault"], "a good answer clears the banner");
+    assert.deepStrictEqual(h.fails, []);
+
+    h.oks.length = 0;
+    assert.strictEqual(api.noteOutcome("Vault", 500, { ok: false, error: "rpc down" }), "error");
+    assert.deepStrictEqual(h.oks, [], "a 500 must NOT clear it");
+    assert.ok(h.fails.some((f) => /^Vault: rpc down/.test(f)), `it is recorded as failed: ${h.fails}`);
+
+    h.oks.length = 0; h.fails.length = 0;
+    assert.strictEqual(api.noteOutcome("Vault", 500, { ok: false }), "error", "even with no error text");
+    assert.ok(h.fails.some((f) => /HTTP 500/.test(f)), "and says what the server answered");
+
+    h.oks.length = 0; h.fails.length = 0;
+    assert.strictEqual(api.noteOutcome("Vault", 202, { refreshing: true }), "pending");
+    assert.deepStrictEqual(h.oks, [], "a still-building answer neither clears nor raises");
+    assert.deepStrictEqual(h.fails, [], "it leaves the previous state alone");
+  }
+
   // ---- apiOutcome ----------------------------------------------------------------
   {
     const { api } = page();

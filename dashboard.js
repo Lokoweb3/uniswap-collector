@@ -3980,7 +3980,7 @@ if (PAGE === 'dashboard'){
       const block = wrap.closest('.tblock');
       if (block){
         block.parentElement.insertBefore(wrap, block);
-        block.remove();
+        block.remove();   // takes the bar and the note with it
       }
       delete table.dataset.tfid;
       return;
@@ -3999,7 +3999,29 @@ if (PAGE === 'dashboard'){
       block.appendChild(wrap);
     }
 
-    let bar = block.querySelector(`[data-tfilter="${id}"]`);
+    // One block, one set of controls. Looking the bar up by the table's id meant a
+    // re-rendered table -- innerHTML replaces the element, so the id goes with it --
+    // found nothing and built another, while the old bar stayed behind as a sibling
+    // of the table rather than inside it. Every refresh added one, which is how the
+    // page came to carry twenty-one identical "Filter rows" boxes. So the bar is
+    // found by what it is, not by which table it was built for, and any extra ones
+    // left behind by earlier renders are cleared out here.
+    const bars = block.querySelectorAll('.tfilter');
+    for (let i = 1; i < bars.length; i++) bars[i].remove();
+    const notes = block.querySelectorAll('.tscope');
+    for (let i = 1; i < notes.length; i++) notes[i].remove();
+    let bar = bars[0] || null;
+    if (bar && bar.dataset.tfilter !== id){
+      // Same controls, new table underneath: re-point them instead of rebuilding,
+      // so the term someone has typed survives the refresh.
+      bar.dataset.tfilter = id;
+      const note = block.querySelector('.tscope');
+      if (note) note.dataset.tfilter = id + '-note';
+      const inputId = id + '-q';
+      const label = bar.querySelector('label');
+      if (label) label.setAttribute('for', inputId);
+      if (bar._input) bar._input.id = inputId;
+    }
     if (!bar){
       bar = document.createElement('div');
       bar.className = 'tfilter';
@@ -4022,13 +4044,16 @@ if (PAGE === 'dashboard'){
       bar._none  = bar.querySelector('.tnone');
       bar._more  = bar.querySelector('.tmore');
       bar._expanded = false;
-      bar._input.addEventListener('input', () => apply(bar, table));
-      bar._more.addEventListener('click', () => { bar._expanded = true; apply(bar, table); });
+      // Bound to bar._table, not to `table`: the listeners outlive the table they
+      // were created for, and a closure over it would keep filtering a detached one.
+      bar._input.addEventListener('input', () => apply(bar, bar._table));
+      bar._more.addEventListener('click', () => { bar._expanded = true; apply(bar, bar._table); });
     } else {
       // The table was re-rendered underneath us: page state resets, the typed
       // term does not, so a refresh does not throw away what someone is reading.
       bar._expanded = false;
     }
+    bar._table = table;
     apply(bar, table);
   }
 

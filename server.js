@@ -1123,6 +1123,25 @@ function recordAllWallets() {
   const total = +(owner + Object.values(wallets).reduce((a, b) => a + b, 0)).toFixed(2);
   // A partially priced owner view understates `owner` and `total`; the point is kept for the
   // chart but flagged so attribution never reads the gap as a value drop.
+
+  // A misread price is not a measurement. One sample on 2026-09-17 recorded the
+  // owner at 6.7e37 and one watched wallet at 1.4e38 while the main-wallet series,
+  // priced the same minute, sat at $12,400 -- a single token priced wrongly by
+  // thirty-odd orders of magnitude. It is kept forever and it set the chart's upper
+  // bound, flattening eleven days of real history into the axis. So a sample wildly
+  // out of step with the ones around it is refused rather than stored: judged
+  // against the recent median, which needs no absolute ceiling and moves with the
+  // portfolio, and only once there is enough history to judge against.
+  const recent = allSeries.points.slice(-24).map((p) => p.total).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
+  const median = recent.length ? recent[Math.floor(recent.length / 2)] : null;
+  if (!Number.isFinite(total)) {
+    console.error(`portfolio-all: sample refused, total is not a number (${total})`);
+    return;
+  }
+  if (median != null && recent.length >= 6 && total > median * 100) {
+    console.error(`portfolio-all: sample refused, $${total.toExponential(3)} is more than 100x the recent median of $${median.toFixed(2)} — a price misread, not a value`);
+    return;
+  }
   allSeries.points.push({ t: Date.now(), owner, wallets, total, ...(pf.partial ? { partial: true } : {}) });
   try {
     fs.writeFileSync(ALL_FILE, JSON.stringify(allSeries));

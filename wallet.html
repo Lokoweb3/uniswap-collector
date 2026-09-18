@@ -509,7 +509,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     <label class="chk"><input type="checkbox" data-id="verify" disabled><span>I checked that the operator address above matches the collector's address shown on the dashboard's "Operator gas" chip and in <span class="mono">collector.log</span> ("Operator: 0x…").</span></label>
     <div class="actions">
       <button data-id="connect">Connect wallet</button>
-      <button data-id="switch" hidden>Switch to Robinhood Chain</button>
+      <button data-id="switch" hidden>Switch network</button>
       <button data-id="approve" class="primary" disabled>Approve operator</button>
       <button data-id="revoke" hidden>Revoke approval</button>
     </div>
@@ -557,7 +557,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     <label class="chk"><input type="checkbox" data-id="verify" disabled><span>I checked that the operator address above matches the collector's address shown on the dashboard's "Operator gas" chip and in <span class="mono">collector.log</span> ("Operator: 0x…").</span></label>
     <div class="actions">
       <button data-id="connect">Connect wallet</button>
-      <button data-id="switch" hidden>Switch to Robinhood Chain</button>
+      <button data-id="switch" hidden>Switch network</button>
       <button data-id="approve" class="primary" disabled>Approve operator</button>
       <button data-id="revoke" hidden>Revoke approval</button>
     </div>
@@ -1168,7 +1168,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
       signer = await provider.getSigner();
       const net = await provider.getNetwork();
       if (Number(net.chainId) !== Number(data.chainId)) {
-        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(data.chainId).toString(16) }] }); } catch (e) { status('Switch the wallet to Robinhood Chain (4663).', 'warn'); }
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(data.chainId).toString(16) }] }); } catch (e) { status(`Switch the wallet to ${data.chainName || 'the right network'} (chain id ${data.chainId}).`, 'warn'); }
       }
       // Work on the connected wallet's row if it is one of ours.
       if (data.wallets.some((w) => w.address.toLowerCase() === account.toLowerCase())) await load(account);
@@ -1305,7 +1305,7 @@ const initApprove = ((root, VERSION) => {
       const mine = account.toLowerCase() === cfg.owner.toLowerCase();
       $('[data-id="wallet"]').innerHTML = `<span class="mono">${short(account)}</span> ${mine ? '<span class="pill ok">owner</span>' : '<span class="pill bad">not the owner wallet</span>'}`;
       if (!mine) status(`Connected account ${short(account)} is not the main wallet or a wallet listed under wallets in settings.json. Switch accounts in your wallet.`, 'bad');
-      else if (!chainOk) status('Wrong network. Click "Switch to Robinhood Chain".', 'warn');
+      else if (!chainOk) status(`Wrong network. Click "Switch to ${cfg.chainName}".`, 'warn');
       else status('Connected. Tick the checkbox, then approve.', 'ok');
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
       window.ethereum.on && window.ethereum.on('chainChanged', () => location.reload());
@@ -1328,14 +1328,21 @@ const initApprove = ((root, VERSION) => {
       await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] });
     } catch (e) {
       if (e.code === 4902 || /unrecognized|not added/i.test(e.message || '')) {
+        // Only offer to add the network when the server states its native asset.
+        // Adding it with a guessed currency labels this chain's gas wrongly in the
+        // wallet from then on -- on Arc, gas is USDC, not ether.
+        if (!cfg.nativeCurrency) {
+          status(`${cfg.chainName} is not in your wallet. Add it by hand (chain id ${cfg.chainId}, RPC ${cfg.rpc}) — this page will not guess the chain's native currency.`, 'warn');
+          return;
+        }
         await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{
           chainId: hex, chainName: cfg.chainName, rpcUrls: [cfg.rpc],
-          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, blockExplorerUrls: [cfg.explorer],
+          nativeCurrency: cfg.nativeCurrency, blockExplorerUrls: cfg.explorer ? [cfg.explorer] : [],
         }] });
       } else { status(`Could not switch network: ${e.message}`, 'bad'); return; }
     }
     await checkChain();
-    status(chainOk ? 'On Robinhood Chain.' : 'Still on the wrong network.', chainOk ? 'ok' : 'warn');
+    status(chainOk ? `On ${cfg.chainName}.` : 'Still on the wrong network.', chainOk ? 'ok' : 'warn');
   }
 
   async function send(flag) {
@@ -1372,8 +1379,16 @@ const initApprove = ((root, VERSION) => {
 <script>
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const EXPLORER = 'https://robinhoodchain.blockscout.com';
-const CHAIN_ID = 4663;
+// From the instance serving this page, never hardcoded: the same page is served on
+// Arc, where the chain id, the explorer and even the native currency all differ.
+let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = 'this network', RPC_URL = '', NATIVE_CURRENCY = null;
+const chainReady = fetch('/api/chain', { cache: 'no-store' }).then(r => r.json()).then(c => {
+  if (!c || !c.ok) throw new Error('the server did not state its chain');
+  EXPLORER = c.explorer || ''; CHAIN_ID = Number(c.chainId); CHAIN_NAME = c.chainName;
+  RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency;
+  document.querySelectorAll('[data-chain-name]').forEach(el => { el.textContent = CHAIN_NAME; });
+  return c;
+}).catch(e => { console.error('chain identity unavailable:', e.message); return null; });
 
 const NFT_ABI = [
   'function ownerOf(uint256) view returns (address)',
@@ -1445,15 +1460,21 @@ async function connectWallet() {
 
     const network = await provider.getNetwork();
     if (Number(network.chainId) !== CHAIN_ID) {
+      await chainReady;
+      if (!CHAIN_ID) throw new Error('This page could not read which chain it is serving; reload before signing.');
       try {
         await provider.send('wallet_switchEthereumChain', [{ chainId: '0x' + CHAIN_ID.toString(16) }]);
       } catch(e) {
+        // Never hardcode another chain's identity here: this page is served by
+        // whichever instance is running, and adding a network under the wrong name
+        // or the wrong native currency misleads the wallet from then on.
+        if (!NATIVE_CURRENCY) throw new Error(`${CHAIN_NAME} is not in your wallet. Add it by hand: chain id ${CHAIN_ID}, RPC ${RPC_URL}.`);
         await provider.send('wallet_addEthereumChain', [{
           chainId: '0x' + CHAIN_ID.toString(16),
-          chainName: 'Robinhood Chain',
-          rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
-          nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-          blockExplorerUrls: [EXPLORER],
+          chainName: CHAIN_NAME,
+          rpcUrls: [RPC_URL],
+          nativeCurrency: NATIVE_CURRENCY,
+          blockExplorerUrls: EXPLORER ? [EXPLORER] : [],
         }]);
       }
     }

@@ -35,6 +35,13 @@ const verdict = require("./verdict");
 
 const settings = require("./settings");
 const cfg = settings.load();
+// The chain's name for anything a wallet will show a person. It was hardcoded to
+// "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
+// network and would have added chain 5042 to their wallet under that name.
+const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc" };
+function chainDisplayName() {
+  return cfg.chainName || KNOWN_CHAIN_NAMES[Number(cfg.chainId)] || `Chain ${Number(cfg.chainId)}`;
+}
 // Ledgers, state files and logs belong to the instance, not to the checkout, so
 // one copy of the code can serve a second chain from its own directory. Code,
 // pages, assets and shell scripts stay on __dirname; only data moves.
@@ -1504,6 +1511,19 @@ async function handleRequest(req, res) {
   // Browser-based operator approval (the Wallet page, Approvals tab): the page reads every
   // address from here (settings.json + the operator keystore's public address)
   // and the current approval state from this server's RPC.
+  // Who this instance is on. The wallet page used to hardcode Robinhood's chain id,
+  // name and explorer, which made every network prompt wrong on Arc.
+  if (url.pathname === "/api/chain") {
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(200);
+    return res.end(JSON.stringify({
+      ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
+      rpc: cfg.rpcUrl, explorer: EXPLORER_URL,
+      // Null unless settings verify it: a wallet told the wrong native asset keeps
+      // showing gas under the wrong ticker.
+      nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
+    }));
+  }
   if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
     res.setHeader("Content-Type", "application/json");
     try {
@@ -1534,7 +1554,11 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify({
         ok: true, version: v,
         owner: ownerAddr, ownerLabel: ownerEntry.label, operator, posm: ethers.getAddress(mgr),
-        chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl,
+        chainId: Number(cfg.chainId), chainName: chainDisplayName(), rpc: cfg.rpcUrl,
+        // For the page's "add this network" call. Omitted unless the chain's native
+        // asset is verified in settings: declaring the wrong one would register the
+        // network in someone's wallet with gas labelled as a currency it is not.
+        nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
         explorer: EXPLORER_URL, approved, others, wallets,
       }));
     } catch (err) {

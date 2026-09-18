@@ -35,7 +35,10 @@ const PROVIDER = (process.env.CHAT_PROVIDER || (process.env.ANTHROPIC_API_KEY ? 
 const OLLAMA_HOST = (process.env.OLLAMA_HOST || (process.env.OLLAMA_API_KEY ? "https://ollama.com" : "http://localhost:11434")).replace(/\/$/, "");
 const MODEL = process.env.CHAT_MODEL || (PROVIDER === "ollama" ? "gpt-oss:120b" : "claude-opus-5");
 const EFFORT = ["low", "medium", "high"].includes(process.env.CHAT_EFFORT) ? process.env.CHAT_EFFORT : "medium";
-const MAX_TOOL_ROUNDS = 8;
+// 8 was enough while a question meant one tool. Answering "which positions exist"
+// honestly now means positions + watched_wallets together, and on the wallet-heavy
+// instance that tipped every such question into "I ran out of steps".
+const MAX_TOOL_ROUNDS = 12;
 const MAX_TURNS = 40;
 const MAX_INFLIGHT = 4;
 const MAX_MESSAGE_CHARS = 2000;
@@ -46,7 +49,7 @@ const ROLES = { read: 0, approve: 1, full: 2 };
 const WRITE_TOOLS = { approve_sale: "approve", update_notes: "approve", record_strategy_proposal: "full", run_tasks: "full" }; // run_tasks starts scripts and writes their output: full role only (TASK-84)
 
 const BASE_SYSTEM = `You are the assistant built into the LP Dashboard, a Uniswap v3/v4 liquidity-position monitor and fee collector on Robinhood Chain (chain id 4663). You are the same assistant on the website, on Telegram and for local scripts; the notes below are what you remember across all of them.
-You answer questions about the owner's positions, watched wallets, collected fees, revenue, portfolio, risk guardian (per-position alert and auto-close rules), the LOKOVault treasury, staking, attribution, the weekly digest, pending fee-token sales, and system health, using the tools. Call a tool before stating any number; never guess figures. Call several tools in one turn when the question spans them. Answer once, in one place; do not restate a number from an earlier tool result when a later, broader result supersedes it. positions covers the Main wallet only; for totals across all wallets use health (guardian.positions) or watched_wallets, and say which wallets the number covers.
+You answer questions about the owner's positions, watched wallets, collected fees, revenue, portfolio, risk guardian (per-position alert and auto-close rules), the LOKOVault treasury, staking, attribution, the weekly digest, pending fee-token sales, and system health, using the tools. Call a tool before stating any number; never guess figures. Call several tools in one turn when the question spans them. Answer once, in one place; do not restate a number from an earlier tool result when a later, broader result supersedes it. positions covers the Main wallet ONLY, and the Main wallet is empty on some instances -- on Arc every position is held by a watched wallet. So never conclude that there are no positions, or give a total, from positions alone: request positions and watched_wallets in the SAME round, side by side rather than one after the other, and say which wallets the answer covers. An empty positions result means "the Main wallet holds none", never "this chain has none".
 Reading the data: fees and revenue are in USD unless a token symbol is given. "In range" means the pool price sits inside the position's band and it earns fees; out of range earns nothing. In memecoin_watch, prices are TOKENS PER QUOTE (ETH or USDG), so a larger number means the token is worth less; report priceVsEntryPct as the token's move since entry. Percent changes are already computed; do not invert them.
 Alerts the dashboard sent to this chat appear in the conversation as your own earlier messages; "it" or "that sale" in a reply refers to the most recent one.
 Style: answer directly in a few short sentences or a bullet list; never use markdown tables or headings. Use $ with two decimals for USD, and the pair name and token id for positions. Say when a value is unpriced or missing rather than filling it in. Do not mention tool names.`;

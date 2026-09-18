@@ -3401,6 +3401,13 @@ function renderWatch(d){
       : '';
     const e = w.earned;
     const earnedPart = e && (e.all > 0 || e.since) ? `<span title="Fee accrual from snapshots since ${e.since || 'today'}, at current prices">earned today <b>${usd(e.today)}</b> · 7d <b>${usd(e.d7)}</b></span>` : '';
+    // What this wallet is earning right now, beside what it is worth. Measured from
+    // the hourly accrual buckets, not projected from a total: a wallet with under an
+    // hour of history reports no rate rather than one divided by a day it has not
+    // lived through, and one that has never accrued shows nothing at all.
+    const ratePart = e && e.perHour != null
+      ? `<span class="lprate" title="Average over the last ${e.rateWindowH} hour${e.rateWindowH === 1 ? '' : 's'} of recorded accrual, valued at current prices${e.rateWindowH < 24 ? ' — a short window, so it moves easily' : ''}">fees/hr <b>${usd(e.perHour)}</b></span>`
+      : '';
     const c = w.collector;
     const mark = v => v === true ? '<span class="in">✓</span>' : v === false ? '<span class="idle">✗</span>' : '?';
     const collectorPart = c && c.enabled ? `<span title="The collector collects this wallet's fees once it has approved the operator on the v3 and v4 position managers (Wallet page, Approvals tab)">collector: v3 ${mark(c.v3)} v4 ${mark(c.v4)}${c.v3 === false || c.v4 === false ? ' <a href="/wallet#approvals" class="muted">approve</a>' : ''}</span>` : '';
@@ -3410,7 +3417,7 @@ function renderWatch(d){
     // collector is approved are all kept, one disclosure down.
     const head = `<div class="wh">
       <div class="wh-main">${link}<span class="wcount"><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>
-      <div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span>${w.positions.length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
+      <div class="wh-side">${ratePart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span>${w.positions.length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
       <details class="whmore"><summary>Wallet detail</summary><div class="whmore-body"><span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}</div></details>
     </div>`;
     // Top tokens sitting in the wallet, compact.

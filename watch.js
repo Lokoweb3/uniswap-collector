@@ -219,8 +219,17 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       if (now - t <= 30 * 24 * HOUR) d30 += usd;
     }
     const days = Object.keys(daily).sort();
+    // A fee rate, from the hours actually observed rather than a flat 24. A wallet
+    // watched for three hours would otherwise have its rate divided by twenty-four
+    // and read as earning almost nothing. Under an hour of history is not a rate at
+    // all, so it is null and the page says nothing rather than something wrong.
+    const stamps = Object.keys(h).map(Number);
+    const first = stamps.length ? Math.min(...stamps) : null;
+    const observedH = first == null ? 0 : Math.min(24, (now - first) / HOUR);
+    const perHour = observedH >= 1 ? h24 / observedH : null;
     return {
       today, d7, d30, all, h24,
+      perHour, rateWindowH: perHour == null ? null : +observedH.toFixed(1),
       since: days.length ? days[0] : null,
       daily: days.slice(-60).map((day) => ({ day, usd: +daily[day].toFixed(2) })),
     };

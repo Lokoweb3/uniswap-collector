@@ -1308,6 +1308,10 @@ select.scope option{background:var(--card);color:var(--ink)}
 .wh-side{display:flex;align-items:center;gap:var(--s3);flex:none}
 .wh-side .lpsub{font-size:13px;color:var(--muted);white-space:nowrap}
 .wh-side .lpsub b{color:var(--pos);font-family:var(--mono);font-weight:600}
+/* What the wallet earns per hour, beside what it holds. Quieter than the LP value:
+   it is a rate, and a rate that shouts competes with the figure it qualifies. */
+.wh-side .lprate{font-size:13px;color:var(--muted);white-space:nowrap}
+.wh-side .lprate b{color:var(--ink);font-family:var(--mono);font-weight:600;margin-left:4px}
 .whmore{flex-basis:100%;order:3}
 .whmore > summary{
   cursor:pointer;list-style:none;font-size:12.5px;color:var(--muted);padding:2px 0;

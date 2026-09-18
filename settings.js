@@ -77,6 +77,10 @@ function toLegacy(raw) {
     ...(chain.nativeCurrency && Number.isInteger(chain.nativeCurrency.decimals) && chain.nativeCurrency.symbol
       ? { nativeCurrency: { symbol: String(chain.nativeCurrency.symbol), decimals: chain.nativeCurrency.decimals } }
       : {}),
+    // What to call this chain wherever a person or their wallet will read it. Any
+    // chain can name itself here; without it the served pages fall back to a small
+    // map of known ids, then to "Chain <id>".
+    ...(chain.name ? { chainName: String(chain.name) } : {}),
     chainId: chain.chainId,
     // No fallback to a particular chain's explorer: an empty string means this
     // chain has none, and the page renders identifiers as plain text with a copy

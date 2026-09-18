@@ -1833,7 +1833,14 @@ const armer = require("./arm");
 const csrf = require("./csrf");
 const treasuryLedger = require("./treasury");
 // The agent (agent.js): one brain for the web panel, Telegram and loopback scripts.
-const agent = require("./agent").create({ port: PORT, dir: DATA_DIR });
+const agent = require("./agent").create({
+  port: PORT, dir: DATA_DIR,
+  // Which chain this assistant is looking at, from this instance's own settings.
+  // Name and id only: what a figure is denominated in is already stated per figure
+  // by the tools, and naming a unit here is how "reported in ETH" got onto a USDG
+  // balance once already.
+  chain: { id: Number(cfg.chainId) || null, name: chainDisplayName() },
+});
 /** Channel and role of a chat request: through the gate = web/read; a browser on this machine = web/read; a script on loopback = loopback/full (read when the dashboard is read-only). */
 function chatChannel(req, body) {
   const viaGate = req.headers["x-lp-gate"] === "1";

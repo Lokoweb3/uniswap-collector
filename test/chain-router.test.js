@@ -68,7 +68,7 @@ const url = (q = "") => new URL(`http://x/page${q}`);
 (async () => {
   const mk = (name) => new Promise((res) => {
     const s = http.createServer((q, r) => {
-      if (q.url === "/api/who") { r.writeHead(200, { "Content-Type": "application/json" }); return r.end(JSON.stringify({ chain: name, cookie: q.headers.cookie || null })); }
+      if (q.url === "/api/who") { r.writeHead(200, { "Content-Type": "application/json" }); return r.end(JSON.stringify({ chain: name, cookie: q.headers.cookie || null, origin: q.headers.origin || null, host: q.headers.host || null })); }
       r.writeHead(200, { "Content-Type": "text/html", "Set-Cookie": `csrf=${name}-token; Path=/` });
       r.end(`<html><body>${name} page</body></html>`);
     });
@@ -114,6 +114,38 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   const seen = JSON.parse(leak.body);
   assert.strictEqual(seen.chain, "robinhood");
   assert.ok(!String(seen.cookie || "").includes("arc-token"), `Arc's token must not reach Robinhood: ${seen.cookie}`);
+
+  // ---- state-changing requests: guarded here, then made to agree upstream -----
+  {
+    // The router forwards under the upstream's own host, so an Origin naming the
+    // router stopped matching and every POST came back "cross-site request" -- which
+    // is what the assistant panel kept reporting. The guard is not weakened: it runs
+    // against the router's own origin, and only a request that passes it is rewritten.
+    const post = (path, headers) => new Promise((res) => {
+      const r = http.request({ host: "127.0.0.1", port, path, method: "POST", headers }, (up) => {
+        let body = ""; up.setEncoding("utf8"); up.on("data", (c) => (body += c));
+        up.on("end", () => res({ status: up.statusCode, body }));
+      });
+      r.end("{}");
+    });
+
+    const evil = await post("/api/who", { origin: "http://evil.example", "content-type": "application/json" });
+    assert.strictEqual(evil.status, 403, "a cross-site POST is refused");
+    assert.ok(/cross-site request/.test(evil.body), "and says why");
+
+    const ok = await post("/api/who", { origin: `http://127.0.0.1:${port}`, "content-type": "application/json" });
+    assert.strictEqual(ok.status, 200, `a same-origin POST reaches the chain: ${ok.body}`);
+    // The upstream must see an Origin matching the host it was called on, or it
+    // applies its own guard and refuses a request the router already vouched for.
+    const seen = JSON.parse(ok.body);
+    assert.strictEqual(seen.origin, `http://${seen.host}`, `the origin names the host it was sent to, not the router: ${seen.origin} vs ${seen.host}`);
+    assert.ok(!seen.origin.includes(String(port)), `and no longer names the router's port ${port}`);
+
+    // A GET is never blocked by this: it changes nothing.
+    const get = await new Promise((res) => http.get({ host: "127.0.0.1", port, path: "/api/who",
+      headers: { origin: "http://evil.example" } }, (r) => { let b = ""; r.on("data", (c) => (b += c)); r.on("end", () => res({ status: r.statusCode })); }));
+    assert.strictEqual(get.status, 200, "a cross-site GET is still served");
+  }
 
   // ---- every chain's vault, side by side, never summed ------------------------
   {

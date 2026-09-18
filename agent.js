@@ -48,11 +48,23 @@ const ROLES = { read: 0, approve: 1, full: 2 };
 /** Tools that change something, and the lowest role that may call them. */
 const WRITE_TOOLS = { approve_sale: "approve", update_notes: "approve", record_strategy_proposal: "full", run_tasks: "full" }; // run_tasks starts scripts and writes their output: full role only (TASK-84)
 
-const BASE_SYSTEM = `You are the assistant built into the LP Dashboard, a Uniswap v3/v4 liquidity-position monitor and fee collector on Robinhood Chain (chain id 4663). You are the same assistant on the website, on Telegram and for local scripts; the notes below are what you remember across all of them.
+// The chain is the instance's, not a constant. One dashboard runs per chain from the
+// same code, and a prompt naming Robinhood told the Arc assistant it was on Robinhood:
+// asked which chain it reported on, it answered "Robinhood Chain, chain ID 4663" while
+// reading Arc's data. An assistant that is wrong about which chain it is looking at
+// will be confidently wrong about every figure it reports.
+const DEFAULT_CHAIN = { id: null, name: null };
+const chainLine = (c) => {
+  if (c.name) return `${c.name}${c.id ? ` (chain id ${c.id})` : ""}`;
+  if (c.id) return `chain id ${c.id}`;
+  return "an EVM chain (this instance has not named it; say so rather than guessing which)";
+};
+const baseSystem = (chain = DEFAULT_CHAIN) => `You are the assistant built into the LP Dashboard, a Uniswap v3/v4 liquidity-position monitor and fee collector on ${chainLine(chain)}. Every figure you can read belongs to that chain and no other: this dashboard cannot see any other chain's positions, wallets or vault, so if you are asked about one, say which chain you cover and that the other has its own dashboard. Never answer for a chain you cannot read. You are the same assistant on the website, on Telegram and for local scripts; the notes below are what you remember across all of them.
 You answer questions about the owner's positions, watched wallets, collected fees, revenue, portfolio, risk guardian (per-position alert and auto-close rules), the LOKOVault treasury, staking, attribution, the weekly digest, pending fee-token sales, and system health, using the tools. Call a tool before stating any number; never guess figures. Call several tools in one turn when the question spans them. Answer once, in one place; do not restate a number from an earlier tool result when a later, broader result supersedes it. positions covers the Main wallet ONLY, and the Main wallet is empty on some instances -- on Arc every position is held by a watched wallet. So never conclude that there are no positions, or give a total, from positions alone: request positions and watched_wallets in the SAME round, side by side rather than one after the other, and say which wallets the answer covers. An empty positions result means "the Main wallet holds none", never "this chain has none".
 Reading the data: fees and revenue are in USD unless a token symbol is given. "In range" means the pool price sits inside the position's band and it earns fees; out of range earns nothing. In memecoin_watch, prices are TOKENS PER QUOTE (ETH or USDG), so a larger number means the token is worth less; report priceVsEntryPct as the token's move since entry. Percent changes are already computed; do not invert them.
 Alerts the dashboard sent to this chat appear in the conversation as your own earlier messages; "it" or "that sale" in a reply refers to the most recent one.
 Style: answer directly in a few short sentences or a bullet list; never use markdown tables or headings. Use $ with two decimals for USD, and the pair name and token id for positions. Say when a value is unpriced or missing rather than filling it in. Do not mention tool names.`;
+
 
 const ROLE_TEXT = {
   read: `This channel is READ-ONLY: you cannot arm the collector, collect, approve sales, close positions, or change settings or notes. If asked to act, say the dashboard's own controls, Telegram, or the CLI do that, and name which page or command.`,
@@ -218,15 +230,16 @@ async function ollamaChat(s, t, system) {
 }
 
 // ---- entry -----------------------------------------------------------------
-function create({ port, dir = __dirname } = {}) {
+function create({ port, dir = __dirname, chain = DEFAULT_CHAIN } = {}) {
   const mem = memoryStore(dir);
+  const SYSTEM_FOR_CHAIN = baseSystem(chain || DEFAULT_CHAIN);
   let inflight = 0;
   const isToolResult = PROVIDER === "ollama"
     ? (m) => m.role === "tool"
     : (m) => Array.isArray(m.content) && m.content.some((b) => b.type === "tool_result");
   const systemFor = (role, channel) => {
     const notes = mem.notes().trim();
-    return `${BASE_SYSTEM}\n${ROLE_TEXT[role] || ROLE_TEXT.read}\nChannel: ${channel}.\n\nNOTES (what you remember; keep them current with update_notes when allowed):\n${notes || "(nothing yet)"}`;
+    return `${SYSTEM_FOR_CHAIN}\n${ROLE_TEXT[role] || ROLE_TEXT.read}\nChannel: ${channel}.\n\nNOTES (what you remember; keep them current with update_notes when allowed):\n${notes || "(nothing yet)"}`;
   };
 
   /**
@@ -293,7 +306,7 @@ function create({ port, dir = __dirname } = {}) {
 
   function reset(channel) { mem.forget(String(channel || "web")); return { ok: true }; }
   function channels() { return mem.list(); }
-  return { chat, remember, reset, status, channels, notes: mem.notes, SYSTEM: BASE_SYSTEM, ROLE_TEXT, toolsFor, WRITE_TOOLS };
+  return { chat, remember, reset, status, channels, notes: mem.notes, SYSTEM: SYSTEM_FOR_CHAIN, ROLE_TEXT, toolsFor, WRITE_TOOLS };
 }
 
 module.exports = { create, status, ROLES, WRITE_TOOLS, ollamaChat };

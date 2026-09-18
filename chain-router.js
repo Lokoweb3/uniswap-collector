@@ -31,6 +31,7 @@
 "use strict";
 
 const http = require("http");
+const csrf = require("./csrf");
 const { URL } = require("url");
 
 const arg = (n, d = null) => {
@@ -78,6 +79,9 @@ function restoreCookieHeader(raw, key) {
 }
 
 const PICKER_ID = "lp-chain-picker";
+// Methods a browser may send cross-site without the guard mattering; everything else
+// is checked before it is forwarded.
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 function pickerHtml(current) {
   // A dropdown was easy to miss: it read as page furniture, and the chain a figure
   // belongs to is the one thing here that must never be misread. So: every chain
@@ -174,7 +178,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+    // The router forwards under the upstream's own host, so an Origin naming the
+  // router no longer matches it and every state-changing request was rejected as a
+  // cross-site one -- which is what the AI panel kept reporting. The guard is not
+  // dropped, it moves to the edge: the request is checked against the ROUTER's own
+  // origin, exactly as the instance would have checked it against its own, and only
+  // then is the Origin rewritten to the upstream it is actually being sent to.
+  if (!SAFE_METHODS.has(req.method) && csrf.isCrossSite({
+    origin: req.headers.origin, host: req.headers.host,
+    secFetchSite: req.headers["sec-fetch-site"], viaGate: req.headers["x-lp-gate"] === "1",
+  })) {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ok: false, error: "cross-site request" }));
+  }
+
   const headers = { ...req.headers, host: `127.0.0.1:${chain.port}` };
+  if (headers.origin) headers.origin = `http://127.0.0.1:${chain.port}`;
+  if (headers.referer) headers.referer = String(headers.referer).replace(/^https?:\/\/[^/]+/, `http://127.0.0.1:${chain.port}`);
   const cookies = restoreCookieHeader(req.headers.cookie, chain.key);
   if (cookies) headers.cookie = cookies; else delete headers.cookie;
   delete headers["accept-encoding"];    // so HTML can be rewritten without decompressing

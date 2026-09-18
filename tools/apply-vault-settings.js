@@ -93,10 +93,23 @@ async function main() {
   const lines = diff(cfg, after);
   console.log(`\n${SETTINGS}`);
   console.log(lines.length ? lines.join("\n") : "  (no change)");
+  // treasury.js reads feeSplitPct() from the NFT and lets it override settings.json
+  // whenever the vault is configured, so printing the settings number alone would
+  // state a split that is not the one in force.
+  let onChain = null;
+  try { onChain = Number(await new ethers.Contract(nft, ["function feeSplitPct() view returns (uint256)"], provider).feeSplitPct()); } catch {}
   console.log("\nThis records where the vault is. It does not enable collection or sweeping:");
   console.log(`  collector.v4Collect.enabled : ${cfg.collector.v4Collect.enabled}`);
   console.log(`  collector.sweep.enabled     : ${cfg.collector.sweep.enabled}`);
-  console.log(`  vault.feeSplitPct           : ${after.vault.feeSplitPct}%`);
+  console.log(`  vault.feeSplitPct (settings): ${after.vault.feeSplitPct}%`);
+  if (onChain != null) {
+    console.log(`  feeSplitPct() on the NFT    : ${onChain}%   <- this is the one in force`);
+    if (onChain !== after.vault.feeSplitPct) {
+      console.log(`  NOTE: once the vault is recorded and sweeping is on, ${onChain}% of each swept amount`);
+      console.log(`        goes to the vault, not ${after.vault.feeSplitPct}%. To change it, the NFT's admin calls`);
+      console.log(`        setFeeSplitPct(<pct>) on ${nft} (capped at ${after.vault.feeSplitMax}%).`);
+    }
+  }
 
   if (!APPLY) { console.log("\nNothing written. Re-run with --apply to write it."); return; }
   const backup = `${SETTINGS}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;

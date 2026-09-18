@@ -35,6 +35,7 @@ const verdict = require("./verdict");
 
 const settings = require("./settings");
 const logs = require("./logs");
+const vaultMeta = require("./vault-metadata");
 const cl = require("./collector-logic");   // native-currency naming, shared with the collector
 const cfg = settings.load();
 // The chain's name for anything a wallet will show a person. It was hardcoded to
@@ -2408,22 +2409,21 @@ async function handleRequest(req, res) {
         }
       }
         // The NFT's own art and metadata, so the page can show the token rather than a
-        // drawing of one. TreasuryNFT builds both on chain from string literals, which
-        // is why the chain it names is compared against the chain it is actually on:
-        // the Arc deployment says "Robinhood Chain / 4663" in metadata it cannot change.
+        // drawing of one. What the token says about its chain is checked against the
+        // chain it is actually on, in two separate ways, because two different things
+        // can be wrong. A token from the old contract carries a hardcoded id: the Arc
+        // deployment says "Robinhood Chain / 4663" in metadata it cannot change. A
+        // token from the current contract takes its id from block.chainid and cannot
+        // be wrong about that, but its name is chosen at deployment and can be.
         try {
           const uri = await new ethers.Contract(cfg.treasuryNFT, ["function tokenURI(uint256) view returns (string)"], provider).tokenURI(1);
           if (uri.startsWith("data:application/json;base64,")) {
             const meta = JSON.parse(Buffer.from(uri.split(",")[1], "base64").toString("utf8"));
-            const attr = (t) => (meta.attributes || []).find((a) => a.trait_type === t);
-            const claimedId = attr("Chain ID") ? String(attr("Chain ID").value) : null;
             out.art = {
               name: meta.name || null,
               image: meta.image || null,
-              claimedChain: attr("Chain") ? String(attr("Chain").value) : null,
-              claimedChainId: claimedId,
-              // Null when the metadata says nothing; true only when it names another chain.
-              mislabelled: claimedId != null && Number(claimedId) !== Number(cfg.chainId),
+              chainName: chainDisplayName(),
+              ...vaultMeta.chainClaim(meta, cfg.chainId, chainDisplayName()),
             };
           }
         } catch (err) { out.artError = err.shortMessage || err.message; }

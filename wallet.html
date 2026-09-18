@@ -1744,7 +1744,9 @@ async function loadAllVaults() {
     // wallet will see the wrong chain.
     const mislabel = art.mislabelled
       ? `<div class="vcard-warn">Metadata says “${esc(art.claimedChain)}” (chain ${esc(art.claimedChainId)}) — the token is wrong about itself, not the balance.</div>`
-      : '';
+      : art.misnamed
+        ? `<div class="vcard-warn">Metadata calls this chain “${esc(art.claimedChain)}”, not “${esc(art.chainName || c.label)}” — the chain id is right, only the name differs.</div>`
+        : '';
     // A thumbnail, not a hero: these cards exist to put the money side by side, and
     // a full-width picture pushed every figure off the screen. No art from this
     // instance means an empty frame of the same size, not a paragraph explaining
@@ -2147,7 +2149,13 @@ async function loadPublicInfo() {
     if (warn) {
       if (info.art && info.art.mislabelled) {
         warn.hidden = false;
-        warn.textContent = `This token's own metadata says "${info.art.claimedChain}" (chain ${info.art.claimedChainId}), but it is deployed on ${chain.name} (chain ${chain.id}). TreasuryNFT writes that text into tokenURI as a literal and has no setter, so it cannot be corrected without redeploying. The account's binding, its owner and its balance are all on ${chain.name} — only the label is wrong.`;
+        warn.textContent = `This token's own metadata says "${info.art.claimedChain}" (chain ${info.art.claimedChainId}), but it is deployed on ${chain.name} (chain ${chain.id}). It was minted from a version of TreasuryNFT that wrote the chain into tokenURI as a literal, and there is no setter, so it cannot be corrected without redeploying. The account's binding, its owner and its balance are all on ${chain.name} — only the label is wrong.`;
+      } else if (info.art && info.art.misnamed) {
+        // The current contract reads the id from block.chainid, so an id can no longer
+        // be wrong. A name still can: it is chosen once at deployment and is just as
+        // permanent. Worth saying plainly rather than leaving the two to disagree.
+        warn.hidden = false;
+        warn.textContent = `This token calls its chain "${info.art.claimedChain}", while this dashboard calls it "${chain.name}". The chain id in the metadata is ${info.art.claimedChainId}, which is correct — the name was set when the token was deployed and cannot be changed.`;
       } else warn.hidden = true;
     }
     if (info.pct != null) currentSplitPct = Number(info.pct);

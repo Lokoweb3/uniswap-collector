@@ -120,7 +120,7 @@ function promptHidden(q) {
 async function main() {
   const cfg = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
   const rpc = arg("rpc", cfg.chain.rpcUrl);
-  const holder = ethers.getAddress(arg("holder", cfg.wallets.main.address));
+  let holder = ethers.getAddress(arg("holder", cfg.wallets.main.address));
   const chainName = arg("chain-name", cfg.chainName || KNOWN_CHAIN_NAMES[ARC_CHAIN_ID]);
   const provider = new ethers.JsonRpcProvider(rpc, undefined, { staticNetwork: true });
   const chainId = Number((await provider.getNetwork()).chainId);
@@ -130,7 +130,6 @@ async function main() {
   log(`  rpc            : ${rpc}${local ? "  (local fork)" : ""}`);
   log(`  chain id       : ${chainId}`);
   log(`  settings       : ${settingsPath()}`);
-  log(`  vault holder   : ${holder}   <- whoever holds LOKOVault #1 controls the money`);
   log(`  chain name     : ${chainName}   <- baked into the metadata permanently`);
   if (!chainName) throw new Error("refusing to run: no chain name (pass --chain-name=)");
   if (chainId !== ARC_CHAIN_ID) throw new Error(`refusing to run: chain ${chainId} is not Arc (${ARC_CHAIN_ID})`);
@@ -151,12 +150,25 @@ async function main() {
     implementation: replacing ? ethers.getAddress(arg("implementation", cfg.vault.implementation)) : null,
   };
   if (replacing) {
+    // A replacement must land in the same hands as the vault it replaces. The holder
+    // of record is the NFT, not settings.json: on Arc the vault is held by the Arc LP
+    // wallet while wallets.main names a different one, and minting the replacement
+    // there would split control from the balance it is supposed to inherit.
+    const heldBy = ethers.getAddress(await new ethers.Contract(cfg.vault.nft, ["function ownerOf(uint256) view returns (address)"], provider).ownerOf(cfg.vault.tokenId || 1));
+    if (heldBy !== holder) {
+      if (arg("holder")) throw new Error(`--holder is ${holder}, but LOKOVault #1 is held by ${heldBy}; the replacement must go to the current holder`);
+      log(`  note           : settings name ${holder}, but the vault is held by ${heldBy} — following the NFT`);
+      holder = heldBy;
+    }
     log(`  replacing      : ${current}   <- left in place; move its balance out yourself first`);
     log(`  reusing        : registry ${reuse.registry}, implementation ${reuse.implementation}`);
+
     for (const [what, addr] of Object.entries(reuse)) {
       if ((await provider.getCode(addr)) === "0x") throw new Error(`the ${what} at ${addr} has no code on this chain`);
     }
   }
+
+  log(`  vault holder   : ${holder}   <- whoever holds LOKOVault #1 controls the money`);
 
   log("\nCompiling…");
   const art = await artifacts();
@@ -178,10 +190,13 @@ async function main() {
   if (Number(price) / 1e9 > cap) log(`  note: above the collector's own ceiling of ${cap} gwei — that ceiling does not gate this script.`);
 
   if (!EXECUTE) {
+    // Measured on a fork of live Arc against the contract as it stands now; the NFT
+    // grew when the chain name moved into storage, so these are not the old figures.
     const steps = replacing
-      ? [["TreasuryNFT (LOKOVault)", 2413573n], ["mint #1 + create the account", 194373n], ["hand admin to the holder", 27290n]]
-      : [["ERC-6551 registry", 176589n], ["TreasuryAccount implementation", 712610n], ["TreasuryNFT (LOKOVault)", 2413573n],
-        ["mint #1 + create the account", 194373n], ["hand admin to the holder", 27290n]];
+      ? [["TreasuryNFT (LOKOVault)", 2524204n], ["mint #1 + create the account", 194395n],
+        ["carry the fee split across", 30286n], ["hand admin to the holder", 27312n]]
+      : [["ERC-6551 registry", 176589n], ["TreasuryAccount implementation", 712610n], ["TreasuryNFT (LOKOVault)", 2524204n],
+        ["mint #1 + create the account", 194395n], ["hand admin to the holder", 27312n]];
     const total = steps.reduce((t, [, g]) => t + g, 0n);
     log(`\nDry run: nothing was sent. The ${steps.length} steps and their measured cost on a fork of live Arc:`);
     for (const [what, gas] of steps) log(`  ${what.padEnd(32)}~${gas.toLocaleString()} gas`);
@@ -197,7 +212,7 @@ async function main() {
   const bal = await provider.getBalance(wallet.address);
   log(`\nDeployer: ${wallet.address}`);
   log(`Balance : ${ethers.formatUnits(bal, cfg.chain.nativeCurrency.decimals)} ${cfg.chain.nativeCurrency.symbol}`);
-  const need = (replacing ? 2635236n : 3524435n) * price * 2n;
+  const need = (replacing ? 2776197n : 3635110n) * price * 2n;
   if (bal < need) throw new Error(`not enough gas: ${ethers.formatUnits(need, 18)} wanted (twice the measured cost)`);
 
   if (!local) {

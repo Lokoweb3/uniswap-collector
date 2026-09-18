@@ -108,6 +108,25 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   assert.strictEqual(seen.chain, "robinhood");
   assert.ok(!String(seen.cookie || "").includes("arc-token"), `Arc's token must not reach Robinhood: ${seen.cookie}`);
 
+  // ---- every chain's vault, side by side, never summed ------------------------
+  {
+    const all = await get("/api/vaults");
+    assert.strictEqual(all.status, 200);
+    const d = JSON.parse(all.body);
+    assert.strictEqual(d.ok, true);
+    assert.strictEqual(d.chains.length, 2, "one entry per configured chain");
+    assert.deepStrictEqual(d.chains.map((c) => c.key), ["robinhood", "arc"]);
+    // The fake chains answer /api/vault-info with an HTML page, so neither is ok --
+    // what matters is the shape: per-chain entries, each with its own error, and no
+    // field anywhere that adds one chain's figures to another's.
+    for (const c of d.chains) {
+      assert.ok("vault" in c && "treasury" in c && "error" in c, "each chain reports itself");
+      assert.ok(!("total" in c) && !("combined" in c), "no cross-chain arithmetic");
+    }
+    assert.ok(!("total" in d) && !("combined" in d) && !("sum" in d), "and none at the top level either");
+    assert.ok(d.current === "robinhood" || d.current === "arc", "it says which chain the page is on");
+  }
+
   // A chain that is down explains itself instead of failing blankly.
   await new Promise((r) => b.close(r));
   const down = await get("/", `${COOKIE}=arc`);

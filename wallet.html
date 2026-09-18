@@ -598,6 +598,14 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     <button class="connect-btn" id="connect-btn" onclick="connectWallet()">Connect Wallet</button>
   </div>
 
+  <!-- Every chain's vault, side by side. Read-only for the chains you are not on:
+       managing one means signing on its network, which is the current chain only. -->
+  <div class="card" id="all-vaults-card" hidden style="margin-bottom:16px">
+    <h2 style="margin:0 0 4px">Vaults</h2>
+    <div class="note" style="margin-bottom:12px">Every chain this dashboard serves. Figures are read from each chain separately and never combined.</div>
+    <div id="all-vaults" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px"></div>
+  </div>
+
   <!-- Hero -->
   <div class="card">
     <div class="warning-box" id="nft-chain-warning" hidden style="margin-bottom:12px"></div>
@@ -1547,6 +1555,65 @@ async function checkOwnership() {
   }
 }
 
+// ── Every chain's vault ───────────────────────────────────────────────────────
+// /api/vaults is answered by the chain router, not by any single instance: an
+// instance can only ever see its own chain. Without a router the fetch 404s and this
+// section stays hidden, which is the honest outcome for a single-chain page.
+async function loadAllVaults() {
+  const card = document.getElementById('all-vaults-card');
+  const grid = document.getElementById('all-vaults');
+  if (!card || !grid) return;
+  let data = null;
+  try {
+    const r = await fetch('/api/vaults', { cache: 'no-store' });
+    if (!r.ok) return;                       // no router in front: nothing to compare against
+    data = await r.json();
+  } catch { return; }
+  if (!data || !data.ok || !Array.isArray(data.chains) || data.chains.length < 2) return;
+
+  const esc = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const money = (n, unit) => (n == null ? '—' : `${Number(n).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${esc(unit || '')}`.trim());
+
+  grid.innerHTML = data.chains.map((c) => {
+    const v = c.vault || {}, t = c.treasury || {};
+    const art = v.art || {};
+    const unit = (v.chain && v.chain.unit) || (v.balances && v.balances[0] && v.balances[0].symbol) || '';
+    const here = c.key === data.current;
+    if (!c.ok) {
+      return `<div class="balance-item" style="padding:14px">
+        <div style="font-weight:600;margin-bottom:6px">${esc(c.label)}</div>
+        <div class="bad" style="font-size:12px">not answering on 127.0.0.1:${c.port}</div>
+        <div class="note" style="margin-top:6px;font-size:11px">${esc(c.error || '')}</div>
+      </div>`;
+    }
+    // A vault whose own metadata names another chain is called out on its card, not
+    // quietly relabelled: the token really does say that, and someone reading it in a
+    // wallet will see the wrong chain.
+    const mislabel = art.mislabelled
+      ? `<div class="note" style="margin-top:8px;font-size:11px;color:#fbbf24">metadata says "${esc(art.claimedChain)}" (chain ${esc(art.claimedChainId)}) — the token is wrong about itself, not the balance</div>`
+      : '';
+    const picture = art.image
+      ? `<img src="${esc(art.image)}" alt="${esc(art.name || 'vault')} on ${esc(c.label)}" style="width:100%;border-radius:10px;display:block">`
+      : `<div class="note" style="height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--rule);border-radius:10px;font-size:11px">no on-chain art from this instance</div>`;
+    return `<div class="balance-item" style="padding:14px;display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span style="font-weight:600">${esc(c.label)}</span>
+        <span class="note" style="font-size:11px">${here ? 'showing now' : `<a href="?chain=${esc(c.key)}">switch to manage</a>`}</span>
+      </div>
+      ${picture}
+      <div style="display:grid;grid-template-columns:1fr auto;gap:2px 10px;font-size:12px">
+        <span class="note">Balance</span><b>${money(t.balanceUsdg, unit)}</b>
+        <span class="note">Split to vault, all time</span><b>${money(t.totalSplitUsdg, unit)}</b>
+        <span class="note">Current split</span><b>${t.pct == null ? '—' : esc(t.pct) + '%'}${t.max != null ? ` <span class="note">max ${esc(t.max)}%</span>` : ''}</b>
+        <span class="note">Splits recorded</span><b>${t.count == null ? '—' : esc(t.count)}</b>
+      </div>
+      <div class="note mono" style="font-size:10px;word-break:break-all">${esc(v.tba || '')}</div>
+      ${mislabel}
+    </div>`;
+  }).join('');
+  card.hidden = false;
+}
+
 // ── Balances ──────────────────────────────────────────────────────────────────
 async function loadBalances() {
   if (!tbaAddress) return;
@@ -1883,6 +1950,9 @@ startAutoRefresh = function () { if (autoRefreshStarted) return; autoRefreshStar
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadConfig().then(async () => {
   await loadPublicInfo(); // also draws the phone QR codes once the server reports the node's public name
+  // Every chain's vault, when a router is in front. Never blocks this chain's own
+  // panel: a slow or missing neighbour must not delay the vault you came to see.
+  loadAllVaults().catch((e) => console.warn('all vaults:', e.message));
   await loadBalances();
   await loadHistory();
   startAutoRefresh();

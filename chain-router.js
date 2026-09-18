@@ -22,7 +22,10 @@
  *     on the way out and restored on the way in, so a session or CSRF token minted
  *     on one chain is never presented to the other.
  *
- *   node chain-router.js                  # 8799, Robinhood + Arc
+ *   node chain-router.js                  # 8800, Robinhood + Arc
+ *
+ * Not 8799: test/smoke.js starts its own dashboard there, and a router squatting on
+ * that port makes the whole smoke suite fail with "fetch failed".
  *   node chain-router.js --port=9000
  */
 "use strict";
@@ -35,7 +38,7 @@ const arg = (n, d = null) => {
   return hit ? hit.split("=").slice(1).join("=") : d;
 };
 
-const PORT = Number(arg("port", 8799));
+const PORT = Number(arg("port", 8800));
 const HOST = arg("host", "127.0.0.1");
 const COOKIE = "lpchain";
 
@@ -96,6 +99,30 @@ function injectPicker(html, chain) {
   return html.includes("</body>") ? html.replace("</body>", `${tag}</body>`) : html + tag;
 }
 
+/** One chain's vault, or why it could not be read. Never throws, never blocks the others. */
+function vaultOf(chain, timeoutMs = 8000) {
+  const get = (path) => new Promise((resolve) => {
+    const r = http.request({ host: "127.0.0.1", port: chain.port, path, method: "GET", timeout: timeoutMs }, (up) => {
+      let body = "";
+      up.setEncoding("utf8");
+      up.on("data", (c) => (body += c));
+      up.on("end", () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });
+    });
+    r.on("timeout", () => { r.destroy(); resolve(null); });
+    r.on("error", () => resolve(null));
+    r.end();
+  });
+  return Promise.all([get("/api/vault-info"), get("/api/treasury")]).then(([vault, treasury]) => ({
+    key: chain.key, label: chain.label, port: chain.port,
+    ok: !!(vault && vault.ok),
+    // Read-only, and kept apart: each chain's figures stay under that chain's name.
+    // Nothing here is added to anything from another chain.
+    vault: vault && vault.ok ? vault : null,
+    treasury: treasury && treasury.ok ? treasury : null,
+    error: vault && vault.ok ? null : (vault && vault.error) || `no answer from 127.0.0.1:${chain.port}`,
+  }));
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const { chain, fromQuery } = chainFor(req, url);
@@ -109,6 +136,19 @@ const server = http.createServer((req, res) => {
       Location: url.pathname + (url.search || ""),
     });
     return res.end();
+  }
+
+  // Every chain's vault at once, answered by the router rather than proxied: no
+  // single instance can see another chain, and none of them should have to.
+  if (url.pathname === "/api/vaults" && req.method === "GET") {
+    Promise.all(CHAINS.map((c) => vaultOf(c))).then((chains) => {
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ ok: true, at: Date.now(), current: chain.key, chains }));
+    }).catch((err) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    });
+    return;
   }
 
   const headers = { ...req.headers, host: `127.0.0.1:${chain.port}` };
@@ -154,4 +194,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { chainFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, CHAINS, COOKIE, nsName, server };
+module.exports = { chainFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, vaultOf, CHAINS, COOKIE, nsName, server };

@@ -20,6 +20,15 @@ function operatorAddress() {
   }
 }
 const operator = operatorAddress();
+
+// The chain this instance is on, for the page's network prompts. Settings may name
+// it; otherwise a small map of known ids, then "Chain <id>". Never a fixed chain:
+// the same page is served on Arc.
+const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc" };
+const chainDisplayName = () => cfg.chainName || KNOWN_CHAIN_NAMES[Number(cfg.chainId)] || `Chain ${Number(cfg.chainId)}`;
+// Null unless settings verify the native asset: a wallet told the wrong one keeps
+// showing this chain's gas under the wrong ticker.
+const nativeCurrencyOut = () => (cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null);
 const PORT = Number(process.env.PORT || 3333);
 
 /** Every operator the owner has ever granted setApprovalForAll on `mgr`, with its current state (from events, re-checked on chain). */
@@ -43,6 +52,14 @@ async function approvedOperators(provider, mgr, owner) {
 http
   .createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
+    // wallet.html reads its chain identity here; it is served by this process too,
+    // so this endpoint has to exist in both servers or the page cannot name a chain.
+    if (url.pathname === "/api/chain") {
+      res.setHeader("Content-Type", "application/json");
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
+        rpc: cfg.rpcUrl, explorer: cfg.explorer || "", nativeCurrency: nativeCurrencyOut() }));
+    }
     if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
       res.setHeader("Content-Type", "application/json");
       try {
@@ -64,7 +81,7 @@ http
         const others = (await approvedOperators(provider, mgr, ownerEntry.address)).filter((o) => o.approved && (!op || o.address.toLowerCase() !== op.toLowerCase()));
         const wallets = [];
         for (const a of allowed) wallets.push({ ...a, approved: op ? await c.isApprovedForAll(a.address, op).catch(() => null) : null });
-        return res.end(JSON.stringify({ ok: true, version: v, owner: ownerEntry.address, ownerLabel: ownerEntry.label, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets }));
+        return res.end(JSON.stringify({ ok: true, version: v, owner: ownerEntry.address, ownerLabel: ownerEntry.label, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: chainDisplayName(), nativeCurrency: nativeCurrencyOut(), rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets }));
       } catch (err) {
         res.writeHead(500);
         return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));

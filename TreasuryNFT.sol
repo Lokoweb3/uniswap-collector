@@ -122,8 +122,11 @@ contract TreasuryNFT is IERC165, IERC721, IERC721Metadata {
 
     address public tbaAddress; // set after createAccount
 
-    // EIP-6551
-    address public constant REGISTRY = 0x000000006551c19487814612e58FE06813775758;
+    // EIP-6551. The registry is set at deployment rather than hardcoded: the
+    // canonical registry is not deployed on every chain (Arc has none), and a vault
+    // there needs its own. An immutable keeps it as cheap to read as the constant
+    // was, and it can never be changed after deployment.
+    address public immutable REGISTRY;
     address public implementation; // TreasuryAccount address
 
     // ERC-721 storage
@@ -151,9 +154,12 @@ contract TreasuryNFT is IERC165, IERC721, IERC721Metadata {
     }
 
     // ── Constructor ────────────────────────────────────────────────────────────
-    constructor(address _implementation) {
+    constructor(address _implementation, address _registry) {
+        require(_implementation != address(0), "No implementation");
+        require(_registry.code.length > 0, "Registry has no code");
         owner = msg.sender;
         implementation = _implementation;
+        REGISTRY = _registry;
     }
 
     // ── Mint ───────────────────────────────────────────────────────────────────

@@ -509,7 +509,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     <label class="chk"><input type="checkbox" data-id="verify" disabled><span>I checked that the operator address above matches the collector's address shown on the dashboard's "Operator gas" chip and in <span class="mono">collector.log</span> ("Operator: 0x…").</span></label>
     <div class="actions">
       <button data-id="connect">Connect wallet</button>
-      <button data-id="switch" hidden>Switch to Robinhood Chain</button>
+      <button data-id="switch" hidden>Switch network</button>
       <button data-id="approve" class="primary" disabled>Approve operator</button>
       <button data-id="revoke" hidden>Revoke approval</button>
     </div>
@@ -557,7 +557,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     <label class="chk"><input type="checkbox" data-id="verify" disabled><span>I checked that the operator address above matches the collector's address shown on the dashboard's "Operator gas" chip and in <span class="mono">collector.log</span> ("Operator: 0x…").</span></label>
     <div class="actions">
       <button data-id="connect">Connect wallet</button>
-      <button data-id="switch" hidden>Switch to Robinhood Chain</button>
+      <button data-id="switch" hidden>Switch network</button>
       <button data-id="approve" class="primary" disabled>Approve operator</button>
       <button data-id="revoke" hidden>Revoke approval</button>
     </div>
@@ -588,7 +588,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   <div class="masthead">
     <div>
       <h1>Private <em>Treasury</em></h1>
-      <div class="est">Token-bound account · <b>Robinhood Chain</b> · Est. 2026</div>
+      <div class="est">Token-bound account · <b data-chain-name>this network</b> · Est. 2026</div>
     </div>
     <div class="seal">
       <span class="gold">Fee split <b id="seal-split">—</b></span>
@@ -632,10 +632,10 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
           <rect x="430" y="170" width="80" height="30" rx="15" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/>
           <text id="svg-pct" x="470" y="191" text-anchor="middle" font-size="13" fill="#bfdbfe" font-weight="700" font-family="sans-serif">10%</text>
           <rect x="170" y="170" width="100" height="24" rx="12" fill="#0f2744" stroke="#2563eb" stroke-width="1"/>
-          <text x="220" y="187" text-anchor="middle" font-size="11" fill="#93c5fd" font-family="sans-serif">Chain 4663</text>
+          <text x="220" y="187" text-anchor="middle" font-size="11" fill="#93c5fd" font-family="sans-serif" data-chain-id-text>Chain —</text>
           <text x="340" y="510" text-anchor="middle" font-size="28" fill="#e2e8f0" font-weight="700" font-family="sans-serif">LOKOVault</text>
           <text x="340" y="540" text-anchor="middle" font-size="13" fill="#64748b" font-family="sans-serif">EIP-6551 Token Bound Account</text>
-          <text x="340" y="570" text-anchor="middle" font-size="11" fill="#475569" font-family="sans-serif">#1 Robinhood Chain</text>
+          <text x="340" y="570" text-anchor="middle" font-size="11" fill="#475569" font-family="sans-serif" data-chain-name-text>#1</text>
           <line x1="200" y1="590" x2="480" y2="590" stroke="#1e3a5f" stroke-width="1"/>
         </svg>
       </div>
@@ -740,7 +740,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
       <div><div class="k">Name</div><div class="val">LOKOVault</div></div>
       <div><div class="k">Symbol</div><div class="val">LKVAULT</div></div>
       <div><div class="k">Token ID</div><div class="val">#1</div></div>
-      <div><div class="k">Chain</div><div class="val">Robinhood Chain (4663)</div></div>
+      <div><div class="k">Chain</div><div class="val"><span data-chain-name>—</span> (<span data-chain-id>—</span>)</div></div>
     </div>
     <div id="transfer-section" style="display:none">
       <div style="background:var(--red-soft);border:1px solid var(--red-line);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--red)">
@@ -1168,7 +1168,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
       signer = await provider.getSigner();
       const net = await provider.getNetwork();
       if (Number(net.chainId) !== Number(data.chainId)) {
-        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(data.chainId).toString(16) }] }); } catch (e) { status('Switch the wallet to Robinhood Chain (4663).', 'warn'); }
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(data.chainId).toString(16) }] }); } catch (e) { status(`Switch the wallet to ${data.chainName || 'the right network'} (chain id ${data.chainId}).`, 'warn'); }
       }
       // Work on the connected wallet's row if it is one of ours.
       if (data.wallets.some((w) => w.address.toLowerCase() === account.toLowerCase())) await load(account);
@@ -1305,7 +1305,7 @@ const initApprove = ((root, VERSION) => {
       const mine = account.toLowerCase() === cfg.owner.toLowerCase();
       $('[data-id="wallet"]').innerHTML = `<span class="mono">${short(account)}</span> ${mine ? '<span class="pill ok">owner</span>' : '<span class="pill bad">not the owner wallet</span>'}`;
       if (!mine) status(`Connected account ${short(account)} is not the main wallet or a wallet listed under wallets in settings.json. Switch accounts in your wallet.`, 'bad');
-      else if (!chainOk) status('Wrong network. Click "Switch to Robinhood Chain".', 'warn');
+      else if (!chainOk) status(`Wrong network. Click "Switch to ${cfg.chainName}".`, 'warn');
       else status('Connected. Tick the checkbox, then approve.', 'ok');
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
       window.ethereum.on && window.ethereum.on('chainChanged', () => location.reload());
@@ -1328,14 +1328,21 @@ const initApprove = ((root, VERSION) => {
       await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] });
     } catch (e) {
       if (e.code === 4902 || /unrecognized|not added/i.test(e.message || '')) {
+        // Only offer to add the network when the server states its native asset.
+        // Adding it with a guessed currency labels this chain's gas wrongly in the
+        // wallet from then on -- on Arc, gas is USDC, not ether.
+        if (!cfg.nativeCurrency) {
+          status(`${cfg.chainName} is not in your wallet. Add it by hand (chain id ${cfg.chainId}, RPC ${cfg.rpc}) — this page will not guess the chain's native currency.`, 'warn');
+          return;
+        }
         await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{
           chainId: hex, chainName: cfg.chainName, rpcUrls: [cfg.rpc],
-          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, blockExplorerUrls: [cfg.explorer],
+          nativeCurrency: cfg.nativeCurrency, blockExplorerUrls: cfg.explorer ? [cfg.explorer] : [],
         }] });
       } else { status(`Could not switch network: ${e.message}`, 'bad'); return; }
     }
     await checkChain();
-    status(chainOk ? 'On Robinhood Chain.' : 'Still on the wrong network.', chainOk ? 'ok' : 'warn');
+    status(chainOk ? `On ${cfg.chainName}.` : 'Still on the wrong network.', chainOk ? 'ok' : 'warn');
   }
 
   async function send(flag) {
@@ -1372,8 +1379,19 @@ const initApprove = ((root, VERSION) => {
 <script>
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const EXPLORER = 'https://robinhoodchain.blockscout.com';
-const CHAIN_ID = 4663;
+// From the instance serving this page, never hardcoded: the same page is served on
+// Arc, where the chain id, the explorer and even the native currency all differ.
+let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = 'this network', RPC_URL = '', NATIVE_CURRENCY = null;
+const chainReady = fetch('/api/chain', { cache: 'no-store' }).then(r => r.json()).then(c => {
+  if (!c || !c.ok) throw new Error('the server did not state its chain');
+  EXPLORER = c.explorer || ''; CHAIN_ID = Number(c.chainId); CHAIN_NAME = c.chainName;
+  RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency;
+  document.querySelectorAll('[data-chain-name]').forEach(el => { el.textContent = CHAIN_NAME; });
+  document.querySelectorAll('[data-chain-id]').forEach(el => { el.textContent = 'chain ' + CHAIN_ID; });
+  document.querySelectorAll('[data-chain-id-text]').forEach(el => { el.textContent = 'Chain ' + CHAIN_ID; });
+  document.querySelectorAll('[data-chain-name-text]').forEach(el => { el.textContent = '#1 ' + CHAIN_NAME; });
+  return c;
+}).catch(e => { console.error('chain identity unavailable:', e.message); return null; });
 
 const NFT_ABI = [
   'function ownerOf(uint256) view returns (address)',
@@ -1445,15 +1463,21 @@ async function connectWallet() {
 
     const network = await provider.getNetwork();
     if (Number(network.chainId) !== CHAIN_ID) {
+      await chainReady;
+      if (!CHAIN_ID) throw new Error('This page could not read which chain it is serving; reload before signing.');
       try {
         await provider.send('wallet_switchEthereumChain', [{ chainId: '0x' + CHAIN_ID.toString(16) }]);
       } catch(e) {
+        // Never hardcode another chain's identity here: this page is served by
+        // whichever instance is running, and adding a network under the wrong name
+        // or the wrong native currency misleads the wallet from then on.
+        if (!NATIVE_CURRENCY) throw new Error(`${CHAIN_NAME} is not in your wallet. Add it by hand: chain id ${CHAIN_ID}, RPC ${RPC_URL}.`);
         await provider.send('wallet_addEthereumChain', [{
           chainId: '0x' + CHAIN_ID.toString(16),
-          chainName: 'Robinhood Chain',
-          rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
-          nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-          blockExplorerUrls: [EXPLORER],
+          chainName: CHAIN_NAME,
+          rpcUrls: [RPC_URL],
+          nativeCurrency: NATIVE_CURRENCY,
+          blockExplorerUrls: EXPLORER ? [EXPLORER] : [],
         }]);
       }
     }
@@ -1512,12 +1536,16 @@ async function checkOwnership() {
 async function loadBalances() {
   if (!tbaAddress) return;
   const grid = document.getElementById('balance-grid');
-  const rpc = new ethers.JsonRpcProvider('https://rpc.mainnet.chain.robinhood.com');
+  await chainReady;
+  if (!RPC_URL) { grid.innerHTML = '<div class="muted">This page could not read which chain it is serving.</div>'; return; }
+  const rpc = new ethers.JsonRpcProvider(RPC_URL);
 
   try {
-    // ETH balance
+    // The chain's native asset: ether on Robinhood, USDC on Arc. Labelled and
+    // scaled from what the instance reports, never assumed to be 18-decimal ether.
+    const nat = NATIVE_CURRENCY || { symbol: 'native', decimals: 18 };
     const ethBal = await rpc.getBalance(tbaAddress);
-    balances['ETH'] = { amount: ethers.formatEther(ethBal), symbol: 'ETH', address: null, usd: 0 };
+    balances[nat.symbol] = { amount: ethers.formatUnits(ethBal, nat.decimals), symbol: nat.symbol, address: null, usd: 0 };
 
     // Known ERC-20 tokens (a token that fails to answer is skipped, not fatal — weekly-digest-and-vault)
     for (const [addr, info] of Object.entries(KNOWN_TOKENS)) {
@@ -1946,7 +1974,7 @@ loadConfig().then(async () => {
       account = ethers.getAddress(accounts[0]); signer = await provider.getSigner();
       const net = await provider.getNetwork();
       if (quote && Number(net.chainId) !== Number(quote.chainId)) {
-        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(quote.chainId).toString(16) }] }); } catch { status('sl-txstatus', 'Switch the wallet to Robinhood Chain (4663).', 'warn'); }
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(quote.chainId).toString(16) }] }); } catch { status('sl-txstatus', `Switch the wallet to ${CHAIN_NAME} (chain id ${quote.chainId}).`, 'warn'); }
       }
       q('sl-connect').textContent = short(account);
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());
@@ -2187,7 +2215,7 @@ loadConfig().then(async () => {
       account = ethers.getAddress(accounts[0]); signer = await provider.getSigner();
       const net = await provider.getNetwork();
       if (ctx && Number(net.chainId) !== Number(ctx.chainId)) {
-        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(ctx.chainId).toString(16) }] }); } catch { status('mt-txstatus', `Switch the wallet to Robinhood Chain (${ctx.chainId}).`, 'warn'); }
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(ctx.chainId).toString(16) }] }); } catch { status('mt-txstatus', `Switch the wallet to ${CHAIN_NAME} (chain id ${ctx.chainId}).`, 'warn'); }
       }
       q('mt-connect').textContent = short(account);
       window.ethereum.on && window.ethereum.on('accountsChanged', () => location.reload());

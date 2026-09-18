@@ -114,6 +114,52 @@ function handBackReason({ feeTier, quotedWeth, maxSwapWeth }) {
  * --------------------------------------------------------------------------- */
 
 /** Split a raw amount at `pct` percent; returns { toVault, toOwner }. */
+/**
+ * Which pool to convert a fee token through, decided by what the pools quote.
+ *
+ * The collector used to take the tier from the position the fees were earned in.
+ * That only works where the position and the swap live in the same place: a v4
+ * position's fee (4%, 3.881%) is not a v3 tier, so on a v4 chain every quote failed
+ * and the token was handed back unconverted. Worse, holding one pair in two tiers
+ * made it refuse to swap at all rather than choose.
+ *
+ * So: quote every candidate and take the best output. An explicit override still
+ * wins outright -- but it is quoted too, and reported when it cannot fill, because
+ * silently falling back to a pool nobody chose is how a swap ends up somewhere
+ * unexpected.
+ *
+ * `quote(fee)` returns the output amount for that tier, 0n or null when it cannot
+ * be quoted. Returns { fee, out, source } or null when nothing can be quoted.
+ */
+const V3_FEE_TIERS = [100, 500, 3000, 10000];
+
+async function pickSwapRoute({ tiers = V3_FEE_TIERS, override = null, positionFee = null, quote }) {
+  const tried = [];
+  const ask = async (fee, source) => {
+    if (fee == null || tried.some((t) => t.fee === fee)) return null;
+    let out = null;
+    try { out = await quote(fee); } catch { out = null; }
+    const row = { fee, out: out && out > 0n ? out : null, source };
+    tried.push(row);
+    return row.out ? row : null;
+  };
+
+  if (override != null) {
+    const hit = await ask(Number(override), "override");
+    // An override that cannot fill is reported, not quietly replaced: the whole
+    // point of setting one is to pin the pool a swap goes through.
+    return hit ? { ...hit, tried } : { fee: null, out: null, source: "override", failedOverride: Number(override), tried };
+  }
+
+  const candidates = [...tiers];
+  // The position's own fee is worth trying when it happens to be a v3 tier, but it
+  // is one candidate among others, never the answer on its own.
+  if (positionFee != null && !candidates.includes(Number(positionFee))) candidates.push(Number(positionFee));
+  for (const fee of candidates) await ask(fee, "quoted");
+  const best = tried.filter((t) => t.out).sort((a, b) => (b.out > a.out ? 1 : b.out < a.out ? -1 : 0))[0];
+  return best ? { ...best, tried } : null;
+}
+
 function splitAmount(amountRaw, pct) {
   const bp = BigInt(Math.round(pct * 100)); // hundredths of a percent
   const toVault = (amountRaw * bp) / 10000n;
@@ -198,6 +244,8 @@ module.exports = {
   budgetAllows,
   gasEstimate,
   GAS_UNITS,
+  pickSwapRoute,
+  V3_FEE_TIERS,
   gasSpentLast24h,
   gasCapHit,
   gasFloat,

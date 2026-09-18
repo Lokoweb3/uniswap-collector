@@ -1733,9 +1733,16 @@ async function loadAllVaults() {
     const unit = t.unit || '';
     const here = c.key === data.current;
     if (!c.ok) {
+      // "Not answering on 127.0.0.1:8787" was said whether the instance was missing
+      // or merely slow. It was slow -- rebuilding a claim history, while answering
+      // other routes in six milliseconds -- and the card sent the reader to check a
+      // port that was fine. What went wrong is now said in the words the router used.
+      const headline = c.reachable === false
+        ? `Not running on 127.0.0.1:${esc(c.port)}`
+        : `No vault reading from ${esc(c.label)}`;
       return `<div class="vcard vcard-down">
         <div class="vcard-head"><span class="vcard-name">${esc(c.label)}</span></div>
-        <div class="vcard-offline">Not answering on 127.0.0.1:${esc(c.port)}</div>
+        <div class="vcard-offline">${headline}</div>
         ${c.error ? `<div class="vcard-foot">${esc(c.error)}</div>` : ''}
       </div>`;
     }

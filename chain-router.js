@@ -126,28 +126,49 @@ function injectPicker(html, chain) {
   return html.includes("</body>") ? html.replace("</body>", `${tag}</body>`) : html + tag;
 }
 
-/** One chain's vault, or why it could not be read. Never throws, never blocks the others. */
-function vaultOf(chain, timeoutMs = 8000) {
+/**
+ * One chain's vault, or why it could not be read. Never throws, never blocks the others.
+ *
+ * Why it failed is not one thing. A chain that is not running refuses the connection;
+ * a busy one accepts it and answers late. Both used to read "no answer from
+ * 127.0.0.1:8787", which sent someone to check a port that was in fact answering
+ * other routes in six milliseconds -- it was rebuilding a claim history at the time.
+ * /api/vault-info reads the NFT, its art and several balances from chain, so seconds
+ * are normal for it and a slow answer is not an outage.
+ */
+function vaultOf(chain, timeoutMs = 15000) {
   const get = (path) => new Promise((resolve) => {
     const r = http.request({ host: "127.0.0.1", port: chain.port, path, method: "GET", timeout: timeoutMs }, (up) => {
       let body = "";
       up.setEncoding("utf8");
       up.on("data", (c) => (body += c));
-      up.on("end", () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });
+      up.on("end", () => {
+        try { resolve({ data: JSON.parse(body) }); }
+        catch { resolve({ fail: `answered ${up.statusCode} but not with JSON` }); }
+      });
     });
-    r.on("timeout", () => { r.destroy(); resolve(null); });
-    r.on("error", () => resolve(null));
+    r.on("timeout", () => { r.destroy(); resolve({ fail: `did not answer within ${Math.round(timeoutMs / 1000)}s — busy, not down` }); });
+    r.on("error", (err) => resolve({
+      fail: err.code === "ECONNREFUSED" ? `nothing is listening on 127.0.0.1:${chain.port}` : `${err.code || err.message}`,
+    }));
     r.end();
   });
-  return Promise.all([get("/api/vault-info"), get("/api/treasury")]).then(([vault, treasury]) => ({
-    key: chain.key, label: chain.label, port: chain.port,
-    ok: !!(vault && vault.ok),
-    // Read-only, and kept apart: each chain's figures stay under that chain's name.
-    // Nothing here is added to anything from another chain.
-    vault: vault && vault.ok ? vault : null,
-    treasury: treasury && treasury.ok ? treasury : null,
-    error: vault && vault.ok ? null : (vault && vault.error) || `no answer from 127.0.0.1:${chain.port}`,
-  }));
+  return Promise.all([get("/api/vault-info"), get("/api/treasury")]).then(([v, t]) => {
+    const vault = v.data && v.data.ok ? v.data : null;
+    const treasury = t.data && t.data.ok ? t.data : null;
+    return {
+      key: chain.key, label: chain.label, port: chain.port,
+      ok: !!vault,
+      // Read-only, and kept apart: each chain's figures stay under that chain's name.
+      // Nothing here is added to anything from another chain.
+      vault, treasury,
+      error: vault ? null : v.fail || (v.data && v.data.error) || "answered, but not with a vault",
+      // Whether the instance is reachable at all, which is a different question from
+      // whether it produced a vault. A card that says "not running" when the process
+      // is merely busy sends someone to restart something that is working.
+      reachable: !v.fail || !/nothing is listening/.test(v.fail),
+    };
+  });
 }
 
 const server = http.createServer((req, res) => {

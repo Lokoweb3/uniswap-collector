@@ -175,6 +175,24 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   const stillUp = await get("/api/who", `${COOKIE}=robinhood`);
   assert.strictEqual(JSON.parse(stillUp.body).chain, "robinhood", "the other chain is unaffected");
 
+  // ---- a chain that is not running reads differently from one that is slow ----
+  {
+    // Both used to say "no answer from 127.0.0.1:8787". The Robinhood instance was
+    // once reported that way while it answered other routes in six milliseconds --
+    // it was rebuilding a claim history -- and the reader was sent to check a port
+    // that was working. Being refused and being late are different facts.
+    const all = JSON.parse((await get("/api/vaults")).body);
+    const down = all.chains.find((c) => c.key === "arc");
+    assert.strictEqual(down.ok, false, "the closed chain has no vault");
+    assert.strictEqual(down.reachable, false, "and is reported as not reachable");
+    assert.ok(/nothing is listening on 127\.0\.0\.1:/.test(down.error), `named as refused: ${down.error}`);
+
+    const up = all.chains.find((c) => c.key === "robinhood");
+    assert.strictEqual(up.ok, false, "the fake chain answers HTML, so it yields no vault");
+    assert.strictEqual(up.reachable, true, "but it is running, and must not be called down");
+    assert.ok(!/nothing is listening/.test(up.error), `a reachable chain is not reported as refused: ${up.error}`);
+  }
+
   await new Promise((r) => router.close(r));
   await new Promise((r) => a.close(r));
   console.log("chain router: requests reach the chosen chain, cookies never cross, the page always names its chain, and a chain that is down says so");

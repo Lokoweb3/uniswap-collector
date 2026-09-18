@@ -281,11 +281,31 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
     // A batched collect (several positions' zero-liquidity events in one tx) has ONE receipt:
     // credit each token's transfers to the first position that carries it, the others get null.
     let fee0Known = true, fee1Known = true, batchNote = null;
+    // Unknown is not zero. fee0/fee1 start at 0n and are only filled from the
+    // receipt's Transfer logs, so every path that leaves those logs unreadable used
+    // to persist a genuine-looking "0 fees collected": a receipt that failed to
+    // fetch, a pool key that would not resolve, a currency lookup that was refused.
+    // Downstream treats only null as unknown, and the dedupe means a rescan skips
+    // the row, so the wrong figure would never correct itself.
+    const readNotes = [];
+    if (!rcpt) {
+      fee0Known = false; fee1Known = false;
+      readNotes.push("receipt could not be read: amounts unknown, not zero");
+    }
+    if (!t0) { fee0Known = false; readNotes.push("token0 unknown: its leg cannot be read"); }
+    if (!t1) { fee1Known = false; readNotes.push("token1 unknown: its leg cannot be read"); }
+    // A native leg moves no ERC-20 and therefore leaves no Transfer log. The code
+    // already said so in `note`; nothing read `note`, and the amount still said 0.
+    if (t0 && t0.address === ethers.ZeroAddress) fee0Known = false;
+    if (t1 && t1.address === ethers.ZeroAddress) fee1Known = false;
     if (batch && batch.n > 1) {
       const cred = batchCredited.get(tx) || new Set();
       batchCredited.set(tx, cred);
-      ({ fee0Known, fee1Known } = allocateBatch(cred, t0, t1));
-      const dup = [!fee0Known && t0 ? t0.symbol : null, !fee1Known && t1 ? t1.symbol : null].filter(Boolean);
+      // Ands, never assigns: batch allocation can only make a leg less certain.
+      const alloc = allocateBatch(cred, t0, t1);
+      fee0Known = fee0Known && alloc.fee0Known;
+      fee1Known = fee1Known && alloc.fee1Known;
+      const dup = [!alloc.fee0Known && t0 ? t0.symbol : null, !alloc.fee1Known && t1 ? t1.symbol : null].filter(Boolean);
       batchNote = dup.length ? `batch of ${batch.n} positions in one tx: ${dup.join(", ")} already credited to #${batch.first}, split unknown` : `batch of ${batch.n} positions in one tx: receipt total credited here`;
     }
     let wallet = null;
@@ -295,7 +315,7 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
       block, t: await blockTime(block), tx, tokenId: `v4-${id}`,
       fee0: fee0Known ? fee0.toString() : null, fee1: fee1Known ? fee1.toString() : null, principal: false,
       wallet: wallet ? String(wallet).toLowerCase() : null, walletLabel: null,
-      t0, t1, src: "owner-modify", poolId, note: [nativeLeg, batchNote].filter(Boolean).join("; ") || undefined,
+      t0, t1, src: "owner-modify", poolId, note: [nativeLeg, batchNote, ...readNotes].filter(Boolean).join("; ") || undefined,
     });
     rows.sort((a, b) => a.block - b.block);
     try {

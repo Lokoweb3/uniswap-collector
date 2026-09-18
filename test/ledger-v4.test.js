@@ -3,6 +3,8 @@
 // the first position that carries the token; later positions in the batch get null for that
 // leg (TASK-87). Pure helpers, no RPC.
 const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 const { ethers } = require("ethers");
 const { zeroDeltaIdsByTx, allocateBatch } = require("../ledger-v4");
 
@@ -29,4 +31,32 @@ const modLog = (tx, id, delta, index) => { const e = IFACE.encodeEventLog("Modif
   // Case-insensitive on the address.
   assert.deepStrictEqual(allocateBatch(cred, { address: Z.address.toUpperCase() }, null), { fee0Known: false, fee1Known: true });
 }
-console.log("ledger-v4: batch collects group by tx and credit each token once — all assertions passed");
+
+// ---- an unreadable leg is unknown, never zero --------------------------------
+//
+// fee0/fee1 begin at 0n and are only filled from the receipt's Transfer logs, so a
+// receipt that fails to fetch, a pool key that will not resolve, or a native leg
+// (which moves no ERC-20 and logs nothing) used to persist "0 fees collected" as
+// though it were measured. Downstream treats only null as unknown, and the dedupe
+// means the row is never revisited, so the wrong figure was permanent.
+{
+  const rows = [];
+  const mkRecorder = require("../ledger-v4");
+  assert.strictEqual(typeof mkRecorder.create, "function");
+  const src = fs.readFileSync(path.join(__dirname, "..", "ledger-v4.js"), "utf8");
+  // The guards, asserted on the source because recordOwnerCollect is internal.
+  assert.ok(/if \(!rcpt\) \{\s*\n\s*fee0Known = false; fee1Known = false;/.test(src),
+    "a missing receipt marks both legs unknown");
+  assert.ok(/if \(!t0\) \{ fee0Known = false;/.test(src) && /if \(!t1\) \{ fee1Known = false;/.test(src),
+    "an unresolved token marks its own leg unknown");
+  assert.ok(/if \(t0 && t0\.address === ethers\.ZeroAddress\) fee0Known = false;/.test(src),
+    "a native leg is unknown: it leaves no Transfer log");
+  assert.ok(/fee0Known = fee0Known && alloc\.fee0Known;/.test(src) && /fee1Known = fee1Known && alloc\.fee1Known;/.test(src),
+    "batch allocation can only reduce certainty, never restore it");
+  assert.ok(!/\(\{ fee0Known, fee1Known \} = allocateBatch/.test(src),
+    "and it no longer overwrites the flags wholesale");
+  assert.ok(/fee0: fee0Known \? fee0\.toString\(\) : null/.test(src), "an unknown leg is written as null");
+  void rows;
+}
+
+console.log("ledger-v4: batch collects credit each token once, and an unreadable leg is recorded as unknown rather than as zero");

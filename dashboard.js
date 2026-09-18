@@ -850,7 +850,7 @@ function renderMonths(){
   $('#mhead').hidden = months.length < 1;
   const weth = histD.wethUsd;
   $('#mtable').innerHTML = months.length ? `<table class="etable">
-    <tr><th>Month</th><th>Collects</th><th>Fees</th><th>≈ USD</th>${weth ? '<th>≈ WETH</th>' : ''}<th>By wallet</th></tr>
+    <tr><th>Month</th><th>Collects</th><th>Fees</th><th>≈ USD</th>${weth ? `<th>≈ ${esc((PRICING && PRICING.unit) || 'WETH')}</th>` : ''}<th>By wallet</th></tr>
     ${months.map(m => `<tr class="mrow${m.key === monthFilter ? ' on' : ''}" data-m="${m.key}">
       <td>${monthLabel(m.key)}</td>
       <td>${m.count}</td>
@@ -884,7 +884,11 @@ function renderHistoryHead(){
     total = rows.reduce((s, r) => s + (r.usd || 0), 0);
   }
   const wethSum = rows.reduce((s, r) => s + (r.weth || 0), 0);
-  const weth = wethSum ? ' · ≈' + wethSum.toFixed(4) + ' WETH' : '';
+  // `weth` on a collect row is not WETH: the server computes it as usd / wethUsd,
+  // the value in THIS instance's unit of account. On Arc that unit is USDC and
+  // wethUsd is 1, so "≈2.2556 WETH" was $2.26 of USDC read as ~$5,600 of ether.
+  const unitName = (PRICING && PRICING.unit) || 'WETH';
+  const weth = wethSum ? ' · ≈' + wethSum.toFixed(4) + ' ' + unitName : '';
   $('#etotal').textContent = usd(total) + weth + (monthFilter ? ' · ' + monthLabel(monthFilter) : '');
   const wallets = walletsIn(rows);
   $('#ewallets').innerHTML = wallets.length > 1 || (histD.byWallet || []).length > 1
@@ -1345,7 +1349,10 @@ function renderVault(){
   const tile = (n, l, cls = '') => `<div class="stat"><div class="n sm ${cls}">${n}</div><div class="l">${l}</div></div>`;
   $('#vaultgrid').innerHTML =
     tile(usd(d.totalSplitUsdg), 'Split to the vault, all time', 'fees') +
-    tile(d.balanceUsdg == null ? '—' : usd(d.balanceUsdg), `Vault balance (${(PRICING && PRICING.unit) || 'target'})`) +
+    // The treasury's own unit, not the portfolio's. PRICING.unit is what the
+    // portfolio prices in -- WETH on Robinhood -- while the vault holds USDG, so
+    // this tile labelled a USDG balance "WETH": a 2,500x implied-value error.
+    tile(d.balanceUsdg == null ? '—' : usd(d.balanceUsdg), `Vault balance${d.unit ? ` (${esc(d.unit)})` : ''}`) +
     tile(d.enabled ? d.pct + '%' : 'off', d.enabled ? `Current split · max ${d.max}%` : 'Split is off (no treasury address yet)') +
     tile(String(d.count), `Splits recorded${d.failed ? ` · ${d.failed} failed` : ''}`);
   // Six-month bar chart of the split amounts.
@@ -1358,7 +1365,7 @@ function renderVault(){
   const bars = vals.map((v, i) => { const h = Math.round((v / max) * (H - 40)); const x = pad + i * bw + bw * 0.2; return `<rect x="${x}" y="${H - 22 - h}" width="${bw * 0.6}" height="${h}" rx="3" fill="var(--neon-gold, #f5c542)" opacity="${v ? 0.9 : 0.25}"/><text class="axis" x="${x + bw * 0.3}" y="${H - 8}" text-anchor="middle">${new Date(months[i] + '-15T12:00:00').toLocaleDateString(undefined, { month: 'short' })}</text>${v ? `<text class="axis" x="${x + bw * 0.3}" y="${H - 26 - h}" text-anchor="middle">${usd(v)}</text>` : ''}`; }).join('');
   $('#vaultchart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:130px">${bars}</svg>`;
   $('#vaultnote').textContent = d.tba
-    ? `Treasury account ${d.tba}. ${d.pct}% of every wallet's swept ${(PRICING && PRICING.unit) || 'proceeds'} goes to the vault at collect time; the rest goes to the wallet. Ledger: /fee-split-ledger.json.`
+    ? `Treasury account ${d.tba}. ${d.pct}% of every wallet's swept ${d.unit ? esc(d.unit) : 'proceeds'} goes to the vault at collect time; the rest goes to the wallet. Ledger: /fee-split-ledger.json.`
       + (d.balanceUsdg != null && Math.abs(Number(d.balanceUsdg) - Number(d.totalSplitUsdg || 0)) > 0.005
         ? ` The balance is ${usd(d.balanceUsdg)} while this ledger accounts for ${usd(d.totalSplitUsdg)}: ${usd(Number(d.balanceUsdg) - Number(d.totalSplitUsdg || 0))} reached the vault by some route this collector did not record.`
         : '')

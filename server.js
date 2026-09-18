@@ -3140,6 +3140,7 @@ function loopHealth() {
 }
 
 /** The treasury view (/api/treasury): settings in force, TBA balance, ledger totals. */
+const treasuryUnitCache = new Map();   // stable token address -> its symbol, read once
 async function treasuryView() {
   // The percentage in force is the NFT's feeSplitPct() (the vault page's slider), not settings.json.
   const ts = await treasuryLedger.effectiveSettings(cfg, provider);
@@ -3149,11 +3150,14 @@ async function treasuryView() {
     const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)", "function symbol() view returns (string)"], provider);
     const [raw, dec, sym] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals(), usdg.symbol().catch(() => null)]);
     balanceUsdg = Number(ethers.formatUnits(raw, dec));
+    // A token's symbol does not change, so a read that fails once should not drop
+    // the ticker off a balance that is still being reported. Remembered per token.
+    if (sym) treasuryUnitCache.set(cfg.usdReference.stable, sym);
     // The unit is whatever THIS token calls itself, asked of the token the balance
     // was just read from. Taking it from cfg.numeraire named a USDG treasury "WETH"
     // on Robinhood, and only looked right on Arc because its numeraire and its
     // stable happen to be the same contract.
-    unitSymbol = sym;
+    unitSymbol = sym || treasuryUnitCache.get(cfg.usdReference.stable) || null;
   }
   // Null rather than a guess when the token could not be asked: a blank is honest,
   // a wrong ticker on someone's treasury is not.

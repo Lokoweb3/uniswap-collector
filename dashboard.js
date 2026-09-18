@@ -486,13 +486,19 @@ function renderHeadline(){
   // Owner's group line inside the Positions panel, in the same shape as the watched wallets' lines.
   if (m) {
     const link = chainRef(EXPLORER, `/address/${m.owner}`, `${ownerLabel()} <span class="muted">${shortA(m.owner)}</span>`, m.owner);
-    const ownTotal = m.totals.liquidityUsd + m.totals.feesUsd + (pf ? pf.totals.walletUsd : 0);
+    // A missing portfolio means the wallet's loose tokens are UNKNOWN, not zero.
+    // Adding 0 quietly deleted them from every total that used this: on Robinhood
+    // that is ~$10k of tokens vanishing with nothing on screen to say a component
+    // was missing. The figure is now marked partial and labelled wherever it shows.
+    const tokensKnown = !!pf;
+    const ownTotal = m.totals.liquidityUsd + m.totals.feesUsd + (tokensKnown ? pf.totals.walletUsd : 0);
+    const partialNote = tokensKnown ? '' : ' <span class="muted" title="This wallet\'s loose tokens could not be valued, so they are not in this figure.">+ tokens unknown</span>';
     $('#ownerhead').innerHTML =
       `<div class="wh-main">${link}<span class="wcount"><b>${m.totals.count}</b> open${m.totals.idle ? ` · <span class="idle">${m.totals.idle} idle</span>` : ''}</span></div>` +
       `<div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b></span>` +
       walletToggle('owner', 'list', m.totals.count) + `</div>` +
       `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">` +
-      `<span class="wtotal">total <b>${usd(ownTotal)}</b></span>` +
+      `<span class="wtotal">total <b>${usd(ownTotal)}</b>${partialNote}</span>` +
       (pf ? `<span>tokens <b>${usd(pf.totals.walletUsd)}</b>${pf.totals.unpricedCount ? ` <span class="muted">+${pf.totals.unpricedCount} unpriced</span>` : ''}</span>` : '') +
       `<span>uncollected <b>${usd(m.totals.feesUsd)}</b></span>` +
       `</div></details>`;
@@ -501,11 +507,11 @@ function renderHeadline(){
     const W = lastWatchForPf && lastWatchForPf.totals;
     if (scope === 'owner') {
       $('#watchtitle').textContent = `Positions · Main wallet · ${m.totals.count} open`;
-      $('#watchtotal').textContent = usd(ownTotal);
+      $('#watchtotal').innerHTML = usd(ownTotal) + partialNote;
     } else if (scope === 'all' && W) {
       const watchedOpen = (lastWatchForPf.wallets || []).reduce((a, w) => a + ((w.totals && w.totals.count) || 0), 0);
       $('#watchtitle').textContent = `Positions · ${m.totals.count + watchedOpen} open across ${W.wallets + 1} wallets`;
-      $('#watchtotal').textContent = usd(ownTotal + W.totalUsd);
+      $('#watchtotal').innerHTML = usd(ownTotal + W.totalUsd) + partialNote;
       $('#watchstats').innerHTML = `<span>${W.wallets + 1} wallets</span><span>tokens in wallets <b>${usd((pf ? pf.totals.walletUsd : 0) + W.walletUsd)}</b></span><span>in pools <b>${usd(m.totals.liquidityUsd + W.liquidityUsd)}</b></span><span>uncollected fees <b>${usd(m.totals.feesUsd + W.feesUsd)}</b></span>`;
     }
   }
@@ -517,7 +523,10 @@ function renderHeadline(){
     document.body.classList.toggle('scope-all', scope === 'all');
   }
   const nwp = $('#networthparts');
-  if (own && !pf) { if (scope === 'owner') { $('#networth').textContent = '—'; nwp.hidden = true; } return; } // owner tokens not valued yet
+  // Net worth is withheld in EVERY scope when the owner's tokens are unvalued: the
+  // guard used to cover 'owner' only, so 'all' returned early leaving a stale figure
+  // on screen beside a total that had already dropped those tokens.
+  if (own && !pf) { $('#networth').textContent = '—'; nwp.hidden = true; return; } // owner tokens not valued yet
   const wallet = (own && pf ? pf.totals.walletUsd : 0) + sel.reduce((s, w) => s + ((w.holdings && w.holdings.walletUsd) || 0), 0);
   const unpriced = (own && pf ? pf.totals.unpricedCount : 0) + sel.reduce((s, w) => s + ((w.holdings && w.holdings.unpricedCount) || 0), 0);
   $('#networth').textContent = usd(liq + fees + wallet);

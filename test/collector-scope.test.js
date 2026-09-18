@@ -62,7 +62,12 @@ function patternNames(node, out = []) {
 }
 
 function analyse(file, host = new Set(Object.getOwnPropertyNames(globalThis))) {
-  const src = fs.readFileSync(path.join(ROOT, file), "utf8").replace(/^#![^\n]*\n/, "\n");
+  // A file can vanish between discovery and analysis -- a scratch script deleted by
+  // whoever created it, mid-run. That is not a scope failure, so it is skipped.
+  let raw;
+  try { raw = fs.readFileSync(path.join(ROOT, file), "utf8"); }
+  catch (err) { if (err.code === "ENOENT") return []; throw err; }
+  const src = raw.replace(/^#![^\n]*\n/, "\n");
   const ast = acorn.parse(src, { ecmaVersion: 2023, sourceType: "script", locations: true, allowReturnOutsideFunction: true });
 
   // scope: { parent, names:Set, node }

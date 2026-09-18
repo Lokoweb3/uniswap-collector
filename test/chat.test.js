@@ -83,6 +83,14 @@ const agentMod = require("../agent");
     assert.strictEqual(bodies.length, 2, "two model rounds");
     assert.strictEqual(s.messages.filter((m) => m.role === "tool").length, 1, "the tool ran once");
   } finally { global.fetch = realFetch; }
-  assert.ok(/Answer once, in one place/.test(bot.SYSTEM) && /positions covers the Main wallet only/.test(bot.SYSTEM));
+  assert.ok(/Answer once, in one place/.test(bot.SYSTEM), "the prompt still asks for one answer in one place");
+  // The rule that matters is not the wording but the inference it forbids: on a chain
+  // where the Main wallet is empty, "positions returned nothing" must not become
+  // "this chain has no positions". That is what made the Arc agent deny two live
+  // positions held by a watched wallet.
+  assert.ok(/positions covers the Main wallet ONLY/.test(bot.SYSTEM), "positions is still described as Main-only");
+  assert.ok(/never conclude that there are no positions[\s\S]*from positions alone/.test(bot.SYSTEM),
+    "and the prompt forbids concluding 'none' from that tool alone");
+  assert.ok(/watched_wallets/.test(bot.SYSTEM), "it names the tool that covers the other wallets");
   console.log("chat.test.js: agent provider, validation, roles, notes, memory and final-round reply ok");
 })().catch((e) => { console.error(e); process.exit(1); });

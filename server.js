@@ -3139,18 +3139,19 @@ async function treasuryView() {
   // The percentage in force is the NFT's feeSplitPct() (the vault page's slider), not settings.json.
   const ts = await treasuryLedger.effectiveSettings(cfg, provider);
   let balanceUsdg = null;
+  let unitSymbol = null;
   if (ts.tba && cfg.usdReference && cfg.usdReference.stable) {
-    const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
-    const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
+    const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)", "function symbol() view returns (string)"], provider);
+    const [raw, dec, sym] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals(), usdg.symbol().catch(() => null)]);
     balanceUsdg = Number(ethers.formatUnits(raw, dec));
+    // The unit is whatever THIS token calls itself, asked of the token the balance
+    // was just read from. Taking it from cfg.numeraire named a USDG treasury "WETH"
+    // on Robinhood, and only looked right on Arc because its numeraire and its
+    // stable happen to be the same contract.
+    unitSymbol = sym;
   }
-  // What that balance is denominated in. Every consumer used to assume USDG, or
-  // guess from the first balance row -- which on Robinhood is a zero ETH row, so the
-  // vault card labelled 493.293396 USDG as ETH. The payload says it instead.
-  const unitSymbol = (cfg.numeraire && cfg.numeraire.symbol)
-    || (cfg.usdReference && cfg.usdReference.stableSymbol)
-    || (cfg.tokens && cfg.tokens.stableSymbol)
-    || "USDG";
+  // Null rather than a guess when the token could not be asked: a blank is honest,
+  // a wrong ticker on someone's treasury is not.
   return { ok: true, ...ts, balanceUsdg, unit: unitSymbol, ...treasuryLedger.summary(), explorer: EXPLORER_URL };
 }
 

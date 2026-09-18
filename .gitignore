@@ -82,3 +82,4 @@ launch-scanner-status.json
 tasks/output/
 watchdog-state.json
 position-values.json
+position-registry.json

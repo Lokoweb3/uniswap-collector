@@ -47,7 +47,7 @@ const { dataPath } = require("./data-dir");
 
 const FILE = dataPath("v4-liquidity-ledger.json");
 const OWNER_COLLECTS = dataPath("v4-owner-collects.json");
-const CHUNK = 2000;
+const CHUNK_DEFAULT = 2000;
 const PACE_MS = 100;
 const STATE_DEPTH = 4000; // blocks back the RPC still answers eth_call for (probed: ~4500)
 const SWAP_LOOKBACK = 20000; // blocks to search back for a Swap price before an event (~35 min)
@@ -99,6 +99,10 @@ function allocateBatch(credited, t0, t1) {
 }
 
 function create({ provider, poolManager, posm, posmAddress, stateView, forwardStart, cfg = null, log = console.log }) {
+  // How wide a getLogs this chain will answer. Arc refuses anything over ~1,000
+  // blocks (and says only "could not coalesce error"), so a fixed 2,000 made every
+  // query here fail -- which is why Arc has no v4 ledger at all, not one record.
+  const CHUNK = Math.max(100, Number((cfg && cfg.maxLogRange) || CHUNK_DEFAULT));
   const batchCredited = new Map(); // tx -> Set(token address) already credited to a position in that tx
   posmAddress = posmAddress || (posm && posm.target);
   const pmLower = String(poolManager).toLowerCase();

@@ -216,7 +216,9 @@ async function main() {
   if (bal < need) throw new Error(`not enough gas: ${ethers.formatUnits(need, 18)} wanted (twice the measured cost)`);
 
   if (!local) {
-    log("\nThis deploys four contracts to Arc mainnet. It cannot be undone.");
+    log(replacing
+      ? `\nThis deploys a new LOKOVault NFT to Arc mainnet and mints #1 to the holder. It cannot be undone.\nThe existing vault ${current} is not touched and keeps its balance until you move it.`
+      : "\nThis deploys four contracts to Arc mainnet. It cannot be undone.");
     const a = await prompt(`Type the holder address to confirm (${holder}): `);
     if (a.toLowerCase() !== holder.toLowerCase()) throw new Error("holder not confirmed — nothing was sent");
   }

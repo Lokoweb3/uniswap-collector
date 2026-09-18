@@ -51,9 +51,10 @@ async function main() {
   const tba = ethers.getAddress(arg("tba"));
   const implementation = ethers.getAddress(arg("implementation"));
   const registry = ethers.getAddress(arg("registry"));
-  const holder = ethers.getAddress(arg("holder", cfg.wallets.main.address));
+  const wantHolder = arg("holder") ? ethers.getAddress(arg("holder")) : null;
   const provider = new ethers.JsonRpcProvider(arg("rpc", cfg.chain.rpcUrl), undefined, { staticNetwork: true });
   const chainId = Number((await provider.getNetwork()).chainId);
+  const chainName = cfg.chain && cfg.chain.name ? cfg.chain.name : `chain ${chainId}`;
 
   console.log(`\nChecking the vault on chain ${chainId} before recording it\n`);
   const acct = new ethers.Contract(tba, [
@@ -75,11 +76,19 @@ async function main() {
   check(tc.toLowerCase() === nft.toLowerCase() && Number(tid) === 1, `it is bound to ${nft} #1`);
   check((await nftC.tbaAddress()).toLowerCase() === tba.toLowerCase(), "the NFT agrees this is its account");
   check((await nftC.REGISTRY()).toLowerCase() === registry.toLowerCase(), "the NFT was built against this registry");
-  const nftHolder = await nftC.ownerOf(1);
-  check(nftHolder.toLowerCase() === holder.toLowerCase(), `LOKOVault #1 is held by ${holder}`);
+  // Who holds the token is read from the token, never assumed from settings:
+  // wallets.main is not the holder on Arc, and taking it as one reported the vault
+  // as held by a wallet that has never held it. An expectation may be stated with
+  // --holder, and then it is checked rather than substituted.
+  const holder = ethers.getAddress(await nftC.ownerOf(1));
+  if (wantHolder) check(wantHolder === holder, `LOKOVault #1 is held by ${wantHolder} as given`
+    + (wantHolder === holder ? "" : `, but the token says ${holder}`));
+  else console.log(`  ..    LOKOVault #1 is held by ${holder}`);
   check((await acct.owner()).toLowerCase() === holder.toLowerCase(), "the account answers to that holder");
-  const admin = await nftC.owner();
-  check(admin.toLowerCase() === holder.toLowerCase(), `the NFT contract's admin is the holder, not the operator (${admin})`);
+  const admin = ethers.getAddress(await nftC.owner());
+  check(admin === holder, admin === holder
+    ? `the NFT contract's admin is that holder, not a hot key`
+    : `the NFT contract's admin is ${admin}, not the holder`);
 
   if (checks.some((c) => !c)) throw new Error("a check failed — settings were not touched");
 
@@ -87,8 +96,12 @@ async function main() {
   after.vault = { ...(cfg.vault || {}), nft, tokenId: 1, tba, implementation, registry,
     feeSplitPct: cfg.vault && cfg.vault.feeSplitPct ? cfg.vault.feeSplitPct : 0,
     feeSplitMax: 20 };
+  // The comment is the only place the file itself explains that the number beside it
+  // is not the one in force. Overwriting it with something shorter would leave a
+  // reader thinking they can change the split by editing settings.json, which they
+  // cannot. Keep whatever is there; write the explanation only when there is none.
   delete after.vault._comment;
-  after.vault._comment = "LOKOVault on Arc. feeSplitPct is the share of each swept amount that goes to the vault's token-bound account; 0 means the split is off even though the vault exists.";
+  after.vault._comment = (cfg.vault && cfg.vault._comment) || `LOKOVault on ${chainName}. feeSplitPct is the share of each swept amount that goes to the vault's token-bound account. The NFT's own feeSplitPct() is what the collector actually uses (treasury.js reads it and lets it win); this number is kept equal to it so the file cannot be misread. To change the split, the NFT's admin calls setFeeSplitPct on the NFT -- editing it here alone does nothing.`;
 
   const lines = diff(cfg, after);
   console.log(`\n${SETTINGS}`);

@@ -26,17 +26,40 @@ mkdir -p backups
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 
 # Everything that is runtime history, present or not.
-FILES=()
-for f in fee-events.json v4-collects.json memecoin-discovered.json fee-snapshots.json fee-daily.json fee-prices.json backfill.json \
-         liquidity-ledger.json v4-liquidity-ledger.json v4-owner-collects.json token-sales.json token-disposals.json strategy-proposals.json portfolio.json range-log.json snet-staking.json alerts-state.json \
-         v4-positions*.json settings.json brain/notes.md agent-memory/*.json; do
-  [ -f "$f" ] && FILES+=("$f")
-done
-[ "${#FILES[@]}" -gt 0 ] || { log "nothing to back up"; exit 1; }
+NAMES=(fee-events.json v4-collects.json memecoin-discovered.json fee-snapshots.json fee-daily.json fee-prices.json backfill.json
+       liquidity-ledger.json v4-liquidity-ledger.json v4-owner-collects.json token-sales.json token-disposals.json strategy-proposals.json portfolio.json range-log.json snet-staking.json alerts-state.json
+       claims.json position-registry.json position-values.json state.json watch-accrual.json watch-pnl-basis.json
+       v4-positions*.json settings.json brain/notes.md agent-memory/*.json)
 
-tar -czf "$OUT" "${FILES[@]}"
+# One instance per data directory. This used to archive the current directory only,
+# which meant the Arc instance -- its settings, its claim history, its position
+# registry -- was never backed up at all. Each directory is stored under its own
+# name inside the archive, so two settings.json files cannot overwrite each other on
+# restore. LP_BACKUP_DATA_DIRS overrides the list; missing directories are skipped
+# with a line in the log rather than silently.
+DATA_DIRS="${LP_BACKUP_DATA_DIRS:-$PWD /home/steven/arc-data}"
+ARGS=()
+COUNT=0
+for d in $DATA_DIRS; do
+  if [ ! -d "$d" ]; then log "skipping $d (not a directory)"; continue; fi
+  parent=$(dirname "$d"); base=$(basename "$d")
+  found=0
+  for pattern in "${NAMES[@]}"; do
+    for f in "$d"/$pattern; do
+      [ -f "$f" ] || continue
+      ARGS+=(-C "$parent" "$base/${f#$d/}")
+      found=$((found + 1))
+    done
+  done
+  COUNT=$((COUNT + found))
+  log "$d: $found file(s)"
+done
+FILES=("${ARGS[@]}")
+[ "$COUNT" -gt 0 ] || { log "nothing to back up"; exit 1; }
+
+tar -czf "$OUT" "${ARGS[@]}"
 SIZE=$(du -h "$OUT" | cut -f1)
-log "archived ${#FILES[@]} files to $OUT ($SIZE)"
+log "archived $COUNT file(s) from ${DATA_DIRS} to $OUT ($SIZE)"
 
 # Keep the newest 14 local archives.
 ls -1t backups/ledgers-*.tar.gz 2>/dev/null | tail -n +15 | xargs -r rm -f

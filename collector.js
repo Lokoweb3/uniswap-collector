@@ -570,6 +570,13 @@ async function runOwner(ctx, owner) {
     // fee leg that is NOT the unit of account (ARGUS here) is still swapped into it
     // first, at the pool's fee and within the slippage tolerance. The figure below
     // is a quote at this instant, not an amount anyone is guaranteed.
+    // sweep.target is a switch ("ETH" or a token) whose string doubles as a label.
+    // Nothing forces it to match the token at sweep.targetToken, so a settings file
+    // can read USDG while every transfer is USDC. Say so rather than let the two
+    // drift in silence; the address is what the code actually uses.
+    if (target.kind === "token" && tinfo.symbol && target.symbol && tinfo.symbol.toUpperCase() !== String(target.symbol).toUpperCase()) {
+      log(`  ! settings call the sweep target "${target.symbol}", but ${target.address} is ${tinfo.symbol} on chain. The address is what is used; fix collector.sweep.target to say ${tinfo.symbol}.`);
+    }
     const slipPct = Number(cfg.thresholds.slippageBps) / 100;
     log(`If run in full mode with sweeping on, target ${tinfo.symbol}: the eligible ≈ ${unit(eligibleWeth)} ${UNIT} quotes at ≈ ${fmt(out, tinfo.decimals, 2)} ${tinfo.symbol} now` +
       `${sameToken ? ` (no final conversion: the sweep target IS the unit of account)` : `, before ${slipPct}% slippage tolerance and pool fees`}.`);

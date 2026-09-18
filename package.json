@@ -27,5 +27,9 @@
   "license": "MIT",
   "overrides": {
     "tmp": ">=0.2.6"
+  },
+  "devDependencies": {
+    "acorn": "^8.18.0",
+    "acorn-walk": "^8.3.4"
   }
 }

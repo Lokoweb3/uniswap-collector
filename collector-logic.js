@@ -160,6 +160,20 @@ async function pickSwapRoute({ tiers = V3_FEE_TIERS, override = null, positionFe
   return best ? { ...best, tried } : null;
 }
 
+/**
+ * The "confirmed in block N, gas X CUR" line.
+ *
+ * It exists as a function because it did not: the label was built inline from
+ * variables that belonged to another function, which type-checks fine, passes a
+ * syntax check, and throws ReferenceError the first time a collect succeeds. It
+ * did exactly that on Arc on 2026-09-18, after the transaction was already mined,
+ * so a successful collect was recorded as a failure and its fee tokens were never
+ * swapped. Everything it needs is an argument now.
+ */
+function gasLine(blockNumber, costWei, cfg) {
+  return `  confirmed in block ${blockNumber}, gas ${ethers.formatUnits(costWei, nativeDecimals(cfg))} ${nativeLabel(cfg)}`;
+}
+
 function splitAmount(amountRaw, pct) {
   const bp = BigInt(Math.round(pct * 100)); // hundredths of a percent
   const toVault = (amountRaw * bp) / 10000n;
@@ -237,6 +251,7 @@ function nativeLabel(cfg) {
 
 
 module.exports = {
+  gasLine,
   unitDecimals,
   unitLabel,
   nativeDecimals,

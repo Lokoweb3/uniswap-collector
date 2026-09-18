@@ -452,6 +452,11 @@ async function runOwner(ctx, owner) {
   // Thresholds are amounts of the chain's unit of account, which is not always an
   // 18-decimal WETH (Arc's is 6-decimal USDC): see collector-logic.unitDecimals.
   const UNIT_DEC = cl.unitDecimals(cfg), UNIT = cl.unitLabel(cfg);
+  // This pass's own native-currency formatters. They used to be read from main(),
+  // which is not in this function's scope chain: valid syntax, and a ReferenceError
+  // the moment a collect or a sweep actually succeeded.
+  const NATIVE_DEC = cl.nativeDecimals(cfg), NATIVE = cl.nativeLabel(cfg);
+  const nat = (v) => ethers.formatUnits(v, NATIVE_DEC);
   const unit = (v) => ethers.formatUnits(v, UNIT_DEC);
   const minWeth = ethers.parseUnits(cfg.thresholds.minWethPerPosition, UNIT_DEC);
   const eligible = [];
@@ -629,7 +634,7 @@ async function runOwner(ctx, owner) {
       const rcpt = await tx.wait();
       const cost = rcpt.gasUsed * rcpt.gasPrice;
       recordGas(state, cost);
-      log(`  confirmed in block ${rcpt.blockNumber}, gas ${nat(cost)} ${NATIVE}`);
+      log(cl.gasLine(rcpt.blockNumber, cost, cfg));
       sim.collectedOk = true;
 
       for (const [addr, amt] of [
@@ -671,7 +676,7 @@ async function runOwner(ctx, owner) {
         const rcpt = await v4c.collect(sim, recipient, wallet);
         const cost = rcpt.gasUsed * rcpt.gasPrice;
         recordGas(state, cost);
-        log(`  confirmed in block ${rcpt.blockNumber}, gas ${nat(cost)} ${NATIVE}`);
+        log(cl.gasLine(rcpt.blockNumber, cost, cfg));
         for (const [t, amt] of [[sim.t0, sim.amount0], [sim.t1, sim.amount1]]) {
           if (amt > 0n && !t.native) collected.set(t.address, (collected.get(t.address) || 0n) + amt);
         }

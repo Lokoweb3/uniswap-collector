@@ -15,6 +15,7 @@
  */
 "use strict";
 const { ethers } = require("ethers");
+const logChunks = require("./logs");
 
 const APPROVAL_TOPIC = ethers.id("Approval(address,address,uint256)");
 const ERC20_ABI = [
@@ -39,9 +40,17 @@ function create({ provider, cfg, approvedOperators, tokenMeta }) {
   }
 
   async function allowances(owner) {
+    // Walked in spans: a chain that caps getLogs refuses the whole-history query
+    // outright, and "scan failed" told the reader nothing about their allowances.
+    // What the walk covered is returned with the rows.
     let logs = [];
+    let coverage = null;
     try {
-      logs = await provider.getLogs({ fromBlock: LOG_FLOOR, toBlock: "latest", topics: [APPROVAL_TOPIC, ethers.zeroPadValue(owner, 32)] });
+      const scan = await logChunks.getLogsRange(provider, { topics: [APPROVAL_TOPIC, ethers.zeroPadValue(owner, 32)] },
+        { from: LOG_FLOOR, span: logChunks.spanFor(cfg), maxRequests: 25 });
+      logs = scan.logs;
+      coverage = { scannedFrom: scan.scannedFrom, complete: scan.complete, requests: scan.requests, error: scan.error || null };
+      if (!scan.logs.length && scan.error) return { ok: false, error: scan.error, coverage, rows: [] };
     } catch (err) {
       return { ok: false, error: err.shortMessage || err.message, rows: [] };
     }
@@ -84,7 +93,7 @@ function create({ provider, cfg, approvedOperators, tokenMeta }) {
       });
     }
     rows.sort((a, b) => (b.unlimited - a.unlimited) || ((b.grantedAt || 0) - (a.grantedAt || 0)));
-    return { ok: true, rows };
+    return { ok: true, rows, coverage };
   }
 
   function labelFor(addr) {
@@ -109,7 +118,9 @@ function create({ provider, cfg, approvedOperators, tokenMeta }) {
     const mgrs = [["v3", cfg.contracts.positionManager], ["v4", cfg.contracts.v4 && cfg.contracts.v4.positionManager]];
     for (const [v, mgr] of mgrs) {
       if (!mgr) continue;
-      const list = await approvedOperators(provider, mgr, owner).catch(() => []);
+      // The collector's own operator is passed in, so its state is read from the
+      // chain rather than depending on an event history this chain may not serve.
+      const list = await approvedOperators(provider, mgr, owner, operator).catch(() => []);
       for (const o of list) if (o.approved) out.push({ version: v, manager: ethers.getAddress(mgr), operator: o.address, isCollector: !!operator && o.address.toLowerCase() === operator.toLowerCase() });
     }
     return out;
@@ -144,7 +155,10 @@ function create({ provider, cfg, approvedOperators, tokenMeta }) {
     const c = cache.get(key);
     if (c && Date.now() - c.at < TTL) return c.data;
     const [al, ops, v] = await Promise.all([allowances(owner), operators(owner, operator), vault(operator)]);
-    const data = { ok: true, at: Date.now(), owner, operator: operator || null, allowances: al.rows, allowancesOk: al.ok, allowancesError: al.error || null, operators: ops, vault: v };
+    // The coverage travels with the rows: on a chain that caps getLogs this list is
+    // "what the last N blocks show", not "everything this wallet ever granted", and
+    // the page has to be able to say which.
+    const data = { ok: true, at: Date.now(), owner, operator: operator || null, allowances: al.rows, allowancesOk: al.ok, allowancesError: al.error || null, allowancesCoverage: al.coverage || null, operators: ops, vault: v };
     cache.set(key, { at: Date.now(), data });
     return data;
   }

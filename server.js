@@ -34,6 +34,7 @@ const history = require("./history");
 const verdict = require("./verdict");
 
 const settings = require("./settings");
+const logs = require("./logs");
 const cfg = settings.load();
 // The chain's name for anything a wallet will show a person. It was hardcoded to
 // "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
@@ -1160,20 +1161,39 @@ let latestOpenIds = [];
 // Every token seen across positions, for the owner-balances panel.
 const tokenSet = new Map(); // addrLower -> { address, symbol, decimals }
 
-/** Every operator the owner has ever granted setApprovalForAll on `mgr`, with its current state (from events, re-checked on chain). */
-async function approvedOperators(provider, mgr, owner) {
+/**
+ * Every operator this owner has granted setApprovalForAll on `mgr`.
+ *
+ * The collector's own operator is asked about directly, so its row is right even
+ * where the event history cannot be read: a chain that caps getLogs (Arc refuses
+ * anything over ~1,000 blocks) made this return nothing at all, and the page then
+ * said "No operator approvals" about a wallet that had just approved. Other
+ * operators are discovered from events over whatever range the chain allows, and
+ * the coverage is reported rather than implied.
+ */
+async function approvedOperators(provider, mgr, owner, knownOperator = null) {
   const iface = new ethers.Interface(["event ApprovalForAll(address indexed owner,address indexed operator,bool approved)"]);
   const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
-  let logs = [];
-  try {
-    logs = await provider.getLogs({ address: mgr, fromBlock: 0, toBlock: "latest", topics: [iface.getEvent("ApprovalForAll").topicHash, ethers.zeroPadValue(owner, 32)] });
-  } catch {
-    return [];
-  }
+  const state = async (op) => c.isApprovedForAll(owner, op).catch(() => null);
+
   const seen = new Map();
-  for (const l of logs) seen.set(iface.parseLog(l).args.operator, true);
+  if (knownOperator) seen.set(ethers.getAddress(knownOperator), "configured");
+
+  let coverage = { scannedFrom: null, complete: false, error: "not scanned" };
+  try {
+    const scan = await logs.getLogsRange(provider, { address: mgr, topics: [iface.getEvent("ApprovalForAll").topicHash, ethers.zeroPadValue(owner, 32)] },
+      { from: 0, span: logs.spanFor(cfg), maxRequests: 8 });
+    for (const l of scan.logs) { const op = iface.parseLog(l).args.operator; if (!seen.has(op)) seen.set(op, "event"); }
+    coverage = { scannedFrom: scan.scannedFrom, complete: scan.complete, error: scan.error || null, requests: scan.requests };
+  } catch (err) {
+    coverage = { scannedFrom: null, complete: false, error: err.shortMessage || err.message };
+  }
+
   const out = [];
-  for (const op of seen.keys()) out.push({ address: op, approved: await c.isApprovedForAll(owner, op).catch(() => null) });
+  for (const [op, source] of seen) out.push({ address: op, approved: await state(op), source });
+  // An operator the chain confirms is approved is never dropped for lack of history.
+  out.sort((a, b) => (b.approved === true) - (a.approved === true));
+  out.coverage = coverage;
   return out;
 }
 
@@ -2079,7 +2099,8 @@ async function handleRequest(req, res) {
       const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
       const approved = operator ? await c.isApprovedForAll(ownerAddr, operator) : null;
       // Other operators still approved (e.g. a replaced keystore's address), so the page can offer to revoke them.
-      const others = (await approvedOperators(provider, mgr, ownerAddr)).filter((o) => o.approved && (!operator || o.address.toLowerCase() !== operator.toLowerCase()));
+      const allOps = await approvedOperators(provider, mgr, ownerAddr, operator);
+      const others = allOps.filter((o) => o.approved && (!operator || o.address.toLowerCase() !== operator.toLowerCase()));
       // Overview of every wallet's approval on this manager, for the page's wallet table.
       const wallets = [];
       for (const a of allowed) wallets.push({ ...a, approved: operator ? await c.isApprovedForAll(a.address, operator).catch(() => null) : null });
@@ -2087,6 +2108,8 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify({
         ok: true, version: v,
         owner: ownerAddr, ownerLabel: ownerEntry.label, operator, posm: ethers.getAddress(mgr),
+        operators: allOps.map((o) => ({ address: o.address, approved: o.approved, source: o.source })),
+        operatorsCoverage: allOps.coverage,
         chainId: Number(cfg.chainId), chainName: chainDisplayName(), rpc: cfg.rpcUrl,
         // For the page's "add this network" call. Omitted unless the chain's native
         // asset is verified in settings: declaring the wrong one would register the

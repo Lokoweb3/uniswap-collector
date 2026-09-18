@@ -1131,7 +1131,13 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
       alc.innerHTML = `<span class="pill bad" title="${String(d.allowancesError || 'unknown error').replace(/"/g, '&quot;')}">scan failed</span> <a href="#" data-id="alretry">Retry</a>`;
       alc.querySelector('[data-id="alretry"]').addEventListener('click', (e) => { e.preventDefault(); load(data && data.owner); });
     }
-    $('[data-id="alnote"]').textContent = 'From every Approval event this wallet ever emitted, filtered to allowances that are still non-zero on chain. Revoke sets the allowance to 0.';
+    // Say what the scan actually covered. This chain caps getLogs, so "every Approval
+    // event this wallet ever emitted" was a claim the scan could not make.
+    const cov = d.allowancesCoverage;
+    $('[data-id="alnote"]').textContent = (cov && !cov.complete
+      ? `From Approval events back to block ${Number(cov.scannedFrom).toLocaleString()} (this chain answers ${cov.requests || 0} narrow log queries per scan; earlier grants are not listed), filtered to allowances still non-zero on chain.`
+      : 'From every Approval event this wallet ever emitted, filtered to allowances that are still non-zero on chain.')
+      + ' Revoke sets the allowance to 0.';
     // The approve sections already know the answer from this table: say "Approved" and offer
     // Revoke instead of an Approve button the operator must not press twice.
     for (const v of ['v3', 'v4']) {
@@ -1237,7 +1243,7 @@ const initApprove = ((root, VERSION) => {
       $('[data-id="tx-data"]').textContent = iface.encodeFunctionData('setApprovalForAll', [cfg.operator, true]);
     }
     const a = $('[data-id="approval"]');
-    if (approved === true) a.innerHTML = '<span class="pill ok">approved</span> the operator can already collect v4 fees';
+    if (approved === true) a.innerHTML = '<span class="pill ok">approved</span> the operator can already collect fees on this manager';
     else if (approved === false) a.innerHTML = '<span class="pill bad">not approved</span>';
     else a.innerHTML = '<span class="pill warn">unknown</span>';
     $('[data-id="revoke"]').hidden = approved !== true;

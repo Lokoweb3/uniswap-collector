@@ -178,7 +178,21 @@ function build(d) {
 }
 
 /** Fetch every payload the report needs from a running dashboard plus the local ledgers. */
-async function gather(base = "http://127.0.0.1:8787") {
+// The port THIS instance serves on, from its own settings. The default used to be
+// 8787 -- Robinhood's -- so running this from an Arc checkout silently summarised
+// the other chain's money and sent it to Telegram as if it were Arc's.
+function ownPort() {
+  const flag = (process.argv.find((a) => a.startsWith("--port=")) || "").split("=")[1];
+  if (Number(flag) > 0) return Number(flag);
+  if (Number(process.env.LP_DASHBOARD_PORT) > 0) return Number(process.env.LP_DASHBOARD_PORT);
+  try {
+    const cfg = require("./settings").load();
+    if (cfg.dashboard && Number(cfg.dashboard.port) > 0) return Number(cfg.dashboard.port);
+  } catch {}
+  return 8787;
+}
+
+async function gather(base = `http://127.0.0.1:${ownPort()}`) {
   const get = async (p) => {
     try {
       const r = await fetch(base + p, { signal: AbortSignal.timeout(20000) });
@@ -254,7 +268,7 @@ module.exports = { build, gather, due, isoWeek, maybeSend, deliver };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
-  const base = args.includes("--base") ? args[args.indexOf("--base") + 1] : "http://127.0.0.1:8787";
+  const base = args.includes("--base") ? args[args.indexOf("--base") + 1] : `http://127.0.0.1:${ownPort()}`;
   (async () => {
     const text = build(await gather(base));
     if (args.includes("--send")) {

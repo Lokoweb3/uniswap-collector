@@ -82,9 +82,24 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   const c2 = create({ transport: async (t, to) => { routed.push([to, t]); return true; }, stateFile: stateFile + ".t", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
   out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 10, balanceUsdg: 12, consecutiveFailures: 3 } });
   assert.strictEqual(out.length, 1); assert.match(out[0], /failed 3 times/); assert.strictEqual(routed[routed.length - 1][0], "vault");
-  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3, withdrawAlertUsdg: 100 } });
+  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, unit: "USDG", consecutiveFailures: 3, withdrawAlertUsdg: 100 } });
   assert.strictEqual(out.length, 2, "balance + pct change expected"); assert.ok(out.some(m => /150.00 USDG/.test(m))); assert.ok(out.some(m => /10% → 15%/.test(m)));
-  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, consecutiveFailures: 3, withdrawAlertUsdg: 100 } });
+  // The currency comes from the treasury state, not from the sentence. Telegram is
+  // read when nobody is looking at the dashboard, so an alert that names the wrong
+  // asset is worse than a wrong label on a page: on Arc this said "USDG" about USDC.
+  {
+    const c2c = create({ transport: async () => true, stateFile: stateFile + ".unit", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
+    const arc = await c2c.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true,
+      treasury: { enabled: true, pct: 20, balanceUsdg: 150, unit: "USDC", consecutiveFailures: 0, withdrawAlertUsdg: 100 } });
+    assert.ok(arc.some((m) => /150\.00 USDC/.test(m)), `the vault alert names USDC on Arc: ${arc}`);
+    assert.ok(!arc.some((m) => /USDG/.test(m)), "and never USDG, which does not exist there");
+    // An instance that cannot name its currency says the figure alone rather than guessing.
+    const c2d = create({ transport: async () => true, stateFile: stateFile + ".nounit", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });
+    const bare = await c2d.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true,
+      treasury: { enabled: true, pct: 20, balanceUsdg: 150, consecutiveFailures: 0, withdrawAlertUsdg: 100 } });
+    assert.ok(bare.some((m) => /holds 150\.00 \(/.test(m)), `no ticker when none is known: ${bare}`);
+  }
+  out = await c2.check({ payload: { positions: [] }, unlock: { armed: true }, keepalive: true, treasury: { enabled: true, pct: 15, balanceUsdg: 150, unit: "USDG", consecutiveFailures: 3, withdrawAlertUsdg: 100 } });
   assert.strictEqual(out.length, 0, "no repeats within the window");
   // default level is 1000 USDG: 150 without an explicit level stays quiet (fresh state file)
   const c2b = create({ transport: async () => true, stateFile: stateFile + ".t3", now: () => clock, log: { error() {} }, chatId: "main", treasuryChatId: "vault" });

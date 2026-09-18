@@ -275,7 +275,7 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
       }
       const level = Number(treasury.withdrawAlertUsdg) > 0 ? Number(treasury.withdrawAlertUsdg) : TREASURY_BALANCE_ALERT_USDG;
       if (treasury.balanceUsdg != null && treasury.balanceUsdg >= level) {
-        await say(`vaultbalance:${level}`, `💰 LOKOVault holds ${treasury.balanceUsdg.toFixed(2)} USDG (≥ ${level}). Time to withdraw from the vault.`, ALERT_REPEAT_MS, sendTreasury);
+        await say(`vaultbalance:${level}`, `💰 LOKOVault holds ${treasury.balanceUsdg.toFixed(2)}${treasury.unit ? ` ${treasury.unit}` : ""} (≥ ${level}). Time to withdraw from the vault.`, ALERT_REPEAT_MS, sendTreasury);
       }
       if (treasury.pct != null) {
         if (state.lastSplitPct != null && state.lastSplitPct !== treasury.pct) {

@@ -30,7 +30,21 @@ function settings(cfg) {
   return { enabled: d.enabled !== false, hour: Number.isFinite(Number(d.hour)) ? Number(d.hour) : 8, chat: d.chat === "group" ? "group" : "main" };
 }
 
-async function gather(base = "http://127.0.0.1:8787") {
+// The port THIS instance serves on, from its own settings. The default used to be
+// 8787 -- Robinhood's -- so running this from an Arc checkout silently summarised
+// the other chain's money and sent it to Telegram as if it were Arc's.
+function ownPort() {
+  const flag = (process.argv.find((a) => a.startsWith("--port=")) || "").split("=")[1];
+  if (Number(flag) > 0) return Number(flag);
+  if (Number(process.env.LP_DASHBOARD_PORT) > 0) return Number(process.env.LP_DASHBOARD_PORT);
+  try {
+    const cfg = require("./settings").load();
+    if (cfg.dashboard && Number(cfg.dashboard.port) > 0) return Number(cfg.dashboard.port);
+  } catch {}
+  return 8787;
+}
+
+async function gather(base = `http://127.0.0.1:${ownPort()}`) {
   const get = async (p) => {
     const r = await fetch(base + p, { signal: AbortSignal.timeout(60000) });
     if (!r.ok) throw new Error(`${p} -> HTTP ${r.status}`);
@@ -165,6 +179,6 @@ async function maybeSend({ cfg, alerts, base, now = new Date(), log = console } 
 module.exports = { build, gather, due, maybeSend, settings, verdictLines };
 
 if (require.main === module) {
-  const port = Number((process.argv.find((a) => a.startsWith("--port=")) || "").split("=")[1] || process.env.LP_DASHBOARD_PORT || 8787);
+  const port = ownPort();
   gather(`http://127.0.0.1:${port}`).then((d) => { console.log(build(d)); }).catch((e) => { console.error(e.message); process.exit(1); });
 }

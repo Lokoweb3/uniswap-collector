@@ -3174,13 +3174,18 @@ async function treasuryState() {
   if (!ts.tba) return null;
   const eff = await treasuryLedger.effectiveSettings(cfg, provider);
   const pct = eff.pct, pctSource = eff.pctSource;
-  let balanceUsdg = null;
+  let balanceUsdg = null, unit = null;
   try {
-    const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"], provider);
-    const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
+    const usdg = new ethers.Contract(cfg.usdReference.stable, ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)", "function symbol() view returns (string)"], provider);
+    const [raw, dec, sym] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals(), usdg.symbol().catch(() => null)]);
     balanceUsdg = Number(ethers.formatUnits(raw, dec));
+    // The alert text used to hardcode "USDG". Telegram is the channel read when
+    // nobody is looking at the dashboard, so a wrong currency there is worse than a
+    // wrong label on a page: this one says what the token calls itself.
+    if (sym) treasuryUnitCache.set(cfg.usdReference.stable, sym);
+    unit = sym || treasuryUnitCache.get(cfg.usdReference.stable) || null;
   } catch {}
-  return { enabled: ts.enabled, pct, pctSource, balanceUsdg, consecutiveFailures: treasuryLedger.consecutiveFailures(), withdrawAlertUsdg: Number(cfg.treasuryWithdrawAlertUsdg) || null };
+  return { enabled: ts.enabled, pct, pctSource, balanceUsdg, unit, consecutiveFailures: treasuryLedger.consecutiveFailures(), withdrawAlertUsdg: Number(cfg.treasuryWithdrawAlertUsdg) || null };
 }
 
 // === performance-attribution === (attribution.js): reads the ledgers plus the live views on request

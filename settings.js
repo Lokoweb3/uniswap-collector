@@ -85,6 +85,10 @@ function toLegacy(raw) {
     // anything over ~1,000 and does not say so in the error, so a scan that assumes
     // a generous range fails outright instead of reading anything.
     ...(Number(chain.maxLogRange) > 0 ? { maxLogRange: Number(chain.maxLogRange) } : {}),
+    // Where forward log scans begin on this chain. history.js defaults to a
+    // Robinhood block number; on a chain whose head is lower, that default makes
+    // every scan a silent no-op, so each chain states its own.
+    ...(Number(chain.historyStartBlock) > 0 ? { historyStartBlock: Number(chain.historyStartBlock) } : {}),
     chainId: chain.chainId,
     // No fallback to a particular chain's explorer: an empty string means this
     // chain has none, and the page renders identifiers as plain text with a copy
@@ -162,7 +166,7 @@ function fromLegacy(c, w = null, chats = {}) {
   const memecoins = (c.memecoins || []).map(strip);
   return {
     _comment: "LP dashboard + collector settings. One file: edit here, restart the dashboard (./start-all.sh). Secrets (TELEGRAM_TOKEN, BLOCKSCOUT_API_KEY, chat provider keys) live in .env only. settings.example.json is the template.",
-    chain: { rpcUrl: c.rpcUrl, ...(Array.isArray(c.rpcUrls) && c.rpcUrls.length ? { rpcUrls: c.rpcUrls } : {}), ...(c.rpcBatch === false ? { rpcBatch: false } : {}), ...(c.nativeCurrency ? { nativeCurrency: c.nativeCurrency } : {}), chainId: c.chainId, ...(c.maxLogRange ? { maxLogRange: c.maxLogRange } : {}), explorer: c.explorer || "https://robinhoodchain.blockscout.com", ...(c.blockscout !== undefined ? { blockscout: c.blockscout } : {}) },
+    chain: { rpcUrl: c.rpcUrl, ...(Array.isArray(c.rpcUrls) && c.rpcUrls.length ? { rpcUrls: c.rpcUrls } : {}), ...(c.rpcBatch === false ? { rpcBatch: false } : {}), ...(c.nativeCurrency ? { nativeCurrency: c.nativeCurrency } : {}), chainId: c.chainId, ...(c.maxLogRange ? { maxLogRange: c.maxLogRange } : {}), ...(c.historyStartBlock ? { historyStartBlock: c.historyStartBlock } : {}), explorer: c.explorer || "https://robinhoodchain.blockscout.com", ...(c.blockscout !== undefined ? { blockscout: c.blockscout } : {}) },
     wallets: {
       _comment: "main: the collector's own wallet (positions read, fees swept back to it). watched: extra wallets shown read-only; collect: true makes the collector also collect that wallet's positions (after it approves the operator on the v3/v4 position managers, Wallet page > Approvals) and deliver the swept fees back to that same wallet.",
       main: { address: c.ownerAddress, label: (w && w.owner && w.owner.label) || "Main" },

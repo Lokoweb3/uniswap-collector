@@ -35,6 +35,7 @@ const verdict = require("./verdict");
 
 const settings = require("./settings");
 const logs = require("./logs");
+const cl = require("./collector-logic");   // native-currency naming, shared with the collector
 const cfg = settings.load();
 // The chain's name for anything a wallet will show a person. It was hardcoded to
 // "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
@@ -202,7 +203,7 @@ function priceSides(p, wethUsd) {
   return { usd0: null, usd1: null };
 }
 
-const hist = history.create({ provider, npmAddress: cfg.contracts.positionManager });
+const hist = history.create({ provider, npmAddress: cfg.contracts.positionManager, cfg });
 const basis = require("./basis");
 const bf = basis.create({ npmAddress: cfg.contracts.positionManager });
 // Pool stats (TVL, fees, APR, siblings) from the scanner on :3847; see pools.js.
@@ -245,7 +246,11 @@ const ledgerV4 = V4 && cfg.contracts.v4.poolManager && cfg.contracts.v4.stateVie
       posm: V4.posm,
       posmAddress: cfg.contracts.v4.positionManager,
       stateView: cfg.contracts.v4.stateView,
-      forwardStart: hist.startBlock,
+      // The v4 ledger starts where the v4 position manager was deployed, not where
+      // the v3 collect history starts: they are different contracts with different
+      // ages, and a start taken from the wrong one either misses positions or walks
+      // blocks that could not contain them. Falls back to the v3 history's start.
+      forwardStart: Number(cfg.contracts.v4.deployBlock || hist.startBlock),
       // Chain identity for token naming: without it a native currency is named by
       // guess, and the ledger read an undeclared `cfg` instead.
       cfg,
@@ -2371,14 +2376,24 @@ async function handleRequest(req, res) {
         if (p != null) out.pct = Number(p);
       }
       if (ts.tba) {
+        // The native row is this chain's native asset, not ether: on Arc it is USDC
+        // at 18 decimals. Labelling it "ETH" named a currency the chain does not have.
+        const nativeDec = cl.nativeDecimals(cfg), nativeSym = cl.nativeLabel(cfg);
         const eth = await provider.getBalance(ts.tba);
-        out.balances.push({ symbol: "ETH", address: null, amount: ethers.formatEther(eth), decimals: 18 });
+        out.balances.push({ symbol: nativeSym, address: null, amount: ethers.formatUnits(eth, nativeDec), decimals: nativeDec, native: true });
+        // Where the native asset IS the token (Arc: numeraire.nativeSameAsErc20, one
+        // balance behind a native interface and an ERC-20 one), listing both makes a
+        // reader add a balance to itself. Skip the token row and say so on the native.
+        const num = cfg.numeraire || {};
+        const dualAddr = num.nativeSameAsErc20 && num.address ? String(num.address).toLowerCase() : null;
+        if (dualAddr) out.balances[0].alsoErc20 = ethers.getAddress(dualAddr);
         const seenTok = new Set();
         const tokens = [cfg.usdReference && cfg.usdReference.stable, cfg.contracts.weth, ...Object.keys(lastPrices)].filter((a) => a && !seenTok.has(a.toLowerCase()) && seenTok.add(a.toLowerCase()));
         for (const addr of tokens.slice(0, 40)) {
           try {
             const meta = await u.getToken(addr, provider);
             const raw = await new ethers.Contract(addr, ["function balanceOf(address) view returns (uint256)"], provider).balanceOf(ts.tba);
+            if (dualAddr && addr.toLowerCase() === dualAddr) continue;   // already the native row
             if (raw > 0n || addr.toLowerCase() === String(cfg.usdReference && cfg.usdReference.stable).toLowerCase()) out.balances.push({ symbol: meta.symbol, address: meta.address, amount: ethers.formatUnits(raw, meta.decimals), decimals: meta.decimals });
           } catch {}
         }

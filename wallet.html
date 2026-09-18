@@ -669,7 +669,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   <div class="card">
     <div class="card-title">Account balance <span id="last-refresh"></span></div>
     <div class="total-value" id="total-usd">$—</div>
-    <div class="note" style="margin-bottom:16px">Available balance · USDG held by the vault</div>
+    <div class="note" style="margin-bottom:16px">Available balance · held by the vault<span data-id="vault-unit-note"></span></div>
     <div class="balance-grid" id="balance-grid">
       <div class="balance-item"><div class="balance-symbol">Loading...</div><div class="skeleton" style="margin-top:8px"></div></div>
     </div>
@@ -1387,11 +1387,13 @@ const initApprove = ((root, VERSION) => {
 // ── Config ────────────────────────────────────────────────────────────────────
 // From the instance serving this page, never hardcoded: the same page is served on
 // Arc, where the chain id, the explorer and even the native currency all differ.
-let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = 'this network', RPC_URL = '', NATIVE_CURRENCY = null;
+let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = 'this network', RPC_URL = '', NATIVE_CURRENCY = null, UNIT_SYMBOL = '';
 const chainReady = fetch('/api/chain', { cache: 'no-store' }).then(r => r.json()).then(c => {
   if (!c || !c.ok) throw new Error('the server did not state its chain');
   EXPLORER = c.explorer || ''; CHAIN_ID = Number(c.chainId); CHAIN_NAME = c.chainName;
-  RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency;
+  RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency; UNIT_SYMBOL = (c.nativeCurrency && c.nativeCurrency.symbol) || '';
+  const un = document.querySelector('[data-id="vault-unit-note"]');
+  if (un && UNIT_SYMBOL) un.textContent = ` (${UNIT_SYMBOL} on ${CHAIN_NAME})`;
   document.querySelectorAll('[data-chain-name]').forEach(el => { el.textContent = CHAIN_NAME; });
   document.querySelectorAll('[data-chain-id]').forEach(el => { el.textContent = 'chain ' + CHAIN_ID; });
   document.querySelectorAll('[data-chain-id-text]').forEach(el => { el.textContent = 'Chain ' + CHAIN_ID; });
@@ -1577,7 +1579,9 @@ async function loadBalances() {
 
 function renderBalances() {
   const grid = document.getElementById('balance-grid');
-  const entries = Object.entries(balances).filter(([,v]) => parseFloat(v.amount) > 0 || v.symbol === 'ETH');
+  // Show a zero row only for this chain's native asset, which is not ether everywhere.
+  const nativeSym = (NATIVE_CURRENCY && NATIVE_CURRENCY.symbol) || 'ETH';
+  const entries = Object.entries(balances).filter(([,v]) => parseFloat(v.amount) > 0 || v.symbol === nativeSym);
 
   if (entries.length === 0) {
     grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">No tokens in vault yet</div>';
@@ -1587,15 +1591,15 @@ function renderBalances() {
 
   grid.innerHTML = entries.map(([sym, data]) => `
     <div class="balance-item">
-      <div class="balance-symbol">${sym}</div>
+      <div class="balance-symbol">${sym}${data.alsoErc20 ? ' <span class="note" title="On this chain the native asset and this token are one balance seen through two interfaces, not two holdings.">native + ERC-20</span>' : ''}</div>
       <div class="balance-amount">${parseFloat(data.amount).toLocaleString(undefined, {maximumFractionDigits: 4})}</div>
     </div>
   `).join('');
 
-  document.getElementById('total-usd').textContent =
-    parseFloat(balances['USDG']?.amount || 0).toFixed(2) !== '0.00'
-    ? '$' + parseFloat(balances['USDG']?.amount || 0).toFixed(2)
-    : '—';
+  // The dollar figure is whatever this instance prices in, not a token called USDG.
+  const unitSym = (UNIT_SYMBOL || (NATIVE_CURRENCY && NATIVE_CURRENCY.symbol) || 'USDG');
+  const unitAmt = parseFloat(balances[unitSym]?.amount || 0);
+  document.getElementById('total-usd').textContent = unitAmt.toFixed(2) !== '0.00' ? '$' + unitAmt.toFixed(2) : '—';
 }
 
 function populateTokenSelect() {
@@ -1811,7 +1815,7 @@ async function loadPublicInfo() {
     if (info.owner) nftOwner = info.owner;
     if (info.pct != null) currentSplitPct = Number(info.pct);
     if (!connectedAddress && info.balances && info.balances.length) {
-      for (const b of info.balances) balances[b.symbol] = { amount: b.amount, symbol: b.symbol, address: b.address, usd: 0 };
+      for (const b of info.balances) balances[b.symbol] = { amount: b.amount, symbol: b.symbol, address: b.address, usd: 0, alsoErc20: b.alsoErc20 || null };
       renderBalances();
       document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
     }

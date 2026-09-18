@@ -28,13 +28,21 @@ const V4_FILE = dataPath("v4-collects.json");
 // them; the server owns that file, the collector owns v4-collects.json).
 const V4_OWNER_FILE = dataPath("v4-owner-collects.json");
 const CHUNK = 2000;
-const START_BLOCK = 51940000; // just before the collector's first collect (2026-09-01)
+// Where a forward scan begins on THIS chain. 51940000 is a Robinhood Chain block,
+// and it was used on every instance: on Arc, whose head is around 21.4M, it put the
+// start 34 million blocks past the end of the chain, so the scan loop never ran
+// once -- no events, no error, no log line, just a ledger that never appeared.
+// chain.historyStartBlock in settings gives a chain its own; the default is
+// Robinhood's, and anything at or beyond the head is clamped with a warning.
+const DEFAULT_START_BLOCK = 51940000; // just before the collector's first collect on Robinhood (2026-09-01)
 
 const COLLECT_TOPIC = ethers.id("Collect(uint256,address,uint256,uint256)");
 const DECREASE_TOPIC = ethers.id("DecreaseLiquidity(uint256,uint128,uint256,uint256)");
 const coder = ethers.AbiCoder.defaultAbiCoder();
 
-function create({ provider, npmAddress }) {
+function create({ provider, npmAddress, cfg = null, log = console.error }) {
+  const START_BLOCK = Number((cfg && cfg.historyStartBlock) ?? DEFAULT_START_BLOCK);
+  let warnedAhead = false;
   let state;
   try {
     state = JSON.parse(fs.readFileSync(FILE, "utf8"));
@@ -139,6 +147,16 @@ function create({ provider, npmAddress }) {
     scanning = true;
     try {
       const head = await provider.getBlockNumber();
+      // A start past the end of the chain is a configuration error, not an empty
+      // result. Left silent it looks exactly like "nothing to scan": that is how
+      // Arc ran for a day with a Robinhood start block and no ledger at all.
+      if (state.lastScanned + 1 > head + 1) {
+        if (!warnedAhead) {
+          warnedAhead = true;
+          log(`history: start block ${START_BLOCK} is past this chain's head (${head}); nothing can be scanned. Set chain.historyStartBlock for this chain.`);
+        }
+        return;
+      }
       const ownerOf = new Map(); // tokenId -> wallet
       for (const w of wallets) for (const id of w.ids) ownerOf.set(String(id), w);
       const idTopics = [...ownerOf.keys()].map(idTopic);

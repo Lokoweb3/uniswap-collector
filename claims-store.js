@@ -61,7 +61,10 @@ const BLOCK_MS_FALLBACK = 1000;
 // with `capitalOnly`, so a position's deposits and withdrawals (each at the price
 // of its own transaction) can be read back. They are never claims: the claim
 // summary, its count and its verified zero ignore them.
-const DECODER = 6;
+// 7: the pool price behind a liquidity change is read from the swap that set it
+// rather than from pruned archive state, so records previously refused as
+// "the pool price at block N could not be read" are worth decoding again.
+const DECODER = 7;
 
 /**
  * Token amounts for a liquidity change, rounded the way v4's SqrtPriceMath does:
@@ -86,7 +89,7 @@ const NATIVE_PSEUDO = new Set([
   "0x0000000000000000000000000000000000000000",
 ]);
 
-function create({ provider, chainId, positionManager, poolManager, stateView, file = null, log = console }) {
+function create({ provider, chainId, positionManager, poolManager, stateView, file = null, log = console, maxLogRange = null, priceSearchRequests = 24 }) {
   if (!chainId) throw new Error("claims-store needs a chainId");
   if (!positionManager) throw new Error("claims-store needs a position manager");
   if (!poolManager) throw new Error("claims-store needs a pool manager");
@@ -194,17 +197,76 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     return blockMs;
   }
 
+  const sqrtOfSwap = (x) => BigInt(coder.decode(["int128", "int128", "uint160", "uint128", "int24", "uint24"], x.data)[2]);
+  // Memoised per exact (pool, block) question. It deliberately does NOT reuse "the
+  // last swap before block B" as an answer for a later block: swaps may have
+  // happened in between, and returning the older one would hand back a stale price
+  // that silently mis-splits principal from fees. A wrong price is worse than a slow
+  // scan, and worse than no answer at all.
+  const lastSwapCache = new Map();
+
+  /**
+   * The most recent swap in a pool strictly before `block`, by walking backwards in
+   * spans. In v4 only a swap moves the price -- a liquidity change does not, and nor
+   * does a donation -- so the price it leaves behind is still the pool's price when
+   * the log we care about was emitted. Exact, not an approximation.
+   */
+  async function lastSwapBefore(poolId, block) {
+    const key = `${poolId}:${block}`;
+    if (lastSwapCache.has(key)) return lastSwapCache.get(key);
+    let to = block - 1;
+    let span = Math.max(100, Number(maxLogRange) || 50000);
+    for (let reqs = 0; reqs < priceSearchRequests && to > 0; ) {
+      const from = Math.max(0, to - span + 1);
+      let logs;
+      try {
+        logs = await provider.getLogs({ address: pm, topics: [SWAP, poolId], fromBlock: from, toBlock: to });
+        reqs++;
+      } catch (err) {
+        // A refused span says nothing about the range; it says the range was too
+        // wide. Narrow it and try the same ground again.
+        reqs++;
+        if (span <= 100) throw err;
+        span = Math.max(100, Math.floor(span / 4));
+        continue;
+      }
+      if (logs.length) {
+        // Within a span, the last log is the latest swap: getLogs returns them in
+        // block then index order.
+        const last = logs[logs.length - 1];
+        const found = { block: last.blockNumber, sqrt: sqrtOfSwap(last) };
+        lastSwapCache.set(key, found);
+        return found;
+      }
+      if (from === 0) break;
+      to = from - 1;
+    }
+    lastSwapCache.set(key, null);   // searched and not found: do not search again
+    return null;
+  }
+
   /**
    * The pool's price at the moment a log was emitted: the price after the last swap
-   * in that pool earlier in the same block (log index order), else the pool's state
-   * at the end of the previous block. Reading the log's own block would return the
-   * price after every swap in that block, including ones that came later.
+   * in that pool earlier in the same block (log index order), else after the last
+   * swap before that block, else the pool's state at the end of the previous block.
+   * Reading the log's own block would return the price after every swap in that
+   * block, including ones that came later.
+   *
+   * The state read is last, not first, because it is the one that needs an archive
+   * node. This chain's RPC has pruned: getSlot0 at an old block answers "missing
+   * revert data", which made every liquidity change whose principal had to be
+   * separated undecodable -- forty-two of forty-three records on one position, and
+   * most of the claim history on the page. Logs are kept where state is not, and
+   * the swap that set the price is in them.
    */
   async function priceAtLog(l) {
-    const swaps = await provider.getLogs({ address: pm, topics: [SWAP, l.topics[1]], fromBlock: l.blockNumber, toBlock: l.blockNumber });
+    const poolId = l.topics[1];
+    const swaps = await provider.getLogs({ address: pm, topics: [SWAP, poolId], fromBlock: l.blockNumber, toBlock: l.blockNumber });
     const before = swaps.filter((x) => x.index < l.index).sort((a, b) => a.index - b.index);
-    if (before.length) return BigInt(coder.decode(["int128", "int128", "uint160", "uint128", "int24", "uint24"], before[before.length - 1].data)[2]);
-    return BigInt((await sv.getSlot0(l.topics[1], { blockTag: l.blockNumber - 1 }))[0]);
+    if (before.length) return sqrtOfSwap(before[before.length - 1]);
+    const prior = await lastSwapBefore(poolId, l.blockNumber).catch(() => null);
+    if (prior) return prior.sqrt;
+    return BigInt((await sv.getSlot0(poolId, { blockTag: l.blockNumber - 1 }))[0]);
   }
 
   const topicAddr = (t) => ("0x" + String(t).slice(26)).toLowerCase();

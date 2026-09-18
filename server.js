@@ -539,6 +539,9 @@ const claimStore = (() => {
       stateView: cfg.contracts.v4.stateView || null,
       file: dataFile("claims.json"),
       log: console,
+      // Arc refuses a getLogs span over about 1,000 blocks; the backward search for
+      // the swap that set a pool's price has to respect that too.
+      maxLogRange: cfg.maxLogRange ? Number(cfg.maxLogRange) : null,
     });
   } catch (err) { console.error(`claims store unavailable: ${err.message}`); return null; }
 })();

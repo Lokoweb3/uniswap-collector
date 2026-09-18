@@ -162,6 +162,34 @@ async function main() {
   log(`  send  ${ethers.formatUnits(final.toOwner, unitDec)} ${tgtSym} (${100 - pct}%) -> ${owner} -> ${otx.hash}`);
   const or = await otx.wait(); gasSpent += or.gasUsed * or.gasPrice;
 
+  // Write the same ledger entry a collector pass would. Without this the vault's
+  // balance and fee-split-ledger.json disagree, and the dashboard reports a split
+  // that is smaller than the money actually in the vault -- which is exactly what
+  // happened after the 2026-09-18 recovery.
+  try {
+    require("../treasury").appendLedger({
+      timestamp: new Date().toISOString(),
+      wallet: arg("wallet-label", "Arc LP"),
+      walletAddress: owner,
+      positionId: null,
+      positionIds: [],
+      pair: `${sym}/${tgtSym}`,
+      totalCollectedUsdg: Number(ethers.formatUnits(received, unitDec)),
+      splitPct: pct,
+      splitUsdg: Number(ethers.formatUnits(final.toVault, unitDec)),
+      ownerReceived: Number(ethers.formatUnits(final.toOwner, unitDec)),
+      tbaAddress: tba,
+      splitTxHash: vtx.hash,
+      ownerTxHash: otx.hash,
+      status: "ok",
+      // Named so a reader can tell this from an ordinary pass: it finished one that died.
+      source: "recover-stranded",
+    });
+    log("  recorded in fee-split-ledger.json");
+  } catch (err) {
+    log(`  ! could not write fee-split-ledger.json: ${err.message} — the transfers above are still on chain`);
+  }
+
   const left = await erc.balanceOf(operator);
   log(`\n  ${sym} left in the operator wallet: ${ethers.formatUnits(left, dec)}`);
   log(`  gas spent: ${ethers.formatUnits(gasSpent, natDec)} ${natSym}`);

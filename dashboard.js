@@ -1345,7 +1345,7 @@ function renderVault(){
   const tile = (n, l, cls = '') => `<div class="stat"><div class="n sm ${cls}">${n}</div><div class="l">${l}</div></div>`;
   $('#vaultgrid').innerHTML =
     tile(usd(d.totalSplitUsdg), 'Split to the vault, all time', 'fees') +
-    tile(d.balanceUsdg == null ? '—' : usd(d.balanceUsdg), 'Vault balance (USDG)') +
+    tile(d.balanceUsdg == null ? '—' : usd(d.balanceUsdg), `Vault balance (${(PRICING && PRICING.unit) || 'target'})`) +
     tile(d.enabled ? d.pct + '%' : 'off', d.enabled ? `Current split · max ${d.max}%` : 'Split is off (no treasury address yet)') +
     tile(String(d.count), `Splits recorded${d.failed ? ` · ${d.failed} failed` : ''}`);
   // Six-month bar chart of the split amounts.
@@ -1358,7 +1358,10 @@ function renderVault(){
   const bars = vals.map((v, i) => { const h = Math.round((v / max) * (H - 40)); const x = pad + i * bw + bw * 0.2; return `<rect x="${x}" y="${H - 22 - h}" width="${bw * 0.6}" height="${h}" rx="3" fill="var(--neon-gold, #f5c542)" opacity="${v ? 0.9 : 0.25}"/><text class="axis" x="${x + bw * 0.3}" y="${H - 8}" text-anchor="middle">${new Date(months[i] + '-15T12:00:00').toLocaleDateString(undefined, { month: 'short' })}</text>${v ? `<text class="axis" x="${x + bw * 0.3}" y="${H - 26 - h}" text-anchor="middle">${usd(v)}</text>` : ''}`; }).join('');
   $('#vaultchart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:130px">${bars}</svg>`;
   $('#vaultnote').textContent = d.tba
-    ? `Treasury account ${d.tba}. ${d.pct}% of every wallet's swept USDG goes to the vault at collect time; the rest goes to the wallet. Ledger: /fee-split-ledger.json.`
+    ? `Treasury account ${d.tba}. ${d.pct}% of every wallet's swept ${(PRICING && PRICING.unit) || 'proceeds'} goes to the vault at collect time; the rest goes to the wallet. Ledger: /fee-split-ledger.json.`
+      + (d.balanceUsdg != null && Math.abs(Number(d.balanceUsdg) - Number(d.totalSplitUsdg || 0)) > 0.005
+        ? ` The balance is ${usd(d.balanceUsdg)} while this ledger accounts for ${usd(d.totalSplitUsdg)}: ${usd(Number(d.balanceUsdg) - Number(d.totalSplitUsdg || 0))} reached the vault by some route this collector did not record.`
+        : '')
     : 'No treasury address configured yet (vault.tba in settings.json). Deploy the vault, set the address, and splits start with the next collect.';
 }
 

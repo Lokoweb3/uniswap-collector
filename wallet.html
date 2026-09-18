@@ -235,7 +235,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   .vhero{display:grid;grid-template-columns:200px 1fr;gap:var(--s6);align-items:center}
   .nft-image{
     width:200px;height:200px;border-radius:var(--r-card);overflow:hidden;background:var(--bg);
-    border:1px solid var(--rule);
+    border:1px solid var(--rule);position:relative;   /* the chain tag sits over the art */
   }
   .nft-image svg{width:100%;height:100%;display:block}
   .nft-info{flex:1;min-width:0}
@@ -600,9 +600,16 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 
   <!-- Hero -->
   <div class="card">
+    <div class="warning-box" id="nft-chain-warning" hidden style="margin-bottom:12px"></div>
     <div class="vhero">
       <div class="nft-image" id="nft-image">
-        <!-- SVG loaded from contract -->
+        <!-- The contract's own art replaces the drawing below once vault-info answers.
+             The tag states the chain the vault is really on, which is not always the
+             chain its metadata claims. -->
+        <div id="nft-chain-tag" class="note" style="position:absolute;top:10px;left:10px;z-index:2;
+          background:rgba(15,23,42,.9);border:1px solid rgba(148,163,184,.35);border-radius:999px;
+          padding:3px 10px;font-size:11px;letter-spacing:.02em"></div>
+        <img id="nft-art" alt="LOKOVault" hidden style="width:100%;height:auto;display:block;border-radius:12px">
         <svg viewBox="0 0 680 680" xmlns="http://www.w3.org/2000/svg">
           <rect x="40" y="40" width="600" height="600" rx="32" fill="#0f172a"/>
           <rect x="60" y="60" width="560" height="560" rx="24" fill="#1e293b"/>
@@ -1813,6 +1820,25 @@ async function loadPublicInfo() {
     if (!info.ok) throw new Error(info.error || 'vault-info failed');
     if (info.publicHost) renderQr(info.publicHost);
     if (info.owner) nftOwner = info.owner;
+    // The token's own picture, and a tag for the chain it actually lives on.
+    const tag = document.getElementById('nft-chain-tag');
+    const art = document.getElementById('nft-art');
+    const chain = info.chain || {};
+    if (tag && chain.name) tag.textContent = `${chain.name} · chain ${chain.id}`;
+    if (art && info.art && info.art.image) {
+      art.src = info.art.image;
+      art.hidden = false;
+      art.alt = `${info.art.name || 'LOKOVault'} on ${chain.name || 'this chain'}`;
+      const drawing = document.querySelector('#nft-image > svg');
+      if (drawing) drawing.style.display = 'none';
+    }
+    const warn = document.getElementById('nft-chain-warning');
+    if (warn) {
+      if (info.art && info.art.mislabelled) {
+        warn.hidden = false;
+        warn.textContent = `This token's own metadata says "${info.art.claimedChain}" (chain ${info.art.claimedChainId}), but it is deployed on ${chain.name} (chain ${chain.id}). TreasuryNFT writes that text into tokenURI as a literal and has no setter, so it cannot be corrected without redeploying. The account's binding, its owner and its balance are all on ${chain.name} — only the label is wrong.`;
+      } else warn.hidden = true;
+    }
     if (info.pct != null) currentSplitPct = Number(info.pct);
     if (!connectedAddress && info.balances && info.balances.length) {
       for (const b of info.balances) balances[b.symbol] = { amount: b.amount, symbol: b.symbol, address: b.address, usd: 0, alsoErc20: b.alsoErc20 || null };

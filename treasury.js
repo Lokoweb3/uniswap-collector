@@ -97,7 +97,10 @@ function summary() {
     const m = String(r.timestamp).slice(0, 7);
     byMonth[m] = (byMonth[m] || 0) + (Number(r.splitUsdg) || 0);
   }
-  return { count: rows.length, failed, totalSplitUsdg: +total.toFixed(2), byMonth, recent: rows.slice(-20).reverse() };
+  // Six decimals, not two: the dashboard compares this against the vault's on-chain
+  // balance, and rounding 0.405136 to 0.41 made a reconciled ledger look 0.005 short.
+  // Display rounding belongs to the page, not to the figure it reconciles with.
+  return { count: rows.length, failed, totalSplitUsdg: +total.toFixed(6), byMonth, recent: rows.slice(-20).reverse() };
 }
 
 module.exports = { settings, effectiveSettings, split, readLedger, appendLedger, consecutiveFailures, summary, LEDGER_FILE };

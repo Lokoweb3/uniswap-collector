@@ -98,7 +98,7 @@ function allocateBatch(credited, t0, t1) {
   return { fee0Known: take(t0), fee1Known: take(t1) };
 }
 
-function create({ provider, poolManager, posm, posmAddress, stateView, forwardStart, log = console.log }) {
+function create({ provider, poolManager, posm, posmAddress, stateView, forwardStart, cfg = null, log = console.log }) {
   const batchCredited = new Map(); // tx -> Set(token address) already credited to a position in that tx
   posmAddress = posmAddress || (posm && posm.target);
   const pmLower = String(poolManager).toLowerCase();
@@ -253,6 +253,9 @@ function create({ provider, poolManager, posm, posmAddress, stateView, forwardSt
     const pk = await poolKeyOf(id);
     let t0 = null, t1 = null;
     if (pk) {
+      // cfg was read here without ever being passed in: a ReferenceError thrown
+      // while evaluating these arguments, before Promise.all exists, so the .catch()
+      // below could not have caught it. It fires whenever a pool key resolves.
       const [c0, c1] = await Promise.all([v4.getCurrency(pk.currency0, provider, cfg), v4.getCurrency(pk.currency1, provider, cfg)]).catch(() => [null, null]);
       if (c0 && c1) { t0 = { address: c0.address, symbol: c0.symbol, decimals: Number(c0.decimals) }; t1 = { address: c1.address, symbol: c1.symbol, decimals: Number(c1.decimals) }; }
     }

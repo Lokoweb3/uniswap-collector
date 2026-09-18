@@ -18,11 +18,34 @@ const acorn = require("acorn");
 const walk = require("acorn-walk");
 
 const ROOT = path.join(__dirname, "..");
-const FILES = ["collector.js", "collector-logic.js", "collector-swap.js", "logs.js", "tools/recover-stranded.js"];
-const HOST = new Set([
-  ...Object.getOwnPropertyNames(globalThis),
-  "require", "module", "exports", "__dirname", "__filename", "process", "console", "Buffer", "fetch",
-]);
+// Discovered, not listed. A hand-kept list only protects the files someone
+// remembered to add, and the bug this exists for was in a file that was on the list
+// only because it had already bitten. Every .js the repo ships is checked.
+const IGNORE = /^(node_modules|backups|themes|\.claude|vm|brain|agent-memory|test)\//;
+function discover(dir = ".", out = []) {
+  for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+    const rel = dir === "." ? e.name : `${dir}/${e.name}`;
+    if (IGNORE.test(rel + "/") || e.name.startsWith(".")) continue;
+    if (e.isDirectory()) discover(rel, out);
+    else if (e.name.endsWith(".js") && !e.name.endsWith(".min.js")) out.push(rel);
+  }
+  return out;
+}
+const FILES = discover().sort();
+
+// One source of truth for what a global is: the lint config the repo already has.
+const lintConfig = require("../eslint.config.js");
+const globalsFor = (file) => {
+  const names = new Set(Object.getOwnPropertyNames(globalThis));
+  for (const block of lintConfig) {
+    const pats = block.files || [];
+    const applies = !block.files || pats.some((p) => p === file || (p === "**/*.js" && file.endsWith(".js")) || (p === "**/*.mjs" && file.endsWith(".mjs")));
+    if (applies && block.languageOptions && block.languageOptions.globals) {
+      for (const g of Object.keys(block.languageOptions.globals)) names.add(g);
+    }
+  }
+  return names;
+};
 
 /** Declarations introduced directly by a node, into the scope it belongs to. */
 function patternNames(node, out = []) {
@@ -38,7 +61,7 @@ function patternNames(node, out = []) {
   return out;
 }
 
-function analyse(file) {
+function analyse(file, host = new Set(Object.getOwnPropertyNames(globalThis))) {
   const src = fs.readFileSync(path.join(ROOT, file), "utf8").replace(/^#![^\n]*\n/, "\n");
   const ast = acorn.parse(src, { ecmaVersion: 2023, sourceType: "script", locations: true, allowReturnOutsideFunction: true });
 
@@ -113,15 +136,17 @@ function analyse(file) {
 
       let s = scopeOf(ancestors.slice(0, -1));
       for (; s; s = s.parent) if (s.names.has(node.name)) return;
-      if (HOST.has(node.name)) return;
+      if (host.has(node.name)) return;
       unresolved.push(`${node.name} (${file}:${node.loc.start.line})`);
     },
   });
   return unresolved;
 }
 
+let checked = 0;
 for (const file of FILES) {
-  const bad = analyse(file);
+  const bad = analyse(file, globalsFor(file));
+  checked++;
   assert.deepStrictEqual(bad, [], `${file} reads identifiers that are not in scope there:\n  ${bad.join("\n  ")}`);
 }
 
@@ -152,4 +177,4 @@ function runOwner() { console.log(\`gas \${nat(1n)} \${NATIVE}\`); }
   assert.strictEqual((collector.match(/cl\.gasLine\(/g) || []).length, 2, "both receipt sites call the shared function");
 }
 
-console.log("collector scope: every identifier resolves in the scope that reads it (checked against the original bug), and the gas receipt takes its arguments");
+console.log(`collector scope: ${checked} discovered file(s) — every identifier resolves in the scope that reads it (checked against the original bug), and the gas receipt takes its arguments`);

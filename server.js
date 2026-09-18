@@ -246,6 +246,9 @@ const ledgerV4 = V4 && cfg.contracts.v4.poolManager && cfg.contracts.v4.stateVie
       posmAddress: cfg.contracts.v4.positionManager,
       stateView: cfg.contracts.v4.stateView,
       forwardStart: hist.startBlock,
+      // Chain identity for token naming: without it a native currency is named by
+      // guess, and the ledger read an undeclared `cfg` instead.
+      cfg,
     })
   : null;
 // Portfolio: every token held, in the wallet or inside positions, valued.

@@ -29,7 +29,7 @@ const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
 const tierLabel = (fee) => (fee == null ? "?" : `${+(Number(fee) / 10000).toFixed(3)}%`);
 
-function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator, getBasis, getCollectEvents, getCollectSummary, priceAtOpen = null }) {
+function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator, getBasis, getCollectEvents, getCollectSummary, getClaimedSummary, priceAtOpen = null }) {
   // === performance-attribution === PnL vs HODL for watched positions.
   // v3: the shared liquidity ledger (getBasis) + collect events (getCollectEvents),
   // the same maths as the main wallet's cards. v4: no per-token liquidity events
@@ -312,9 +312,15 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         const raw = (p.currentTick - p.tickLower) / span;
         const pnl = pnlFor({ version, id, p, a0, a1, f0, f1, usd0, usd1, valueUsd, feesUsd }); // === performance-attribution ===
         const collected = getCollectSummary ? getCollectSummary(version === 4 ? `v4-${id}` : id.toString(), p.token0.decimals, p.token1.decimals, usd0, usd1) : null;
+        const claimKey = version === 4 ? `v4-${id}` : id.toString();
+        const claimed = getClaimedSummary
+          ? getClaimedSummary(claimKey, p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol,
+              { token0: p.token0.address, token1: p.token1.address, owner: w.address })
+          : { status: "unavailable", reason: "this instance exposes no claim history" };
         positions.push({
           ...pnl,
           collected,
+          claimed,
           tokenId: version === 4 ? `v4-${id}` : id.toString(),
           nftId: id.toString(),
           version,
@@ -427,7 +433,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     return inFlight;
   }
 
-  return { refresh, readWallets, ownerLabel, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
+  // discoveryFor: the position registry reads the same per-wallet discovery (ids and tombstones).
+  return { refresh, readWallets, ownerLabel, discoveryFor, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
 }
 
 /**

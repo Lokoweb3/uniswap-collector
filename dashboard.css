@@ -1221,32 +1221,35 @@ select.scope option{background:var(--card);color:var(--ink)}
    wrapper around the first two, so display:contents lifts its children into the same
    grid rather than needing new markup. Two or more positions keep the card grid, and
    nothing is ever invented to fill space. */
+/* Superseded by .pos.card2, which lays itself out (header, four metrics, full-width
+   rail, grouped disclosure). These rules mapped the OLD .top/.vals/.comp markup into
+   four columns for a lone position; a .card2 must not be dragged into those tracks. */
 :is(#ownergroup #list, .wcards):has(> .pos:only-child){grid-template-columns:minmax(0,1fr)}
-:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos{
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2){
   display:grid;
   grid-template-columns:minmax(200px,1fr) minmax(140px,.65fr) minmax(230px,1.25fr) minmax(210px,1.1fr);
   gap:var(--s3) var(--s5);align-items:start;
 }
-:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top{display:contents}
-:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top > .name{grid-column:1;margin:0}
-:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top > .vals{
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .top{display:contents}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .top > .name{grid-column:1;margin:0}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .top > .vals{
   grid-column:2;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
 }
-:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .rail{grid-column:3;margin:0}
-:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .comp{grid-column:4;margin:0}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .rail{grid-column:3;margin:0}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .comp{grid-column:4;margin:0}
 /* The 7-day price chart is the full width of the card, under the four columns. */
-:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .pxchart{grid-column:1/-1;margin-top:var(--s2)}
+:is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .pxchart{grid-column:1/-1;margin-top:var(--s2)}
 /* Below four columns' worth of room the same information stacks, in the same order. */
 @media (max-width:1100px){
-  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos{
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2){
     grid-template-columns:minmax(200px,1fr) minmax(140px,.7fr);
   }
-  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .rail,
-  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .comp{grid-column:1/-1}
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .rail,
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .comp{grid-column:1/-1}
 }
 @media (max-width:640px){
-  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos{grid-template-columns:minmax(0,1fr)}
-  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos > .top > .vals{grid-column:1}
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2){grid-template-columns:minmax(0,1fr)}
+  :is(#ownergroup #list, .wcards):has(> .pos:only-child) > .pos:not(.card2) > .top > .vals{grid-column:1}
 }
 
 #decisionsec:has(#attentionitems > .insightcard:only-child) .ehead,
@@ -1538,3 +1541,215 @@ select.scope option{background:var(--card);color:var(--ink)}
 /* A fee read that failed states so on the card face. Amber, because it is a gap
    in the data rather than a loss — and never the same colour as a real figure. */
 .pos .vals .f.unavail{color:var(--warn);font-variant-numeric:normal}
+
+/* Claimed fees on a position card. Three states read differently on purpose: a
+   verified zero is muted, a partial window is amber because the number is short,
+   and unavailable is amber too because it is an absence of knowledge, not a zero. */
+.c.unavail{color:var(--warn)}
+.c.partial{color:var(--warn)}
+.c.zero{color:var(--muted)}
+
+/* ---- position card: header, four metrics, full-width rail, grouped details ---- */
+.pos.card2{display:flex;flex-direction:column;gap:var(--s3)}
+.pchead{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--s3);flex-wrap:wrap}
+.pcid{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;min-width:0}
+.pcid h3{margin:0;font-size:16px;font-weight:600}
+.pcwallet{font-size:12px;color:var(--muted);border:1px solid var(--rule);border-radius:var(--r-pill);padding:1px 8px}
+
+/* Four metrics, equal weight. Two columns once the card is narrow, never one:
+   the pairs (value/fees, claimed/range) still read together at phone width. */
+/* Wraps on its own width, not the viewport's: these cards also sit two-up inside a
+   watched wallet's grid, where a viewport media query would still force four
+   columns into ~300px and squeeze every figure to "$2…". */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:var(--s2)}
+.metric{display:flex;flex-direction:column;gap:2px;padding:var(--s2) var(--s3);
+  background:var(--raised);border:1px solid var(--rule-soft);border-radius:var(--r-ctl);
+  text-align:left;font:inherit;min-width:0}
+.metric .ml{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.metric .mv{font-family:var(--mono);font-size:19px;font-weight:600;color:var(--ink);
+  font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
+.metric .mv.zero{color:var(--muted)}
+.metric .mv.unavail,.metric .mv.partial{color:var(--warn);font-size:15px}
+.metric .mv.near{color:var(--warn)}
+.metric .mv.out{color:var(--neg)}
+.metric .msub{font-size:12px;color:var(--muted);line-height:1.45}
+button.metric{cursor:pointer;border-color:var(--rule)}
+button.metric:hover{border-color:var(--cyan)}
+button.metric[aria-expanded="true"]{border-color:var(--cyan);background:var(--cyan-dim)}
+button.metric::after{content:"Collection history ▸";font-size:11px;color:var(--cyan);margin-top:2px}
+button.metric[aria-expanded="true"]::after{content:"Collection history ▾"}
+
+.rail.wide{width:100%}
+/* min | toggle | max on one line. The older .ends rule pins the toggle to
+   order:3 and width:100% so it sits on its own row; on the wide card it belongs
+   between the two bounds, so order and width are both reset here. */
+.rail.wide .ends{display:flex;flex-wrap:nowrap;justify-content:space-between;
+  align-items:center;gap:var(--s3);margin-top:var(--s2)}
+.rail.wide .ends > *{flex:0 0 auto}
+.rail.wide .ends > span:first-child{order:0;text-align:left}
+.rail.wide .ends button.unit{order:0;width:auto;margin-top:0;text-align:center}
+.rail.wide .ends > span:last-child{order:0;text-align:right}
+/* Narrow: the bounds keep the ends of the line and the toggle drops below, centred. */
+@media (max-width:560px){
+  .rail.wide .ends{flex-wrap:wrap}
+  .rail.wide .ends > span:first-child{order:1}
+  .rail.wide .ends > span:last-child{order:2}
+  .rail.wide .ends button.unit{order:3;width:100%;margin-top:var(--s1)}
+}
+.ends .rl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+button.unit{font:inherit;font-size:11.5px;color:var(--muted);background:transparent;
+  border:1px solid var(--rule-soft);border-radius:var(--r-ctl);padding:1px 8px;cursor:pointer}
+button.unit:hover{color:var(--cyan);border-color:var(--cyan)}
+
+/* The table is the one thing allowed to be wider than the card; it scrolls in its
+   own container rather than pushing the page sideways. */
+.claimhist{border:1px solid var(--rule);border-radius:var(--r-ctl);padding:var(--s2) var(--s3);
+  background:var(--card);overflow-x:auto}
+.claimhist .chtable{min-width:340px}
+.chnote{margin:0;font-size:12.5px;color:var(--muted)}
+.chtable{width:100%;border-collapse:collapse;font-size:12.5px}
+.chtable caption{text-align:left;font-size:11.5px;color:var(--muted);padding-bottom:var(--s1)}
+.chtable th{text-align:left;font-size:11px;color:var(--muted);font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;padding:2px 8px 2px 0}
+.chtable td{padding:3px 8px 3px 0;border-top:1px solid var(--rule-soft)}
+
+/* Details: two columns on desktop, stacked narrow. */
+.detailgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--s3) var(--s5)}
+.dgroup{display:flex;flex-direction:column;gap:var(--s2);min-width:0}
+.dgroup h4{margin:0;font-size:12px;font-weight:600;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--muted);padding-bottom:var(--s1);border-bottom:1px solid var(--rule-soft)}
+.dfoot{display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;
+  margin-top:var(--s3);padding-top:var(--s2);border-top:1px solid var(--rule-soft);
+  font-size:11.5px;color:var(--muted)}
+.amts.unavail,.mv.unavail{color:var(--warn)}
+
+@media (max-width:820px){
+  .detailgrid{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:420px){
+  .metric .mv{font-size:17px}
+}
+
+.chnote.warn{color:var(--warn)}
+.chnote.err{color:var(--neg)}
+.chtable .unavail{color:var(--warn)}
+.chtable .approx{color:var(--muted);cursor:help}
+.chtable td{text-align:left;vertical-align:top}
+.chtable .amt{display:block;white-space:nowrap}
+.metric .mv.approx{color:var(--muted)}
+.loadfail{margin:var(--s1) 0;font-size:12.5px;color:var(--neg)}
+
+/* Claimed fees and pool-rate presentation corrections */
+.metric .msub.reason{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.chtable .rowusd{display:flex;flex-direction:column;gap:1px}
+.chtable .rowsrc{font-size:11px;color:var(--muted)}
+.chtable .psrc{cursor:help}
+.poolstats .poolrate,.poolstats .liqlabel{cursor:help;border-bottom:1px dotted var(--rule)}
+
+/* ---- positions: Open · Closed · All, and the read-only claimed-fee total ----
+   Both sit under the Positions heading. The filter is a segmented radio group;
+   the total is a history button, never an action, and says so on its face. */
+.posbar{display:flex;flex-wrap:wrap;align-items:stretch;gap:var(--s2) var(--s3);margin:var(--s3) 0 var(--s2)}
+.posfilter{display:inline-flex;align-self:center;gap:2px;padding:2px;border:1px solid var(--rule);
+  border-radius:var(--r-pill);background:var(--card)}
+.pfopt{font:inherit;font-size:12.5px;font-weight:500;color:var(--muted);background:transparent;border:0;
+  border-radius:var(--r-pill);padding:5px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.pfopt:hover{color:var(--ink)}
+.pfopt[aria-checked="true"]{color:var(--btn-ink);background:var(--cyan);font-weight:600}
+.pfopt:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.pfn{font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;padding:0 6px;
+  border-radius:var(--r-pill);background:var(--raised);color:var(--ink)}
+.pfopt[aria-checked="true"] .pfn{background:rgba(4,18,28,.18);color:var(--btn-ink)}
+.ctwrap{flex:1 1 280px;min-width:0;display:flex}
+.ctotbtn{flex:1;min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s3);row-gap:2px;
+  align-items:baseline;text-align:left;font:inherit;color:var(--ink);cursor:pointer;
+  background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-ctl);padding:var(--s2) var(--s3)}
+.ctotbtn:hover{border-color:var(--cyan)}
+.ctotbtn[aria-expanded="true"]{border-color:var(--cyan);background:var(--cyan-dim)}
+.ctotbtn:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.ctotbtn .ctl{grid-column:1;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);
+  overflow-wrap:anywhere}
+.ctotbtn .ctv{grid-column:2;grid-row:1 / span 2;align-self:center;font-family:var(--mono);font-size:18px;font-weight:600;
+  font-variant-numeric:tabular-nums;text-align:right;overflow-wrap:anywhere}
+.ctotbtn .cts{grid-column:1;font-size:12px;color:var(--muted)}
+.ctotbtn .cthint{grid-column:1 / -1;font-size:11px;color:var(--cyan)}
+.ctotbtn .cthint::after{content:" ▸"}
+.ctotbtn[aria-expanded="true"] .cthint::after{content:" ▾"}
+.ctv.muted,.ctv.zero{color:var(--muted)}
+.ctv.partial,.ctv.unavail{color:var(--warn);font-size:15px}
+.ctstale{color:var(--warn)}
+@media (max-width:520px){
+  .posfilter{display:flex;width:100%}
+  .pfopt{flex:1;justify-content:center;min-height:44px}
+  .ctotbtn{grid-template-columns:minmax(0,1fr)}
+  .ctotbtn .ctv{grid-column:1;grid-row:auto;text-align:left}
+}
+
+.ctpanel{border:1px solid var(--rule);border-radius:var(--r-card);background:var(--card);
+  padding:var(--s3) var(--s4);margin:0 0 var(--s3);min-width:0;display:flex;flex-direction:column;gap:var(--s3)}
+.ctpanel .ehead h3{margin:0;font-size:14px;font-weight:600;color:var(--ink)}
+.ctpanel .ehead:has(h3){margin-top:0;padding-top:0;border-top:0}
+.ctfilters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--s2) var(--s3)}
+.ctf{display:flex;flex-direction:column;gap:2px;font-size:11px;font-weight:600;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--muted);min-width:0}
+.ctf select,.ctf input{max-width:100%;min-width:0;text-transform:none;letter-spacing:normal;color-scheme:dark}
+#ctbody{display:flex;flex-direction:column;gap:var(--s2);min-width:0}
+.ctstate{margin:0;font-size:12.5px;color:var(--muted)}
+.ctstate b{color:var(--ink)}
+.ctstate.partial b,.ctstate.unavail b{color:var(--warn)}
+.cth{margin:var(--s2) 0 0;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted);padding-bottom:var(--s1);border-bottom:1px solid var(--rule-soft)}
+.ctscroll{overflow-x:auto;max-width:100%;overscroll-behavior-x:contain}
+.ctscroll:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.ctscroll .chtable{min-width:520px}
+.ctscroll .ctrows{min-width:760px}
+.ctscroll .ctpos{min-width:720px}
+.ctsubs{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--s2)}
+.ctsub{display:flex;flex-direction:column;gap:2px;padding:var(--s2) var(--s3);background:var(--raised);
+  border:1px solid var(--rule-soft);border-radius:var(--r-ctl);min-width:0}
+.ctsub .ml{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.ctsub .ctsv{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
+.ctsub .msub{font-size:12px;color:var(--muted)}
+.ctamts .amt,.ctpos .amt{display:block;font-family:var(--mono);font-size:12px;overflow-wrap:anywhere}
+.ctlist{margin:var(--s1) 0 0;padding-left:var(--s5);font-size:12.5px;color:var(--muted)}
+.ctlist li{margin:2px 0}
+.ctmore summary{cursor:pointer;font-size:12.5px;color:var(--warn)}
+.ctcov{display:flex;flex-direction:column;gap:var(--s1)}
+
+/* ---- positions no longer open ------------------------------------------------ */
+body.pf-closed #ownergroup,body.pf-closed #watchlist,body.pf-closed #watchstale{display:none!important}
+body.pf-closed .closedsec,body.pf-all .closedsec{display:none!important}
+.histsec{margin-top:var(--s4);min-width:0}
+.histsec .ehead h3{margin:0;font-size:14px;font-weight:600;color:var(--ink)}
+body.pf-closed .histsec .ehead:has(h3){margin-top:0;padding-top:0;border-top:0}
+.histgroup{margin-top:var(--s3);min-width:0}
+.histgh{margin:0;font-size:13px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:var(--s2)}
+.histgroup > .enote{margin-top:2px}
+.pos.hist .pcid h4{margin:0;font-size:16px;font-weight:600;color:var(--ink)}
+.state.hstate{color:var(--muted);border-color:var(--rule);background:var(--raised)}
+.state.hstate::before{box-shadow:none}
+.state.hs-unavailable{color:var(--warn);border-color:rgba(255,181,71,.42);background:var(--warn-dim)}
+.metric .mv.hv{font-family:var(--sans);font-size:16px}
+.metric .mv.hs-unavailable{color:var(--warn)}
+.hdate{display:block}
+.hunver{color:var(--warn)}
+.hfacts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:var(--s1) var(--s4);margin:0;font-size:12.5px}
+.hfacts > div{min-width:0}
+.hfacts .wide{grid-column:1 / -1}
+.hfacts dt{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.hfacts dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.ctrows td.ctaddr,.ctrows td:first-child{white-space:nowrap}
+
+/* ---- approved wide card ------------------------------------------------------
+   One position per row at every width: the card owns the full column, so the four
+   metrics sit across it, the rail spans it, and the expanded details fall into two
+   columns. Rows are sized to their own content (`align-items:start`), so opening
+   one card's details never stretches its neighbours. */
+.wcards,#ownergroup #list,#histlist{grid-template-columns:minmax(0,1fr);align-items:start}
+.pos .metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+.pos .detailgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:1100px){.pos .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:720px){
+  .pos .metrics{grid-template-columns:minmax(0,1fr)}
+  .pos .detailgrid{grid-template-columns:minmax(0,1fr)}
+}

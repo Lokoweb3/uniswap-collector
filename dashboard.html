@@ -38,6 +38,7 @@
   <span class="chip" id="gasday" hidden></span>
   <span class="chip" id="merklchip" hidden></span>
 </div>
+<div class="loadfails" id="loadfails" role="alert" hidden></div>
 
 <form class="armform" id="armform" hidden>
   <input type="password" id="armpass" placeholder="Operator passphrase" autocomplete="off" required>
@@ -116,6 +117,26 @@
     <span class="etotal" id="watchtotal"></span>
     <span class="enote" id="ltlegend" title="Fee APR: collected plus uncollected fees over the last 30 days (or since open), annualised over the actual days, on the value at open or the time-weighted value — never today's value. Net return: fees + price move + IL over the same window. A ⛓ marks a position re-minted within 48 h of a close, counted together with its predecessors.">Fee APR · Net return <label>sort <select id="ltsort"><option value="default">default</option><option value="fee">by fee APR</option><option value="net">by net return</option></select></label></span>
   </div>
+  <div class="posbar" id="posbar">
+    <div class="posfilter" id="posfilter" role="radiogroup" aria-label="Which positions to list"></div>
+    <div class="ctwrap">
+      <button type="button" class="ctotbtn" id="ctotbtn" aria-expanded="false" aria-controls="ctotalpanel"
+        title="Read-only history — no transaction"><span class="ctl">Total claimed fees</span><span class="ctv muted">Loading…</span><span class="cthint">Read-only history — no transaction</span></button>
+    </div>
+  </div>
+  <section class="ctpanel" id="ctotalpanel" aria-labelledby="ctotaltitle" hidden>
+    <div class="ehead"><h3 id="ctotaltitle">Total claimed fees</h3><span class="enote">Read-only history of fees already paid out to the wallet. Nothing here sends a transaction, and none of it is added to the portfolio value.</span></div>
+    <form class="ctfilters" id="ctfilters" aria-label="Filter the claimed-fee total">
+      <label class="ctf" id="ctwalletwrap" hidden><span>Wallet</span><select id="ctwallet" class="msel"><option value="">All wallets</option></select></label>
+      <label class="ctf"><span>Positions</span><select id="ctstatus" class="msel">
+        <option value="all">Open + closed (all)</option><option value="open">Open</option><option value="closed">Closed</option><option value="other">Burned, transferred or unavailable</option>
+      </select></label>
+      <label class="ctf"><span>From</span><input type="date" id="ctfrom" class="msel"></label>
+      <label class="ctf"><span>To</span><input type="date" id="ctto" class="msel"></label>
+      <button type="reset" class="reload" id="ctreset">Reset filters</button>
+    </form>
+    <div id="ctbody" aria-live="polite"><p class="chnote">Open the total to load it.</p></div>
+  </section>
   <div class="pstats" id="watchstats"></div>
   <div class="watchwallet owneronly" id="ownergroup">
     <div class="wh" id="ownerhead"></div>
@@ -126,7 +147,13 @@
       <div class="closedlist" id="closedlist" hidden></div>
     </section>
   </div>
+  <div class="loadfail" id="watchstale" role="status" hidden></div>
   <div id="watchlist"></div>
+  <section class="histsec" id="histsec" aria-labelledby="histtitle" hidden>
+    <div class="ehead"><h3 id="histtitle">No longer open</h3><span class="enote">Closed, burned, transferred or unreadable positions for this wallet scope · read-only</span></div>
+    <div class="loadfail" id="histstale" role="status" hidden></div>
+    <div id="histlist"></div>
+  </section>
   <div class="enote" id="watchnote"></div>
 </section>
 
@@ -145,7 +172,7 @@
 
 <aside class="col-side" aria-label="Supporting information">
 
-  <section class="earnings panel" id="walletpanel" aria-labelledby="walletpaneltitle">
+  <section class="earnings panel" id="walletpanel" aria-labelledby="walletpaneltitle" hidden>
     <div class="ehead"><h2 id="walletpaneltitle">Wallet overview</h2><span class="etotal" id="walletpaneltotal"></span></div>
     <div id="walletbars"><p class="enote">Reading wallet values…</p></div>
     <p class="enote" id="walletpanelnote"></p>
@@ -235,9 +262,12 @@
 <section class="earnings analytics" id="taxsec" hidden>
   <div class="ehead">
     <h2>Income for taxes</h2>
-    <span><a class="ecsv" id="taxcsv" href="#">Download tax CSV</a> <span class="etotal" id="taxtotal"></span></span>
+    <span><a class="ecsv" id="taxcsv" href="#">Download tax CSV</a> <span class="etotal muted" id="taxcsvnote">both sources below</span></span>
   </div>
-  <div class="etablewrap" id="taxtable"></div>
+  <div class="ehead"><h3 id="taxledgerhead">Recorded by this collector — its own collects and staking rebases</h3><span class="etotal" id="taxtotal"></span></div>
+  <div class="etablewrap" id="taxtable" aria-labelledby="taxledgerhead"></div>
+  <div class="ehead"><h3 id="chaintaxhead">Settled by the wallet — read from chain</h3><span class="etotal" id="chaintaxtotal"></span></div>
+  <div id="chaintax" aria-labelledby="chaintaxhead"></div>
   <div class="taxnote">Income is valued in USD at the moment it was received: LP fees when collected (rows marked ≈ have no
   price record from that moment and use today's price), staking rewards at each rebase. Fees taken when a position was closed are included; the principal returned
   by the close is not income and is already netted out. Unpriced tokens are listed by amount only. This is a record, not tax advice.</div>
@@ -266,6 +296,8 @@
   <div class="echart" id="tvchart"></div>
   <div class="etablewrap" id="etablewrap"></div>
   <div class="enote" id="enote"></div>
+  <div class="ehead"><h3 id="chainfeeshead">Claimed fees — read from chain</h3><span class="etotal" id="chainfeestotal"></span></div>
+  <div id="chainfees" aria-labelledby="chainfeeshead"></div>
 </section>
 
 <section class="earnings analytics owneronly" id="dailysec" hidden>
@@ -312,7 +344,7 @@
 <div class="foot">
   Rails are drawn on a log scale, matching how ticks are spaced. The centre mark is the
   geometric midpoint, where a position sits half in each token by value.<br>
-  Prices come from pool state. Positions not paired with WETH are shown without a dollar value rather than a guessed one.
+  <span id="pricefoot">Prices come from on-chain pools against this instance&rsquo;s unit of account; a token with no such pool is left unpriced.</span> Positions whose tokens have no price are shown without a dollar value rather than a guessed one.
 </div>
 
 </div>

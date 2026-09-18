@@ -34,7 +34,15 @@ const history = require("./history");
 const verdict = require("./verdict");
 
 const settings = require("./settings");
+const logs = require("./logs");
 const cfg = settings.load();
+// The chain's name for anything a wallet will show a person. It was hardcoded to
+// "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
+// network and would have added chain 5042 to their wallet under that name.
+const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc" };
+function chainDisplayName() {
+  return cfg.chainName || KNOWN_CHAIN_NAMES[Number(cfg.chainId)] || `Chain ${Number(cfg.chainId)}`;
+}
 // Ledgers, state files and logs belong to the instance, not to the checkout, so
 // one copy of the code can serve a second chain from its own directory. Code,
 // pages, assets and shell scripts stay on __dirname; only data moves.
@@ -158,6 +166,27 @@ function toFloat(amountStr, decimals) {
  * WETH; anything else is left null rather than guessed at.
  */
 const STABLE = ((cfg.usdReference && cfg.usdReference.stable) || "").toLowerCase();
+/**
+ * How this instance turns token amounts into dollars, for the page to state
+ * instead of a fixed "WETH or USDG" sentence. Position tokens are priced from
+ * the position's own pool (priceSides); wallet tokens from the deepest pool
+ * against the unit or the stable (portfolio.js poolFor). Symbols are filled in
+ * once read from chain.
+ */
+const PRICING = { unit: UNIT.symbol || null, unitUsd: UNIT.usdRate != null ? Number(UNIT.usdRate) : null, stable: null, text: null };
+function pricingText() {
+  const unit = PRICING.unit || "the unit token";
+  const sameAsStable = STABLE && STABLE === WETH;
+  const quotes = sameAsStable || !STABLE ? unit : `${unit} or ${PRICING.stable || "the reference stablecoin"}`;
+  const unitUsd = PRICING.unitUsd != null
+    ? `${unit} is counted at $${PRICING.unitUsd} by configuration`
+    : `${unit} is valued through its pool against ${PRICING.stable || "the reference stablecoin"}${STABLE && !sameAsStable ? `, and ${PRICING.stable || "the stablecoin"} at $1` : ""}`;
+  return `Prices are read on-chain against ${quotes}, at current pool state: position tokens from the position's own pool; wallet tokens from a position's pool when one holds the same token, otherwise from the deepest ${quotes} pool. ${unitUsd}. A token with no such pool is left unpriced.`;
+}
+PRICING.text = pricingText();
+if (STABLE && STABLE !== WETH) {
+  u.getToken(STABLE, provider, Number(cfg.chainId)).then((t) => { if (t && t.symbol) { PRICING.stable = t.symbol; PRICING.text = pricingText(); } }).catch(() => {});
+}
 function priceSides(p, wethUsd) {
   const a0 = p.token0.address.toLowerCase(), a1 = p.token1.address.toLowerCase();
   // Native ETH (v4 pools) is priced as WETH.
@@ -194,6 +223,10 @@ const watch = require("./watch").create({
   },
   getCollectEvents: (tokenId) => (typeof hist !== "undefined" ? hist.events.filter((e) => e.tokenId === String(tokenId)) : []),
   getCollectSummary: (tokenKey, dec0, dec1, usd0, usd1) => collectSummary(tokenKey, dec0, dec1, usd0, usd1),
+  // Watched positions get the same claimed summary as the owner's, so the two
+  // kinds of card can never show a different answer for the same question.
+  getClaimedSummary: (tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, ctx) =>
+    claimedSummary(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, null, ctx),
 });
 // Liquidity history from the RPC itself; the PnL basis prefers it over
 // Blockscout's, which has dropped transactions on this chain.
@@ -481,6 +514,508 @@ function collectSummary(tokenKey, dec0, dec1, usd0, usd1) {
   }
   return count ? { usd: +usd.toFixed(2), usd7d: +usd7d.toFixed(2), count, last, atCollectPrices: locked, approx: locked < count } : null;
 }
+/**
+ * The chain-derived claim store for this instance's v4 position manager. Its file
+ * lives in DATA_DIR, so two instances on two chains keep separate progress and
+ * separate records. v3 has no equivalent here yet: its claims still sit in the
+ * tokenId-only ledgers, which is exactly why they are reported as unverified.
+ */
+const claimStore = (() => {
+  try {
+    if (!cfg.contracts.v4 || !cfg.contracts.v4.positionManager || !cfg.contracts.v4.poolManager) return null;
+    return require("./claims-store").create({
+      provider, chainId: Number(cfg.chainId),
+      positionManager: cfg.contracts.v4.positionManager,
+      poolManager: cfg.contracts.v4.poolManager,
+      stateView: cfg.contracts.v4.stateView || null,
+      file: dataFile("claims.json"),
+      log: console,
+    });
+  } catch (err) { console.error(`claims store unavailable: ${err.message}`); return null; }
+})();
+/** Pair and owner for a token id, so the scanner knows which positions to fold. */
+function claimMeta(tokenId) {
+  const hit = claimMetaIndex.get(String(tokenId));
+  // Persisted with the scan progress, so a restarted process can keep scanning
+  // before the first build has described any position.
+  return hit || (claimStore && claimStore.metaOf(tokenId)) || null;
+}
+/** Every position the scanner should track: this process's cards plus the persisted ones. */
+function trackedClaimIds() {
+  return [...new Set([...claimMetaIndex.keys(), ...(claimStore ? claimStore.knownIds() : [])])];
+}
+const claimMetaIndex = new Map();
+function rememberClaimMeta(tokenId, token0, token1, owner) {
+  if (!tokenId || !token0 || !token1 || !owner) return;
+  claimMetaIndex.set(String(tokenId), { token0, token1, owner });
+  if (claimStore) {
+    try { claimStore.remember(tokenId, { token0, token1, owner }); }
+    catch (err) { console.error(`claims: could not persist position ${tokenId}: ${err.message}`); }
+  }
+}
+
+/**
+ * Claimed fees for one position, in the shape the card renders: token amounts,
+ * a USD total when both legs price, the count and the latest collection, and an
+ * explicit coverage state.
+ *
+ * Scope. Rows are keyed by token id alone in the ledgers, so the scope is carried
+ * here and stated on the card rather than pretended away: this instance serves one
+ * chain (cfg.chainId) and one pair of position managers, and `scope` records which.
+ * claimed-fees.js is the chain-derived replacement that keys rows by
+ * chainId:positionManager:tokenId; until its scanner is wired in, this reads the
+ * existing ledgers and is honest about what they cover.
+ *
+ * Coverage. The v3 scan starts at START_BLOCK, so a position opened before that
+ * has claims this cannot see: that is `partial`, with the date it starts from.
+ * No history file at all is `unavailable` — never a zero.
+ */
+// The arguments each card's claim summary was built with, so the summary can be
+// recomputed from the store whenever a cached payload is served. The scanner
+// moves on between rebuilds (a rescan, a new claim); a summary frozen into the
+// positions or watch cache would keep saying "not scanned" after the panel,
+// which reads the store directly, already shows a complete history.
+const claimArgs = new WeakMap();
+function claimedSummary(...args) {
+  const out = claimedSummaryNow(...args);
+  if (out && typeof out === "object") claimArgs.set(out, args);
+  return out;
+}
+/** Replace every `claimed` in a payload with one computed from the store now. */
+function freshClaims(payload) {
+  if (!payload || !claimStore) return payload;
+  const fix = (list) => {
+    if (!Array.isArray(list)) return;              // e.g. a wallet's `closed` is a count
+    for (const p of list) {
+      const args = p && p.claimed && claimArgs.get(p.claimed);
+      if (args) {
+        try {
+          p.claimed = claimedSummary(...args);
+          const [key, dec0, dec1, , , sym0, sym1, , ctx] = args;
+          if (ctx && ctx.owner) {
+            p.income = positionIncome(String(key).replace(/^v4-/, ""), ctx.owner,
+              { address: ctx.token0, symbol: sym0, decimals: dec0 }, { address: ctx.token1, symbol: sym1, decimals: dec1 },
+              { claimed: p.claimed, uncollectedUsd: p.feesUsd ?? null, valueUsd: p.valueUsd ?? null });
+          }
+        } catch (err) { console.error(`claims: refreshing a card summary failed: ${err.message}`); }
+      }
+    }
+  };
+  fix(payload.positions);
+  fix(payload.closed);
+  for (const w of payload.wallets || []) { fix(w.positions); fix(w.closed); }
+  return payload;
+}
+function claimedSummaryNow(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, openedBlock, ctx) {
+  const key = String(tokenKey);
+  // Remember what the scanner needs to recognise this position later: its pair and
+  // the wallet the payout lands in. Without this the scan cannot tell one manager's
+  // positions apart from every other position on the chain.
+  if (ctx && ctx.token0 && ctx.token1 && ctx.owner) rememberClaimMeta(key.replace(/^v4-/, ""), ctx.token0, ctx.token1, ctx.owner);
+  const isV4 = key.startsWith("v4-");
+  const id = key.replace(/^v4-/, "");
+  // v3 (and anything else) still comes from the tokenId-only ledgers. Those rows
+  // record no chain and no position manager, so the scope this instance would
+  // attach is an assumption about where they came from, not evidence. An
+  // assumption must not become a displayed figure.
+  if (!isV4 || !claimStore) {
+    return { status: "unavailable", state: "unsupported", verifiedZero: false,
+      reason: isV4
+        ? "the chain-derived claim scanner is not configured for this instance"
+        : "this position's claims are only in the older token-id-keyed ledger, which records no chain or position manager, so they cannot be attributed to this position with certainty",
+      scope: { chainId: Number(cfg.chainId), tokenId: id, positionManager: null },
+      legacyRowsExist: hasLegacyRows(key) };
+  }
+  // A native-asset leg is paid by a value transfer that emits no log, so its
+  // history is not reconstructed: excluded and said so, never a zero.
+  if (ctx && [ctx.token0, ctx.token1].some((t) => String(t).toLowerCase() === ethers.ZeroAddress)) {
+    return { status: "unavailable", state: "unsupported", verifiedZero: false,
+      reason: "this pool pays a native-asset leg by plain value transfer, which emits no log; that history is not reconstructed on this instance",
+      scope: { chainId: Number(cfg.chainId), tokenId: id, positionManager: String(cfg.contracts.v4.positionManager).toLowerCase(), wallet: ctx.owner ? String(ctx.owner).toLowerCase() : null } };
+  }
+  // Coverage comes only from the mint (or the wallet's transfer in) the scanner
+  // observed; `openedBlock` is not used. Only the wallet's own settlements count.
+  return claimStore.summary(id, { dec0, dec1, sym0, sym1, usd0, usd1, wallet: ctx && ctx.owner ? ctx.owner : null });
+}
+/** Does the old ledger hold rows for this key? Reported, never counted. */
+function hasLegacyRows(tokenKey) {
+  try { return (hist.events || []).some((e) => e.tokenId === String(tokenKey)); } catch { return false; }
+}
+
+/** Has the pre-collector backfill finished, so history reaches a position's open? */
+function bfDone() { try { return typeof bf !== "undefined" && bf.ready === true; } catch { return false; } }
+
+/** Approximate wall-clock time of the history scan floor, for the partial label. */
+function START_BLOCK_TIME() { try { return hist.startBlockTime || null; } catch { return null; } }
+// Scanning is bounded so opening a card cannot stall the request; coverage grows
+// a little each time the panel is opened, and the cursor is persisted either way.
+const CLAIM_CHUNK = Number(process.env.LP_CLAIM_CHUNK || 9000);
+const CLAIM_BUDGET = Number(process.env.LP_CLAIM_BUDGET || 6);
+// How far back a scan reaches for a position whose mint it has not found. The
+// store converts this to a block floor with the chain's measured block time
+// (Arc is ~0.5 s a block, Robinhood ~0.1 s), so no block time is assumed here.
+const CLAIM_LOOKBACK_MS = Number(process.env.LP_CLAIM_LOOKBACK_DAYS || 30) * 86400 * 1000;
+/** Scan every position the cards have described, under the request budget. */
+function scanClaims() {
+  return claimStore.scan(claimMeta, { ids: trackedClaimIds(), chunk: CLAIM_CHUNK, budget: CLAIM_BUDGET, lookbackMs: CLAIM_LOOKBACK_MS });
+}
+// The background scan (claims-scanner.js): runs from server start, one chunk at a
+// time behind the dashboard's own requests, until every tracked position reaches
+// its mint or the lookback floor, then follows the head. On in the main process;
+// a read-only or preview instance opts in with LP_CLAIM_SCAN=1 or --claim-scan
+// (only one process per data directory should run it). LP_CLAIM_SCAN=0 turns it off.
+let activeRequests = 0;
+const CLAIM_SCAN = !!claimStore && process.env.LP_CLAIM_SCAN !== "0" &&
+  (process.env.LP_CLAIM_SCAN === "1" || process.argv.includes("--claim-scan") || LOOPS);
+// Only one process may own claims.json; if another live one does, this one reads.
+const CLAIM_WRITER = CLAIM_SCAN && claimStore.acquireWriter();
+if (CLAIM_SCAN && !CLAIM_WRITER) console.error(`claims scan: not started, another process holds ${dataFile("claims.json")}.lock; this one only reads its progress`);
+const claimScanner = CLAIM_WRITER ? require("./claims-scanner").create({
+  store: claimStore, meta: claimMeta, ids: trackedClaimIds,
+  busy: () => activeRequests > 0,
+  chunk: CLAIM_CHUNK, lookbackMs: CLAIM_LOOKBACK_MS,
+  pauseMs: Number(process.env.LP_CLAIM_PAUSE_MS || 500),
+  // New records are priced at their own block right away, so the cards' dollar
+  // figure does not wait for someone to open the panel.
+  onFolded: async () => { await priceAllClaims(); },
+}) : null;
+async function priceAllClaims() {
+  for (const id of trackedClaimIds()) await priceClaims(id).catch((err) => console.error(`claims: pricing ${id}: ${err.message}`));
+}
+
+// Every v4 position the wallets on this instance have held (position-registry.js).
+// Refreshed in the background by the process that owns the claim store; requests
+// read the saved view.
+const lcAddr = (a) => (a == null ? null : String(a).toLowerCase());
+function instanceWallets() {
+  const out = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main" }];
+  for (const w of watch.readWallets()) out.push({ address: w.address, label: w.label || w.address });
+  const seen = new Set();
+  return out.filter((w) => w.address && !seen.has(lcAddr(w.address)) && seen.add(lcAddr(w.address)));
+}
+const registry = V4 && claimStore ? require("./position-registry").create({
+  provider, cfg, posm: V4.posm, v4,
+  getToken: (a) => u.getToken(a, provider, Number(cfg.chainId)),
+  wallets: instanceWallets,
+  discoveryFor: (a) => (lcAddr(a) === lcAddr(cfg.ownerAddress) ? V4.discovery : watch.discoveryFor(a)),
+  // A position already described by an open card keeps that description.
+  remember: (id, m) => { if (!claimMetaIndex.has(String(id))) { try { claimStore.remember(id, m); } catch {} } },
+  file: dataFile("position-registry.json"),
+}) : null;
+/** `?wallet=all|<address>` → the instance's wallets in scope (this chain only). */
+function claimScope(url) {
+  const all = instanceWallets();
+  const want = String(url.searchParams.get("wallet") || "all").toLowerCase();
+  if (want === "all") return { all: true, wallets: all, set: new Set(all.map((w) => lcAddr(w.address))) };
+  const hit = all.find((w) => lcAddr(w.address) === want);
+  if (!hit) return { error: "wallet is not one of this instance's wallets" };
+  return { all: false, wallets: [hit], set: new Set([want]) };
+}
+/**
+ * What a position has actually earned, from the chain-derived history alone:
+ * capital in and out at the price of each transaction, fees claimed at the price
+ * of each settlement, and the fees still in the pool at today's price.
+ *
+ * The fee rate is fees over TIME-WEIGHTED capital: the running net capital (at
+ * the prices it went in and out) integrated over the position's life and divided
+ * by that life. A position that has been emptied still has an honest denominator
+ * this way, and no figure is produced when an input is missing — every gap is
+ * named in `missing` instead.
+ */
+function positionIncome(tokenId, wallet, token0, token1, { claimed, uncollectedUsd = null, valueUsd = null, closedT = null } = {}) {
+  const missing = [];
+  if (!claimStore) return { available: false, missing: ["this instance has no chain-derived claim scanner"] };
+  if (!token0 || !token1 || token0.decimals == null || token1.decimals == null) {
+    return { available: false, missing: ["a token's decimals were not read from chain"] };
+  }
+  const cap = claimStore.capital(tokenId, wallet);
+  const cov = claimStore.coverage(tokenId, wallet);
+  const usdOf = (r, a0, a1) => (r.px ? Number(ethers.formatUnits(a0, token0.decimals)) * r.px.p0 + Number(ethers.formatUnits(a1, token1.decimals)) * r.px.p1 : null);
+  let deposited = 0, withdrawn = 0, unpriced = 0;
+  const events = [];
+  for (const r of cap) {
+    const usd = r.unpriced ? null : usdOf(r, r.principal0, r.principal1);
+    if (usd == null) { unpriced++; continue; }
+    if (r.direction === "in") deposited += usd; else withdrawn += usd;
+    events.push({ t: r.t, usd, direction: r.direction });
+  }
+  if (!cov || !cov.coversOpening) missing.push("the scan has not covered this position's whole life for this wallet");
+  if (unpriced) missing.push(`${unpriced} capital movement(s) have no verified price of their moment`);
+  if (!cap.length) missing.push("no capital movement has been read for this position yet");
+  const openedT = cov ? cov.openedT ?? cov.fromT : null;
+  if (openedT == null) missing.push("the time this position was opened is not known");
+  const endT = closedT || Date.now();
+  const days = openedT != null ? (endT - openedT) / 86400000 : null;
+  // Time-weighted capital over the life, from the events themselves.
+  let twa = null;
+  if (openedT != null && days > 0 && events.length && !unpriced) {
+    const sorted = events.filter((e) => e.t != null).sort((a, b) => a.t - b.t);
+    let running = 0, area = 0, prev = openedT;
+    for (const e of sorted) {
+      area += running * Math.max(0, e.t - prev);
+      running += e.direction === "in" ? e.usd : -e.usd;
+      prev = e.t;
+    }
+    area += running * Math.max(0, endT - prev);
+    twa = area / Math.max(1, endT - openedT);
+  }
+  const claimedUsd = claimed && claimed.usd != null ? claimed.usd : null;
+  if (claimedUsd == null) missing.push("the claimed fees have no historical USD total");
+  const uncollected = uncollectedUsd == null ? 0 : uncollectedUsd;
+  const feesUsd = claimedUsd == null ? null : claimedUsd + uncollected;
+  // Fees against the capital that was actually working, and the annualised rate —
+  // but only from a day's history: annualising six hours reads as a five-figure
+  // percentage and means nothing.
+  const onCapitalPct = feesUsd != null && twa != null && twa > 0 ? (feesUsd / twa) * 100 : null;
+  const feeRatePct = onCapitalPct != null && days >= 1 ? onCapitalPct * (365 / days) : null;
+  const annualNote = onCapitalPct != null && feeRatePct == null
+    ? `open for ${days != null ? (days * 24).toFixed(1) : "?"} h — too short to annualise`
+    : null;
+  return {
+    available: !missing.length,
+    openedT, days: days == null ? null : +days.toFixed(3), closedT: closedT || null,
+    depositedUsd: unpriced ? null : +deposited.toPrecision(12),
+    withdrawnUsd: unpriced ? null : +withdrawn.toPrecision(12),
+    netCapitalUsd: unpriced ? null : +(deposited - withdrawn).toPrecision(12),
+    twaCapitalUsd: twa == null ? null : +twa.toPrecision(12),
+    claimedUsd, uncollectedUsd: uncollectedUsd == null ? null : +uncollected.toPrecision(12),
+    feesUsd: feesUsd == null ? null : +feesUsd.toPrecision(12),
+    onCapitalPct: onCapitalPct == null ? null : +onCapitalPct.toPrecision(6),
+    feeRatePct: feeRatePct == null ? null : +feeRatePct.toPrecision(6),
+    annualNote,
+    valueUsd, capitalEvents: cap.length, claimEvents: claimed ? claimed.count ?? null : null,
+    basis: "capital at the price of each deposit and withdrawal; claimed fees at the price of each settlement; fees still in the pool at today's price",
+    missing,
+  };
+}
+
+/** A registry entry's claim summary, scoped to the wallet that held it. */
+function registryClaim(e) {
+  const scope = { chainId: Number(cfg.chainId), positionManager: lcAddr(cfg.contracts.v4.positionManager), tokenId: e.tokenId, wallet: e.wallet };
+  if (!e.token0 || !e.token1) {
+    return { status: "unavailable", state: "unsupported", verifiedZero: false, scope,
+      reason: "this position's pair could not be read, so its settlements cannot be decoded" };
+  }
+  if (e.token0.decimals == null || e.token1.decimals == null) {
+    return { status: "unavailable", state: "unsupported", verifiedZero: false, scope,
+      reason: "a token's decimals were not read from chain, so no amount can be stated" };
+  }
+  const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] ?? null : currentPrice(t.address) ?? null);
+  return claimedSummary(`v4-${e.tokenId}`, e.token0.decimals, e.token1.decimals, price(e.token0), price(e.token1),
+    e.token0.symbol, e.token1.symbol, null, { token0: e.token0.address, token1: e.token1.address, owner: e.wallet });
+}
+/** A registry entry plus what the claim store knows: dates, closure, fees owed. */
+async function historyEntry(e) {
+  const own = claimStore.ownership(e.tokenId);
+  const lh = claimStore.liquidityHistory(e.tokenId);
+  const w = e.wallet;
+  const at = async (x) => (x ? { block: x.block, t: await registry.blockTime(x.block), tx: x.tx } : null);
+  const received = own.transfers.find((x) => x.to === w) || null;
+  const sentAway = [...own.transfers].reverse().find((x) => x.from === w && x.to !== ethers.ZeroAddress) || null;
+  let status = e.status, statusReason = e.statusReason;
+  // A burned NFT that this wallet had already transferred away left this wallet
+  // by transfer; the burn was someone else's.
+  if (status === "burned" && sentAway) {
+    status = "transferred";
+    statusReason = `sent to ${sentAway.to} and later burned by its new owner`;
+  }
+  const noLiquidity = status === "closed" || status === "burned";
+  const claimed = registryClaim(e);
+  const closedAt = noLiquidity && lh.closedAt ? { ...(await at(lh.closedAt)), verified: !!lh.closedAt.verified } : null;
+  const { checkedAt, poolId, tickSpacing, mintBlock, ...rest } = e;
+  return {
+    ...rest, status, statusReason,
+    openedAt: await at(received),
+    closedAt,
+    transferredAt: status === "transferred" && sentAway ? { ...(await at(sentAway)), to: sentAway.to } : null,
+    burnedAt: status === "burned" ? await at(own.burn) : null,
+    unsettledFees: noLiquidity
+      ? { state: "none", reason: "v4 pays out every accrued fee when liquidity is removed, and this position holds no liquidity" }
+      : { state: "unknown", reason: status === "open" ? "shown as uncollected fees on the open card"
+        : status === "transferred" ? "the position belongs to another owner now" : "the position could not be read" },
+    claimed,
+    income: positionIncome(e.tokenId, e.wallet, e.token0, e.token1, {
+      claimed,
+      uncollectedFees: null,
+      uncollectedUsd: noLiquidity ? 0 : null,
+      closedT: closedAt ? closedAt.t : null,
+    }),
+    checkedAt,
+  };
+}
+/**
+ * The selected wallets' verified fee settlements, aggregated. Tokens are summed by
+ * ADDRESS. USD is only ever historical here (a claim's own verified price); claims
+ * without one are listed as excluded from a "priced subtotal". Today's valuation is
+ * a separate, labelled figure. Positions whose history cannot be read in full are
+ * left out of the totals and listed with the reason.
+ */
+async function claimTotal(sel, status, from, to) {
+  const bucketOf = (st) => (st === "open" ? "open" : st === "closed" ? "closed" : "other");
+  const newSub = () => ({ tokens: new Map(), usdHistorical: 0, pricedSubtotal: 0, unpriced: 0, records: 0, positions: 0 });
+  const addTok = (map, t, raw) => {
+    const k = t.address;
+    const cur = map.get(k) || { address: t.address, symbol: t.symbol, decimals: t.decimals, raw: 0n };
+    cur.raw += raw;
+    map.set(k, cur);
+  };
+  const tokList = (map) => [...map.values()].map((x) => ({ address: x.address, symbol: x.symbol, decimals: x.decimals,
+    raw: x.raw.toString(), amount: Number(ethers.formatUnits(x.raw, x.decimals)) }));
+  const tokens = new Map();
+  const subs = { open: newSub(), closed: newSub(), other: newSub() };
+  const positions = [], rows = [], excluded = [], partial = [], unsupported = [];
+  let complete = true, hist = 0, priced = 0, unpriced = 0, inScope = 0;
+  for (const e0 of registry.entries(sel.set)) {
+    const h = await historyEntry(e0);
+    const bucket = bucketOf(h.status);
+    if (status !== "all" && bucket !== status) continue;
+    inScope++;
+    const c = h.claimed;
+    const base = { key: h.key, tokenId: h.tokenId, wallet: h.wallet, walletLabel: h.walletLabel, status: h.status, pair: h.pair || null, bucket };
+    if (h.status === "unavailable" || ["unsupported", "undecodable", "not-scanned"].includes(c.state)) {
+      complete = false;
+      const reason = h.status === "unavailable" ? h.statusReason : c.reason;
+      (c.state === "not-scanned" ? partial : unsupported).push({ key: h.key, tokenId: h.tokenId, state: h.status === "unavailable" ? "unavailable" : c.state, reason });
+      positions.push({ ...base, tokens: [], usdHistorical: null, pricedSubtotal: 0, records: 0, lastT: null, state: h.status === "unavailable" ? "unavailable" : c.state, reason, included: false });
+      continue;
+    }
+    if (c.state !== "complete") { complete = false; partial.push({ key: h.key, tokenId: h.tokenId, state: c.state, reason: c.reason }); }
+    const recs = claimStore.rows(h.tokenId, h.wallet).filter((r) => !r.unavailable)
+      .filter((r) => (from == null || (r.t != null && r.t >= from)) && (to == null || (r.t != null && r.t <= to)));
+    const ptoks = new Map();
+    let pHist = 0, pUnpriced = 0, lastT = null;
+    const sub = subs[bucket];
+    sub.positions++;
+    for (const r of recs) {
+      const r0 = BigInt(r.fee0 || "0"), r1 = BigInt(r.fee1 || "0");
+      addTok(tokens, h.token0, r0); addTok(tokens, h.token1, r1);
+      addTok(ptoks, h.token0, r0); addTok(ptoks, h.token1, r1);
+      addTok(sub.tokens, h.token0, r0); addTok(sub.tokens, h.token1, r1);
+      const x0 = Number(ethers.formatUnits(r0, h.token0.decimals)), x1 = Number(ethers.formatUnits(r1, h.token1.decimals));
+      const usdRow = r.px ? x0 * r.px.p0 + x1 * r.px.p1 : null;
+      if (usdRow == null) { unpriced++; pUnpriced++; sub.unpriced++; excluded.push({ key: r.key, tokenId: h.tokenId, reason: "no verified price of this claim's moment" }); }
+      else { priced++; hist += usdRow; pHist += usdRow; sub.pricedSubtotal += usdRow; }
+      sub.records++;
+      if (r.t && (!lastT || r.t > lastT)) lastT = r.t;
+      rows.push({ key: r.key, positionKey: h.key, logIndex: Number(String(r.key).split(":")[1]), tokenId: h.tokenId, wallet: h.wallet, walletLabel: h.walletLabel,
+        status: h.status, t: r.t ?? null, block: r.block, tx: r.tx, kind: r.kind, recipient: r.owner || null,
+        tokens: [{ address: h.token0.address, symbol: h.token0.symbol, raw: r0.toString(), amount: x0 },
+                 { address: h.token1.address, symbol: h.token1.symbol, raw: r1.toString(), amount: x1 }],
+        usd: usdRow == null ? null : +usdRow.toPrecision(12), priceSrc: r.px ? r.px.src : null,
+        priceT: r.px ? (r.px.t ?? (r.px.src === "block" ? r.t ?? null : null)) : null });
+    }
+    positions.push({ ...base, tokens: tokList(ptoks), usdHistorical: pUnpriced ? null : +pHist.toPrecision(12), pricedSubtotal: +pHist.toPrecision(12),
+      records: recs.length, lastT, state: c.state, reason: c.reason || null, included: true });
+  }
+  const discovery = sel.wallets.map((w) => {
+    const d = registry.discoveryStatus(w.address);
+    return { wallet: lcAddr(w.address), label: w.label, complete: !!(d && d.complete), scannedFrom: d ? d.scannedFrom : null,
+      deployBlock: d ? d.deployBlock : null, error: d ? d.error : "no discovery for this wallet" };
+  });
+  if (discovery.some((d) => !d.complete)) complete = false;
+  rows.sort((a, b) => (b.t || 0) - (a.t || 0) || b.block - a.block);
+  const tokenTotals = tokList(tokens);
+  // Today's prices, separately: only when every token has one.
+  let current = null;
+  if (tokenTotals.length) {
+    const prices = tokenTotals.map((t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] ?? null : currentPrice(t.address) ?? null));
+    current = prices.every((p) => p != null)
+      ? { usd: +tokenTotals.reduce((s, t, i) => s + t.amount * prices[i], 0).toPrecision(12), note: "the same token amounts at today's prices; not what they were worth when claimed" }
+      : { usd: null, note: "a claimed token has no current price, so there is no current-price figure" };
+  }
+  const walletName = sel.all ? "All wallets" : sel.wallets[0].label;
+  const statusName = { all: "Open + closed", open: "Open", closed: "Closed", other: "Burned, transferred and unavailable" }[status];
+  const state = !rows.length ? "empty" : complete ? "complete" : "partial";
+  const stateLabel = !rows.length
+    ? (complete ? "Verified: no fees claimed" : "No verified settlements found so far — partial history")
+    : complete ? "Verified claimed — complete history" : "Verified claimed so far — partial history";
+  const note = [
+    "Only this instance's chain and v4 position manager are covered; v3 positions are not reconstructed here. Token ids are shared across managers, so they are never merged by id alone.",
+    "Historical USD uses each settlement's own pool price at its transaction — the price that produced the payout, not an independent valuation; another venue's price for the same token can differ materially.",
+    "Native-asset payouts emit no log and are not reconstructed; such positions are listed as unsupported and excluded.",
+    discovery.some((d) => !d.complete) ? "Position discovery has not swept back to the position manager's deployment block for every wallet, so an older position cannot be ruled out from saved state alone." : "",
+    from != null || to != null ? "A date range is applied to the settlements; coverage still describes the whole history." : "",
+  ].filter(Boolean).join(" ");
+  const subOut = (x) => ({ tokens: tokList(x.tokens), usdHistorical: x.unpriced ? null : +x.pricedSubtotal.toPrecision(12),
+    pricedSubtotal: +x.pricedSubtotal.toPrecision(12), records: x.records, positions: x.positions });
+  return {
+    ok: true, at: registry.at,
+    scope: { chainId: Number(cfg.chainId), positionManager: lcAddr(cfg.contracts.v4.positionManager),
+      wallets: sel.wallets.map((w) => ({ address: lcAddr(w.address), label: w.label })), status, from, to },
+    label: `Total claimed fees · ${walletName} · ${statusName}`,
+    state, stateLabel,
+    verifiedZero: complete && !rows.length,
+    tokens: tokenTotals,
+    usd: { historical: unpriced ? null : +hist.toPrecision(12), pricedSubtotal: +hist.toPrecision(12), pricedRecords: priced, unpricedRecords: unpriced, excluded },
+    current,
+    subtotals: { open: subOut(subs.open), closed: subOut(subs.closed), other: subOut(subs.other) },
+    positions, rows,
+    coverage: { positionsTotal: inScope, positionsComplete: positions.filter((p) => p.state === "complete").length, partial, unsupported, discovery, note },
+    pricing: PRICING,
+  };
+}
+const REGISTRY_EVERY_MS = 10 * 60 * 1000;
+function refreshRegistry() {
+  if (!registry || !CLAIM_WRITER) return null;
+  return registry.refresh();
+}
+
+/**
+ * Fix each of a position's claims at the USD prices of its own moment: the pool
+ * price the scanner read at the claim's block with the numeraire at that block,
+ * else the hourly price log within three hours. A claim with neither keeps no
+ * price, and the summary values it at today's prices and says so. A price once
+ * fixed is kept with the record, so this only does work for new claims.
+ */
+/**
+ * The hourly price log has held mis-scaled rows (a token off by 1e12 after a
+ * decimals slip), which would value a claim at about nothing. A log row is used
+ * for a claim only when it agrees with the pool price the scanner read at that
+ * claim (within 1.5x on the pair's ratio). Otherwise it is refused: the claim
+ * keeps its exact token amounts and has no historical USD value.
+ */
+function priceLogImplausible(lp, r, a, b) {
+  if (!(lp.p0 > 0) || !(lp.p1 > 0)) return "a non-positive price";
+  // Being near today's price says nothing about a past price, so without the pool
+  // price the scanner read at the claim there is nothing to verify the row against.
+  if (!r.sqrtP) return "no pool price at the claim to verify the price-log row against";
+  const pool = u.priceFromSqrt(BigInt(r.sqrtP), a.decimals, b.decimals);   // token1 per token0
+  const ratio = (lp.p0 / lp.p1) / pool;
+  return pool > 0 && ratio < 1.5 && ratio > 1 / 1.5 ? null : `its ratio is ${ratio.toPrecision(3)}x the pool price at the claim`;
+}
+async function priceClaims(id) {
+  let changed = 0;
+  // Capital events are priced too: a deposit's own price is what makes an income
+  // figure possible at all.
+  for (const r of claimStore.rows(id, null, { capital: true })) {
+    if (r.px || r.unavailable) continue;
+    let px = null;
+    try {
+      const [a, b] = await Promise.all([u.getToken(r.token0, provider, Number(cfg.chainId)), u.getToken(r.token1, provider, Number(cfg.chainId))]);
+      if (a.decimalsOk !== true || b.decimalsOk !== true) continue;   // no decimals, no price
+      const m = { t0: { address: r.token0, decimals: a.decimals, symbol: a.symbol }, t1: { address: r.token1, decimals: b.decimals, symbol: b.symbol } };
+      if (r.sqrtP) {
+        const w = await getWethUsd(r.block);
+        if (w != null) {
+          const current = u.priceFromSqrt(BigInt(r.sqrtP), a.decimals, b.decimals);
+          const { usd0, usd1 } = priceSides({ token0: m.t0, token1: m.t1, prices: { current } }, w);
+          if (usd0 != null && usd1 != null && isFinite(usd0) && isFinite(usd1)) px = { p0: usd0, p1: usd1, src: "block", t: r.t ?? null };
+        }
+      }
+      if (!px && r.t) {
+        const lp = pricesFromLog(m, r.t);
+        const why = lp ? priceLogImplausible(lp, r, a, b) : null;
+        if (lp && !why) px = { ...lp, t: lp.at };
+        else if (why) console.error(`claims: price-log row for ${r.key} rejected: ${why}`);
+      }
+    } catch (err) {
+      console.error(`claims: pricing ${r.key} failed: ${err.shortMessage || err.message}`);
+    }
+    if (px) { claimStore.setPrice(r.key, px); changed++; }
+  }
+  if (changed) claimStore.save();
+  return changed;
+}
 const STATE_DEPTH = 4500; // probed: slot0 answers at -5000 blocks, not at -50000
 
 async function pricesAtBlock(m, block) {
@@ -557,7 +1092,7 @@ function pricesFromLog(m, t) {
   const logKey = (t) => (t.address === ethers.ZeroAddress ? "eth" : t.address.toLowerCase()); // v4 native leg
   const p0 = row[logKey(m.t0)], p1 = row[logKey(m.t1)];
   if (p0 == null || p1 == null || row.eth == null) return null;
-  return { p0, p1, w: row.eth, src: "pricelog" };
+  return { p0, p1, w: row.eth, src: "pricelog", at: Number(best.h) };
 }
 
 // -- Combined portfolio history --------------------------------------------------
@@ -626,20 +1161,39 @@ let latestOpenIds = [];
 // Every token seen across positions, for the owner-balances panel.
 const tokenSet = new Map(); // addrLower -> { address, symbol, decimals }
 
-/** Every operator the owner has ever granted setApprovalForAll on `mgr`, with its current state (from events, re-checked on chain). */
-async function approvedOperators(provider, mgr, owner) {
+/**
+ * Every operator this owner has granted setApprovalForAll on `mgr`.
+ *
+ * The collector's own operator is asked about directly, so its row is right even
+ * where the event history cannot be read: a chain that caps getLogs (Arc refuses
+ * anything over ~1,000 blocks) made this return nothing at all, and the page then
+ * said "No operator approvals" about a wallet that had just approved. Other
+ * operators are discovered from events over whatever range the chain allows, and
+ * the coverage is reported rather than implied.
+ */
+async function approvedOperators(provider, mgr, owner, knownOperator = null) {
   const iface = new ethers.Interface(["event ApprovalForAll(address indexed owner,address indexed operator,bool approved)"]);
   const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
-  let logs = [];
-  try {
-    logs = await provider.getLogs({ address: mgr, fromBlock: 0, toBlock: "latest", topics: [iface.getEvent("ApprovalForAll").topicHash, ethers.zeroPadValue(owner, 32)] });
-  } catch {
-    return [];
-  }
+  const state = async (op) => c.isApprovedForAll(owner, op).catch(() => null);
+
   const seen = new Map();
-  for (const l of logs) seen.set(iface.parseLog(l).args.operator, true);
+  if (knownOperator) seen.set(ethers.getAddress(knownOperator), "configured");
+
+  let coverage = { scannedFrom: null, complete: false, error: "not scanned" };
+  try {
+    const scan = await logs.getLogsRange(provider, { address: mgr, topics: [iface.getEvent("ApprovalForAll").topicHash, ethers.zeroPadValue(owner, 32)] },
+      { from: 0, span: logs.spanFor(cfg), maxRequests: 8 });
+    for (const l of scan.logs) { const op = iface.parseLog(l).args.operator; if (!seen.has(op)) seen.set(op, "event"); }
+    coverage = { scannedFrom: scan.scannedFrom, complete: scan.complete, error: scan.error || null, requests: scan.requests };
+  } catch (err) {
+    coverage = { scannedFrom: null, complete: false, error: err.shortMessage || err.message };
+  }
+
   const out = [];
-  for (const op of seen.keys()) out.push({ address: op, approved: await c.isApprovedForAll(owner, op).catch(() => null) });
+  for (const [op, source] of seen) out.push({ address: op, approved: await state(op), source });
+  // An operator the chain confirms is approved is never dropped for lack of history.
+  out.sort((a, b) => (b.approved === true) - (a.approved === true));
+  out.coverage = coverage;
   return out;
 }
 
@@ -1066,6 +1620,7 @@ async function build() {
         pnlLegs,
         pnlSource,
         collected: collectSummary(p.tokenId, p.token0.decimals, p.token1.decimals, usd0, usd1),
+        claimed: claimedSummary(p.version === 4 && !String(p.tokenId).startsWith("v4-") ? `v4-${p.tokenId}` : String(p.tokenId), p.token0.decimals, p.token1.decimals, usd0, usd1, p.token0.symbol, p.token1.symbol, p.openedBlock ?? null, { token0: p.token0.address, token1: p.token1.address, owner: cfg.ownerAddress }),
         liquidity: p.liquidity,
         pair: `${p.token0.symbol} / ${p.token1.symbol}`,
         symbol0: p.token0.symbol,
@@ -1326,6 +1881,11 @@ function refreshPortfolio() {
 // route sent a 200 header, then its view failed on a 403 from the RPC) took the whole
 // dashboard down with ERR_HTTP_HEADERS_SENT.
 const server = http.createServer((req, res) => {
+  // Counted so the background claim scan can step aside while requests run.
+  activeRequests++;
+  let counted = true;
+  const done = () => { if (counted) { counted = false; activeRequests--; } };
+  res.on("finish", done); res.on("close", done);
   handleRequest(req, res).catch((err) => {
     console.error(`request ${req.method} ${String(req.url).slice(0, 80)} failed: ${err && (err.shortMessage || err.message || err)}`);
     try {
@@ -1494,7 +2054,7 @@ async function handleRequest(req, res) {
         return res.end(JSON.stringify({ ok: false, error: "portfolio still loading" }));
       }
       res.writeHead(200);
-      return res.end(JSON.stringify(d));
+      return res.end(JSON.stringify({ ...d, pricing: PRICING }));
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -1504,6 +2064,19 @@ async function handleRequest(req, res) {
   // Browser-based operator approval (the Wallet page, Approvals tab): the page reads every
   // address from here (settings.json + the operator keystore's public address)
   // and the current approval state from this server's RPC.
+  // Who this instance is on. The wallet page used to hardcode Robinhood's chain id,
+  // name and explorer, which made every network prompt wrong on Arc.
+  if (url.pathname === "/api/chain") {
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(200);
+    return res.end(JSON.stringify({
+      ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
+      rpc: cfg.rpcUrl, explorer: EXPLORER_URL,
+      // Null unless settings verify it: a wallet told the wrong native asset keeps
+      // showing gas under the wrong ticker.
+      nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
+    }));
+  }
   if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
     res.setHeader("Content-Type", "application/json");
     try {
@@ -1526,7 +2099,8 @@ async function handleRequest(req, res) {
       const c = new ethers.Contract(mgr, ["function isApprovedForAll(address,address) view returns (bool)"], provider);
       const approved = operator ? await c.isApprovedForAll(ownerAddr, operator) : null;
       // Other operators still approved (e.g. a replaced keystore's address), so the page can offer to revoke them.
-      const others = (await approvedOperators(provider, mgr, ownerAddr)).filter((o) => o.approved && (!operator || o.address.toLowerCase() !== operator.toLowerCase()));
+      const allOps = await approvedOperators(provider, mgr, ownerAddr, operator);
+      const others = allOps.filter((o) => o.approved && (!operator || o.address.toLowerCase() !== operator.toLowerCase()));
       // Overview of every wallet's approval on this manager, for the page's wallet table.
       const wallets = [];
       for (const a of allowed) wallets.push({ ...a, approved: operator ? await c.isApprovedForAll(a.address, operator).catch(() => null) : null });
@@ -1534,7 +2108,13 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify({
         ok: true, version: v,
         owner: ownerAddr, ownerLabel: ownerEntry.label, operator, posm: ethers.getAddress(mgr),
-        chainId: Number(cfg.chainId), chainName: "Robinhood Chain", rpc: cfg.rpcUrl,
+        operators: allOps.map((o) => ({ address: o.address, approved: o.approved, source: o.source })),
+        operatorsCoverage: allOps.coverage,
+        chainId: Number(cfg.chainId), chainName: chainDisplayName(), rpc: cfg.rpcUrl,
+        // For the page's "add this network" call. Omitted unless the chain's native
+        // asset is verified in settings: declaring the wrong one would register the
+        // network in someone's wallet with gas labelled as a currency it is not.
+        nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
         explorer: EXPLORER_URL, approved, others, wallets,
       }));
     } catch (err) {
@@ -1658,7 +2238,8 @@ async function handleRequest(req, res) {
           const m = await positionMeta(key);
           const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
           p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
-        } catch { p.collected = null; }
+          p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedBlock ?? null, { token0: m.t0.address, token1: m.t1.address, owner: cfg.ownerAddress });
+        } catch { p.collected = null; p.claimed = { status: "unavailable", reason: "this position's token metadata could not be read, so its claims cannot be valued" }; }
         // keep / watch / close / hold, from this row plus the collect history and
         // the hourly fee accrual (main wallet only; watched wallets accrue per wallet).
         const feeHours = {};
@@ -1980,7 +2561,7 @@ async function handleRequest(req, res) {
     const stale = !d || Date.now() - d.at > 15 * 60 * 1000;
     if (fresh || stale) watch.refresh().catch((err) => console.error("watch:", err.shortMessage || err.message));
     res.writeHead(d ? 200 : 202);
-    return res.end(JSON.stringify(d ? { ...d, refreshing: watch.inFlight } : { ok: false, refreshing: true, error: "watched wallets still loading", wallets: [] }));
+    return res.end(JSON.stringify(d ? { ...freshClaims(d), refreshing: watch.inFlight, pricing: PRICING } : { ok: false, refreshing: true, error: "watched wallets still loading", wallets: [] }));
   }
 
   // === sell tab (wallet.html) === tokens a wallet holds and a signable sell quote; nothing is sent by the server.
@@ -2201,6 +2782,150 @@ async function handleRequest(req, res) {
     }));
   }
 
+  // Collection history for ONE position, scoped by chain, position manager and
+  // token id, served independently of the analytics bundle so the card's control
+  // can load it on its own. A scan budget is spent here, so opening the panel is
+  // also what extends coverage backwards.
+  if (url.pathname === "/api/claims") {
+    res.setHeader("Content-Type", "application/json");
+    const id = String(url.searchParams.get("tokenId") || "").replace(/^v4-/, "");
+    const wantChain = url.searchParams.get("chainId");
+    const wantManager = (url.searchParams.get("manager") || "").toLowerCase();
+    const wantWallet = (url.searchParams.get("wallet") || "").toLowerCase() || null;
+    if (!/^[0-9]+$/.test(id)) return res.end(JSON.stringify({ ok: false, error: "a numeric tokenId is required" }));
+    if (wantWallet && !/^0x[0-9a-f]{40}$/.test(wantWallet)) return res.end(JSON.stringify({ ok: false, error: "wallet must be an address" }));
+    if (!claimStore) {
+      return res.end(JSON.stringify({ ok: true, status: "unavailable", rows: [],
+        reason: "this instance has no chain-derived claim scanner configured" }));
+    }
+    // A request for another chain's or another manager's position is answered as
+    // what it is — not this instance's position — rather than with these records.
+    if ((wantChain && Number(wantChain) !== Number(cfg.chainId)) ||
+        (wantManager && wantManager !== String(cfg.contracts.v4.positionManager).toLowerCase())) {
+      return res.end(JSON.stringify({ ok: true, status: "unavailable", rows: [],
+        reason: `this instance serves chain ${cfg.chainId} and manager ${cfg.contracts.v4.positionManager}; the position asked for belongs to a different scope` }));
+    }
+    try {
+      // With the background scan running, the request never scans on its own and
+      // never waits for it: it answers from the progress saved so far.
+      // Saved progress is read as it is; the background scanner prices new records.
+      if (claimMeta(id) && !claimScanner && !claimStore.readOnly) {
+        await scanClaims();
+        await priceClaims(id);
+      }
+      const m0 = claimMeta(id);
+      const wallet = wantWallet || (m0 && m0.owner ? String(m0.owner).toLowerCase() : null);
+      const rows = claimStore.rows(id, wallet);
+      const coverage = claimStore.coverage(id, wallet);
+      // The card's own summary decides the state, so the panel and the tile can
+      // never disagree about completeness or a verified zero.
+      const m = claimMeta(id);
+      let sum = null;
+      if (m) {
+        try {
+          const [a, b] = await Promise.all([u.getToken(m.token0, provider, Number(cfg.chainId)), u.getToken(m.token1, provider, Number(cfg.chainId))]);
+          if (a.decimalsOk === true && b.decimalsOk === true) sum = claimedSummaryNow(`v4-${id}`, a.decimals, b.decimals, null, null, a.symbol, b.symbol, null, { token0: m.token0, token1: m.token1, owner: wallet });
+        } catch {}
+      }
+      const state = sum ? sum.state : !coverage ? "not-scanned" : rows.some((r) => r.unavailable) ? "undecodable" : coverage.coversOpening ? "complete" : coverage.reachedLookbackFloor ? "lookback-reached" : "scanning";
+      return res.end(JSON.stringify({ ok: true,
+        status: !coverage ? "unavailable" : state === "undecodable" ? "unavailable" : coverage.coversOpening ? "ok" : "partial",
+        state, verifiedZero: !!(sum && sum.verifiedZero),
+        // Valued only at each claim's own moment here (no current prices on this
+        // route), so an unpriced record leaves the total null rather than guessed.
+        summary: sum,
+        ...(!coverage ? { reason: m
+          ? "no block range has been scanned for this position yet"
+          : "this position has not been loaded by this instance, so the scanner does not know its pair or owner" }
+          : sum && sum.reason ? { reason: sum.reason } : coverage.gap ? { reason: coverage.gap } : {}),
+        scope: { chainId: Number(cfg.chainId), positionManager: String(cfg.contracts.v4.positionManager).toLowerCase(), tokenId: id, wallet },
+        coverage,
+        scanner: claimScanner ? claimScanner.status() : null,
+        rows: await Promise.all(rows.map(async (r) => {
+          // Format here, where the token metadata is available and cached; the card
+          // must never be handed a raw integer and left to guess at decimals.
+          const fmt = async (raw, addr) => {
+            if (raw == null) return null;
+            try { const t = await u.getToken(addr, provider, Number(cfg.chainId));
+              if (t.decimalsOk !== true) return null;
+              return `${Number(ethers.formatUnits(raw, t.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })} ${t.symbol}`;
+            } catch { return null; }
+          };
+          // USD for this row only at the price of its own moment; a row without one
+          // is not valued here (the card's total says how it values those).
+          let usdRow = null;
+          if (r.px && r.fee0 != null && r.fee1 != null) {
+            try {
+              const [a, b] = await Promise.all([u.getToken(r.token0, provider, Number(cfg.chainId)), u.getToken(r.token1, provider, Number(cfg.chainId))]);
+              if (a.decimalsOk === true && b.decimalsOk === true) {
+                usdRow = +(Number(ethers.formatUnits(r.fee0, a.decimals)) * r.px.p0 + Number(ethers.formatUnits(r.fee1, b.decimals)) * r.px.p1).toFixed(4);
+              }
+            } catch {}
+          }
+          return { t: r.t, block: r.block, tx: r.tx, logIndex: Number(String(r.key).split(":")[1]), kind: r.kind, unavailable: r.unavailable,
+                   recipient: r.owner || null,
+                   fee0: await fmt(r.fee0, r.token0), fee1: await fmt(r.fee1, r.token1),
+                   priceSrc: r.px ? r.px.src : null,
+                   priceT: r.px ? (r.px.t ?? (r.px.src === "block" ? r.t : null)) : null,
+                   usd: usdRow };
+        })),
+      }));
+    } catch (err) {
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+
+  // Every position a wallet has held, open or not, with its status evidence,
+  // closure/transfer/burn dates and its claimed-fee summary for that wallet.
+  if (url.pathname === "/api/positions/history") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const sel = claimScope(url);
+      if (sel.error) { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: sel.error })); }
+      if (!registry) return res.end(JSON.stringify({ ok: false, error: "this instance has no v4 position manager, so there is no position history" }));
+      if (CLAIM_WRITER && Date.now() - registry.at > REGISTRY_EVERY_MS) refreshRegistry();
+      if (!registry.at) {
+        res.writeHead(202);
+        return res.end(JSON.stringify({ ok: false, refreshing: true, error: "position history is still being read" }));
+      }
+      const positions = await Promise.all(registry.entries(sel.set).map(historyEntry));
+      const counts = { open: 0, closed: 0, burned: 0, transferred: 0, unavailable: 0, all: positions.length };
+      for (const p of positions) counts[p.status] = (counts[p.status] || 0) + 1;
+      return res.end(JSON.stringify({ ok: true, at: registry.at, refreshing: registry.inFlight,
+        chainId: Number(cfg.chainId), positionManager: lcAddr(cfg.contracts.v4.positionManager), pricing: PRICING,
+        scanner: claimScanner ? claimScanner.status() : null,
+        wallets: sel.wallets.map((w) => ({ address: lcAddr(w.address), label: w.label, discovery: registry.discoveryStatus(w.address) })),
+        counts, positions }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+
+  // The read-only "Total claimed fees" history: every verified fee settlement of
+  // the selected wallet(s) across their positions, grouped by token address.
+  if (url.pathname === "/api/claims/total") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const sel = claimScope(url);
+      if (sel.error) { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: sel.error })); }
+      if (!registry) return res.end(JSON.stringify({ ok: false, error: "this instance has no v4 position manager, so there is no claim history" }));
+      if (!registry.at) {
+        res.writeHead(202);
+        return res.end(JSON.stringify({ ok: false, refreshing: true, error: "position history is still being read" }));
+      }
+      const status = String(url.searchParams.get("status") || "all").toLowerCase();
+      if (!["all", "open", "closed", "other"].includes(status)) { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: "status must be all, open, closed or other" })); }
+      const num = (k) => { const v = url.searchParams.get(k); return v == null || v === "" ? null : Number(v); };
+      const from = num("from"), to = num("to");
+      if ((from != null && !Number.isFinite(from)) || (to != null && !Number.isFinite(to))) { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: "from and to are millisecond timestamps" })); }
+      return res.end(JSON.stringify(await claimTotal(sel, status, from, to)));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+
   if (url.pathname === "/api/history") {
     res.setHeader("Content-Type", "application/json");
     try {
@@ -2262,7 +2987,7 @@ async function handleRequest(req, res) {
     // Fresh enough: serve it.
     if (!fresh && cache.payload && age < CACHE_MS) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ ...cache.payload, cached: true, loops: loopHealth() }));
+      return res.end(JSON.stringify({ ...freshClaims(cache.payload), cached: true, loops: loopHealth(), pricing: PRICING }));
     }
 
     // Stale (or fresh=1): kick off one rebuild, shared by all callers.
@@ -2283,12 +3008,12 @@ async function handleRequest(req, res) {
     // Refresh button (fresh=1) and the very first request ever wait.
     if (cache.payload && !fresh) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ ...cache.payload, cached: true, refreshing: true, loops: loopHealth() }));
+      return res.end(JSON.stringify({ ...freshClaims(cache.payload), cached: true, refreshing: true, loops: loopHealth(), pricing: PRICING }));
     }
     try {
       const payload = await buildInFlight;
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(payload));
+      return res.end(JSON.stringify({ ...freshClaims(payload), pricing: PRICING }));
     } catch (err) {
       res.writeHead(500, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -2321,7 +3046,10 @@ async function handleRequest(req, res) {
       return res.end("dashboard.html not found next to server.js or in public/");
     }
     const html = fs.readFileSync(found);
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    // The page shell carries the markup the script fills, so a browser holding an
+    // older copy shows a page whose controls simply do not exist. The scripts are
+    // already no-cache; the shell must be too.
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     return res.end(html);
   }
 
@@ -2916,6 +3644,15 @@ if (process.env.LP_RESTARTED_BY === "watchdog" && LOOPS) {
   setTimeout(() => { alerts.send(`♻️ Dashboard restarted by the watchdog after it exited (${process.env.LP_RESTART_REASON || "process gone"}). Check server.log for the cause.`).catch(() => {}); }, 20000);
 }
 server.listen(PORT, HOST, () => {
+  if (claimScanner) {
+    // After the listener is up, so the first requests are never behind it.
+    setTimeout(() => { claimScanner.start(); priceAllClaims().catch(() => {}); }, Number(process.env.LP_CLAIM_SCAN_DELAY_MS || 15000)).unref();
+    if (registry) {
+      setTimeout(() => refreshRegistry(), Number(process.env.LP_REGISTRY_DELAY_MS || 20000)).unref();
+      setInterval(() => refreshRegistry(), REGISTRY_EVERY_MS).unref();
+    }
+    console.log(`claims scan: background scan on (chain ${cfg.chainId}, ${trackedClaimIds().length} position(s) persisted)`);
+  }
   console.log(`Dashboard running at http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`);
   if (HOST === "0.0.0.0") console.log("Bound to all interfaces -- reachable from your network.");
   console.log(`Watching ${cfg.ownerAddress} on chain ${cfg.chainId}`);

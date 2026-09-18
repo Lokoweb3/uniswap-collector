@@ -67,7 +67,7 @@ function create({ cfg, provider }) {
       while (arr.length > 72) arr.shift();
       saveSamples();
     }
-    let fees24h = null, feesWindowH = null;
+    let fees24h = null, feesWindowH = null, liqRange = null;
     const first = arr.find((s) => now - s.t <= 24 * 3600000) || arr[0];
     if (first && now - first.t >= 30 * 60000) {
       // Fees paid to the liquidity that was active, approximated with the current liquidity.
@@ -76,13 +76,18 @@ function create({ cfg, provider }) {
       const f1 = Number(ethers.formatUnits((d1 * L) / Q128, decimals1 || 18));
       const hours = (now - first.t) / 3600000;
       feesWindowH = hours;
+      // The estimate multiplies the window's fee growth by TODAY's active liquidity.
+      // How far the sampled liquidity strayed from that over the window is reported,
+      // so the card can say how much that assumption is carrying.
+      const inWin = arr.filter((x) => x.t >= first.t && x.L != null).map((x) => Number(BigInt(x.L)) / Number(L));
+      if (inWin.length) liqRange = { min: +Math.min(...inWin).toFixed(3), max: +Math.max(...inWin).toFixed(3), samples: inWin.length };
       if (usd0 != null && usd1 != null) fees24h = ((f0 * usd0 + f1 * usd1) / hours) * 24;
     }
     const row = {
       key: `v4:${id}`, version: "v4", name: `${symbol0} / ${symbol1} ${feePct != null ? feePct + "%" : ""}`.trim(), feePct: feePct ?? null, tag: null,
       tvl, vol24h: fees24h != null && feePct ? fees24h / (feePct / 100) : null, fees24h,
       aprPct: fees24h != null && tvl > 0 ? (fees24h / tvl) * 365 * 100 : null,
-      turnover: null, priceChange24h: null, stale: false, direct: true, feesWindowH,
+      turnover: null, priceChange24h: null, stale: false, direct: true, feesWindowH, liqRange,
     };
     direct.set(id, { at: now, row });
     return row;

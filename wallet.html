@@ -1577,7 +1577,10 @@ async function loadAllVaults() {
   grid.innerHTML = data.chains.map((c) => {
     const v = c.vault || {}, t = c.treasury || {};
     const art = v.art || {};
-    const unit = (v.chain && v.chain.unit) || (v.balances && v.balances[0] && v.balances[0].symbol) || '';
+    // Never inferred from balances[0]: on an older instance that row is a zero
+    // native balance ("ETH" on Robinhood), which mislabelled a USDG treasury.
+    // An instance that does not state its unit gets no ticker rather than a wrong one.
+    const unit = t.unit || '';
     const here = c.key === data.current;
     if (!c.ok) {
       return `<div class="balance-item" style="padding:14px">
@@ -1594,7 +1597,7 @@ async function loadAllVaults() {
       : '';
     const picture = art.image
       ? `<img src="${esc(art.image)}" alt="${esc(art.name || 'vault')} on ${esc(c.label)}" style="width:100%;border-radius:10px;display:block">`
-      : `<div class="note" style="height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--rule);border-radius:10px;font-size:11px">no on-chain art from this instance</div>`;
+      : `<div class="note" style="height:120px;display:flex;align-items:center;justify-content:center;text-align:center;border:1px dashed var(--rule);border-radius:10px;font-size:11px;padding:8px">this instance does not serve the token's art yet — restart it on a current build</div>`;
     return `<div class="balance-item" style="padding:14px;display:flex;flex-direction:column;gap:8px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <span style="font-weight:600">${esc(c.label)}</span>
@@ -1803,18 +1806,28 @@ async function transferNFT() {
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
+let STATEMENT_UNIT = '';
 async function loadHistory() {
   try {
     const r = await fetch('/fee-split-ledger.json');
     const data = await r.json();
     if (!data || data.length === 0) return;
 
+    // The ledger's fields are named …Usdg for historical reasons; what they hold is
+    // whatever this instance sweeps into. Ask the instance rather than assume USDG,
+    // which on Arc is a token that does not exist.
+    try {
+      const tr = await (await fetch('/api/treasury', { cache: 'no-store' })).json();
+      if (tr && tr.ok && tr.unit) STATEMENT_UNIT = tr.unit;
+    } catch {}
+    if (!STATEMENT_UNIT) STATEMENT_UNIT = UNIT_SYMBOL || '';
+
     const total = data.reduce((s, r) => s + (r.splitUsdg || 0), 0);
 
     document.getElementById('history-content').innerHTML = `
       <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
         <span class="note" style="letter-spacing:.14em;text-transform:uppercase;font-size:10.5px">Closing balance · all deposits</span>
-        <span style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--gold);text-shadow:0 0 18px var(--glow-gold)">${total.toFixed(2)} USDG</span>
+        <span style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--gold);text-shadow:0 0 18px var(--glow-gold)">${total.toFixed(2)} ${STATEMENT_UNIT}</span>
       </div>
       <div style="overflow-x:auto">
         <table>
@@ -1835,9 +1848,9 @@ async function loadHistory() {
                 <td>${new Date(r.timestamp).toLocaleDateString()}</td>
                 <td>${r.wallet || 'Main'}</td>
                 <td>#${r.positionId}</td>
-                <td>${(r.totalCollectedUsdg || 0).toFixed(2)} USDG</td>
+                <td>${(r.totalCollectedUsdg || 0).toFixed(2)} ${STATEMENT_UNIT}</td>
                 <td>${r.splitPct || 10}%</td>
-                <td style="color:var(--gold)">${(r.splitUsdg || 0).toFixed(4)} USDG</td>
+                <td style="color:var(--gold)">${(r.splitUsdg || 0).toFixed(4)} ${STATEMENT_UNIT}</td>
                 <td><a href="${EXPLORER}/tx/${r.splitTxHash}" target="_blank">${short(r.splitTxHash || '')}</a></td>
               </tr>
             `).join('')}

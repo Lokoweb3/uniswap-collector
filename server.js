@@ -1935,7 +1935,11 @@ async function handleRequest(req, res) {
   if (url.pathname === "/wallet" || url.pathname === "/wallet.html") {
     try {
       const html = fs.readFileSync(path.join(__dirname, "wallet.html"));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      // Same reason the dashboard shell is no-cache: this page carries its own
+      // markup and script inline, so a browser holding an older copy keeps showing
+      // old labels and missing controls long after the server was fixed. That is
+      // what made a corrected vault page still read "493.293396 ETH".
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(html);
     } catch {
       res.writeHead(404, { "Content-Type": "text/plain" });
@@ -3140,7 +3144,14 @@ async function treasuryView() {
     const [raw, dec] = await Promise.all([usdg.balanceOf(ts.tba), usdg.decimals()]);
     balanceUsdg = Number(ethers.formatUnits(raw, dec));
   }
-  return { ok: true, ...ts, balanceUsdg, ...treasuryLedger.summary(), explorer: EXPLORER_URL };
+  // What that balance is denominated in. Every consumer used to assume USDG, or
+  // guess from the first balance row -- which on Robinhood is a zero ETH row, so the
+  // vault card labelled 493.293396 USDG as ETH. The payload says it instead.
+  const unitSymbol = (cfg.numeraire && cfg.numeraire.symbol)
+    || (cfg.usdReference && cfg.usdReference.stableSymbol)
+    || (cfg.tokens && cfg.tokens.stableSymbol)
+    || "USDG";
+  return { ok: true, ...ts, balanceUsdg, unit: unitSymbol, ...treasuryLedger.summary(), explorer: EXPLORER_URL };
 }
 
 /**

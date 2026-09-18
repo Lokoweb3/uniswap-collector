@@ -167,20 +167,22 @@ assert.match(b[1].note, /only 10.0 days/);
 const none = benchmarks({ bookSeries: [], ethSeries, stakingSamples, now });
 assert.strictEqual(none[0].portfolioPct, null);
 
-// A chain whose unit of account is already a dollar (Arc prices in USDC) has no
-// separate ETH or USDG to hold. The comparison is withheld rather than printed as
-// +0.00 %, which reads as a measured result for an asset nobody here holds.
+// An instance that records no independent ETH price history -- it prices in a unit
+// fixed at $1.00 by configuration -- has no ETH or USDG benchmark to report. It is
+// withheld rather than printed as +0.00 %, which would pass a configured rate off
+// as a measured market result. The stablecoin column, where it is shown, is that
+// configured $1.00 baseline and not a measurement either.
 {
   const flat = [{ t: now - 10 * DAY, p: 1 }, { t: now, p: 1 }];   // what priceHours.eth is there
-  const asUnit = benchmarks({ bookSeries, ethSeries: flat, stakingSamples, stakingRewards, principal: 3.0, ethIsUnit: true, now, windows: [7, 30] });
-  for (const bb of asUnit) {
-    assert.strictEqual(bb.ethPct, null, "no ETH benchmark where the numeraire is the dollar");
-    assert.strictEqual(bb.usdgPct, null, "and no USDG benchmark either");
+  const untracked = benchmarks({ bookSeries, ethSeries: flat, stakingSamples, stakingRewards, principal: 3.0, ethTracked: false, now, windows: [7, 30] });
+  for (const bb of untracked) {
+    assert.strictEqual(bb.ethPct, null, "no ETH benchmark without a measured ETH history");
+    assert.strictEqual(bb.usdgPct, null, "and no USDG baseline to compare against either");
   }
-  assert.strictEqual(+asUnit[1].portfolioPct.toFixed(6), 10, "the portfolio's own return is unaffected");
-  const asAsset = benchmarks({ bookSeries, ethSeries: flat, stakingSamples, stakingRewards, principal: 3.0, now, windows: [30] });
-  assert.strictEqual(asAsset[0].usdgPct, 0, "where those assets exist, the columns still report");
-  assert.strictEqual(+asAsset[0].ethPct.toFixed(6), 0, "a genuinely flat ETH price is 0 %, not withheld");
+  assert.strictEqual(+untracked[1].portfolioPct.toFixed(6), 10, "the portfolio's own return is unaffected");
+  const tracked = benchmarks({ bookSeries, ethSeries: flat, stakingSamples, stakingRewards, principal: 3.0, now, windows: [30] });
+  assert.strictEqual(tracked[0].usdgPct, 0, "where a history is tracked, the baseline is shown");
+  assert.strictEqual(+tracked[0].ethPct.toFixed(6), 0, "and a genuinely flat ETH price is 0 %, not withheld");
 }
 
 // Flows only count wallet-boundary transfers: sent (out, -) and received (in, +).

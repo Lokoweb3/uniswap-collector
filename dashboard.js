@@ -1321,7 +1321,11 @@ function incomeEvents(){
   const ev = [];
   for (const r of historyRows){
     if (!r.t) continue; // close events carry fees net of principal, so they count too
-    ev.push({ t: r.t, type: 'LP fees', wallet: r.wallet || 'Main', what: r.pair + (r.principal ? ' (on close)' : ''), amounts: `${amount(r.f0)} ${r.sym0} + ${amount(r.f1)} ${r.sym1}`, usd: r.usd, approx: r.usd != null && !r.locked, tx: r.tx || '' });
+    // The identity fields travel with the row: the tax export has to decide whether
+    // a ledger collect and a chain settlement are the same economic event, and a
+    // transaction hash alone cannot say that (one transaction can settle several).
+    ev.push({ t: r.t, type: 'LP fees', wallet: r.wallet || 'Main', what: r.pair + (r.principal ? ' (on close)' : ''), amounts: `${amount(r.f0)} ${r.sym0} + ${amount(r.f1)} ${r.sym1}`, usd: r.usd, approx: r.usd != null && !r.locked, tx: r.tx || '',
+      tokenId: r.nftId != null ? String(r.nftId) : String(r.tokenId ?? '').replace(/^v\d+-/, ''), version: r.version ?? null, block: r.block ?? null });
   }
   for (const t of (stakingD && stakingD.tokens) || []){
     for (const e of t.events || []) ev.push({ t: e.t, type: 'Staking reward', wallet: ownerLabel(), what: t.label, amounts: `${amount(e.amount)} ${t.symbol}`, usd: e.usd, approx: !!e.approx, tx: '' });
@@ -1466,39 +1470,206 @@ function renderAnalytics(){
     + ` — this collector's ledger and its snapshots only. Fees the wallet settled itself are in "Claimed fees — read from chain" below, and the two are never added together.`;
 }
 
-// Tax CSV: one row per income event, USD at receipt.
-//
-// Both sources are exported, each row naming its own: this collector's ledger, and
-// the settlements read from chain. They are NOT summed here and must not be summed
-// blindly by the reader — a settlement this collector performed appears in both, so
-// the tx_hash is the key to reconcile them. Where the collector has never run, the
-// chain rows are the only record of the income, which is why exporting the ledger
-// alone would hand back an empty file for a wallet that has settled fees all year.
+/**
+ * One row per economic fee settlement, from both records of it.
+ *
+ * The same settlement can be written down twice: once by this collector when it
+ * performed the collect, and once by the chain scan that reads every settlement the
+ * wallet made. A tax export must contain each settlement once, so the two records
+ * are matched on the settlement's identity — chain, position manager, position,
+ * transaction, and the log index of the event inside that transaction — not on the
+ * transaction hash, which is not unique: one transaction can settle several
+ * positions, and a single position can be settled twice in one transaction (a
+ * decrease and a collect).
+ *
+ * The collector's ledger records no log index. That is fine while a transaction
+ * holds one settlement for the position, and it is exactly what makes the crowded
+ * case undecidable: two chain settlements for one position in one transaction
+ * cannot be told apart from the ledger's side. Those records are flagged and left
+ * out of the reconciled total rather than guessed at — the reader still gets them,
+ * labelled, and can settle the question by hand.
+ *
+ * Staking rewards are income from a different act and are never matched against
+ * fees; vault splits are a movement of money already counted as income, so they
+ * are carried for the record and counted in no total.
+ */
+function reconcileIncome({ events = [], chain = null, splits = [], chainId = null, managers = {} }){
+  const lc = v => String(v ?? '').toLowerCase();
+  const tid = v => String(v ?? '').replace(/^v\d+-/, '');
+  const pairOf = new Map(((chain && chain.positions) || []).map(p => [tid(p.tokenId), p.pair || '']));
+  const key = (c, m, id, tx) => [c ?? '', lc(m), tid(id), lc(tx)].join('|');
+  const loose = (c, id, tx) => [c ?? '', tid(id), lc(tx)].join('|');
+
+  // Group both records by the identity they share.
+  const groups = new Map(), byLoose = new Map();
+  const group = (k, c, m, id, tx) => {
+    if (!groups.has(k)) {
+      const g = { k, chainId: c, manager: lc(m), tokenId: tid(id), tx: lc(tx), chain: [], ledger: [] };
+      groups.set(k, g);
+      const l = loose(c, id, tx);
+      byLoose.set(l, [...(byLoose.get(l) || []), g]);
+    }
+    return groups.get(k);
+  };
+  for (const r of (chain && chain.rows) || []) {
+    const p = String(r.positionKey || '').split(':');
+    const c = p[0] ? Number(p[0]) : chainId;
+    const m = p[1] || managers[4] || '';
+    group(key(c, m, r.tokenId, r.tx), c, m, r.tokenId, r.tx).chain.push(r);
+  }
+  const orphans = [];                       // ledger rows whose identity is incomplete
+  for (const x of events) {
+    if (x.type !== 'LP fees') continue;
+    if (!x.tx || !x.tokenId) { orphans.push({ x, why: !x.tx ? 'the collector recorded no transaction hash, so this collect cannot be matched against the chain record' : 'the collector recorded no position id, so this collect cannot be matched against the chain record' }); continue; }
+    const m = managers[x.version] || '';
+    const k = key(chainId, m, x.tokenId, x.tx);
+    if (groups.has(k)) { groups.get(k).ledger.push(x); continue; }
+    // No exact match. Before treating it as a settlement the chain scan has not
+    // seen, check whether the chain knows this position and transaction under a
+    // different manager: that is a disagreement, not a second settlement.
+    const near = byLoose.get(loose(chainId, x.tokenId, x.tx)) || [];
+    if (near.length === 1 && !m) { near[0].ledger.push(x); continue; }   // manager unknown here: the chain record supplies it
+    if (near.length) { orphans.push({ x, why: `the chain record for this position and transaction is under position manager ${near.map(g => g.manager).join(', ')}, which is not the one the collector recorded (${lc(m) || 'none'})` }); continue; }
+    group(k, chainId, m, x.tokenId, x.tx).ledger.push(x);
+  }
+
+  const rows = [];
+  const basisOf = r => r.usd == null ? 'unpriced'
+    : r.priceSrc === 'block' ? 'at settlement (same-block swap)' : `at settlement (${r.priceSrc || 'pool'})`;
+  const chainRow = (g, r, extra) => ({
+    t: r.t, type: 'LP fees', chainId: g.chainId, manager: g.manager, tokenId: g.tokenId, tx: g.tx,
+    logIndex: r.logIndex == null ? '' : r.logIndex,
+    wallet: r.walletLabel || r.wallet, description: `#${g.tokenId} ${pairOf.get(g.tokenId) || ''}`.trim(),
+    amounts: (r.tokens || []).map(t => `${t.amount} ${t.symbol}`).join(' + '),
+    usd: r.usd == null ? null : r.usd, priceBasis: basisOf(r), collectorUsd: null,
+    source: 'chain', matchStatus: 'chain only', counted: r.usd != null, note: '', ...extra,
+  });
+  const ledgerRow = (g, x, extra) => ({
+    t: x.t, type: 'LP fees', chainId: g ? g.chainId : chainId, manager: g ? g.manager : lc(managers[x.version] || ''),
+    tokenId: tid(x.tokenId), tx: lc(x.tx), logIndex: '',
+    wallet: x.wallet || 'Main', description: x.what, amounts: x.amounts,
+    usd: x.usd == null ? null : x.usd,
+    priceBasis: x.usd == null ? 'unpriced' : x.approx ? "today's price (no price recorded at receipt)" : 'at receipt',
+    collectorUsd: x.usd == null ? null : x.usd,
+    source: 'collector ledger', matchStatus: 'collector only', counted: x.usd != null, note: '', ...extra,
+  });
+
+  for (const g of groups.values()) {
+    if (g.chain.length && g.ledger.length) {
+      if (g.chain.length === 1 && g.ledger.length === 1) {
+        // One settlement, two records of it: one row, carrying both.
+        const r = g.chain[0], x = g.ledger[0];
+        rows.push(chainRow(g, r, { source: 'chain + collector ledger', matchStatus: 'matched',
+          collectorUsd: x.usd == null ? null : x.usd,
+          note: x.usd != null && r.usd != null && Math.abs(x.usd - r.usd) > Math.max(0.01, Math.abs(r.usd) * 0.01)
+            ? `the two records value this settlement differently (chain ${r.usd.toFixed(2)}, collector ${x.usd.toFixed(2)}); the chain figure is used` : '' }));
+        continue;
+      }
+      // Several settlements share this transaction and position. The ledger carries
+      // no log index, so which collect is which cannot be established here.
+      const why = `${g.chain.length} chain settlement${g.chain.length === 1 ? '' : 's'} and ${g.ledger.length} collector record${g.ledger.length === 1 ? '' : 's'} share this position and transaction; the collector records no log index, so they cannot be matched one to one`;
+      for (const r of g.chain) rows.push(chainRow(g, r, { matchStatus: 'ambiguous', counted: false, note: why }));
+      for (const x of g.ledger) rows.push(ledgerRow(g, x, { matchStatus: 'ambiguous', counted: false, note: why }));
+      continue;
+    }
+    for (const r of g.chain) rows.push(chainRow(g, r));
+    for (const x of g.ledger) rows.push(ledgerRow(g, x));
+  }
+  for (const o of orphans) rows.push(ledgerRow(null, o.x, { matchStatus: 'ambiguous', counted: false, note: o.why }));
+
+  // Staking is income from a different act: never matched, counted on its own.
+  for (const x of events) {
+    if (x.type === 'LP fees') continue;
+    rows.push({ t: x.t, type: x.type, chainId, manager: '', tokenId: '', tx: lc(x.tx), logIndex: '',
+      wallet: x.wallet || 'Main', description: x.what, amounts: x.amounts, usd: x.usd == null ? null : x.usd,
+      priceBasis: x.usd == null ? 'unpriced' : x.approx ? "today's price (no price recorded at receipt)" : 'at receipt',
+      collectorUsd: null, source: 'collector ledger', matchStatus: 'not applicable', counted: false, note: '' });
+  }
+  // A vault split moves income that is already counted above; it is never income again.
+  for (const r of splits) {
+    if (r.status === 'failed' || !r.splitUsdg) continue;
+    rows.push({ t: Date.parse(r.timestamp) || 0, type: 'Vault split', chainId, manager: '', tokenId: '',
+      tx: lc(r.splitTxHash || ''), logIndex: '', wallet: r.wallet || 'Main',
+      description: `${r.wallet} · ${r.pair || ''} · ${r.splitPct}% of ${r.totalCollectedUsdg} USDG`,
+      amounts: `${r.splitUsdg} USDG`, usd: Number(r.splitUsdg), priceBasis: 'at receipt', collectorUsd: null,
+      source: 'collector ledger', matchStatus: 'not applicable', counted: false,
+      note: 'a share of income already counted above, moved to the treasury; not income again',
+      splitUsdg: Number(r.splitUsdg) });
+  }
+
+  rows.sort((a, b) => a.t - b.t || String(a.tokenId).localeCompare(String(b.tokenId)) || (a.logIndex === '' ? -1 : a.logIndex) - (b.logIndex === '' ? -1 : b.logIndex));
+  const lp = rows.filter(r => r.type === 'LP fees');
+  // Each row is exported rounded to the cent, so the stated total is the sum of
+  // those rounded figures: a reader who adds the column up must land on it exactly.
+  const cents = v => Math.round(v * 100) / 100;
+  const totals = {
+    reconciledUsd: +lp.filter(r => r.counted).reduce((s, r) => s + cents(r.usd), 0).toFixed(2),
+    settlements: lp.filter(r => r.matchStatus !== 'ambiguous').length,
+    matched: lp.filter(r => r.matchStatus === 'matched').length,
+    chainOnly: lp.filter(r => r.matchStatus === 'chain only').length,
+    collectorOnly: lp.filter(r => r.matchStatus === 'collector only').length,
+    ambiguous: lp.filter(r => r.matchStatus === 'ambiguous').length,
+    unpriced: lp.filter(r => r.matchStatus !== 'ambiguous' && r.usd == null).length,
+    stakingUsd: +rows.filter(r => r.type === 'Staking reward').reduce((s, r) => s + (r.usd || 0), 0).toFixed(2),
+  };
+  return { rows, totals };
+}
+
+const INCOME_CSV_COLUMNS = ['date_utc','match_status','source','chain_id','position_manager','position_id','tx_hash','log_index','wallet','type','description','amounts','usd_at_receipt','price_basis','collector_recorded_usd','in_reconciled_total','vault_split_usdg','note'];
+
+/** The CSV text for an export: the header notes, the column row, then the rows. */
+function incomeCsv({ rows, totals }, { partial = null } = {}){
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const n2 = v => v == null ? '' : Number(v).toFixed(2);
+  const lines = [];
+  // The notes ride in the file itself: a spreadsheet outlives the page it came from.
+  lines.push(q(`Reconciled LP fee income: ${totals.reconciledUsd.toFixed(2)} USD across ${totals.settlements} settlements (${totals.matched} recorded by both sources, ${totals.chainOnly} by the chain only, ${totals.collectorOnly} by this collector only).`));
+  if (totals.unpriced) lines.push(q(`${totals.unpriced} settlement(s) have no price record and carry an amount only; they are not in that total.`));
+  if (totals.ambiguous) lines.push(q(`${totals.ambiguous} record(s) could not be matched one to one and are excluded from that total: see match_status "ambiguous" and the note column.`));
+  lines.push(q(`Staking rewards, listed separately: ${totals.stakingUsd.toFixed(2)} USD. Vault splits are a movement of income already counted and are in no total.`));
+  // The page totals the exact values; this file totals the rounded ones, so that the
+  // column adds up to the figure above it. The two can differ by a cent or two.
+  lines.push(q('Each row is rounded to the cent and the totals above are the sums of those rounded rows, so this file adds up exactly; the dashboard totals the unrounded values and can differ by a cent or two.'));
+  if (partial) lines.push(q(`INCOMPLETE EXPORT — ${partial}`));
+  lines.push(INCOME_CSV_COLUMNS.join(','));
+  for (const r of rows) {
+    lines.push([new Date(r.t).toISOString(), r.matchStatus, r.source, r.chainId, r.manager, r.tokenId, r.tx,
+      r.logIndex, r.wallet, r.type, r.description, r.amounts, n2(r.usd), r.priceBasis, n2(r.collectorUsd),
+      r.counted ? 'yes' : 'no', r.splitUsdg == null ? '' : n2(r.splitUsdg), r.note].map(q).join(','));
+  }
+  return lines.join('\n');
+}
+
+// Tax CSV: one row per economic settlement, both records of it on that row.
 $('#taxcsv').addEventListener('click', async e => {
   e.preventDefault();
-  const ev = incomeEvents();
-  let ledger = [];
-  try { ledger = await (await fetch('/fee-split-ledger.json')).json(); } catch(e){}
-  let chain = chainFeesD;
-  if (!chain) { try { const j = await (await fetch('/api/claims/total?wallet=all')).json(); if (j && j.ok) chain = j; } catch(e){} }
-  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const lines = [['date_utc','source','wallet','type','description','amounts','usd_at_receipt','price_basis','tx_hash','vault_split_usdg'].join(',')];
-  for (const x of ev) lines.push([new Date(x.t).toISOString(), 'collector ledger', x.wallet || 'Main', x.type, x.what, x.amounts, x.usd == null ? '' : x.usd.toFixed(2), x.usd == null ? 'unpriced' : x.approx ? 'current price' : 'at receipt', x.tx, ''].map(q).join(','));
-  // One row per recorded vault split (the treasury's share of a pass's swept USDG).
-  for (const r of ledger) if (r.status !== 'failed' && r.splitUsdg) lines.push([r.timestamp, 'collector ledger', r.wallet || 'Main', 'Vault split', `${r.wallet} · ${r.pair || ''} · ${r.splitPct}% of ${r.totalCollectedUsdg} USDG`, `${r.splitUsdg} USDG`, Number(r.splitUsdg).toFixed(2), 'at receipt', r.splitTxHash || '', Number(r.splitUsdg).toFixed(2)].map(q).join(','));
-  // Every fee settlement the wallets made, read from chain, valued at its own
-  // transaction. Withdrawn principal is not income and is already excluded.
-  const pairOf = new Map(((chain && chain.positions) || []).map(p => [String(p.tokenId), p.pair || '']));
-  for (const r of (chain && chain.rows) || []) {
-    lines.push([new Date(r.t).toISOString(), 'chain', r.walletLabel || r.wallet, 'LP fees (settled on chain)',
-      `#${r.tokenId} ${pairOf.get(String(r.tokenId)) || ''}`.trim(),
-      (r.tokens || []).map(t => `${t.amount} ${t.symbol}`).join(' + '),
-      r.usd == null ? '' : r.usd.toFixed(2),
-      r.usd == null ? 'unpriced' : r.priceSrc === 'block' ? 'at settlement (same-block swap)' : `at settlement (${r.priceSrc})`,
-      r.tx, ''].map(q).join(','));
+  const note = $('#taxcsvnote');
+  let splits = [];
+  try { splits = await (await fetch('/fee-split-ledger.json')).json(); } catch(e){}
+  let chain = chainFeesD, failed = null;
+  if (!chain) {
+    try {
+      const j = await (await fetch('/api/claims/total?wallet=all')).json();
+      if (j && j.ok) chain = j; else failed = (j && j.error) || 'the server did not return the claim history';
+    } catch(err){ failed = err.message; }
   }
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lp-income-' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
+  // A ledger-only file looks like a complete record and is not one: the settlements
+  // the wallet made itself are missing from it. Say so and make the reader choose.
+  if (failed) {
+    const msg = `The chain-derived settlements could not be read (${failed}).\n\nA download now would contain this collector's own ledger only — ${incomeEvents().filter(x => x.type === 'LP fees').length} collect(s) — and would be missing every fee the wallet settled itself. It is not a complete income record.\n\nDownload the incomplete ledger-only export anyway?`;
+    if (note) { note.textContent = 'chain settlements unavailable — export is incomplete'; note.classList.add('err'); }
+    if (!confirm(msg)) return;
+  } else if (note) { note.textContent = 'both sources below'; note.classList.remove('err'); }
+
+  const d = lastRender || {};
+  const out = reconcileIncome({ events: incomeEvents(), chain, splits,
+    chainId: CHAIN.id != null ? CHAIN.id : d.chainId, managers: { 4: d.positionManagerV4, 3: d.positionManager } });
+  const csv = incomeCsv(out, { partial: failed ? `the chain-derived settlements could not be read (${failed}); this file holds this collector's ledger only and is missing every fee the wallet settled itself` : null });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (failed ? 'lp-income-INCOMPLETE-ledger-only-' : 'lp-income-') + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
 });
 
 // Collected per local day, from the collects history (cash actually swept).
@@ -3554,16 +3725,19 @@ function renderAttribution(){
   // Benchmarks.
   const B = ($('#attribscope').value === 'main' ? d.mainBenchmarks : d.benchmarks) || d.benchmarks;
   const pct = v => v == null ? '<span class="muted">—</span>' : `<span class="${v < 0 ? 'neg' : ''}">${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}%</span>`;
-  // Only compare against assets this chain actually has. Where the unit of account
-  // is itself the dollar there is no separate ETH or USDG to hold, and a +0.00%
-  // column would read as a measurement rather than as an absence.
+  // A benchmark column needs a price history this instance actually records. Where
+  // it keeps none for ETH or USDG, the columns are withheld rather than printed as
+  // +0.00% — an absent history, not a measured flat market. The stablecoin column,
+  // where it is shown, is a configured $1.00 baseline and says so on hover.
   const BA = d.benchmarkAssets || { eth: 'ETH', stable: 'USDG' };
   const hasEth = !!BA.eth;
+  const stableTitle = esc(BA.stableBasis || 'a configured $1.00 baseline for a dollar stablecoin, not a measured market price');
   $('#benchtable').innerHTML = `<table class="etable">
-    <tr><th class="l">Window</th><th>Portfolio</th>${hasEth ? `<th>Holding ${esc(BA.eth)}</th><th>Holding ${esc(BA.stable)}</th>` : ''}<th>Staking NET</th>${hasEth ? `<th>vs ${esc(BA.eth)}</th>` : ''}<th>vs staking</th><th class="l">Note</th></tr>
+    <tr><th class="l">Window</th><th>Portfolio</th>${hasEth ? `<th>Holding ${esc(BA.eth)}</th><th title="${stableTitle}">Holding ${esc(BA.stable)} <span class="muted">(baseline)</span></th>` : ''}<th>Staking NET</th>${hasEth ? `<th>vs ${esc(BA.eth)}</th>` : ''}<th>vs staking</th><th class="l">Note</th></tr>
     ${B.map(b => `<tr><td class="l">${b.windowDays}d</td><td class="u">${pct(b.portfolioPct)}</td>${hasEth ? `<td>${pct(b.ethPct)}</td><td>${pct(b.usdgPct)}</td>` : ''}<td>${pct(b.stakingPct)}</td>${hasEth ? `<td>${b.portfolioPct != null && b.ethPct != null ? pct(b.portfolioPct - b.ethPct) : '—'}</td>` : ''}<td>${b.portfolioPct != null && b.stakingPct != null ? pct(b.portfolioPct - b.stakingPct) : '—'}</td><td class="l muted">${esc(b.note || '')}</td></tr>`).join('')}
   </table>`;
-  $('#benchnote').textContent = (d.history && d.history.bookSince ? `Book history since ${new Date(d.history.bookSince).toLocaleString()}; main wallet since ${d.history.mainSince ? new Date(d.history.mainSince).toLocaleDateString() : '—'}. Recorded transfers across the wallet boundary are netted out of the return; a window whose transfers cannot be netted, or whose value change no recorded transfer explains, shows no percentage at all.` : 'No value history yet.') + (BA.note ? ' ' + BA.note : '');
+  $('#benchnote').textContent = (d.history && d.history.bookSince ? `Book history since ${new Date(d.history.bookSince).toLocaleString()}; main wallet since ${d.history.mainSince ? new Date(d.history.mainSince).toLocaleDateString() : '—'}. Recorded transfers across the wallet boundary are netted out of the return; a window whose transfers cannot be netted, or whose value change no recorded transfer explains, shows no percentage at all.` : 'No value history yet.')
+    + (BA.note ? ' ' + BA.note : hasEth ? ` The ${BA.stable} column is ${BA.stableBasis || 'a configured $1.00 baseline'}; the ${BA.eth} column is measured from recorded prices.` : '');
   // Per position.
   const P = ($('#attribscope').value === 'book' ? d.positions : d.positions.filter(p => p.key === $('#attribscope').value));
   const wl = k => k === 'main' ? (d.wallets.find(w => w.main) || {}).label || 'Main' : (d.wallets.find(w => w.key === k) || {}).label || shortA(k);

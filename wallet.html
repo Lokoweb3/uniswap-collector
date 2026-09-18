@@ -238,7 +238,18 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     border:1px solid var(--rule);position:relative;   /* the chain tag sits over the art */
   }
   .nft-image svg{width:100%;height:100%;display:block}
+  .nft-image img{width:100%;height:100%;display:block;object-fit:cover}
+  .nft-image [hidden]{display:none}
+  /* The chain the account really lives on, over its own art. Hidden until named. */
+  .chain-tag{
+    position:absolute;top:var(--s2);left:var(--s2);z-index:2;max-width:calc(100% - var(--s4));
+    background:rgba(8,13,24,.86);border:1px solid var(--rule);border-radius:var(--r-pill);
+    padding:3px 9px;font-size:11px;color:var(--muted);line-height:1.4;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
   .nft-info{flex:1;min-width:0}
+  .explorer-links{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-top:var(--s4);font-size:11.5px}
+  .explorer-links span{color:var(--faint)}
   .nft-name{font-family:var(--sans);font-size:20px;font-weight:600;letter-spacing:-.01em;color:var(--ink);margin-bottom:var(--s2);line-height:1.2}
   .nft-name span{color:var(--cyan)!important;font-style:normal;font-weight:600}
   .nft-badge{
@@ -261,7 +272,11 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   .copy-btn:hover{color:var(--cyan);border-color:var(--cyan)}
 
   /* ---- balances -------------------------------------------------------- */
-  .total-value{font-family:var(--mono);font-size:30px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-bottom:2px;line-height:1.2}
+  .total-value{font-family:var(--mono);font-size:30px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-bottom:2px;line-height:1.2;font-variant-numeric:tabular-nums}
+  .total-value[hidden]{display:none}
+  .balance-note{margin-bottom:var(--s4)}
+  /* A qualifier on a symbol, never mistakable for the symbol itself. */
+  .tagline{font-size:10px;letter-spacing:.04em;text-transform:none;color:var(--faint)}
   .balance-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--s3)}
   .balance-item{
     background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-ctl);padding:var(--s3) var(--s3);
@@ -325,16 +340,87 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   .status-error{background:var(--neg-dim);color:var(--neg);border:1px solid var(--red-line)}
   .status-pending{background:var(--warn-dim);color:var(--warn);border:1px solid rgba(255,181,71,.34)}
 
-  /* ---- statement table ------------------------------------------------- */
+  /* ---- statement ------------------------------------------------------- */
   th{color:var(--muted);border-bottom-color:var(--rule);padding:var(--s2) var(--s3);font-size:11px}
   td{padding:9px var(--s3);border-bottom:1px solid var(--rule-soft);font-family:var(--mono);color:var(--ink);white-space:nowrap;vertical-align:middle}
   tbody tr:nth-child(even) td{background:rgba(41,217,255,.02)}
   .empty-state{text-align:center;padding:var(--s8);color:var(--muted);font-family:var(--sans);font-style:normal;font-size:14px;line-height:1.7}
 
+  /* The closing balance, then what each wallet put in, then the rows. */
+  .st-summary{margin-bottom:var(--s4)}
+  .st-closing{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);flex-wrap:wrap}
+  .st-closing-k{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .st-closing-v{font-family:var(--mono);font-size:22px;font-weight:600;color:var(--gold);font-variant-numeric:tabular-nums}
+  .st-unitnote{margin:var(--s2) 0 0;font-size:11.5px;color:var(--muted);max-width:62ch}
+  .st-wallets{list-style:none;margin:var(--s3) 0 0;padding:0;display:grid;gap:var(--s2);
+    grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .st-wallets li{
+    display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:0 var(--s2);
+    background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-ctl);padding:var(--s2) var(--s3);
+  }
+  .st-w-name{font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .st-w-amt{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;justify-self:end}
+  .st-w-n{grid-column:1/-1;font-size:11px;color:var(--faint)}
+
+  /* Fifty rows without a scroll of the whole page, and a header that stays put. */
+  .st-scroll{max-height:60vh;overflow:auto;border:1px solid var(--rule);border-radius:var(--r-ctl)}
+  .statement{width:100%;border-collapse:separate;border-spacing:0}
+  .statement thead th{
+    position:sticky;top:0;z-index:1;background:var(--card);text-align:left;white-space:nowrap;
+    letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--rule);
+  }
+  .statement td{border-bottom:1px solid var(--rule-soft);padding:7px var(--s3);font-size:12px;line-height:1.5}
+  .statement tbody tr:last-child td{border-bottom:0}
+  .statement tbody tr:hover td{background:var(--raised)}
+  /* The day changes: one hairline, no invented per-day subtotal. */
+  .statement tbody tr.st-daybreak td{border-top:1px solid var(--rule)}
+  .statement tbody tr:first-child td{border-top:0}
+  .statement th.st-num,.statement td.st-num{text-align:right;font-variant-numeric:tabular-nums}
+  .statement .st-when{white-space:nowrap}
+  .st-day{display:inline-block;min-width:8.5em;color:var(--ink)}
+  .st-time{color:var(--faint)}
+  .statement .st-wallet{font-family:var(--sans);color:var(--ink)}
+  .statement .st-pos{color:var(--muted)}
+  .statement .st-pct{color:var(--muted)}
+  .statement .st-split{color:var(--gold);font-weight:600}
+  .statement .st-tx a,.statement .st-tx span{font-family:var(--mono);font-size:11.5px}
+  .statement .st-tx span{color:var(--muted)}
+  .st-foot{margin:var(--s2) 0 0;font-size:11.5px;color:var(--faint)}
+
+  /* ---- every chain's vault, side by side -------------------------------- */
+  .vcard{
+    background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-ctl);
+    padding:var(--s3);display:flex;flex-direction:column;gap:var(--s3);min-width:0;
+  }
+  .vcard-here{border-color:var(--gold-line)}
+  .vcard-head{display:flex;align-items:center;gap:var(--s3)}
+  .vcard-id{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+  .vcard-name{font-size:13.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vcard-tag{font-size:11px;color:var(--muted);align-self:flex-start}
+  .vcard-tag-here{color:var(--cyan)}
+  /* The token's picture identifies the card; the figures below are what it is for. */
+  .vcard-art{width:64px;height:64px;flex:none;border-radius:var(--r-ctl);display:block;object-fit:cover;background:var(--bg)}
+  /* No art from that instance: an empty frame of the same size, not a paragraph. */
+  .vcard-art-empty{border:1px dashed var(--rule);background:var(--bg)}
+  .vcard-figures{margin:0;display:grid;grid-template-columns:1fr auto;gap:var(--s1) var(--s3);align-items:baseline}
+  .vcard-figures dt{font-size:11.5px;color:var(--muted);min-width:0}
+  .vcard-figures dd{margin:0;font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--ink);
+    text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  .vcard-sub{font-family:var(--sans);font-size:11px;font-weight:400;color:var(--faint)}
+  /* An absence reads as an absence: never a dash that could pass for zero. */
+  .vcard-none{font-family:var(--sans);font-size:11.5px;font-weight:400;color:var(--faint)}
+  .vcard-addr{font-family:var(--mono);font-size:10.5px;color:var(--faint);word-break:break-all;line-height:1.5}
+  .vcard-foot{font-size:11px;color:var(--faint);line-height:1.5}
+  .vcard-warn{font-size:11px;color:var(--warn);line-height:1.5}
+  .vcard-offline{font-size:12px;color:var(--neg)}
+  .vcard-down{gap:var(--s2)}
+
   /* ---- info grid, loading, locked -------------------------------------- */
   .kv{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3) var(--s4);margin-bottom:var(--s4)}
   .kv .k{font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
   .kv .val{font-family:var(--mono);font-size:13px;color:var(--ink);overflow-wrap:anywhere}
+  .kv .val-sub{color:var(--faint);font-size:11.5px}
+  .kv > [hidden]{display:none}
   /* Reserve the row's height before the number arrives: no layout shift. */
   .skeleton{background:linear-gradient(90deg,var(--raised) 25%,var(--card) 50%,var(--raised) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:20px}
   @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
@@ -381,6 +467,11 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     .split-display{font-size:26px}
     .kv{grid-template-columns:1fr}
     .connect-btn{width:100%}
+    .st-wallets{grid-template-columns:1fr}
+    .st-closing-v{font-size:19px}
+    .st-scroll{max-height:70vh}
+    .statement td,.statement th{padding:6px var(--s2);font-size:11.5px}
+    .st-day{min-width:0;margin-right:6px}
   }
   /* Touch targets stay comfortable where the desktop packs controls tight. */
   .tab button,.tab .btn,.tab .copy-btn,.tab .max-btn{min-height:40px}
@@ -588,7 +679,10 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   <div class="masthead">
     <div>
       <h1>Private <em>Treasury</em></h1>
-      <div class="est">Token-bound account · <b data-chain-name>this network</b> · Est. 2026</div>
+      <!-- The chain is appended only once the instance has named it. An instance
+           that cannot say which chain it serves says nothing here rather than a
+           stand-in phrase, which reads like a value and is not one. -->
+      <div class="est">Token-bound account<span data-id="est-chain"></span> · Est. 2026</div>
     </div>
     <div class="seal">
       <span class="gold">Fee split <b id="seal-split">—</b></span>
@@ -611,47 +705,27 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     <div class="warning-box" id="nft-chain-warning" hidden style="margin-bottom:12px"></div>
     <div class="vhero">
       <div class="nft-image" id="nft-image">
-        <!-- The contract's own art replaces the drawing below once vault-info answers.
-             The tag states the chain the vault is really on, which is not always the
-             chain its metadata claims. -->
-        <div id="nft-chain-tag" class="note" style="position:absolute;top:10px;left:10px;z-index:2;
-          background:rgba(15,23,42,.9);border:1px solid rgba(148,163,184,.35);border-radius:999px;
-          padding:3px 10px;font-size:11px;letter-spacing:.02em"></div>
-        <img id="nft-art" alt="LOKOVault" hidden style="width:100%;height:auto;display:block;border-radius:12px">
-        <svg viewBox="0 0 680 680" xmlns="http://www.w3.org/2000/svg">
-          <rect x="40" y="40" width="600" height="600" rx="32" fill="#0f172a"/>
-          <rect x="60" y="60" width="560" height="560" rx="24" fill="#1e293b"/>
-          <circle cx="100" cy="100" r="6" fill="#3b82f6" opacity="0.6"/>
-          <circle cx="580" cy="100" r="6" fill="#3b82f6" opacity="0.6"/>
-          <circle cx="100" cy="580" r="6" fill="#3b82f6" opacity="0.6"/>
-          <circle cx="580" cy="580" r="6" fill="#3b82f6" opacity="0.6"/>
-          <rect x="190" y="180" width="300" height="280" rx="16" fill="#1e3a5f" stroke="#2d5a8e" stroke-width="2"/>
-          <circle cx="340" cy="310" r="100" fill="#162032" stroke="#3b82f6" stroke-width="3"/>
-          <circle cx="340" cy="310" r="85" stroke="#2563eb" stroke-width="1.5" fill="none" opacity="0.6"/>
-          <circle cx="340" cy="310" r="65" stroke="#1d4ed8" stroke-width="1" fill="none" opacity="0.4"/>
-          <line x1="340" y1="225" x2="340" y2="395" stroke="#3b82f6" stroke-width="1.5" opacity="0.5"/>
-          <line x1="255" y1="310" x2="425" y2="310" stroke="#3b82f6" stroke-width="1.5" opacity="0.5"/>
-          <line x1="280" y1="250" x2="400" y2="370" stroke="#3b82f6" stroke-width="1" opacity="0.3"/>
-          <line x1="400" y1="250" x2="280" y2="370" stroke="#3b82f6" stroke-width="1" opacity="0.3"/>
-          <circle cx="340" cy="310" r="18" fill="#1d4ed8" stroke="#60a5fa" stroke-width="2"/>
-          <circle cx="340" cy="310" r="8" fill="#93c5fd"/>
-          <path d="M390 300 Q410 300 410 310 Q410 320 390 320" stroke="#60a5fa" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <circle cx="220" cy="210" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
-          <circle cx="460" cy="210" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
-          <circle cx="220" cy="430" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
-          <circle cx="460" cy="430" r="8" fill="#0f2744" stroke="#2563eb" stroke-width="1.5"/>
-          <ellipse cx="160" cy="274" rx="22" ry="10" fill="#fbbf24" stroke="#d97706" stroke-width="1.5"/>
-          <text x="160" y="278" text-anchor="middle" font-size="10" fill="#78350f" font-weight="700" font-family="sans-serif">$</text>
-          <ellipse cx="520" cy="344" rx="22" ry="10" fill="#fbbf24" stroke="#d97706" stroke-width="1.5"/>
-          <text x="520" y="348" text-anchor="middle" font-size="10" fill="#78350f" font-weight="700" font-family="sans-serif">$</text>
-          <rect x="430" y="170" width="80" height="30" rx="15" fill="#1d4ed8" stroke="#60a5fa" stroke-width="1.5"/>
-          <text id="svg-pct" x="470" y="191" text-anchor="middle" font-size="13" fill="#bfdbfe" font-weight="700" font-family="sans-serif">10%</text>
-          <rect x="170" y="170" width="100" height="24" rx="12" fill="#0f2744" stroke="#2563eb" stroke-width="1"/>
-          <text x="220" y="187" text-anchor="middle" font-size="11" fill="#93c5fd" font-family="sans-serif" data-chain-id-text>Chain —</text>
-          <text x="340" y="510" text-anchor="middle" font-size="28" fill="#e2e8f0" font-weight="700" font-family="sans-serif">LOKOVault</text>
-          <text x="340" y="540" text-anchor="middle" font-size="13" fill="#64748b" font-family="sans-serif">EIP-6551 Token Bound Account</text>
-          <text x="340" y="570" text-anchor="middle" font-size="11" fill="#475569" font-family="sans-serif" data-chain-name-text>#1</text>
-          <line x1="200" y1="590" x2="480" y2="590" stroke="#1e3a5f" stroke-width="1"/>
+        <!-- The contract's own art replaces the placeholder below once vault-info
+             answers. The tag names the chain the vault is really on, which is not
+             always the chain its metadata claims; it stays hidden until an instance
+             actually names one.
+
+             The placeholder carries no figures on purpose. The drawing that used to
+             sit here showed two gold coins bearing a currency sign, a percentage
+             badge and a chain label with an em dash for its name; on an instance that
+             serves no art those read as this vault's own currency, split and chain,
+             and none of them were. An empty frame says the honest thing: the artwork
+             is not available here. -->
+        <div id="nft-chain-tag" class="chain-tag" hidden></div>
+        <img id="nft-art" alt="LOKOVault" hidden>
+        <svg id="nft-art-placeholder" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg"
+          role="img" aria-label="Artwork not available from this instance">
+          <rect x="1" y="1" width="238" height="238" rx="16" style="fill:var(--raised);stroke:var(--rule);stroke-width:1"/>
+          <g style="fill:none;stroke:var(--rule);stroke-width:2;stroke-linecap:round">
+            <rect x="68" y="82" width="104" height="82" rx="10"/>
+            <circle cx="120" cy="123" r="21"/>
+            <path d="M120 102v-9M120 144v9M99 123h-9M141 123h9"/>
+          </g>
         </svg>
       </div>
       <div class="nft-info">
@@ -671,10 +745,11 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
           <span class="address-label">NFT owner</span>
           <span class="address-val" id="nft-owner">Loading...</span>
         </div>
-        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-          <a id="blockscout-nft" href="#" target="_blank" style="font-size:11px">View NFT on Blockscout ↗</a>
-          <span style="color:var(--faint)">·</span>
-          <a id="blockscout-tba" href="#" target="_blank" style="font-size:11px">View TBA ↗</a>
+        <!-- Hidden until the instance names an explorer to link to. -->
+        <div class="explorer-links" id="explorer-links" hidden>
+          <a id="blockscout-nft" href="#" target="_blank" rel="noopener">View NFT ↗</a>
+          <span aria-hidden="true">·</span>
+          <a id="blockscout-tba" href="#" target="_blank" rel="noopener">View vault account ↗</a>
         </div>
       </div>
     </div>
@@ -683,10 +758,15 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   <!-- Balances -->
   <div class="card">
     <div class="card-title">Account balance <span id="last-refresh"></span></div>
-    <div class="total-value" id="total-usd">$—</div>
-    <div class="note" style="margin-bottom:16px">Available balance · held by the vault<span data-id="vault-unit-note"></span></div>
+    <!-- The headline figure is the vault's holding in the unit this instance
+         reports in. No currency sign is printed: one would be this page’s guess,
+         not the instance's answer. An instance that names no unit shows no
+         headline at all and lets the per-token rows below, which carry their own
+         symbols, speak for themselves. -->
+    <div class="total-value" id="total-usd" hidden></div>
+    <div class="note balance-note">Available balance · held by the vault<span data-id="vault-unit-note"></span></div>
     <div class="balance-grid" id="balance-grid">
-      <div class="balance-item"><div class="balance-symbol">Loading...</div><div class="skeleton" style="margin-top:8px"></div></div>
+      <div class="balance-item"><div class="balance-symbol">Loading…</div><div class="skeleton" style="margin-top:8px"></div></div>
     </div>
   </div>
 
@@ -702,7 +782,9 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
       <div class="slider-wrap">
         <input type="range" id="split-slider" min="0" max="20" value="10"
           oninput="onSlider(this.value)">
-        <div class="slider-labels"><span>0%</span><span>10%</span><span>20% max</span></div>
+        <!-- Filled from the slider's own min/max so the scale can never disagree
+             with the control it labels. -->
+        <div class="slider-labels" id="split-scale"></div>
       </div>
       <div class="warning-box" id="split-warning"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></svg><span>High split rate — you keep less of your fees</span></div>
       <button class="btn btn-gold" id="update-split-btn" onclick="updateSplit()">Update split %</button>
@@ -755,8 +837,12 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
       <div><div class="k">Name</div><div class="val">LOKOVault</div></div>
       <div><div class="k">Symbol</div><div class="val">LKVAULT</div></div>
       <div><div class="k">Token ID</div><div class="val">#1</div></div>
-      <div><div class="k">Chain</div><div class="val"><span data-chain-name>—</span> (<span data-chain-id>—</span>)</div></div>
+      <!-- Shown only once the instance has named its chain. A Chain row filled with
+           em dashes is a label with no value behind it, and reads as if the chain were
+           unknown to the contract rather than unreported by this build. -->
+      <div id="kv-chain" hidden><div class="k">Chain</div><div class="val"><span data-chain-name></span> <span class="val-sub" data-chain-id></span></div></div>
     </div>
+    <div class="note" id="kv-chain-absent" hidden>This instance does not report which chain it is serving, so the chain is left out rather than guessed.</div>
     <div id="transfer-section" style="display:none">
       <div style="background:var(--red-soft);border:1px solid var(--red-line);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--red)">
         ⚠️ Transferring this NFT gives the recipient full control of the vault and all funds inside.
@@ -1402,19 +1488,32 @@ const initApprove = ((root, VERSION) => {
 // ── Config ────────────────────────────────────────────────────────────────────
 // From the instance serving this page, never hardcoded: the same page is served on
 // Arc, where the chain id, the explorer and even the native currency all differ.
-let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = 'this network', RPC_URL = '', NATIVE_CURRENCY = null, UNIT_SYMBOL = '';
+// CHAIN_NAME stays empty until an instance names itself. Every place that prints it
+// checks first, so a build that does not serve /api/chain leaves the chain out of the
+// page rather than printing a generic stand-in phrase, which looks like an answer.
+let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = '', RPC_URL = '', NATIVE_CURRENCY = null, UNIT_SYMBOL = '';
 const chainReady = fetch('/api/chain', { cache: 'no-store' }).then(r => r.json()).then(c => {
   if (!c || !c.ok) throw new Error('the server did not state its chain');
-  EXPLORER = c.explorer || ''; CHAIN_ID = Number(c.chainId); CHAIN_NAME = c.chainName;
+  EXPLORER = c.explorer || ''; CHAIN_ID = Number(c.chainId); CHAIN_NAME = c.chainName || '';
   RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency; UNIT_SYMBOL = (c.nativeCurrency && c.nativeCurrency.symbol) || '';
-  const un = document.querySelector('[data-id="vault-unit-note"]');
-  if (un && UNIT_SYMBOL) un.textContent = ` (${UNIT_SYMBOL} on ${CHAIN_NAME})`;
-  document.querySelectorAll('[data-chain-name]').forEach(el => { el.textContent = CHAIN_NAME; });
-  document.querySelectorAll('[data-chain-id]').forEach(el => { el.textContent = 'chain ' + CHAIN_ID; });
-  document.querySelectorAll('[data-chain-id-text]').forEach(el => { el.textContent = 'Chain ' + CHAIN_ID; });
-  document.querySelectorAll('[data-chain-name-text]').forEach(el => { el.textContent = '#1 ' + CHAIN_NAME; });
+  paintChainIdentity();
   return c;
-}).catch(e => { console.error('chain identity unavailable:', e.message); return null; });
+}).catch(e => { console.warn('chain identity unavailable:', e.message); paintChainIdentity(); return null; });
+
+// One place decides what a missing chain looks like: nothing at all.
+function paintChainIdentity() {
+  const named = Boolean(CHAIN_NAME);
+  const est = document.querySelector('[data-id="est-chain"]');
+  if (est) est.textContent = named ? ` · ${CHAIN_NAME}` : '';
+  const un = document.querySelector('[data-id="vault-unit-note"]');
+  if (un) un.textContent = UNIT_SYMBOL && named ? ` · reported in ${UNIT_SYMBOL} on ${CHAIN_NAME}` : '';
+  document.querySelectorAll('[data-chain-name]').forEach(el => { el.textContent = CHAIN_NAME; });
+  document.querySelectorAll('[data-chain-id]').forEach(el => { el.textContent = CHAIN_ID ? 'chain ' + CHAIN_ID : ''; });
+  const row = document.getElementById('kv-chain');
+  if (row) row.hidden = !named;
+  const absent = document.getElementById('kv-chain-absent');
+  if (absent) absent.hidden = named;
+}
 
 const NFT_ABI = [
   'function ownerOf(uint256) view returns (address)',
@@ -1456,6 +1555,37 @@ let isOwner = false;
 let balances = {};
 let currentSplitPct = 10;
 
+// ── The unit these figures are counted in ─────────────────────────────────────
+// The ledger's fields are named …Usdg for historical reasons; what they hold is
+// whatever this instance sweeps into — USDC on one chain, USDG on another. Only the
+// instance knows, so it is asked once and the answer is shared by the balance
+// headline, the vaults cards and the statement. When it does not answer, REPORTING_UNIT
+// stays empty and every figure is printed bare: a number with no ticker is merely
+// incomplete, while a number with the wrong ticker is a lie about real money.
+let REPORTING_UNIT = '';
+let unitResolved = false;
+let _treasuryPromise = null;
+function treasuryInfo() {
+  if (!_treasuryPromise) {
+    _treasuryPromise = fetch('/api/treasury', { cache: 'no-store' })
+      .then(r => r.json()).then(t => (t && t.ok ? t : null)).catch(() => null);
+  }
+  return _treasuryPromise;
+}
+async function resolveUnit() {
+  if (unitResolved) return REPORTING_UNIT;
+  await chainReady;
+  const t = await treasuryInfo();
+  REPORTING_UNIT = (t && t.unit) || UNIT_SYMBOL || '';
+  unitResolved = true;
+  return REPORTING_UNIT;
+}
+// A figure and its ticker, or the figure alone. Never a bare currency sign.
+function withUnit(text, unit) { return unit ? `${text} ${unit}` : String(text); }
+function escHtml(x) {
+  return String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 // Load config
 async function loadConfig() {
   try {
@@ -1463,9 +1593,17 @@ async function loadConfig() {
     const c = await r.json();
     nftAddress = c.treasuryNFT;
     tbaAddress = c.treasuryTBA;
-    if (nftAddress) {
-      const nftEl = document.getElementById('nft-address'); nftEl.textContent = short(nftAddress); nftEl.title = nftAddress;
-      const tbaEl = document.getElementById('tba-address'); tbaEl.textContent = short(tbaAddress); tbaEl.title = tbaAddress;
+    // The explorer comes from the chain the instance names. Waiting for it keeps the
+    // links from being written as "/token/0x…", which looks like a link and is not one.
+    await chainReady;
+    const nftEl = document.getElementById('nft-address');
+    const tbaEl = document.getElementById('tba-address');
+    if (nftEl) { nftEl.textContent = nftAddress ? short(nftAddress) : 'not configured'; nftEl.title = nftAddress || ''; }
+    if (tbaEl) { tbaEl.textContent = tbaAddress ? short(tbaAddress) : 'not configured'; tbaEl.title = tbaAddress || ''; }
+    const links = document.getElementById('explorer-links');
+    const canLink = Boolean(EXPLORER && nftAddress);
+    if (links) links.hidden = !canLink;
+    if (canLink) {
       document.getElementById('blockscout-nft').href = `${EXPLORER}/token/${nftAddress}`;
       document.getElementById('blockscout-tba').href = `${EXPLORER}/address/${tbaAddress}`;
     }
@@ -1528,7 +1666,6 @@ async function checkOwnership() {
     const ownEl = document.getElementById('nft-owner'); ownEl.textContent = short(nftOwner); ownEl.title = nftOwner;
     document.getElementById('split-val').textContent = currentSplitPct;
     document.getElementById('split-slider').value = currentSplitPct;
-    document.getElementById('svg-pct').textContent = currentSplitPct + '%';
     document.getElementById('seal-split').textContent = currentSplitPct + '%';
     onSlider(currentSplitPct);
 
@@ -1571,8 +1708,12 @@ async function loadAllVaults() {
   } catch { return; }
   if (!data || !data.ok || !Array.isArray(data.chains) || data.chains.length < 2) return;
 
-  const esc = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const money = (n, unit) => (n == null ? '—' : `${Number(n).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${esc(unit || '')}`.trim());
+  const esc = escHtml;
+  // A figure carries a ticker only when the instance named one. A missing ticker
+  // leaves the number bare; a missing figure leaves the row empty rather than
+  // printing a dash that could be read as zero.
+  const money = (n, unit) => (n == null ? '<span class="vcard-none">not reported</span>'
+    : esc(withUnit(Number(n).toLocaleString(undefined, { maximumFractionDigits: 6 }), unit)));
 
   grid.innerHTML = data.chains.map((c) => {
     const v = c.vault || {}, t = c.treasury || {};
@@ -1583,34 +1724,44 @@ async function loadAllVaults() {
     const unit = t.unit || '';
     const here = c.key === data.current;
     if (!c.ok) {
-      return `<div class="balance-item" style="padding:14px">
-        <div style="font-weight:600;margin-bottom:6px">${esc(c.label)}</div>
-        <div class="bad" style="font-size:12px">not answering on 127.0.0.1:${c.port}</div>
-        <div class="note" style="margin-top:6px;font-size:11px">${esc(c.error || '')}</div>
+      return `<div class="vcard vcard-down">
+        <div class="vcard-head"><span class="vcard-name">${esc(c.label)}</span></div>
+        <div class="vcard-offline">Not answering on 127.0.0.1:${esc(c.port)}</div>
+        ${c.error ? `<div class="vcard-foot">${esc(c.error)}</div>` : ''}
       </div>`;
     }
     // A vault whose own metadata names another chain is called out on its card, not
     // quietly relabelled: the token really does say that, and someone reading it in a
     // wallet will see the wrong chain.
     const mislabel = art.mislabelled
-      ? `<div class="note" style="margin-top:8px;font-size:11px;color:#fbbf24">metadata says "${esc(art.claimedChain)}" (chain ${esc(art.claimedChainId)}) — the token is wrong about itself, not the balance</div>`
+      ? `<div class="vcard-warn">Metadata says “${esc(art.claimedChain)}” (chain ${esc(art.claimedChainId)}) — the token is wrong about itself, not the balance.</div>`
       : '';
+    // A thumbnail, not a hero: these cards exist to put the money side by side, and
+    // a full-width picture pushed every figure off the screen. No art from this
+    // instance means an empty frame of the same size, not a paragraph explaining
+    // itself — a build note does not belong in the picture's place.
     const picture = art.image
-      ? `<img src="${esc(art.image)}" alt="${esc(art.name || 'vault')} on ${esc(c.label)}" style="width:100%;border-radius:10px;display:block">`
-      : `<div class="note" style="height:120px;display:flex;align-items:center;justify-content:center;text-align:center;border:1px dashed var(--rule);border-radius:10px;font-size:11px;padding:8px">this instance does not serve the token's art yet — restart it on a current build</div>`;
-    return `<div class="balance-item" style="padding:14px;display:flex;flex-direction:column;gap:8px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <span style="font-weight:600">${esc(c.label)}</span>
-        <span class="note" style="font-size:11px">${here ? 'showing now' : `<a href="?chain=${esc(c.key)}">switch to manage</a>`}</span>
+      ? `<img class="vcard-art" src="${esc(art.image)}" alt="${esc(art.name || 'vault')} on ${esc(c.label)}">`
+      : `<div class="vcard-art vcard-art-empty" role="img" aria-label="Artwork not available from this instance"></div>`;
+    // Said once per card, quietly, instead of leaving four numbers looking unfinished.
+    const unitNote = unit ? '' : '<div class="vcard-foot">Currency not reported by this instance.</div>';
+    return `<div class="vcard${here ? ' vcard-here' : ''}">
+      <div class="vcard-head">
+        ${picture}
+        <div class="vcard-id">
+          <span class="vcard-name">${esc(c.label)}</span>
+          ${here ? '<span class="vcard-tag vcard-tag-here">showing now · read-write</span>'
+                 : `<a class="vcard-tag" href="?chain=${esc(c.key)}">read-only · switch to manage</a>`}
+        </div>
       </div>
-      ${picture}
-      <div style="display:grid;grid-template-columns:1fr auto;gap:2px 10px;font-size:12px">
-        <span class="note">Balance</span><b>${money(t.balanceUsdg, unit)}</b>
-        <span class="note">Split to vault, all time</span><b>${money(t.totalSplitUsdg, unit)}</b>
-        <span class="note">Current split</span><b>${t.pct == null ? '—' : esc(t.pct) + '%'}${t.max != null ? ` <span class="note">max ${esc(t.max)}%</span>` : ''}</b>
-        <span class="note">Splits recorded</span><b>${t.count == null ? '—' : esc(t.count)}</b>
-      </div>
-      <div class="note mono" style="font-size:10px;word-break:break-all">${esc(v.tba || '')}</div>
+      <dl class="vcard-figures">
+        <dt>Balance</dt><dd>${money(t.balanceUsdg, unit)}</dd>
+        <dt>Split to vault, all time</dt><dd>${money(t.totalSplitUsdg, unit)}</dd>
+        <dt>Current split</dt><dd>${t.pct == null ? '<span class="vcard-none">not reported</span>' : esc(t.pct) + '%'}${t.max != null ? ` <span class="vcard-sub">of ${esc(t.max)}% max</span>` : ''}</dd>
+        <dt>Splits recorded</dt><dd>${t.count == null ? '<span class="vcard-none">not reported</span>' : esc(t.count)}</dd>
+      </dl>
+      ${v.tba ? `<div class="vcard-addr mono" title="${esc(v.tba)}">${esc(v.tba)}</div>` : ''}
+      ${unitNote}
       ${mislabel}
     </div>`;
   }).join('');
@@ -1621,8 +1772,16 @@ async function loadAllVaults() {
 async function loadBalances() {
   if (!tbaAddress) return;
   const grid = document.getElementById('balance-grid');
-  await chainReady;
-  if (!RPC_URL) { grid.innerHTML = '<div class="muted">This page could not read which chain it is serving.</div>'; return; }
+  await resolveUnit();
+  // No chain, no RPC, so no live refresh. Whatever /api/vault-info already reported
+  // stays on screen: overwriting real balances with an apology was the worst of both
+  // — the figures gone and nothing useful in their place.
+  if (!RPC_URL) {
+    if (!Object.keys(balances).length) {
+      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">Balances are not available from this instance.</div>';
+    }
+    return;
+  }
   const rpc = new ethers.JsonRpcProvider(RPC_URL);
 
   try {
@@ -1656,27 +1815,33 @@ async function loadBalances() {
 
 function renderBalances() {
   const grid = document.getElementById('balance-grid');
-  // Show a zero row only for this chain's native asset, which is not ether everywhere.
-  const nativeSym = (NATIVE_CURRENCY && NATIVE_CURRENCY.symbol) || 'ETH';
-  const entries = Object.entries(balances).filter(([,v]) => parseFloat(v.amount) > 0 || v.symbol === nativeSym);
+  const total = document.getElementById('total-usd');
+
+  // The headline is the holding in the unit this instance reports in, with that
+  // unit's own ticker. No unit, no headline — the rows below each carry the symbol
+  // the chain gave them, so nothing is lost by leaving the summary out.
+  const headline = REPORTING_UNIT ? balances[REPORTING_UNIT] : null;
+  if (total) {
+    total.hidden = !headline;
+    total.textContent = headline ? withUnit(parseFloat(headline.amount).toFixed(2), REPORTING_UNIT) : '';
+  }
+
+  // A zero row is kept only for this chain's own native asset, and only when the
+  // instance has named it. Nothing here is assumed to be ether.
+  const nativeSym = (NATIVE_CURRENCY && NATIVE_CURRENCY.symbol) || '';
+  const entries = Object.entries(balances).filter(([, v]) => parseFloat(v.amount) > 0 || (nativeSym && v.symbol === nativeSym));
 
   if (entries.length === 0) {
     grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">No tokens in vault yet</div>';
-    document.getElementById('total-usd').textContent = '$0.00';
     return;
   }
 
   grid.innerHTML = entries.map(([sym, data]) => `
     <div class="balance-item">
-      <div class="balance-symbol">${sym}${data.alsoErc20 ? ' <span class="note" title="On this chain the native asset and this token are one balance seen through two interfaces, not two holdings.">native + ERC-20</span>' : ''}</div>
+      <div class="balance-symbol">${escHtml(sym)}${data.alsoErc20 ? ' <span class="tagline" title="On this chain the native asset and this token are one balance seen through two interfaces, not two holdings.">native + ERC-20</span>' : ''}</div>
       <div class="balance-amount">${parseFloat(data.amount).toLocaleString(undefined, {maximumFractionDigits: 4})}</div>
     </div>
   `).join('');
-
-  // The dollar figure is whatever this instance prices in, not a token called USDG.
-  const unitSym = (UNIT_SYMBOL || (NATIVE_CURRENCY && NATIVE_CURRENCY.symbol) || 'USDG');
-  const unitAmt = parseFloat(balances[unitSym]?.amount || 0);
-  document.getElementById('total-usd').textContent = unitAmt.toFixed(2) !== '0.00' ? '$' + unitAmt.toFixed(2) : '—';
 }
 
 function populateTokenSelect() {
@@ -1695,10 +1860,20 @@ function populateTokenSelect() {
 }
 
 // ── Slider ────────────────────────────────────────────────────────────────────
+// The scale is read off the input, never written next to it: a hand-typed "20% max"
+// beside a slider whose range had moved would be a label for a control that no longer
+// exists. This touches the labels only — the range itself is untouched.
+function paintSplitScale() {
+  const slider = document.getElementById('split-slider');
+  const scale = document.getElementById('split-scale');
+  if (!slider || !scale) return;
+  const min = Number(slider.min || 0), max = Number(slider.max || 0);
+  scale.innerHTML = `<span>${min}%</span><span>${Math.round((min + max) / 2)}%</span><span>${max}% max</span>`;
+}
+
 function onSlider(val) {
   val = parseInt(val);
   document.getElementById('split-val').textContent = val;
-  document.getElementById('svg-pct').textContent = val + '%';
   const warning = document.getElementById('split-warning');
   warning.style.display = val > 15 ? 'block' : 'none';
 }
@@ -1805,7 +1980,11 @@ async function transferNFT() {
   }
 }
 
-// ── History ───────────────────────────────────────────────────────────────────
+// ── Statement ─────────────────────────────────────────────────────────────────
+// The window of rows drawn has always been the last 50; the closing balance and the
+// per-wallet totals count every deposit in the ledger, and the footer says so, so a
+// reader can never mistake the window for the whole book.
+const STATEMENT_ROWS = 50;
 let STATEMENT_UNIT = '';
 async function loadHistory() {
   try {
@@ -1813,50 +1992,82 @@ async function loadHistory() {
     const data = await r.json();
     if (!data || data.length === 0) return;
 
-    // The ledger's fields are named …Usdg for historical reasons; what they hold is
-    // whatever this instance sweeps into. Ask the instance rather than assume USDG,
-    // which on Arc is a token that does not exist.
-    try {
-      const tr = await (await fetch('/api/treasury', { cache: 'no-store' })).json();
-      if (tr && tr.ok && tr.unit) STATEMENT_UNIT = tr.unit;
-    } catch {}
-    if (!STATEMENT_UNIT) STATEMENT_UNIT = UNIT_SYMBOL || '';
+    STATEMENT_UNIT = await resolveUnit();
+    const amount = (n, digits) => withUnit(Number(n).toFixed(digits), STATEMENT_UNIT);
 
-    const total = data.reduce((s, r) => s + (r.splitUsdg || 0), 0);
+    const total = data.reduce((s, row) => s + (row.splitUsdg || 0), 0);
+
+    // Deposits per wallet, over the whole ledger. Same field, same sum as the closing
+    // balance — only split by the name the collector already wrote on each row.
+    const byWallet = new Map();
+    for (const row of data) {
+      const name = row.wallet || 'Main';
+      const w = byWallet.get(name) || { name, count: 0, total: 0 };
+      w.count += 1;
+      w.total += (row.splitUsdg || 0);
+      byWallet.set(name, w);
+    }
+    const wallets = [...byWallet.values()].sort((a, b) => b.total - a.total);
+
+    const shown = data.slice(-STATEMENT_ROWS).reverse();
+    let lastDay = '';
+    const rows = shown.map((row) => {
+      const when = new Date(row.timestamp);
+      const day = when.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+      const newDay = day !== lastDay;
+      lastDay = day;
+      const hash = row.splitTxHash || '';
+      // Without an explorer there is no link to make; the hash is still shown in full
+      // on hover and stays selectable, so nothing is lost.
+      const tx = !hash ? ''
+        : EXPLORER
+          ? `<a href="${escHtml(EXPLORER)}/tx/${escHtml(hash)}" target="_blank" rel="noopener" title="${escHtml(hash)}">${escHtml(short(hash))}</a>`
+          : `<span title="${escHtml(hash)}">${escHtml(short(hash))}</span>`;
+      return `<tr${newDay ? ' class="st-daybreak"' : ''}>
+        <td class="st-when"><span class="st-day">${newDay ? escHtml(day) : ''}</span><span class="st-time">${escHtml(when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span></td>
+        <td class="st-wallet">${escHtml(row.wallet || 'Main')}</td>
+        <td class="st-pos">#${escHtml(row.positionId)}</td>
+        <td class="st-num">${escHtml(amount(row.totalCollectedUsdg || 0, 2))}</td>
+        <td class="st-num st-pct">${row.splitPct == null ? '' : escHtml(row.splitPct + '%')}</td>
+        <td class="st-num st-split">${escHtml(amount(row.splitUsdg || 0, 4))}</td>
+        <td class="st-tx">${tx}</td>
+      </tr>`;
+    }).join('');
 
     document.getElementById('history-content').innerHTML = `
-      <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
-        <span class="note" style="letter-spacing:.14em;text-transform:uppercase;font-size:10.5px">Closing balance · all deposits</span>
-        <span style="font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--gold);text-shadow:0 0 18px var(--glow-gold)">${total.toFixed(2)} ${STATEMENT_UNIT}</span>
+      <div class="st-summary">
+        <div class="st-closing">
+          <span class="st-closing-k">Closing balance · all deposits</span>
+          <span class="st-closing-v">${escHtml(amount(total, 2))}</span>
+        </div>
+        ${STATEMENT_UNIT ? '' : '<p class="st-unitnote">This instance does not report the currency these figures are counted in, so they are shown without a ticker.</p>'}
+        <ul class="st-wallets">
+          ${wallets.map((w) => `<li>
+            <span class="st-w-name">${escHtml(w.name)}</span>
+            <span class="st-w-amt">${escHtml(amount(w.total, 2))}</span>
+            <span class="st-w-n">${w.count} deposit${w.count === 1 ? '' : 's'}</span>
+          </li>`).join('')}
+        </ul>
       </div>
-      <div style="overflow-x:auto">
-        <table>
+      <div class="st-scroll">
+        <table class="statement">
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Wallet</th>
-              <th>Position</th>
-              <th>Collected</th>
-              <th>Split %</th>
-              <th>Amount</th>
-              <th>TX</th>
+              <th class="st-when">Date</th>
+              <th class="st-wallet">Wallet</th>
+              <th class="st-pos">Position</th>
+              <th class="st-num">Collected</th>
+              <th class="st-num st-pct">Split</th>
+              <th class="st-num st-split">To vault</th>
+              <th class="st-tx">Transaction</th>
             </tr>
           </thead>
-          <tbody>
-            ${data.slice(-50).reverse().map(r => `
-              <tr>
-                <td>${new Date(r.timestamp).toLocaleDateString()}</td>
-                <td>${r.wallet || 'Main'}</td>
-                <td>#${r.positionId}</td>
-                <td>${(r.totalCollectedUsdg || 0).toFixed(2)} ${STATEMENT_UNIT}</td>
-                <td>${r.splitPct || 10}%</td>
-                <td style="color:var(--gold)">${(r.splitUsdg || 0).toFixed(4)} ${STATEMENT_UNIT}</td>
-                <td><a href="${EXPLORER}/tx/${r.splitTxHash}" target="_blank">${short(r.splitTxHash || '')}</a></td>
-              </tr>
-            `).join('')}
-          </tbody>
+          <tbody>${rows}</tbody>
         </table>
       </div>
+      <p class="st-foot">${shown.length < data.length
+        ? `Most recent ${shown.length} of ${data.length} deposits. The totals above count all ${data.length}.`
+        : `All ${data.length} deposit${data.length === 1 ? '' : 's'}.`}</p>
     `;
   } catch(e) {
     // No history yet
@@ -1893,6 +2104,10 @@ function startAutoRefresh() {
 let autoRefreshStarted = false;
 async function loadPublicInfo() {
   if (!nftAddress) return;
+  // The unit first: renderBalances below decides whether it can print a headline
+  // figure at all from it, and a headline that appears and then changes ticker is
+  // worse than one that arrives a moment late.
+  await resolveUnit();
   try {
     // Served by the dashboard (server-side RPC): works without a wallet and without CORS on the RPC.
     const r = await fetch('/api/vault-info');
@@ -1904,13 +2119,20 @@ async function loadPublicInfo() {
     const tag = document.getElementById('nft-chain-tag');
     const art = document.getElementById('nft-art');
     const chain = info.chain || {};
-    if (tag && chain.name) tag.textContent = `${chain.name} · chain ${chain.id}`;
+    // The tag names a chain or it is not there. It never shows an empty pill.
+    if (tag) {
+      tag.textContent = chain.name ? `${chain.name}${chain.id ? ' · chain ' + chain.id : ''}` : '';
+      tag.hidden = !chain.name;
+    }
     if (art && info.art && info.art.image) {
       art.src = info.art.image;
       art.hidden = false;
-      art.alt = `${info.art.name || 'LOKOVault'} on ${chain.name || 'this chain'}`;
-      const drawing = document.querySelector('#nft-image > svg');
-      if (drawing) drawing.style.display = 'none';
+      art.alt = chain.name ? `${info.art.name || 'LOKOVault'} on ${chain.name}` : (info.art.name || 'LOKOVault');
+      // setAttribute, not .hidden: this is an SVGElement, and the `hidden` IDL
+      // property lives on HTMLElement only — assigning it there sets a JS field and
+      // leaves the placeholder on screen behind the art.
+      const placeholder = document.getElementById('nft-art-placeholder');
+      if (placeholder) placeholder.setAttribute('hidden', '');
     }
     const warn = document.getElementById('nft-chain-warning');
     if (warn) {
@@ -1928,7 +2150,6 @@ async function loadPublicInfo() {
     const ownEl2 = document.getElementById('nft-owner'); ownEl2.textContent = nftOwner ? short(nftOwner) : '—'; ownEl2.title = nftOwner || '';
     document.getElementById('split-val').textContent = currentSplitPct;
     document.getElementById('split-slider').value = currentSplitPct;
-    document.getElementById('svg-pct').textContent = currentSplitPct + '%';
     document.getElementById('seal-split').textContent = currentSplitPct + '%';
     if (!connectedAddress) {
       const badge = document.getElementById('owner-badge');
@@ -1961,6 +2182,7 @@ const _startAutoRefresh = startAutoRefresh;
 startAutoRefresh = function () { if (autoRefreshStarted) return; autoRefreshStarted = true; _startAutoRefresh(); };
 
 // ── Init ──────────────────────────────────────────────────────────────────────
+paintSplitScale();
 loadConfig().then(async () => {
   await loadPublicInfo(); // also draws the phone QR codes once the server reports the node's public name
   // Every chain's vault, when a router is in front. Never blocks this chain's own

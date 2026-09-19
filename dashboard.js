@@ -3698,7 +3698,9 @@ document.addEventListener('click', async e => {
   const line = card.querySelector('.rules'); const nftId = line && line.dataset.nft; if (!nftId) return;
   if (e.target.classList.contains('rk-toggle')){
     const on = !e.target.classList.contains('on');
-    if (on && !confirm('Turn ON automatic closing for #' + nftId + '?\nWhen a close trigger (drawdown or out-of-range time) holds for 3 checks, the operator removes 100% of the liquidity and sends the tokens to the position\'s owner wallet. It needs the collector to be armed.')) return;
+    if (on && !confirm('Turn ON automatic closing for #' + nftId + '?\nWhen a close trigger (drawdown or out-of-range time) holds for 3 checks, the operator removes 100% of the liquidity and sends the tokens to the position\'s owner wallet. It needs the collector to be armed.\n\nThis also releases the alert-only latch for this position, which is what allows it to act rather than only warn.')) return;
+    // Both fields, explicitly. The server no longer infers one from the other: a
+    // latch that a neighbouring switch can release is not a latch.
     try { await postRule({ tokenId: nftId, autoClose: on, alertOnly: !on }); } catch(err){ alert('Could not save: ' + err.message); }
   } else if (e.target.classList.contains('rk-hold')){
     const on = !e.target.classList.contains('on');

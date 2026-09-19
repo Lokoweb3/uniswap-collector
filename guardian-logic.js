@@ -31,6 +31,16 @@ const tokenValue = (price) => (price > 0 ? 1 / price : null);
 
 const HOUR = 3600 * 1000;
 const RULE_DEFAULTS = { alertPct: 20, closePct: 50, outOfRangeMinutes: 120, tvlDropPct: 50, feeFloorPerHour: null, collectedTargetUsd: null, autoClose: false, alertOnly: true, hold: false };
+/**
+ * Floors below which a threshold stops being a threshold.
+ *
+ * closePct 0 is the one that matters: shouldClose fires when the drawdown is at or
+ * past the limit, so a limit of zero closes a position that has not moved at all --
+ * "price 0% from entry (limit -0%)" on a healthy position. The others are the same
+ * shape: an alert at 0% alerts on nothing, 0 minutes out of range closes the moment
+ * a tick crosses, a 0% TVL drop is every pool.
+ */
+const RULE_MINIMUMS = { closePct: 5, alertPct: 1, outOfRangeMinutes: 15, tvlDropPct: 5 };
 const VOLUME_DROP_PCT = 70; // fees/h down this much vs 30 min ago -> "volume dying" status (no alert: the fee floor covers it)
 
 /** The effective rule block for one entry: its own values over the defaults, numbers checked. */
@@ -45,12 +55,28 @@ function rulesOf(entry = {}, defaults = {}) {
     if (isFinite(n) && n >= 0) return n;
     return allowNull ? null : own ? Number(base[k]) >= 0 ? Number(base[k]) : RULE_DEFAULTS[k] : RULE_DEFAULTS[k];
   };
+  // A stored value below its floor is not silently clamped to the floor, which
+  // would leave the file saying one thing and the guardian doing another. It falls
+  // back to the default -- the more cautious of the two -- and is named in `unsafe`
+  // so the page and the log can show that the file needs correcting. Reading never
+  // throws: a configuration already on disk must still load, or the guardian stops
+  // watching everything because one entry is wrong.
+  const unsafe = [];
+  const floored = (k) => {
+    const v = num(k);
+    if (RULE_MINIMUMS[k] !== undefined && v < RULE_MINIMUMS[k]) { unsafe.push(k); return RULE_DEFAULTS[k]; }
+    return v;
+  };
   return {
-    alertPct: num("alertPct"), closePct: num("closePct"), outOfRangeMinutes: num("outOfRangeMinutes"), tvlDropPct: num("tvlDropPct"),
+    alertPct: floored("alertPct"), closePct: floored("closePct"), outOfRangeMinutes: floored("outOfRangeMinutes"), tvlDropPct: floored("tvlDropPct"),
     feeFloorPerHour: num("feeFloorPerHour", true), collectedTargetUsd: num("collectedTargetUsd", true),
     autoClose: (entry.autoClose !== undefined ? entry.autoClose : base.autoClose) === true,
+    // The latch is independent of autoClose and is only ever lowered by being said
+    // explicitly. Turning auto-close on used to clear it as a side effect, which is
+    // the opposite of what a safety latch is for.
     alertOnly: (entry.alertOnly !== undefined ? entry.alertOnly : base.alertOnly) !== false,
     hold: (entry.hold !== undefined ? entry.hold : base.hold) === true,
+    ...(unsafe.length ? { unsafe } : {}),
   };
 }
 
@@ -242,4 +268,4 @@ function pruneState(state, now = Date.now(), { closedTtlMs = CLOSED_TTL_MS, keep
   return state;
 }
 
-module.exports = { pruneState, CLOSED_TTL_MS, derive, alertsFor, shouldClose, rulesOf, RULE_DEFAULTS, HOUR };
+module.exports = { pruneState, CLOSED_TTL_MS, derive, alertsFor, shouldClose, rulesOf, RULE_DEFAULTS, RULE_MINIMUMS, HOUR };

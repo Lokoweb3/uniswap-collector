@@ -322,8 +322,18 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
       if (patch[k] === null || patch[k] === "") next[k] = null;
       else if (isFinite(Number(patch[k])) && Number(patch[k]) >= 0) next[k] = Number(patch[k]);
       else throw new Error(`${k} must be a number`);
+      // Refused, not clamped: a threshold below its floor is almost always a typo or
+      // a zero left in a form, and quietly turning it into something else would hide
+      // that. closePct 0 closes a position that has not moved.
+      const floor = logic.RULE_MINIMUMS[k];
+      if (floor !== undefined && next[k] !== null && next[k] < floor) {
+        throw new Error(`${k} must be at least ${floor}${k === "closePct" ? " — a close limit of 0 closes a position that has not moved" : ""}`);
+      }
     }
-    if (patch.autoClose !== undefined) { next.autoClose = patch.autoClose === true; if (next.autoClose) next.alertOnly = false; }
+    // autoClose no longer clears alertOnly. They are separate switches: one says
+    // the guardian may close, the other says it may not act at all, and turning the
+    // first on used to silently release the second.
+    if (patch.autoClose !== undefined) next.autoClose = patch.autoClose === true;
     if (patch.alertOnly !== undefined) next.alertOnly = patch.alertOnly !== false;
     if (patch.hold !== undefined) next.hold = patch.hold === true;
     if (patch.entryPrice !== undefined && Number(patch.entryPrice) > 0) { next.entryPrice = Number(patch.entryPrice); next.entrySource = "set by hand"; }

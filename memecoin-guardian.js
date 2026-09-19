@@ -354,7 +354,15 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     const wethUsd = ethUsd();
     const statuses = [];
     const t = now();
+    const cycleStarted = Date.now();
     const alertsSent = [];
+
+    // Which positions are due, decided before any reading. Each sample is six to
+    // eight RPC round trips through loadPosition, and they were taken one position
+    // after another, so a cycle cost the sum of every position's latency. They do
+    // not depend on each other, so they are taken together, a few at a time -- the
+    // chain's rate limit is the reason for the cap rather than the code's.
+    const due = [];
     for (const entry of list) {
       const id = String(entry.tokenId);
       const st = (state.positions[id] = state.positions[id] || { samples: [], closed: false });
@@ -366,15 +374,30 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
         if (prev) statuses.push(prev);
         continue;
       }
-      let s;
-      try {
-        s = await sample(entry, wethUsd);
-      } catch (err) {
+      due.push({ entry, id, st, interval });
+    }
+    // Results are collected first and processed afterwards in the original order, so
+    // alerts, closes and the state file are written in exactly the sequence they
+    // were before: only the reading is concurrent, not the deciding.
+    const SAMPLE_CONCURRENCY = 4;
+    const sampled = new Map();
+    for (let i = 0; i < due.length; i += SAMPLE_CONCURRENCY) {
+      await Promise.all(due.slice(i, i + SAMPLE_CONCURRENCY).map(async ({ entry, id }) => {
+        try { sampled.set(id, { s: await sample(entry, wethUsd) }); }
+        catch (err) { sampled.set(id, { err }); }
+      }));
+    }
+
+    for (const { entry, id, st, interval } of due) {
+      const got = sampled.get(id);
+      if (!got || got.err) {
+        const err = got ? got.err : new Error("not sampled");
         log(`#${id} ${entry.pair}: read failed: ${err.shortMessage || err.message}`);
         const prev = status.positions.find((p) => p.tokenId === id);
         if (prev) statuses.push(prev);
         continue;
       }
+      const s = got.s;
       if (s.gone || s.closed) {
         st.closed = true;
         st.closedAt = t;
@@ -450,7 +473,12 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     }
     logic.pruneState(state, t);
     writeJson(STATE_FILE, state);
-    status = { ok: true, at: t, wethUsd, positions: statuses, recent: readJson(LOG_FILE, []).slice(-10).reverse(), defaults: logic.rulesOf({}, defaults), discovery: live.memecoinDiscovery !== false };
+    // How long the cycle took, and how much of it was reading. Without this a
+    // guardian that has quietly become slower than its own interval looks the same
+    // as one that is keeping up.
+    const cycleMs = Date.now() - cycleStarted;
+    status = { ok: true, at: t, wethUsd, positions: statuses, recent: readJson(LOG_FILE, []).slice(-10).reverse(), defaults: logic.rulesOf({}, defaults), discovery: live.memecoinDiscovery !== false, cycleMs, sampled: due.length };
+    log(`cycle: ${cycleMs} ms for ${due.length} sample(s) of ${list.length} watched${alertsSent.length ? `, ${alertsSent.length} alert(s)` : ""}`);
     writeJson(STATUS_FILE, status);
     return { statuses, alerts: alertsSent };
   }

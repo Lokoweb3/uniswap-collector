@@ -2003,7 +2003,52 @@ const server = http.createServer((req, res) => {
     } catch {}
   });
 });
+/**
+ * Hosts this instance will answer to.
+ *
+ * Every "localhost-only" endpoint here tests HOST, which is the address the server
+ * binds (LP_BIND, default 127.0.0.1) -- a constant, not the requester. And the
+ * cross-site guard compares the request's Origin against its own Host header, so a
+ * page served from evil.example, whose DNS has been rebound to 127.0.0.1, arrives
+ * with Origin and Host both reading evil.example:8787 and counts as same-origin.
+ * The two checks together let such a page reach arm, unlock, approve and close.
+ *
+ * The Host header is the only part of that chain the attacker cannot forge away, so
+ * it is checked first, before routing, for every method including GET.
+ *
+ * The gate and the chain router both rewrite Host to 127.0.0.1:<upstream> before
+ * proxying, so they pass. The tailnet name is allowed on any port, which is how
+ * https://<node>.ts.net:8444 reaches this server directly. LP_ALLOWED_HOSTS adds
+ * more, for a deployment that binds somewhere else.
+ */
+const EXTRA_HOSTS = String(process.env.LP_ALLOWED_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+function hostAllowed(raw) {
+  if (!raw) return false;                       // no Host: nothing to check it against
+  const host = String(raw).toLowerCase();
+  const bare = host.replace(/:\d+$/, "");
+  const loopback = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+  // A loopback name is accepted only on this instance's own port: 127.0.0.1:8797
+  // reaching the 8787 instance would mean something is proxying in a way nobody
+  // intended, and each instance answering only for itself keeps the chains apart.
+  if (loopback.has(bare)) return host === bare || host === `${bare}:${PORT}`;
+  if (EXTRA_HOSTS.includes(host) || EXTRA_HOSTS.includes(bare)) return true;
+  const pub = publicHost();
+  return !!pub && bare === String(pub).toLowerCase().replace(/\.$/, "");
+}
+const refusedHosts = new Set();
+
 async function handleRequest(req, res) {
+  if (!hostAllowed(req.headers.host)) {
+    // Said once per distinct host, so a misconfigured proxy is diagnosable without
+    // a rebinding attempt filling the log.
+    const key = String(req.headers.host || "(none)").toLowerCase();
+    if (!refusedHosts.has(key)) {
+      refusedHosts.add(key);
+      console.error(`refused Host ${key}: not this instance's address. Set LP_ALLOWED_HOSTS if that is wrong.`);
+    }
+    res.writeHead(421, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ok: false, error: "this server does not answer to that host name" }));
+  }
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
 
   // Cross-site guard for every state-changing /api route (csrf.js): a browser

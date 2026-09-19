@@ -1104,6 +1104,10 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 
   async function sign() {
     // personal_sign over the exact server-provided message; any chain is fine, nothing is sent on chain.
+    // The message carries a nonce stored at setup, so it cannot be composed by
+    // anyone who has not read that file. Without one there is nothing safe to sign:
+    // say so rather than putting an empty prompt in front of the owner's wallet.
+    if (!st.message) throw new Error(st.messageError || 'the dashboard did not provide a message to sign');
     status('[data-id="status"]', 'Confirm the signature in your wallet…', 'warn');
     return signer.signMessage(st.message);
   }

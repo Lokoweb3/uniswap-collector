@@ -795,11 +795,20 @@ passphrase form) arms the collector with the owner wallet's signature instead of
 setup: connect the owner wallet, enter the operator passphrase once and sign; `arm.js` verifies the
 passphrase against the keystore, derives an AES-256-GCM key from the signature bytes (EOA signatures over
 a fixed message are deterministic) and stores only the ciphertext in `~/.lp-collector/arm-secret.json`.
-Arming afterwards: sign the same message (it names chain, owner and operator), the server re-derives the
+Arming afterwards: sign the same message, the server re-derives the
 key, decrypts, checks the keystore still opens, and writes the same RAM cache `unlock.sh` writes, for the
 chosen window (2 hours to 1 week; a WSL restart clears the cache regardless). Nothing on disk is decryptable without the owner wallet; the `/api/arm*` endpoints answer
 over loopback only and the public gate refuses them. Replacing the keystore changes the message, so setup
 must be repeated. "Forget saved passphrase" deletes the ciphertext.
+
+The message names the asker on its first line (`127.0.0.1:8787 wants you to sign this message`) and
+carries a `nonce:` — 16 random bytes generated at setup and kept in `arm-secret.json`. Everything else in
+it is public: the template is in this repository and the chain, owner and operator addresses are on chain,
+so without the nonce anyone could compose the exact string and ask the owner to sign it somewhere else.
+That signature is the key to the stored passphrase, and the text truthfully says it moves no funds, which
+is what makes it a good thing to be asked to sign. **A setup made before this change has no nonce and
+cannot be armed: the arm page will say so, and one further setup replaces it.** Keeping the nonce out of
+the message would have meant keeping a phishable signature.
 
 The intended arm window is also recorded on disk (`~/.lp-collector/arm-window.json`). When the RAM cache
 is gone before that window has expired (a WSL restart), the dashboard chip and the arm page say the

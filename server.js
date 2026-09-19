@@ -1918,6 +1918,10 @@ function readBody(req, limit = 4096) {
 
 const CACHE_FILE = `/dev/shm/.lp-collector-${process.getuid()}`;
 const armer = require("./arm");
+// Named in the first line of the signed message, so a prompt claiming to be
+// something else is visibly not this dashboard. Arming is loopback-only, so this is
+// the address the owner's browser used to reach it.
+const ARM_ORIGIN = `127.0.0.1:${PORT}`;
 const csrf = require("./csrf");
 const treasuryLedger = require("./treasury");
 // The agent (agent.js): one brain for the web panel, Telegram and loopback scripts.
@@ -2108,25 +2112,30 @@ async function handleRequest(req, res) {
     try {
       if (url.pathname === "/api/arm/status") {
         res.writeHead(200);
-        return res.end(JSON.stringify({ ok: true, owner: cfg.ownerAddress, operator: armer.operatorAddress(), chainId: Number(cfg.chainId), message: armer.message(cfg), unlock: unlockState(), maxMinutes: cfg.armMaxMinutes, ...armer.configured() }));
+        // The message carries the nonce, so the page shows the owner exactly what
+        // it is asking them to sign. A record written before salting has none and
+        // says to run setup again rather than offering an unsignable message.
+        let armMessage = null, armMessageError = null;
+        try { armMessage = armer.currentMessage(cfg, ARM_ORIGIN); } catch (e) { armMessageError = e.message; }
+        return res.end(JSON.stringify({ ok: true, owner: cfg.ownerAddress, operator: armer.operatorAddress(), chainId: Number(cfg.chainId), message: armMessage, messageError: armMessageError, unlock: unlockState(), maxMinutes: cfg.armMaxMinutes, ...armer.configured() }));
       }
       if (req.method !== "POST") throw new Error("POST required");
       const body = JSON.parse(await readBody(req));
       // The window is clamped to settings arm.maxMinutes (24 h by default); the response says so.
       const clampInfo = (mins) => { const asked = Number(body.minutes) || 120; return { minutes: mins, maxMinutes: cfg.armMaxMinutes, ...(asked > mins ? { clampedFrom: asked } : {}) }; };
       if (url.pathname === "/api/arm/setup") {
-        await armer.setup(cfg, body);
-        const mins = await armer.arm(cfg, body, CACHE_FILE);
+        await armer.setup(cfg, { ...body, origin: ARM_ORIGIN });
+        const mins = await armer.arm(cfg, { ...body, origin: ARM_ORIGIN }, CACHE_FILE);
         res.writeHead(200);
         return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins }, ...clampInfo(mins), ...armer.configured() }));
       }
       if (url.pathname === "/api/arm") {
-        const mins = await armer.arm(cfg, body, CACHE_FILE);
+        const mins = await armer.arm(cfg, { ...body, origin: ARM_ORIGIN }, CACHE_FILE);
         res.writeHead(200);
         return res.end(JSON.stringify({ ok: true, unlock: { armed: true, minutesLeft: mins }, ...clampInfo(mins) }));
       }
       if (url.pathname === "/api/arm/forget") {
-        armer.verify(cfg, body.signature);
+        armer.verify(cfg, body.signature, ARM_ORIGIN);
         armer.forget();
         res.writeHead(200);
         return res.end(JSON.stringify({ ok: true, ...armer.configured() }));

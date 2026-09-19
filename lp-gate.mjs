@@ -28,7 +28,13 @@ const STATE_FILE = path.join(HERE, "gate-state.json");
 const COOKIE = "lpgate";
 const TTL_S = 30 * 86400;
 const SITES = [
-  { name: "LP dashboard", port: Number(process.env.LP_GATE_DASHBOARD_PORT || 8790), upstream: 8787,
+  // Upstream is the chain router (8800), not one chain's dashboard: the router
+  // serves every configured chain behind one URL and injects the chain picker, so
+  // the public address reaches Arc as well as Robinhood. Pointing it straight at
+  // 8787 again would serve Robinhood only, and silently -- the page would look
+  // complete while a whole chain was missing from it.
+  { name: "LP dashboard", port: Number(process.env.LP_GATE_DASHBOARD_PORT || 8790),
+    upstream: Number(process.env.LP_GATE_DASHBOARD_UPSTREAM || 8800),
     allow: (m, p) => ((m === "GET" || m === "HEAD") && !/^\/api\/(arm|backup|collect|lock|memecoins\/close|risk|sales\/approve|strategy\/proposals|unlock)(\/|$)/.test(p) && !/^\/arm(\.html)?$/.test(p))
       || (m === "POST" && /^\/api\/(chat(\/reset)?|tasks\/run)$/.test(p)) }, // in-site chat + task runner
     // /vault, /treasury, /qr.js and /api/digest are plain GETs and pass (weekly-digest-and-vault).
@@ -120,9 +126,25 @@ function proxy(site, req, res) {
   headers.host = `127.0.0.1:${site.upstream}`;
   headers["x-forwarded-for"] = clientIp(req);
   headers["x-lp-gate"] = "1";
+  // Cookie is a hop header above, so nothing a client holds reaches upstream -- this
+  // gate's session least of all. The chain selection is the one thing that must,
+  // and only that one: it decides which chain the router proxies to, and stripping
+  // it meant the cookie was set, stored, sent back, and thrown away here, so every
+  // page came back Robinhood however many times someone chose Arc.
+  const chainCookie = String(req.headers.cookie || "").split(";").map((c) => c.trim())
+    .find((c) => /^lpchain=[A-Za-z0-9_-]*$/.test(c));
+  if (chainCookie) headers.cookie = chainCookie;
   const up = http.request({ host: "127.0.0.1", port: site.upstream, method: req.method, path: req.url, headers }, (ur) => {
     const h = { ...ur.headers, "x-frame-options": "DENY", "referrer-policy": "no-referrer", "strict-transport-security": "max-age=31536000" };
-    delete h["set-cookie"];
+    // Upstream cookies are dropped: nothing behind the gate has any business setting
+    // state on the public origin, and none of it may shadow this gate's own session.
+    // The one exception is the router's chain selection. It carries no authority --
+    // it names which chain to proxy to, and the router accepts only names it already
+    // knows -- and without it the picker cannot work from the public URL: the cookie
+    // was set, stripped here, and every page came back Robinhood however many times
+    // someone chose Arc.
+    const passed = [].concat(h["set-cookie"] || []).filter((c) => /^lpchain=/.test(String(c).trim()));
+    if (passed.length) h["set-cookie"] = passed; else delete h["set-cookie"];
     res.writeHead(ur.statusCode || 502, h);
     ur.pipe(res);
   });

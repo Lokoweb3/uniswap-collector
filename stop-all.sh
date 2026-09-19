@@ -21,6 +21,6 @@ for d in /proc/[0-9]*; do
   [ -r "$d/cmdline" ] || continue
   cmd=$(tr "\0" " " 2>/dev/null < "$d/cmdline") || continue
   case "$cmd" in
-    "node memecoin-guardian.js"*|"node memecoin-collect.js"*|*"bash ./nightly.sh"*|"node lp-gate.mjs"*|"node approve-serve.js"*|"node "*"lp-mcp-remote.mjs"*) kill "${d#/proc/}" 2>/dev/null && echo "stopped: $cmd" ;;
+    "node memecoin-guardian.js"*|"node memecoin-collect.js"*|*"bash ./nightly.sh"*|"node lp-gate.mjs"*|"node chain-router.js"*|"node approve-serve.js"*|"node "*"lp-mcp-remote.mjs"*) kill "${d#/proc/}" 2>/dev/null && echo "stopped: $cmd" ;;
   esac
 done

@@ -54,6 +54,23 @@ start_arc() {
 }
 start_arc
 
+# One URL for every chain: the router proxies to each chain's dashboard, namespaces
+# their cookies so a session on one is never presented to the other, and injects the
+# chain picker. The public gate (lp-gate.mjs) fronts this rather than a single
+# chain's port, so without it the public address serves Robinhood alone. Only worth
+# running when there is a second chain to switch to.
+start_router() {
+  local port="${LP_ROUTER_PORT:-8800}"
+  [ -f "${LP_ARC_DATA_DIR:-$HOME/arc-data}/settings.json" ] || return 0
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then
+    echo "chain router: already running on :${port}"
+    return 0
+  fi
+  nohup node chain-router.js --port="$port" >> chain-router.log 2>&1 < /dev/null &
+  echo "chain router: started (pid $!) on :${port} — one URL for every chain, logs in chain-router.log"
+}
+start_router
+
 if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':8787$'; then
   echo "dashboard: already running on :8787 (stop it first to restart: ./stop-all.sh)"
   exit 0

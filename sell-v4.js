@@ -46,6 +46,7 @@ const { dataPath } = require("./data-dir");
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const priceSanity = require("./price-sanity");
 
 const SALES_FILE = dataPath("token-sales.json");
 const PENDING_FILE = dataPath("sales-pending.json");
@@ -167,6 +168,19 @@ function pendingSales() {
   return rows.filter((r) => r.status === "pending" || (r.decidedAt || r.createdAt) > cutoff).sort((a, b) => b.createdAt - a.createdAt);
 }
 
+// The hourly price record, re-read when it changes. A sale must not be blocked by a
+// log that cannot be read, so a failure yields nothing to compare against rather
+// than an error: the sale then proceeds on the checks that were always there.
+const PRICE_LOG = dataPath("price-log.json");
+let priceLogCache = { mtime: 0, log: null };
+function readPriceLog() {
+  try {
+    const mtime = fs.statSync(PRICE_LOG).mtimeMs;
+    if (mtime !== priceLogCache.mtime) priceLogCache = { mtime, log: JSON.parse(fs.readFileSync(PRICE_LOG, "utf8")) };
+    return priceLogCache.log;
+  } catch { return null; }
+}
+
 function settings(cfg) {
   const s = (cfg && cfg.memecoinSell) || {};
   const v4 = (cfg && cfg.contracts && cfg.contracts.v4) || {};
@@ -174,6 +188,11 @@ function settings(cfg) {
     enabled: s.enabled === true,
     minUsd: Number(s.minUsd ?? 25),
     maxImpactPct: Number(s.maxImpactPct ?? 3),
+    // How far the live price may sit from the last hourly reading before a sale is
+    // refused. The impact cap above is measured against the pool's own spot, so a
+    // price already pushed satisfies it by construction; this is the check that
+    // notices the push.
+    maxDeviationPct: Number(s.maxDeviationPct ?? 15),
     hold: new Set((s.hold || []).map((x) => String(x).toLowerCase())),
     nativeQuoteOnly: s.nativeQuoteOnly === true, // off by default: ERC-20-quoted pools work with the router's real layout
     confirm: s.confirm === true,
@@ -324,6 +343,18 @@ function create({ provider, cfg, log = console.log }) {
     const { zeroForOne, currencyOut, fit, usd } = best;
     const full = fit.amountIn === amount;
     if (usd < st.minUsd) return skip(`${full ? "batch" : "slice under the impact cap"} worth $${usd.toFixed(2)}, below the $${st.minUsd} threshold`, { usd: +usd.toFixed(2), impactPct: fit.impactPct != null ? +fit.impactPct.toFixed(2) : null });
+
+    // A second opinion on the price, from a source that is not this pool a moment
+    // ago. Everything above is measured against the pool's current state, so someone
+    // who has already moved the price sets the reference the sale is judged by.
+    // price-log.json is written on its own schedule and disagrees when that happens.
+    // No entry for the token is not agreement, and does not block the sale -- there
+    // is simply nothing to compare with, which the record says.
+    {
+      const livePerToken = usd / Number(ethers.formatUnits(fit.amountIn, decimals));
+      const v = priceSanity.check(readPriceLog(), token, livePerToken, st.maxDeviationPct);
+      if (!v.ok) return skip(v.reason, { usd: +usd.toFixed(2), deviationPct: +v.deviationPct.toFixed(2), hourlyUsd: v.hourlyUsd });
+    }
     if (maxSwapWeth != null && wethOf) {
       const w = await wethOf(currencyOut, fit.quotedOut);
       if (w != null && w > maxSwapWeth) return skip(`proceeds ${ethers.formatEther(w)} WETH over maxSwapValueWeth`);

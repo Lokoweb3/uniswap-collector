@@ -399,7 +399,36 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
       // Auto-close needs the trigger to hold for CONFIRM_CYCLES consecutive
       // cycles with the pool price stable within 10% between cycles, so one
       // bad RPC read or a single-block wick cannot close a position.
-      const reason = logic.shouldClose(d);
+      let reason = logic.shouldClose(d);
+      // A drawdown close rests on the price level, and the price level comes from
+      // the same pool the position is in. The stability check beside it compares one
+      // cycle to the one before, so a steady push of 9% a minute passes it while
+      // adding up to the drawdown that triggers this. The hourly log is written on
+      // its own schedule and is the one reading that disagrees when that happens.
+      //
+      // Agreement means the hourly price is ALSO past the close limit -- not merely
+      // close to spot -- because the question is whether the position has really
+      // fallen that far, not whether two readings match. An out-of-range close is
+      // not gated: it depends on where the ticks are, not on what the price is worth.
+      if (reason && /from entry/.test(reason) && d.entryPrice > 0) {
+        // priceLogAt returns tokens-per-quote, the same unit as d.price and
+        // entryPrice, so the drawdown is computed the way derive() computes it.
+        // Comparing the log's USD figure against either of those directly would be
+        // a units error that defers closes at random.
+        const hourly = priceLogAt(s.tokenAddress, s.quoteAddress, t);
+        if (hourly > 0) {
+          // tokenValue(p) = 1/p, so a drawdown in token value is (entry/hourly - 1).
+          const hourlyDrawdown = Math.max(0, -((d.entryPrice / hourly - 1) * 100));
+          if (!(hourlyDrawdown >= d.rules.closePct)) {
+            d.closeDeferred = `hourly log puts it ${hourlyDrawdown.toFixed(0)}% from entry, under the ${d.rules.closePct}% limit`;
+            d.status = "deferred: price disagrees with hourly log";
+            reason = null;
+            // The streak restarts: three cycles of a price the record does not
+            // support must not add up to a close once the record catches up.
+            st.confirm = { n: 0, lastPrice: d.price > 0 ? d.price : null };
+          }
+        }
+      }
       st.confirm = st.confirm || { n: 0, lastPrice: null };
       for (const text of logic.alertsFor(d, state.sent, t, 60 * 60000, { closing: !!reason })) { await send(text, d); alertsSent.push(text); }
       if (reason) {

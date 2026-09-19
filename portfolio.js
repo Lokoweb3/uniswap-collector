@@ -343,7 +343,10 @@ function create({ provider, factory, cfg, explorerApi }) {
       }
       let price = prices[x.addr], depthUsd = null, via = null;
       if (price == null) ({ price, depthUsd, via = null } = await priceOf(x.addr, wethUsd));
-      return { symbol: x.meta.symbol, address: x.meta.address, native: false, amount: x.amount, price, depthUsd, via: via ? (await u.getToken(via, provider)).symbol : null };
+      // `via` is set only by the priceVia branch, so it is the honest test for
+      // "this price was carried from another token" whatever path found it.
+      const assumed = !!(via && price != null) || !!(priceVia[x.addr] && price != null);
+      return { symbol: x.meta.symbol, address: x.meta.address, native: false, amount: x.amount, price, depthUsd, assumed, via: via ? (await u.getToken(via, provider)).symbol : null };
     });
     rows.push(...priced.filter(Boolean));
     save(); // pool choices made above
@@ -418,6 +421,12 @@ function create({ provider, factory, cfg, explorerApi }) {
     if (addr === WETH) return { price: wethUsd, depthUsd: null };
     if (addr === STABLE) return { price: 1, depthUsd: null };
     if (priceVia[addr] && hops < 3) {
+      // A receipt token priced at its underlying, one for one, because settings.json
+      // says so. It is a configured assumption, not a reading: sNET has no pool of
+      // its own on this chain -- no v4 pool against WETH or USDG, no v2 pair -- and
+      // no exchange-rate function to ask, so nothing on chain can confirm or refute
+      // the ratio. That is worth carrying on the row, because the figure it produces
+      // is the largest in this portfolio.
       const r = await priceOf(priceVia[addr], wethUsd, hops + 1);
       return { ...r, via: priceVia[addr] };
     }
@@ -516,10 +525,12 @@ function create({ provider, factory, cfg, explorerApi }) {
       // construction); anything else goes through the deepest pool found.
       let price = prices[x.addr], depthUsd = null, via = null;
       if (price == null) ({ price, depthUsd, via = null } = await priceOf(x.addr, wethUsd));
+      const assumed = !!(via && price != null) || !!(priceVia[x.addr] && price != null);
       return {
         symbol: x.meta.symbol, address: x.meta.address, native: false,
         wallet: x.wallet, pools: x.h.amount, fees: x.h.fees, price, depthUsd,
         via: via ? (await u.getToken(via, provider)).symbol : null,
+        assumed,
         source: positionTokens.has(x.addr) ? "pools" : "wallet",
       };
     });
@@ -570,7 +581,17 @@ function create({ provider, factory, cfg, explorerApi }) {
     const newest = state.series[state.series.length - 1];
     latest = {
       ok: true, at: now, owner, wethUsd,
-      totals: { walletUsd, lpUsd: lpUsd || 0, feesUsd: feesUsd || 0, totalUsd, unpricedCount: rows.filter((r) => r.usd == null).length },
+      totals: {
+        walletUsd, lpUsd: lpUsd || 0, feesUsd: feesUsd || 0, totalUsd,
+        unpricedCount: rows.filter((r) => r.usd == null).length,
+        // How much of that total rests on a price carried from another token rather
+        // than read from a market. It is inside totalUsd, not beside it -- the money
+        // is really held; what is assumed is the ratio it is valued at. The page
+        // already says how much is missing for want of a price; this says how much
+        // is present on an assumption, which for sNET is most of the main wallet.
+        assumedUsd: +rows.filter((r) => r.assumed).reduce((t, r) => t + (r.usd || 0), 0).toFixed(2),
+        assumedTokens: rows.filter((r) => r.assumed).map((r) => ({ symbol: r.symbol, via: r.via, usd: +(r.usd || 0).toFixed(2) })),
+      },
       // The newest point is partial when a token priced an hour ago has no price now: the
       // total is understated by that token, so consumers must not record it as a value drop.
       partial: !!(newest && newest.partial && now - newest.t < 2 * SERIES_STEP_MS),

@@ -1310,6 +1310,9 @@ select.scope option{background:var(--card);color:var(--ink)}
 .wh-side .lpsub b{color:var(--pos);font-family:var(--mono);font-weight:600}
 /* What the wallet earns per hour, beside what it holds. Quieter than the LP value:
    it is a rate, and a rate that shouts competes with the figure it qualifies. */
+/* A figure that is in the total on an assumption, not a reading. Marked, not
+   alarmed: the money is really held, it is the rate that is unverified. */
+.assumed{color:var(--warn,#d97706)}
 .wh-side .lprate{font-size:13px;color:var(--muted);white-space:nowrap}
 .wh-side .lprate b{color:var(--ink);font-family:var(--mono);font-weight:600;margin-left:4px}
 .whmore{flex-basis:100%;order:3}

@@ -534,6 +534,11 @@ function renderHeadline(){
   nwp.innerHTML = `positions <b>${usd(liq)}</b> · fees <b>${usd(fees)}</b> · tokens in wallet <b>${usd(wallet)}</b>` + (unpriced ? ` · ${unpriced} unpriced` : '');
 }
 
+/** Which tokens carry a price from another, and what that rests on. */
+function assumedTip(totals){
+  const list = (totals.assumedTokens || []).map(t => `${t.symbol} valued as ${t.via || 'another token'} (${usd(t.usd)})`).join('; ');
+  return `${list}. A receipt token with no market of its own is priced one for one against what it represents, because settings.json says to. Nothing on chain confirms that ratio: there is no pool for it and no exchange rate to read. The holding is real; the rate it is valued at is an assumption.`;
+}
 function renderPortfolio(){
   const d = lastPortfolio;
   if (!d) return;
@@ -552,6 +557,11 @@ function renderPortfolio(){
     for (const x of rows) if (x.change24h == null) x.change24h = chg24.get(x.native ? NATIVE_KEY : x.address.toLowerCase()) ?? null;
     const sum = k => rows.reduce((s, x) => s + (x[k] || 0), 0);
     totals = { walletUsd: sum('walletUsd'), lpUsd: sum('poolsUsd'), feesUsd: sum('feesUsd'), unpricedCount: rows.filter(x => x.usd == null).length };
+    // Merged scopes rebuild their own totals, so the assumption has to be re-summed
+    // here or it would vanish the moment someone looked at all wallets at once --
+    // which is the view where the figure is largest.
+    totals.assumedUsd = +rows.filter(x => x.assumed).reduce((t, x) => t + (x.usd || 0), 0).toFixed(2);
+    totals.assumedTokens = rows.filter(x => x.assumed).map(x => ({ symbol: x.symbol, via: x.via, usd: +(x.usd || 0).toFixed(2) }));
     totals.totalUsd = totals.walletUsd + totals.lpUsd + totals.feesUsd;
     const w = scope === 'all' ? null : watched.find(w => w.address.toLowerCase() === scope);
     holder = w ? w.address : null;
@@ -562,7 +572,13 @@ function renderPortfolio(){
     `<span>in pools <b>${usd(totals.lpUsd)}</b></span>` +
     `<span>uncollected fees <b>${usd(totals.feesUsd)}</b></span>` +
     `<span>in wallet <b>${usd(totals.walletUsd)}</b></span>` +
-    (totals.unpricedCount ? `<span>${totals.unpricedCount} token${totals.unpricedCount === 1 ? '' : 's'} unpriced</span>` : '');
+    (totals.unpricedCount ? `<span>${totals.unpricedCount} token${totals.unpricedCount === 1 ? '' : 's'} unpriced</span>` : '') +
+    // What is missing from the total is already said above. This says what is IN it
+    // on an assumption rather than a reading: sNET has no market of its own on this
+    // chain, so it is valued at NET one for one because settings.json says to. At
+    // four fifths of the wallet, a reader deciding anything on this number should
+    // see that before they act on it.
+    (totals.assumedUsd ? `<span class="assumed" title="${esc(assumedTip(totals))}">${usd(totals.assumedUsd)} assumed${totals.totalUsd ? ` (${Math.round(totals.assumedUsd / totals.totalUsd * 100)}% of the total)` : ''}</span>` : '');
   // Value chart: the owner's hourly series, or the combined / per-wallet series recorded by the server.
   let series = [];
   if (scope === 'owner') series = (d.series || []).map(s => ({ t: s.t, v: s.total }));

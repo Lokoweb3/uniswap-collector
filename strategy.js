@@ -452,7 +452,7 @@ function create({ cfg, dir = __dirname, port, metaFor = null }) {
         stillHeld: now ? round(now.balance, 6) : null, priceNote };
     }).sort((a, b) => (b.basisUsd || 0) - (a.basisUsd || 0));
     // Sales made at collect time (sell-v4.js, token-sales.json): those tokens never became lots; report them alongside.
-    const salesRows = readJson(path.join(dir, "token-sales.json"), []).filter((r) => !since || r.t >= since);
+    const salesRows = require("./jsonl").readRows(path.join(dir, "token-sales.json")).filter((r) => !since || r.t >= since);
     const sales = {};
     for (const r of salesRows) {
       if (token && String(r.token).toLowerCase() !== String(token).toLowerCase()) continue;

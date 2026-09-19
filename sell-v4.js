@@ -47,6 +47,7 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const priceSanity = require("./price-sanity");
+const jsonl = require("./jsonl");
 
 const SALES_FILE = dataPath("token-sales.json");
 const PENDING_FILE = dataPath("sales-pending.json");
@@ -137,14 +138,13 @@ async function fitSlice({ quote, spot, feePips, amount, maxImpactPct, steps = 7 
   return best;
 }
 
+// One line appended per sale or skip. It used to read the whole file, push a row
+// and write it all back: O(file) per event for a file that only grows, and a process
+// killed mid-write left a truncated array that parses as nothing -- losing every row
+// rather than the last one. A torn line now costs that line.
 function appendSale(row) {
-  let rows = [];
-  try { rows = JSON.parse(fs.readFileSync(SALES_FILE, "utf8")); } catch { rows = []; }
-  if (!Array.isArray(rows)) rows = [];
-  rows.push(row);
-  const tmp = SALES_FILE + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(rows));
-  fs.renameSync(tmp, SALES_FILE);
+  jsonl.migrate(SALES_FILE);
+  jsonl.appendRow(SALES_FILE, row);
 }
 
 // ---- confirm-before-sell ---------------------------------------------------

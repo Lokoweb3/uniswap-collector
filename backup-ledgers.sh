@@ -27,7 +27,7 @@ log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 
 # Everything that is runtime history, present or not.
 NAMES=(fee-events.json v4-collects.json memecoin-discovered.json fee-snapshots.json fee-daily.json fee-prices.json backfill.json
-       liquidity-ledger.json v4-liquidity-ledger.json v4-owner-collects.json token-sales.json token-disposals.json strategy-proposals.json portfolio.json range-log.json snet-staking.json alerts-state.json
+       liquidity-ledger.json v4-liquidity-ledger.json v4-owner-collects.json token-sales.json token-sales.jsonl memecoin-guardian-log.jsonl token-disposals.json strategy-proposals.json portfolio.json range-log.json snet-staking.json alerts-state.json
        claims.json position-registry.json position-values.json state.json watch-accrual.json watch-pnl-basis.json
        v4-positions*.json settings.json brain/notes.md agent-memory/*.json)
 

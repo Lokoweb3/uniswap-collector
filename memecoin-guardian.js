@@ -29,6 +29,7 @@ const { ethers } = require("ethers");
 const v4 = require("./univ4");
 const u = require("./univ3");
 const logic = require("./guardian-logic");
+const jsonl = require("./jsonl");
 const closer = require("./close-position");
 
 const CONFIRM_CYCLES = 3; // consecutive cycles an auto-close trigger must hold
@@ -238,10 +239,19 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     };
   }
 
+  // One line per close or refusal, and the last rows kept in memory for the status
+  // view. The whole file used to be re-read on every cycle just to take ten rows.
+  const recentRows = [];
   function appendLog(entry) {
-    const rows = readJson(LOG_FILE, []);
-    rows.push(entry);
-    writeJson(LOG_FILE, rows);
+    jsonl.migrate(LOG_FILE, { log });
+    jsonl.appendRow(LOG_FILE, entry);
+    recentRows.push(entry);
+    if (recentRows.length > 50) recentRows.splice(0, recentRows.length - 50);
+  }
+  /** The last rows, from memory once this process has written any, else from the file. */
+  function recentLog(n = 10) {
+    if (recentRows.length >= n) return recentRows.slice(-n).reverse();
+    return jsonl.readRows(LOG_FILE).slice(-n).reverse();
   }
 
   /** Close one watched position now (the operator must be armed). Returns the log entry. */
@@ -477,7 +487,7 @@ function create({ dir = __dirname, provider = null, alerts = null, log = (m) => 
     // guardian that has quietly become slower than its own interval looks the same
     // as one that is keeping up.
     const cycleMs = Date.now() - cycleStarted;
-    status = { ok: true, at: t, wethUsd, positions: statuses, recent: readJson(LOG_FILE, []).slice(-10).reverse(), defaults: logic.rulesOf({}, defaults), discovery: live.memecoinDiscovery !== false, cycleMs, sampled: due.length };
+    status = { ok: true, at: t, wethUsd, positions: statuses, recent: recentLog(10), defaults: logic.rulesOf({}, defaults), discovery: live.memecoinDiscovery !== false, cycleMs, sampled: due.length };
     log(`cycle: ${cycleMs} ms for ${due.length} sample(s) of ${list.length} watched${alertsSent.length ? `, ${alertsSent.length} alert(s)` : ""}`);
     writeJson(STATUS_FILE, status);
     return { statuses, alerts: alertsSent };

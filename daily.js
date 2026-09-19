@@ -80,7 +80,9 @@ function build(d) {
 
   // Fee tokens sold at collect time (sell-v4.js)
   let salesRows = [];
-  try { salesRows = JSON.parse(fs.readFileSync(path.join(HERE, "token-sales.json"), "utf8")).filter((r) => r.t > dayAgo); } catch {}
+  // Reads .jsonl when it exists and the legacy array otherwise, so this works
+  // before and after the migration rather than reading an old file as empty.
+  try { salesRows = require("./jsonl").readRows(path.join(HERE, "token-sales.json")).filter((r) => r.t > dayAgo); } catch {}
   const sold = salesRows.filter((r) => !r.skipped), skipped = salesRows.filter((r) => r.skipped);
   if (sold.length || skipped.length) {
     const byTok = {};

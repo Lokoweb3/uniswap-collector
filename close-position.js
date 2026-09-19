@@ -80,7 +80,9 @@ async function dryRunV4({ provider, cfg, tokenId, owner, from }) {
   try {
     await posm.modifyLiquidities.staticCall(unlockData, deadline(), { from: from || owner });
     const gas = await provider.estimateGas({ from: from || owner, to: posm.target, data: posm.interface.encodeFunctionData("modifyLiquidities", [unlockData, deadline()]) }).catch(() => null);
-    return { ok: true, gas, expect, position };
+    // The exact bytes that passed, handed back so the caller can send those rather
+    // than build a second set.
+    return { ok: true, gas, expect, position, posm, unlockData };
   } catch (err) {
     return { ok: false, error: err.shortMessage || err.message, position };
   }
@@ -90,7 +92,11 @@ async function dryRunV4({ provider, cfg, tokenId, owner, from }) {
 async function closeV4({ provider, cfg, tokenId, owner, wallet }) {
   const dry = await dryRunV4({ provider, cfg, tokenId, owner, from: wallet.address });
   if (!dry.ok) throw new Error(`close would revert: ${dry.error}`);
-  const { posm, unlockData, position, expect } = await buildV4({ provider, cfg, tokenId, owner });
+  // The dry run's own calldata, not a rebuild. buildV4 reads the position's current
+  // liquidity and fees, so a second build between the check and the send produces
+  // different amounts -- fees accrue every block -- and what was sent was never the
+  // thing that was proven not to revert.
+  const { posm, unlockData, position, expect } = dry;
   const tx = await posm.connect(wallet).modifyLiquidities(unlockData, deadline());
   const rcpt = await tx.wait();
   return { hash: tx.hash, block: rcpt.blockNumber, gasWei: rcpt.gasUsed * rcpt.gasPrice, expect, position };
@@ -172,10 +178,27 @@ function lockCollector({ dir = __dirname } = {}) {
       resolve(null);
       return;
     }
-    const shell = `exec 9>"$1"; if flock -n 9; then echo LOCKED; exec sleep 3600; else exit 1; fi`;
-    const child = execFile("/bin/bash", ["-c", shell, "bash", lockFile], { stdio: ["ignore", "pipe", "ignore"] });
+    // Holding the lock with `exec sleep 3600` outlived the process that wanted it:
+    // the release below kills the child, but a SIGKILLed Node never runs it, and the
+    // collector stayed blocked for up to an hour with nothing holding it on purpose.
+    //
+    // The child now waits on a pipe this process holds open. Releasing closes it and
+    // `read` returns at once; if this process dies by any means, including SIGKILL,
+    // the kernel closes the pipe and the child sees the same EOF. A polling loop on
+    // the parent would also survive a kill, but bash defers a signal until its
+    // foreground `sleep` returns, which made an ordinary release take seconds.
+    const shell = `exec 9>"$1"; if flock -n 9; then echo LOCKED; read -r _ <&0; else exit 1; fi`;
+    const child = execFile("/bin/bash", ["-c", shell, "bash", lockFile], { stdio: ["pipe", "pipe", "ignore"] });
     let out = "";
-    child.stdout.on("data", (d) => { out += d; if (out.includes("LOCKED")) resolve(() => { try { child.kill(); } catch (_) {} }); });
+    child.stdout.on("data", (d) => {
+      out += d;
+      if (out.includes("LOCKED")) resolve(() => {
+        // Closing the pipe is the release; the kill is belt and braces for a child
+        // that has somehow stopped reading.
+        try { child.stdin.end(); } catch (_) {}
+        try { child.kill(); } catch (_) {}
+      });
+    });
     child.on("error", () => resolve(null));
     child.on("exit", (code) => { if (code !== 0 && !out.includes("LOCKED")) resolve(null); });
     child.unref();

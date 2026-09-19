@@ -320,7 +320,15 @@ function create({ provider, cfg, log = console.log }) {
     if (!candidates.length) return skip("no v4 pool for this token");
     const usable = candidates.filter((k) => !(k.hooks && k.hooks !== ethers.ZeroAddress) && (!st.nativeQuoteOnly || isNative(k.currency0) || isNative(k.currency1)));
     if (!usable.length) {
-      const why = candidates.every((k) => k.hooks && k.hooks !== ethers.ZeroAddress) ? "its pools have hooks; sells not proven" : "its pools are ERC-20-quoted; this chain's PoolManager rejects router swaps there (only ETH-quoted pools work)";
+      // The second branch is only reachable with memecoinSell.nativeQuoteOnly on:
+      // the filter above excludes ERC-20-quoted pools only then. The old wording
+      // said this chain's PoolManager rejects router swaps in such pools, which was
+      // why the setting existed and is no longer true -- they work with the router's
+      // real layout, which is why the setting is off by default. Saying otherwise
+      // sent whoever read the skip looking for a chain problem that is not there.
+      const why = candidates.every((k) => k.hooks && k.hooks !== ethers.ZeroAddress)
+        ? "its pools have hooks; sells not proven"
+        : "its pools are ERC-20-quoted and memecoinSell.nativeQuoteOnly is on, so only ETH-quoted pools are used";
       return skip(why);
     }
 

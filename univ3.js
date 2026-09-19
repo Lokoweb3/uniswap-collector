@@ -4,6 +4,8 @@
  * every number here comes from pool state we have to read anyway.
  */
 
+const fs = require("fs");
+const path = require("path");
 const { ethers } = require("ethers");
 
 const Q96 = 1n << 96n;
@@ -153,7 +155,55 @@ function priceAtTick(tick, decimals0, decimals1) {
 // Chain reads
 // ---------------------------------------------------------------------------
 
+/**
+ * Token metadata, cached in memory and kept on disk between runs.
+ *
+ * getToken is called from loadPosition, so it runs for every position on every
+ * guardian cycle, every dashboard build and every watched-wallet refresh. A symbol
+ * and a decimals place never change for a given address on a given chain, so the
+ * in-memory cache below already spares the repeat reads within one process -- but
+ * every restart, and every separate process (the collector, the guardian's own run,
+ * each dashboard instance), started again from nothing.
+ *
+ * Only successful reads are kept. A failed decimals() read is never cached, here or
+ * on disk: 18 assumed on failure is indistinguishable from a real 18 once it leaves
+ * this function, and on Arc, whose USDC answers 6, one swallowed failure wrote an
+ * opening basis 10^12 too small and froze it. Symbols are sanitised before they are
+ * cached, so nothing unsanitised can arrive from the file either.
+ */
 const tokenCache = new Map();
+const META_FILE = path.join(process.env.LP_DATA_DIR || __dirname, "token-meta.json");
+let metaDirty = false, metaTimer = null;
+try {
+  const saved = JSON.parse(fs.readFileSync(META_FILE, "utf8"));
+  for (const [key, info] of Object.entries(saved && saved.tokens ? saved.tokens : {})) {
+    // Trust nothing from the file that the live path would not have produced.
+    if (info && info.decimalsOk === true && Number.isInteger(info.decimals) && info.decimals >= 0 && info.decimals <= 36
+      && typeof info.symbol === "string" && /^[A-Za-z0-9 ._$+-]{1,16}$/.test(info.symbol) && typeof info.address === "string") {
+      tokenCache.set(key, { address: info.address, symbol: info.symbol, decimals: info.decimals, decimalsOk: true });
+    }
+  }
+} catch { /* no file, or unreadable: start empty and rebuild from chain */ }
+
+function saveTokenMeta() {
+  metaDirty = false;
+  const tokens = {};
+  for (const [key, info] of tokenCache) if (info.decimalsOk === true) tokens[key] = info;
+  try {
+    // Written whole and renamed into place: several processes share this file, and a
+    // half-written one would be read as no cache at all on the next start.
+    const tmp = `${META_FILE}.tmp${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify({ tokens }));
+    fs.renameSync(tmp, META_FILE);
+  } catch { /* a cache that cannot be written is still a working cache in memory */ }
+}
+/** Batched: a build that reads forty tokens writes the file once, not forty times. */
+function scheduleTokenMetaSave() {
+  if (metaDirty) return;
+  metaDirty = true;
+  metaTimer = setTimeout(saveTokenMeta, 2000);
+  if (metaTimer.unref) metaTimer.unref();   // never holds a process open
+}
 
 async function getToken(address, provider, chainId = null) {
   // Keyed by chain as well as address: the same address is a different token on a
@@ -190,7 +240,7 @@ async function getToken(address, provider, chainId = null) {
   const info = decimalsOk
     ? { address, symbol, decimals, decimalsOk: true }
     : { address, symbol, decimals: null, decimalsOk: false, decimalsError };
-  if (decimalsOk) tokenCache.set(key, info);
+  if (decimalsOk) { tokenCache.set(key, info); scheduleTokenMetaSave(); }
   return info;
 }
 
@@ -319,6 +369,9 @@ module.exports = {
   priceFromSqrt,
   priceAtTick,
   getToken,
+  // For tests: the cache and its file, so persistence can be exercised without
+  // reaching for module internals.
+  _tokenMeta: { cache: tokenCache, file: META_FILE, save: saveTokenMeta },
   listTokenIds,
   readUncollectedFees,
   loadPosition,

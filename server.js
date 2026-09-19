@@ -3688,7 +3688,15 @@ if (SERVICES) {
       return;
     }
     svc.adopted = false;
-    const child = spawn(svc.cmd, svc.args, { cwd: svc.cwd || __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    // A service gets its own PORT, never this process's. The scanner reads
+    // `process.env.PORT || 3847`, inherited 8787 from the dashboard that spawned it,
+    // bound the port already in use and died two seconds later -- forty-six times,
+    // every fifteen minutes, while :3847 stayed empty and the public scanner URL had
+    // nothing behind it. Inheriting the environment is right for the secrets in it;
+    // inheriting the parent's own port never is.
+    const env = { ...process.env };
+    if (svc.port) env.PORT = String(svc.port); else delete env.PORT;
+    const child = spawn(svc.cmd, svc.args, { cwd: svc.cwd || __dirname, stdio: ["ignore", "pipe", "pipe"], env });
     svc.child = child; svc.startedAt = Date.now();
     const relay = (isErr) => (d) => { for (const line of d.toString().split("\n")) if (line.trim()) { console.log(`${svc.name}: ${line}`); if (isErr) svc.lastErr = line.trim(); } };
     child.stdout.on("data", relay(false)); child.stderr.on("data", relay(true));

@@ -512,6 +512,22 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile 
       return !!state.complete;
     }
 
+    // --- a state with no floor ----------------------------------------------
+    // lastScanned set and scannedFrom null: a first run that read the head but never
+    // recorded how far back it reached, or state written before that field existed.
+    // The backfill below is guarded by `scannedFrom > 0`, which is false for null,
+    // so discovery could never resume and never report complete -- every wallet on
+    // this instance had been stuck there, with the page saying an older position
+    // could not be ruled out. Re-establish the floor from what was scanned.
+    if (!state.complete && state.scannedFrom == null && state.lastScanned > 0) {
+      const r = await sweepBack(state.lastScanned, Math.max(1, maxChunks));
+      if (r.coveredFrom <= state.lastScanned) state.scannedFrom = r.coveredFrom;
+      state.complete = r.complete;
+      if (r.error) state.lastError = r.error;
+      save();
+      return !!state.complete && state.lastScanned >= latest;
+    }
+
     // --- backfill ----------------------------------------------------------
     if (!state.complete && state.scannedFrom > 0) {
       const r = await sweepBack(state.scannedFrom - 1, Math.max(1, maxChunks));

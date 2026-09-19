@@ -24,15 +24,24 @@ flock -w 120 9 || { echo "tailscale: another setup is running; leaving it to fin
 "$TS/tailscale" --socket="$SOCK" funnel --bg 8788                                  # public: MCP only
 "$TS/tailscale" --socket="$SOCK" funnel --bg --https=8443 http://127.0.0.1:8790    # public: dashboard behind lp-gate.mjs (passphrase)
 "$TS/tailscale" --socket="$SOCK" funnel --bg --https=10000 http://127.0.0.1:8791   # public: pool scanner behind lp-gate.mjs (passphrase)
-# === weekly-digest-and-vault === tailnet-only (no Funnel, no gate): the dashboard itself, e.g. the vault at
-# https://<your-node>.<your-tailnet>.ts.net:8444/vault, reachable only from devices logged into this tailnet.
-"$TS/tailscale" --socket="$SOCK" serve --bg --https=8444 http://127.0.0.1:8787
+# === weekly-digest-and-vault === tailnet-only (no Funnel, no gate): the dashboard
+# itself, e.g. the vault at https://<your-node>.<your-tailnet>.ts.net:8444/vault,
+# reachable only from devices logged into this tailnet.
+#
+# Through the chain router (8800), not one chain's port, for the same reason the
+# public mapping goes that way: pointed at 8787 this address served Robinhood alone,
+# with no picker and no sign that Arc existed. LP_ROUTER_PORT keeps it in step with
+# start-all.sh, and a single-chain install has no router, so fall back to 8787 then
+# rather than publish an address with nothing behind it.
+TARGET=8787
+if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${LP_ROUTER_PORT:-8800}\$"; then TARGET="${LP_ROUTER_PORT:-8800}"; fi
+"$TS/tailscale" --socket="$SOCK" serve --bg --https=8444 "http://127.0.0.1:$TARGET"
 # Applying is not the same as being applied: verify every mapping we just asked for
 # is actually in the config, and say so loudly if one is not, rather than reporting
 # success because the commands exited 0.
 missing=0
 status="$("$TS/tailscale" --socket="$SOCK" funnel status 2>&1)"
-for want in "8443.*8790" "10000.*8791" "8444.*8787"; do
+for want in "8443.*8790" "10000.*8791" "8444.*$TARGET"; do
   echo "$status" | tr '\n' ' ' | grep -qE "$want" || { echo "tailscale: WARNING — mapping $want is missing after setup"; missing=1; }
 done
 echo "$status"

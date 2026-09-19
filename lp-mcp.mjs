@@ -24,17 +24,38 @@ import daykey from "./daykey.js"; // one calendar for every "day": LP_TZ, else t
 const TZ = daykey.TZ;
 
 async function get(path) {
-  const r = await fetch(BASE + path, { signal: AbortSignal.timeout(60000) });
+  let r;
+  try {
+    r = await fetch(BASE + path, { signal: AbortSignal.timeout(60000) });
+  } catch (err) {
+    // Only here is the dashboard actually unreachable: nothing accepted the
+    // connection, or it never answered.
+    throw Object.assign(new Error(`${path} -> ${err.name === "TimeoutError" ? "no answer within 60s" : err.message}`), { unreachable: true });
+  }
   if (!r.ok) throw new Error(`${path} -> HTTP ${r.status}`);
   const j = await r.json();
-  if (j.ok === false) throw new Error(`${path} -> ${j.error || "not ok"}`);
+  // An endpoint that is still building its first answer is not a failure and must
+  // not be reported as one. The assistant was told "Dashboard not reachable ...
+  // Start it with ./run-dashboard.sh" about an instance that was running and
+  // answering other routes in milliseconds, and repeated that to the person asking:
+  // it had been given a wrong reason, not invented one.
+  if (j.ok === false && j.refreshing) {
+    throw Object.assign(new Error(`${path} is still loading (${j.error || "first read in progress"})`), { warming: true });
+  }
+  if (j.ok === false) throw Object.assign(new Error(`${path} -> ${j.error || "not ok"}`), { refused: true });
   return j;
 }
 
 const text = (obj) => ({ content: [{ type: "text", text: JSON.stringify(obj, null, 1) }] });
+// What went wrong decides what to say. Telling the assistant to start a dashboard
+// that is already running sends whoever asked to fix something that is not broken.
 const fail = (err) => ({
   isError: true,
-  content: [{ type: "text", text: `Dashboard not reachable at ${BASE}: ${err.message}. Start it with ./run-dashboard.sh.` }],
+  content: [{ type: "text", text: err && err.warming
+    ? `The dashboard is running but ${err.message}. Say that it is still warming up and the figure is not available yet; do not report it as missing or as zero, and do not suggest restarting anything.`
+    : err && err.refused
+      ? `The dashboard answered but could not provide this: ${err.message}. Report what it said; it is running.`
+      : `Dashboard not reachable at ${BASE}: ${err.message}. Start it with ./run-dashboard.sh.` }],
 });
 
 const dayKey = (t) => daykey.dayKey(t);

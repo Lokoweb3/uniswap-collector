@@ -75,7 +75,17 @@ async function main() {
     }
     // The split assets must be served with the right types.
     for (const [file, type] of [["/dashboard.css", "text/css"], ["/dashboard.js", "application/javascript"], ["/insights-view.js", "application/javascript"]]) {
-      const r = await fetch(base + file);
+      // The page loop above aborts its own requests on a timeout, which can leave a
+      // socket in undici's pool that looks reusable and is not: the next request on
+      // it fails with UND_ERR_SOCKET before reaching the server. That is a client
+      // artefact, not a fault in what is being tested, so one retry on a socket
+      // error distinguishes it from a real failure, which fails again.
+      let r;
+      try { r = await fetch(base + file); }
+      catch (e) {
+        if (!e.cause || e.cause.code !== "UND_ERR_SOCKET") throw e;
+        r = await fetch(base + file);
+      }
       const ct = r.headers.get("content-type") || "";
       if (!r.ok || !ct.startsWith(type)) {
         failed++;

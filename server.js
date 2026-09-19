@@ -237,6 +237,64 @@ const ledger = require("./ledger").create({
   npmAddress: cfg.contracts.positionManager,
   forwardStart: hist.startBlock,
 });
+/**
+ * What this collector itself recorded collecting, per position.
+ *
+ * Nineteen of the thirty-three positions here can never be reconstructed from the
+ * chain: their pools pay a native-asset leg by plain value transfer, which emits no
+ * log, so the claims page shows "none" for them and says why. But the collector was
+ * the thing doing the collecting, and it wrote down what it took. Eight of those
+ * positions are in its ledger with real amounts.
+ *
+ * This is a different provenance from the chain reconstruction and is never added to
+ * the verified totals: it covers only this collector's own runs and knows nothing
+ * about fees the wallet settled itself. It is shown beside them, labelled, because
+ * "none" for a position that demonstrably paid out is worse than a figure whose
+ * origin is stated.
+ */
+const OWNER_COLLECTS_FILE = dataFile("v4-owner-collects.json");
+let ownerCollectsCache = { mtime: 0, byId: new Map() };
+function collectorRunsByPosition() {
+  let mtime = 0;
+  try { mtime = fs.statSync(OWNER_COLLECTS_FILE).mtimeMs; } catch { return new Map(); }
+  if (mtime === ownerCollectsCache.mtime) return ownerCollectsCache.byId;
+  const byId = new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(OWNER_COLLECTS_FILE, "utf8"));
+    const rows = Array.isArray(raw) ? raw : raw.rows || [];
+    for (const r of rows) {
+      if (r.principal === true) continue;                 // liquidity out, not a fee
+      const id = String(r.tokenId || "").replace(/^v4-/, "");
+      if (!id) continue;
+      if (!byId.has(id)) byId.set(id, { records: 0, unknownLegs: 0, firstT: null, lastT: null, tok: new Map() });
+      const e = byId.get(id);
+      e.records++;
+      if (r.t) { if (!e.firstT || r.t < e.firstT) e.firstT = r.t; if (!e.lastT || r.t > e.lastT) e.lastT = r.t; }
+      for (const [amt, meta] of [[r.fee0, r.t0], [r.fee1, r.t1]]) {
+        // A leg the ledger could not measure is unknown, never zero: adding it as
+        // zero is exactly the repair tools/repair-v4-zero-fees.js had to undo.
+        if (amt == null || !meta || !meta.address) { e.unknownLegs++; continue; }
+        const k = String(meta.address).toLowerCase();
+        const prev = e.tok.get(k) || { address: meta.address, symbol: meta.symbol || "?", decimals: Number(meta.decimals ?? 18), raw: 0n };
+        prev.raw += BigInt(amt);
+        e.tok.set(k, prev);
+      }
+    }
+  } catch { return ownerCollectsCache.byId; }
+  ownerCollectsCache = { mtime, byId };
+  return byId;
+}
+const collectorRunsFor = (tokenId) => {
+  const e = collectorRunsByPosition().get(String(tokenId));
+  if (!e || !e.records) return null;
+  return {
+    records: e.records, unknownLegs: e.unknownLegs, firstT: e.firstT, lastT: e.lastT,
+    tokens: [...e.tok.values()].map((t) => ({ address: t.address, symbol: t.symbol, raw: t.raw.toString(),
+      amount: Number(ethers.formatUnits(t.raw, t.decimals)) })),
+    note: "this collector's own runs only; fees the wallet settled itself are not counted here",
+  };
+};
+
 // v4 liquidity ledger (ledger-v4.js): ModifyLiquidity events on the PoolManager
 // keyed by the salt (tokenId), in the v3 ledger's shape so the PnL views and
 // strategy.js treat v4 positions the same way. Only when v4 is configured.
@@ -888,7 +946,12 @@ async function claimTotal(sel, status, from, to) {
       complete = false;
       const reason = h.status === "unavailable" ? h.statusReason : c.reason;
       (c.state === "not-scanned" ? partial : unsupported).push({ key: h.key, tokenId: h.tokenId, state: h.status === "unavailable" ? "unavailable" : c.state, reason });
-      positions.push({ ...base, tokens: [], usdHistorical: null, pricedSubtotal: 0, records: 0, lastT: null, state: h.status === "unavailable" ? "unavailable" : c.state, reason, included: false });
+      // The excluded path is where the native-asset positions land -- the ones the
+      // chain cannot reconstruct at all. It is precisely there that the collector's
+      // own record is worth having, so it is attached here too. Without this the
+      // figure appeared only on positions that already had a verified history.
+      positions.push({ ...base, tokens: [], usdHistorical: null, pricedSubtotal: 0, records: 0, lastT: null, state: h.status === "unavailable" ? "unavailable" : c.state, reason, included: false,
+        collector: collectorRunsFor(base.tokenId) });
       continue;
     }
     if (c.state !== "complete") { complete = false; partial.push({ key: h.key, tokenId: h.tokenId, state: c.state, reason: c.reason }); }
@@ -917,7 +980,10 @@ async function claimTotal(sel, status, from, to) {
         priceT: r.px ? (r.px.t ?? (r.px.src === "block" ? r.t ?? null : null)) : null });
     }
     positions.push({ ...base, tokens: tokList(ptoks), usdHistorical: pUnpriced ? null : +pHist.toPrecision(12), pricedSubtotal: +pHist.toPrecision(12),
-      records: recs.length, lastT, state: c.state, reason: c.reason || null, included: true });
+      records: recs.length, lastT, state: c.state, reason: c.reason || null, included: true,
+      // Carried, never merged: the verified figures above stay exactly as the chain
+      // supports them, and this says what the collector separately wrote down.
+      collector: collectorRunsFor(base.tokenId) });
   }
   const discovery = sel.wallets.map((w) => {
     const d = registry.discoveryStatus(w.address);

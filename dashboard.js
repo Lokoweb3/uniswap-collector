@@ -2677,6 +2677,23 @@ function ctotalPanelHtml(d, walletScoped) {
       `<span class="ctamts">${ctTokenList(s.tokens)}</span></div>`;
   }).join('') + '</div>');
   // per position
+  // A position the chain cannot reconstruct still shows "none", because none of its
+  // payout can be verified from logs -- a native-asset leg moves no ERC-20 and leaves
+  // nothing to read. But the collector was the thing collecting, and it wrote down
+  // what it took: eight of those positions have real amounts in its own ledger. That
+  // is a different provenance, so it sits beside the verified column rather than in
+  // it, and says whose record it is.
+  const ctCollectorNote = (p) => {
+    const c = p.collector;
+    if (!c || !c.records) return '';
+    const amounts = (c.tokens || []).filter(t => Number(t.amount) > 0)
+      .map(t => `${Number(t.amount).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${esc(t.symbol)}`).join(' + ');
+    if (!amounts) return '';
+    const verified = Number(p.records) > 0;
+    return `<div class="ctcollector" title="From this collector's own run ledger, not reconstructed from the chain. It covers only what this collector took${c.unknownLegs ? `, and ${c.unknownLegs} leg${c.unknownLegs === 1 ? ' was' : 's were'} not measured at the time` : ''}; fees the wallet settled itself are not counted here.">`
+      + `${verified ? 'collector also recorded' : 'collector recorded'} ${amounts} over ${c.records} run${c.records === 1 ? '' : 's'}`
+      + `${c.unknownLegs ? ` <span class="muted">(${c.unknownLegs} unmeasured leg${c.unknownLegs === 1 ? '' : 's'})</span>` : ''}</div>`;
+  };
   const ps = Array.isArray(d.positions) ? d.positions : [];
   out.push('<h4 class="cth">By position</h4>' + (ps.length
     ? '<div class="ctscroll"><table class="chtable ctpos"><thead><tr><th scope="col">Position</th>' + (walletScoped ? '' : '<th scope="col">Wallet</th>') +
@@ -2684,7 +2701,7 @@ function ctotalPanelHtml(d, walletScoped) {
       ps.map(p => `<tr><td>#${esc(p.tokenId)} <span class="muted">${esc(p.pair || '')}</span></td>` +
         (walletScoped ? '' : `<td>${esc(p.walletLabel || shortA(p.wallet))}</td>`) +
         `<td>${esc(p.status === 'open' ? 'Open' : histLabel(histGroupOf(p)))}</td>` +
-        `<td class="mono">${ctTokenList(p.tokens)}</td>` +
+        `<td class="mono">${ctTokenList(p.tokens)}${ctCollectorNote(p)}</td>` +
         `<td class="mono">${esc(ctUsdText(p.usdHistorical, p.pricedSubtotal, p.records))}</td>` +
         `<td>${Number(p.records) || 0}</td>` +
         `<td>${p.lastT ? esc(cTime(p.lastT)) : '—'}</td>` +

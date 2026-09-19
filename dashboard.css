@@ -1313,6 +1313,9 @@ select.scope option{background:var(--card);color:var(--ink)}
 /* A figure that is in the total on an assumption, not a reading. Marked, not
    alarmed: the money is really held, it is the rate that is unverified. */
 .assumed{color:var(--warn,#d97706)}
+/* A figure from the collector's own ledger, beside one verified from the chain.
+   Quieter than the verified column: different provenance, not a second opinion. */
+.ctcollector{font-size:11px;color:var(--muted);margin-top:2px;white-space:normal;line-height:1.35}
 .wh-side .lprate{font-size:13px;color:var(--muted);white-space:nowrap}
 .wh-side .lprate b{color:var(--ink);font-family:var(--mono);font-weight:600;margin-left:4px}
 .whmore{flex-basis:100%;order:3}

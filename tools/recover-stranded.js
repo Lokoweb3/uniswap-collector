@@ -23,6 +23,15 @@
  * DRY RUN BY DEFAULT.
  *   node tools/recover-stranded.js --token=0xeCe5…cb3c
  *   node tools/recover-stranded.js --token=0xeCe5…cb3c --execute
+ *
+ * When the stranded balance is ALREADY the sweep target there is nothing to
+ * convert, and the pass died after its swap rather than before it. Quoting the
+ * target against itself reverts, so that case is handled separately: state the
+ * amount owed and it is split and delivered, untouched. --amount is required
+ * there, because the operator's balance also holds its gas float, and "everything
+ * in the wallet" would spend it.
+ *
+ *   node tools/recover-stranded.js --token=<target> --amount=53.589647
  */
 "use strict";
 
@@ -57,6 +66,9 @@ async function main() {
   const unitDec = cl.unitDecimals(cfg.numeraire ? { numeraire: cfg.numeraire } : {});
   const natDec = (cfg.chain.nativeCurrency || {}).decimals ?? 18;
   const natSym = (cfg.chain.nativeCurrency || {}).symbol || "ETH";
+  // One balance behind two interfaces: the 18-decimal native view and the
+  // 6-decimal ERC-20 view are the same money on this chain.
+  const nativeSame = !!(cfg.numeraire && cfg.numeraire.nativeSameAsErc20);
 
   let wallet = null;
   if (EXECUTE) {
@@ -87,6 +99,65 @@ async function main() {
   log(`  remainder        : ${100 - pct}% -> ${owner}`);
   if (chainId !== Number(cfg.chain.chainId)) throw new Error(`settings say chain ${cfg.chain.chainId}, RPC says ${chainId}`);
   if (balance === 0n) { log("\nNothing stranded. Done."); return; }
+
+  // --- already the sweep target: split and deliver, no conversion --------------
+  // On Arc the unit of account and the sweep target are one token (USDC is both the
+  // native asset and the ERC-20 at 0x3600…), so a pass that swapped successfully
+  // leaves its proceeds in the target and the collector's sweep, which assumes the
+  // two differ, dies trying to quote the token against itself.
+  if (token === target) {
+    const amountArg = arg("amount");
+    if (!amountArg) throw new Error("the balance is already the sweep target: pass --amount=<amount owed> (the wallet also holds its gas float, which must not be delivered)");
+    // One balance, two scales: `balance` above came from the 6-decimal ERC-20 view,
+    // and the native view of the same money is 18-decimal. Mixing them reads
+    // 65.448768 USDC as 0.000000000065448768, so the whole branch works in one.
+    const dp = nativeSame ? natDec : dec;
+    const held = nativeSame ? await provider.getBalance(operator) : balance;
+    const amount = ethers.parseUnits(String(amountArg), dp);
+    if (amount <= 0n) throw new Error("--amount must be positive");
+    if (amount > held) throw new Error(`--amount ${amountArg} is more than the operator holds (${ethers.formatUnits(held, dp)})`);
+    const keep = held - amount;
+    const split = cl.splitAmount(amount, pct);
+    const fmtA = (v) => ethers.formatUnits(v, dp);
+    log(`\n  already the target: no conversion`);
+    log(`  delivering       : ${fmtA(amount)} ${sym}`);
+    log(`    ${pct}% to vault    : ${fmtA(split.toVault)} -> ${tba}`);
+    log(`    ${100 - pct}% to owner    : ${fmtA(split.toOwner)} -> ${owner}`);
+    log(`  left as gas float: ${fmtA(keep)} ${sym}`);
+    if (!EXECUTE) { log("\nDry run: nothing was sent. Re-run with --execute."); return; }
+
+    // Sent as native value. On this chain the ERC-20 interface and the native
+    // balance are one balance, and the native path is the one already proven here
+    // (the vault was funded that way during the migration).
+    let gasUsed = 0n;
+    const send = async (to, value, what) => {
+      const tx = nativeSame ? await wallet.sendTransaction({ to, value }) : await tgt.transfer(to, value);
+      log(`  ${what} ${fmtA(value)} ${sym} -> ${to} -> ${tx.hash}`);
+      const r = await tx.wait();
+      if (r.status !== 1) throw new Error(`${what} transaction reverted (${tx.hash}); nothing further was sent`);
+      gasUsed += r.gasUsed * (r.gasPrice || 0n);
+      return tx.hash;
+    };
+    const vHash = split.toVault > 0n ? await send(tba, split.toVault, "split") : null;
+    const oHash = await send(owner, split.toOwner, "send ");
+    log(`  gas              : ${ethers.formatUnits(gasUsed, natDec)} ${natSym}`);
+    try {
+      require("../treasury").appendLedger({
+        timestamp: new Date().toISOString(),
+        wallet: arg("wallet-label", "Arc LP"), walletAddress: owner,
+        positionId: null, positionIds: [], pair: `${sym} (already target)`,
+        totalCollectedUsdg: Number(fmtA(amount)), splitPct: pct,
+        splitUsdg: Number(fmtA(split.toVault)), ownerReceived: Number(fmtA(split.toOwner)),
+        tbaAddress: tba, splitTxHash: vHash, ownerTxHash: oHash, status: "ok",
+        source: "recover-stranded (no conversion)",
+      });
+      log("  recorded in fee-split-ledger.json");
+    } catch (err) {
+      log(`  ! could not write fee-split-ledger.json: ${err.message} — the transfers above are still on chain`);
+    }
+    log("\nDone.");
+    return;
+  }
 
   const quoter = new ethers.Contract(cfg.contracts.quoterV2,
     ["function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)"],

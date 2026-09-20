@@ -305,7 +305,15 @@ async function main() {
   }
 
   const cfg = require("./settings").load({ fresh: true });
-  const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId);
+  // Arc throttles a collector's burst, sometimes saying so ("rate limit exceeded")
+  // and sometimes answering eth_call with empty data, which ethers reports as
+  // "missing revert data" -- indistinguishable, in a log, from a contract refusing.
+  // One pass read the sweep target's symbol as "???" and skipped a position holding
+  // $44 of fees that way. Reads are retried; sends never are.
+  const provider = require("./rpc-retry").withRetry(
+    new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId),
+    { attempts: Number(cfg.rpcRetryAttempts) || 4, log },
+  );
 
   // Confirm we're on the chain we think we're on.
   const net = await provider.getNetwork();

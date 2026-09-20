@@ -36,6 +36,7 @@
 "use strict";
 
 const fs = require("fs");
+const path = require("path");
 const { ethers } = require("ethers");
 const cl = require("../collector-logic");
 const swapMod = require("../collector-swap");
@@ -46,6 +47,8 @@ const arg = (n, d = null) => {
 };
 const EXECUTE = process.argv.includes("--execute");
 const SETTINGS = arg("settings", "/home/steven/arc-data/settings.json");
+// The split ledger belongs beside the settings this run was told to use.
+const LEDGER_FOR_SETTINGS = path.join(path.dirname(SETTINGS), "fee-split-ledger.json");
 const ERC20 = [
   "function balanceOf(address) view returns (uint256)",
   "function allowance(address,address) view returns (uint256)",
@@ -142,6 +145,9 @@ async function main() {
     const oHash = await send(owner, split.toOwner, "send ");
     log(`  gas              : ${ethers.formatUnits(gasUsed, natDec)} ${natSym}`);
     try {
+      // Into the ledger of the instance whose settings this run was given, not the
+      // one this process happens to live in: reading Arc's settings from the
+      // Robinhood checkout put an Arc split into Robinhood's ledger once already.
       require("../treasury").appendLedger({
         timestamp: new Date().toISOString(),
         wallet: arg("wallet-label", "Arc LP"), walletAddress: owner,
@@ -150,7 +156,7 @@ async function main() {
         splitUsdg: Number(fmtA(split.toVault)), ownerReceived: Number(fmtA(split.toOwner)),
         tbaAddress: tba, splitTxHash: vHash, ownerTxHash: oHash, status: "ok",
         source: "recover-stranded (no conversion)",
-      });
+      }, { file: LEDGER_FOR_SETTINGS, expectTba: tba });
       log("  recorded in fee-split-ledger.json");
     } catch (err) {
       log(`  ! could not write fee-split-ledger.json: ${err.message} — the transfers above are still on chain`);

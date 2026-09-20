@@ -70,10 +70,27 @@ function readLedger() {
   }
 }
 
-function appendLedger(entry) {
-  const rows = readLedger();
+/**
+ * Append a split row.
+ *
+ * `file` exists because LEDGER_FILE is resolved from the PROCESS's data directory,
+ * and a tool can legitimately act on another instance's chain: tools/recover-stranded
+ * reads Arc's settings while running from this checkout, so its row went into
+ * Robinhood's ledger. That inflated Robinhood's "split to vault, all time" by an Arc
+ * split of 10.717929 and made the vault look as though it had been withdrawn from.
+ *
+ * A row carries the vault it paid, so a mismatch between that and the ledger it is
+ * being written to is caught here rather than discovered on a page.
+ */
+function appendLedger(entry, { file = LEDGER_FILE, expectTba = null } = {}) {
+  if (expectTba && entry && entry.tbaAddress
+    && String(entry.tbaAddress).toLowerCase() !== String(expectTba).toLowerCase()) {
+    throw new Error(`refusing to write a split for vault ${entry.tbaAddress} into a ledger whose vault is ${expectTba}`);
+  }
+  let rows = [];
+  try { const j = JSON.parse(fs.readFileSync(file, "utf8")); rows = Array.isArray(j) ? j : (j.rows || []); } catch { rows = []; }
   rows.push(entry);
-  fs.writeFileSync(LEDGER_FILE, JSON.stringify(rows, null, 1));
+  fs.writeFileSync(file, JSON.stringify(rows, null, 1));
 }
 
 /** Number of most recent consecutive entries whose TBA transfer failed. */

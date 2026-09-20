@@ -52,12 +52,16 @@ async function main() {
   // transfer produces no log, so there was nothing to read.
   const nativeZero = (r) => (r.t0 && r.t0.address === ethers.ZeroAddress && r.fee0 === "0")
     || (r.t1 && r.t1.address === ethers.ZeroAddress && r.fee1 === "0");
-  // But nulling is not free. Downstream treats a null leg as unpriced and drops the
-  // whole row from priced totals, so a row whose OTHER leg holds a real measured
-  // amount would lose that amount from the dashboard -- trading an overstated zero
-  // for an understated total. Those need a decision, not a default, so by default
-  // only rows with nothing measured on any leg are repaired: there the change is
-  // purely one of honesty and no figure moves.
+  // What nulling actually costs, checked against every consumer rather than assumed.
+  // A null leg is read as `fee ?? "0"` or `fee || "0"` for the AMOUNT, so the row's
+  // measured leg keeps contributing and no row is dropped. What changes is the
+  // valuation: `legUnknown` makes the row fall back from its locked historical
+  // price to today's prices, and it is reported as not locked. That is the honest
+  // description of a fee whose second leg was never measured.
+  //
+  // It is still a decision rather than a default, because it moves a figure: rows
+  // with nothing measured on any leg are repaired without --include-partial, and
+  // there no figure moves at all.
   const measuredSomething = (r) => [["fee0", r.t0], ["fee1", r.t1]]
     .some(([k, tok]) => tok && tok.address !== ethers.ZeroAddress && r[k] && r[k] !== "0");
   const all = rows.filter(nativeZero);
@@ -68,7 +72,7 @@ async function main() {
   console.log(`  ${rows.length} row(s); ${all.length} with a native leg recorded as exactly 0`);
   console.log(`  ${partial.length} of those also measured a real amount on their token leg`);
   console.log(INCLUDE_PARTIAL
-    ? `  --include-partial: repairing all ${all.length}. Those ${partial.length} rows will become unpriced and their measured token value will leave the priced totals.`
+    ? `  --include-partial: repairing all ${all.length}. The ${partial.length} partial rows keep their measured leg and stay in the totals; their USD falls back from the locked price of the collect to today's prices, and they are marked not locked.`
     : `  repairing the ${suspects.length} with nothing measured on any leg; no total moves. Use --include-partial for the rest, knowing what it costs.`);
   console.log("");
   if (!suspects.length) { console.log("Nothing to repair."); return; }
@@ -105,7 +109,7 @@ async function main() {
   fs.copyFileSync(LEDGER, backup);
   for (const { row, legs } of repairs) {
     for (const key of legs) row[key] = null;
-    const note = "native leg unreadable: it moves no ERC-20 and leaves no Transfer log, so the amount was never measured (repaired 2026-09-18; it had been recorded as 0)";
+    const note = `native leg unreadable: it moves no ERC-20 and leaves no Transfer log, so the amount was never measured (repaired ${new Date().toISOString().slice(0, 10)}; it had been recorded as 0)`;
     row.note = row.note ? `${row.note}; ${note}` : note;
   }
   fs.writeFileSync(LEDGER, JSON.stringify(Array.isArray(raw) ? rows : raw, null, 1));

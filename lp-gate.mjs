@@ -35,7 +35,12 @@ const SITES = [
   // complete while a whole chain was missing from it.
   { name: "LP dashboard", port: Number(process.env.LP_GATE_DASHBOARD_PORT || 8790),
     upstream: Number(process.env.LP_GATE_DASHBOARD_UPSTREAM || 8800),
-    allow: (m, p) => ((m === "GET" || m === "HEAD") && !/^\/api\/(arm|backup|collect|lock|memecoins\/close|risk|sales\/approve|strategy\/proposals|unlock)(\/|$)/.test(p) && !/^\/arm(\.html)?$/.test(p))
+    // GET /api/risk is the guardian's status and changes nothing -- the identical
+    // payload is already public under /api/memecoins, from the same handler. Denying
+    // one name and not the other only emptied the Risk panel on the public URL.
+    // Rule changes are POST /api/risk, which cannot pass: the POST branch below
+    // admits only chat and tasks/run, and the endpoint is localhost-only besides.
+    allow: (m, p) => ((m === "GET" || m === "HEAD") && !/^\/api\/(arm|backup|collect|lock|memecoins\/close|sales\/approve|strategy\/proposals|unlock)(\/|$)/.test(p) && !/^\/arm(\.html)?$/.test(p))
       || (m === "POST" && /^\/api\/(chat(\/reset)?|tasks\/run)$/.test(p)) }, // in-site chat + task runner
     // /vault, /treasury, /qr.js and /api/digest are plain GETs and pass (weekly-digest-and-vault).
   { name: "Robinhood LP scanner", port: Number(process.env.LP_GATE_SCANNER_PORT || 8791), upstream: 3847,

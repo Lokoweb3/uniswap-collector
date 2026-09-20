@@ -76,4 +76,23 @@ const inbound = new RegExp(/\.find\(\(c\) => (\/.+?\/)\.test\(c\)\)/.exec(src)[1
   assert.ok(/node chain-router\.js/.test(stopAll), "and stopped with it");
 }
 
+// ---- 4. reads pass, writes do not ---------------------------------------------
+{
+  // GET /api/risk is the guardian's status and changes nothing; the identical
+  // payload is already public under /api/memecoins, from the same handler. Denying
+  // one name and not the other emptied the Risk panel on the public URL and
+  // answered {"ok":false,"error":"not available through the public gate"}.
+  const deny = /!\/\^\\\/api\\\/\(([^)]*)\)/.exec(src);
+  assert.ok(deny, "the gate still has a deny list for the dashboard site");
+  const denied = deny[1].split("|");
+  assert.ok(!denied.includes("risk"), "a read-only status is not denied");
+  // What must stay denied: everything that arms, spends, closes or approves.
+  for (const path of ["arm", "backup", "collect", "lock", "memecoins\\/close", "sales\\/approve", "unlock"]) {
+    assert.ok(denied.includes(path), `${path.replace("\\", "")} is still refused through the gate`);
+  }
+  // And the write side of risk cannot pass by method: POST admits only these two.
+  assert.match(src, /m === "POST" && \/\^\\\/api\\\/\(chat\(\\\/reset\)\?\|tasks\\\/run\)\$\//,
+    "POST is limited to chat and the task runner, so POST /api/risk is refused whatever the deny list says");
+}
+
 console.log("gate cookies: the chain choice passes in both directions, the gate's session never goes upstream, and no other cookie crosses either way");

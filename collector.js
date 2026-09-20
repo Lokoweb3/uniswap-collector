@@ -694,7 +694,13 @@ async function runOwner(ctx, owner) {
       if (ethBal < gasTargetWei && ethBal > before.eth) {
         log(`gas float: keeping ${ethers.formatEther(ethBal - before.eth)} ETH of v4 fees (float ${ethers.formatEther(ethBal)} of ${ethers.formatEther(gasTargetWei)} target)`);
       }
-      if (excess > 0n) {
+      // Native v4 fees are wrapped so the sweep can convert them. When the sweep
+      // target IS this token there is nothing to convert and no wrapper to call:
+      // deposit() reverts with "missing revert data" on a chain whose native asset
+      // is the ERC-20 itself, and the fees are already in the right form.
+      const wrapNeeded = String(cfg.sweep.targetToken || "").toLowerCase() !== String(weth).toLowerCase();
+      if (!wrapNeeded && excess > 0n) log(`v4 fees are already the sweep target; nothing to wrap.`);
+      if (wrapNeeded && excess > 0n) {
         try {
           const wtx = await new ethers.Contract(weth, WETH_ABI, wallet).deposit({ value: excess });
           log(`wrap ${ethers.formatEther(excess)} ETH (v4 fees) -> WETH -> ${wtx.hash}`);
@@ -965,14 +971,31 @@ async function runOwner(ctx, owner) {
   let wethBal = cl.passDelta(before.weth, wethNow);
   const { reserve, target: gasTarget } = gasFloat(cfg);
 
+  // The unit of account and the sweep target can be the same token. On Arc they
+  // are: USDC is the native asset and the ERC-20 at 0x3600… at once, and the sweep
+  // target is that token. There is then nothing to wrap, unwrap or quote -- the
+  // proceeds are already what they are being swept into -- and every one of those
+  // calls reverts on a token with no wrapper. On 2026-09-20 that killed a pass
+  // between its swap and its split: the collect and the swap were on chain and
+  // 53.589647 USDC sat in the operator wallet until it was delivered by hand.
+  const unitIsTarget = target.kind === "token" && String(target.address).toLowerCase() === String(weth).toLowerCase();
+
   if (target.kind === "token") {
     const tinfo = await tokenInfo(target.address, provider);
     const targetC = new ethers.Contract(target.address, ERC20_ABI, wallet);
 
+    // Steps 1 and 2 convert the unit of account into the sweep target. When they
+    // are the same token there is nothing to convert, and every call here reverts:
+    // quoting a token against itself, and wrapping or unwrapping a token that has
+    // no wrapper. Skipping to the split is not an optimisation, it is the only
+    // thing that works -- and not skipping it killed a pass between its swap and
+    // its split, leaving 53.589647 USDC in the operator wallet.
+    if (unitIsTarget) log(`Sweep target is the unit of account (${tinfo.symbol}); nothing to convert.`);
+
     // 1. Gas float first: the operator pays gas in ETH, so if it has slipped
     //    under the target float, unwrap enough of this pass's WETH to refill it.
     const ethBal0 = await provider.getBalance(wallet.address);
-    if (ethBal0 < gasTarget && wethBal > 0n) {
+    if (!unitIsTarget && ethBal0 < gasTarget && wethBal > 0n) {
       const topUp = gasTarget - ethBal0 < wethBal ? gasTarget - ethBal0 : wethBal;
       try {
         const utx = await wethC.withdraw(topUp);
@@ -987,7 +1010,7 @@ async function runOwner(ctx, owner) {
 
     // 2. The rest of the WETH becomes the target token, delivered straight to
     //    the owner (the router pays out to `recipient`, so no extra transfer).
-    if (wethBal > 0n) {
+    if (!unitIsTarget && wethBal > 0n) {
       const quoted = await quoteSingle(quoter, weth, target.address, wethBal, target.feeTier);
       if (quoted === 0n) {
         log(`  ! could not quote WETH -> ${tinfo.symbol}; WETH left in operator wallet.`);

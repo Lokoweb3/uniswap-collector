@@ -25,24 +25,52 @@ const isTransient = (err) => {
   for (let e = err, hops = 0; e && hops < 4; e = e.cause || e.error, hops++) {
     if (e.code && TRANSPORT_CODES.has(String(e.code))) return true;
   }
+  // A JSON-RPC rate limit is throttling by another route: the HTTP exchange
+  // succeeded and the refusal is in the body. Failover reads this too, and an
+  // endpoint answering -32005 is precisely one worth stepping away from.
+  for (let e = err, hops = 0; e && hops < 4; e = e.cause || e.error, hops++) {
+    if (e.code === -32005) return true;
+  }
   const m = String((err.shortMessage || err.message) || err || "");
-  return /429|Too Many Requests|403|Forbidden|502|503|504|Bad Gateway|Gateway Time-out|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|fetch failed|timeout/i.test(m);
+  // "missing revert data" is deliberately NOT here: at this layer it is what a
+  // genuine revert without a reason string looks like, and a revert must never look
+  // transient. The method-level retry above handles the throttled flavour of it,
+  // where the call being retried is known to be a read.
+  return /429|Too Many Requests|403|Forbidden|502|503|504|Bad Gateway|Gateway Time-out|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|fetch failed|timeout|rate limit|could not coalesce/i.test(m);
 };
+
+/** Methods that change something. A second attempt could send a second transaction. */
+const SENDS = new Set(["eth_sendRawTransaction", "eth_sendTransaction", "eth_signTransaction", "personal_sign", "eth_sign"]);
+/** True when a payload -- single or batched -- carries anything that changes state. */
+const carriesSend = (payload) => (Array.isArray(payload) ? payload : [payload]).some((p) => p && SENDS.has(p.method));
 
 class RetryingProvider extends ethers.JsonRpcProvider {
   constructor(url, chainId, options) {
     super(url, chainId, options);
     this.rpcStats = { calls: 0, retries: 0, throttled: 0, failed: 0, lastThrottleAt: null };
+    // The transport retry below sees only transport failures: a JSON-RPC error
+    // response -- a rate limit, say -- is a successful HTTP exchange and is turned
+    // into an error further up, after _send has already returned. Arc's throttling
+    // arrives that way ({"code":-32005,"message":"rate limit exceeded"}, and empty
+    // eth_call data that ethers reports as "missing revert data"), which is why
+    // those reached the dashboards as failed panels rather than being retried.
+    // withRetry sits at the method level, where that error exists, and refuses to
+    // retry anything but a known read.
+    require("./rpc-retry").withRetry(this, { attempts: 3, baseMs: 400 });
   }
   async _send(payload) {
     this.rpcStats.calls++;
     let last = null;
-    for (let attempt = 0; attempt <= RETRY_MS.length; attempt++) {
+    // Never twice for a send. eth_sendRawTransaction may have been broadcast before
+    // the socket failed, and the guardian's auto-close signs through this provider:
+    // a retry there is a second close, or a second collect.
+    const attempts = carriesSend(payload) ? 0 : RETRY_MS.length;
+    for (let attempt = 0; attempt <= attempts; attempt++) {
       try {
         return await super._send(payload);
       } catch (err) {
         last = err;
-        if (!isTransient(err) || attempt === RETRY_MS.length) break;
+        if (!isTransient(err) || attempt === attempts) break;
         this.rpcStats.retries++;
         if (/429|Too Many|403|Forbidden/i.test(String(err.shortMessage || err.message))) { this.rpcStats.throttled++; this.rpcStats.lastThrottleAt = Date.now(); }
         await new Promise((r) => setTimeout(r, RETRY_MS[attempt] + Math.floor(Math.random() * 200)));
@@ -176,4 +204,4 @@ function createProvider(cfg, options = {}) {
   return new FailoverProvider(urls, chainId, opts);
 }
 
-module.exports = { createProvider, RetryingProvider, FailoverProvider, chainIdOf, isTransient, RETRY_MS };
+module.exports = { createProvider, RetryingProvider, FailoverProvider, chainIdOf, isTransient, RETRY_MS, SENDS, carriesSend };

@@ -76,10 +76,17 @@ const oldMessage = (cfg) => [
   // ---- 3. a record from before salting says to run setup again ----------------
   delete rec.salt;
   fs.writeFileSync(SECRET, JSON.stringify(rec));
-  assert.throws(() => arm.currentMessage(cfg, ORIGIN), /predates the signed-message nonce; run setup again/,
-    "an old record cannot produce a message rather than producing an unsafe one");
+  // It still cannot be armed -- that is the guarantee -- but the refusal now lives in
+  // decrypt() rather than in the message builder. Throwing there wedged the page: setup
+  // and forget also need a signable message, so the only advertised way out raised the
+  // very error it told the owner to clear.
   await assert.rejects(() => arm.arm(cfg, { signature: sig, minutes: 5, origin: ORIGIN }, CACHE),
-    /run setup again/, "and cannot be armed until it is replaced");
+    /run setup again/, "an old record cannot be armed until it is replaced");
+  const replacement = arm.currentMessage(cfg, ORIGIN);
+  assert.match(replacement, /nonce: [0-9a-f]{32}/, "but it still offers a signable message, so setup can replace it");
+  assert.notStrictEqual(replacement, msg, "and that message carries a new nonce, not the one it was stored with");
+  assert.strictEqual(arm.configured().configured, false,
+    "and it reports as unconfigured, so the page offers setup instead of an Arm button that can only fail");
 
   // ---- 4. the nonce is fresh per setup ----------------------------------------
   fs.rmSync(SECRET);

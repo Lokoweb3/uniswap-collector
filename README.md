@@ -193,7 +193,7 @@ Sessions are kept in RAM per browser (two hours, last 40 turns); `↺` starts ov
 ### MCP server (`lp-mcp.mjs`)
 
 `lp-mcp.mjs` is an MCP server that exposes the dashboard's read-only data as
-twenty tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and fifteen added since, ending with `status_report`, `position_history`, `price_history`, `pool_scout_history`, `token_lots`, `record_strategy_proposal`, `strategy_track_record`) so
+twenty-eight tools (`positions`, `collects`, `daily_revenue`, `wallet_balances`, `portfolio`, and the rest added since, ending with `status_report`, `position_history`, `price_history`, `pool_scout_history`, `token_lots`, `claimed_fees`, `token_health`, `daily_check`, `record_strategy_proposal`, `strategy_track_record`) so
 Claude Code or Claude Desktop can answer questions from the live numbers. It
 fetches from the running dashboard over loopback and cannot sign, collect, or
 reach the operator key. The dashboard must be running.
@@ -219,7 +219,7 @@ used for day and month grouping (default America/New_York).
 ### From claude.ai and the Claude mobile app
 
 Those run on Anthropic's servers, so the tools have to be reachable over the
-internet. `lp-mcp-remote.mjs` serves the same tools (twenty, see
+internet. `lp-mcp-remote.mjs` serves the same tools (twenty-eight, see
 "From an agent on a server") over HTTP behind its own OAuth login (claude.ai registers itself, you type a passphrase once, it
 gets a token that refreshes on its own). It binds to loopback; a tunnel gives
 it a public HTTPS address. Steps:
@@ -1012,6 +1012,52 @@ All of it is the collector wallet's own history, so the wallet picker is hidden 
 only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
+
+### 2026-09-22
+
+- Watchdog: a public-path probe. Everything it watched before ran on this machine, so it
+  could not see the 2026-09-21 outage at all -- the dashboard answered on loopback, the
+  funnel listed every mapping, the cert was valid, and the public address answered nothing
+  for hours because the node's Funnel ingress registration had gone stale after the machine's
+  IP changed. The probe goes through the relay as a browser does, on its own slower clock
+  (every 10 cycles, three consecutive failures before acting, because ingress takes ~25 s to
+  propagate), and its recovery restarts tailscaled and re-applies the funnel -- never the
+  dashboard, which was never at fault. At most one tunnel restart per 30 min. The address is
+  read from the funnel config, so there is no second copy to keep in step, and no tailscale
+  means the probe is a no-op. `watchdog.sh --self-test` covers it and now runs in the suite.
+- Improvement loop: move proposals are filtered to positions that are still open. The pool
+  scout's window is historical, so a position closed days ago still had rows in it and still
+  beat a sibling; on 2026-09-22 the loop's single HIGH action was "Move ETH / USDG #2302341",
+  closed since, and two of its four proposals were for positions no longer held. An unknown
+  position list leaves every candidate in rather than silently emptying the report.
+- Dashboard: token symbols and the "priced as" name are escaped where they enter the balance
+  table (`chainRef` is deliberately given markup by other callers, so the escaping belongs at
+  the call site). The nav highlight and the scope picker's listener are guarded -- both run at
+  the top level, where one missing element threw and left the page blank. `renderHeadline`
+  now sets the section header for a single watched wallet instead of leaving the previous
+  wallet's name and total on screen.
+
+### 2026-09-21
+
+- Three MCP tools. `claimed_fees`: fees settled on chain across every wallet, rebuilt from
+  events. It is not `collects`, which counts only runs this collector made -- fees the wallet
+  settled itself are absent there and present here, so a zero in one is not a zero in the
+  other. It returns `state` and `coverage` alongside the subtotal because the history is
+  usually partial (7 of 40 positions complete when it was written), and a subtotal quoted as a
+  lifetime total is the failure this tool exists to prevent. `token_health`: contract risk per
+  token (transfer tax, mint function, guardian or admin powers, verified source, holders, age),
+  defaulting to the tokens above `safe`. `daily_check`: the daily Telegram text. All three are
+  read tools, so the read-only remote connector serves them; reconnect the claude.ai connector
+  to pick them up, as it caches the tool list.
+- Portfolio chart: the 2026-09-17 sample that recorded $2.34e39 was removed with
+  `tools/repair-portfolio-spike.js`. The write-time guard in `server.js` refuses such a sample,
+  but it was added after this one was already stored, so the point sat in history setting the
+  chart's upper bound. Axis labels now use the compact formatter, which switches to an exponent
+  above $1T: a misread price can no longer print a forty-digit label across the gutter.
+- `arm.js`: a pre-salt `arm-secret.json` no longer wedges the arm page. `currentSalt()` offers a
+  fresh nonce instead of throwing and the refusal moved into `decrypt()` -- setup and forget both
+  need a signable message, so throwing in the message builder meant the only advertised way out
+  ("run setup again") raised the very error it was telling the owner to clear.
 
 ### 2026-09-10
 

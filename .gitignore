@@ -32,6 +32,8 @@ liquidity-ledger.json
 v4-liquidity-ledger.json
 v4-owner-collects.json
 token-sales.json
+token-sales.jsonl
+token-meta.json
 sales-pending.json
 token-disposals.json
 ledger-audit.json
@@ -83,3 +85,9 @@ tasks/output/
 watchdog-state.json
 position-values.json
 position-registry.json
+
+# Timestamped backups written beside a ledger before it is rewritten
+# (tools/repair-portfolio-spike.js and the nightly ledger backup). They are
+# recovery copies of gitignored data, never source.
+*.bak-*
+*.json.migrated

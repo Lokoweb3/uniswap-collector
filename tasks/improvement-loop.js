@@ -181,7 +181,26 @@ function analysePortfolio(portfolio) {
   return { topToken, bigDroppers, lpPct, issues, suggestions };
 }
 
-function analyseScout(scoutRows) {
+/**
+ * Token ids open right now, or null when the answer is unknown.
+ *
+ * The scout's window is historical: a position closed days ago still has rows in it, and
+ * its last observation can still beat a sibling. Nothing downstream checked, so the loop
+ * proposed moving positions that no longer exist -- on 2026-09-22 its one HIGH action was
+ * "Move ETH / USDG #2302341", closed since. An action that cannot be taken, ranked first,
+ * teaches the reader to stop reading the report.
+ *
+ * null (no rows, or rows carrying no status at all) leaves every candidate in: a missing
+ * answer must not silently empty the list, which would look like "nothing to do".
+ */
+function openTokenIds(strategyData) {
+  const rows = strategyData && (strategyData.positions || strategyData.rows);
+  if (!Array.isArray(rows) || !rows.length) return null;
+  if (!rows.some(r => r && r.status)) return null;
+  return new Set(rows.filter(r => r.status === "open").map(r => String(r.tokenId)));
+}
+
+function analyseScout(scoutRows, openIds = null) {
   const issues = [], suggestions = [];
   const moveOpps = [];
 
@@ -192,6 +211,8 @@ function analyseScout(scoutRows) {
   }
 
   for (const [tokenId, rows] of byPos) {
+    // Closed positions cannot be moved; see openTokenIds above.
+    if (openIds && !openIds.has(String(tokenId))) continue;
     rows.sort((a, b) => String(a.t || "").localeCompare(String(b.t || ""))); // a row without a timestamp sorts first instead of throwing
     const latest = rows[rows.length - 1];
 
@@ -281,7 +302,7 @@ async function main() {
   const attrAnalysis  = analyseAttribution(attribution);
   const posAnalysis   = analysePositions(attribution, strategyData ? (strategyData.positions || strategyData.rows || null) : null);
   const portAnalysis  = portfolio ? analysePortfolio(portfolio) : { issues: [], suggestions: [], lpPct: "n/a" };
-  const scoutAnalysis = scoutData  ? analyseScout(scoutData.rows || []) : { moveOpps: [], issues: [], suggestions: [] };
+  const scoutAnalysis = scoutData  ? analyseScout(scoutData.rows || [], openTokenIds(strategyData)) : { moveOpps: [], issues: [], suggestions: [] };
 
   const { proposal, allIssues, allSuggestions, status } = synthesise({ attrAnalysis, posAnalysis, portAnalysis, scoutAnalysis, ts });
 
@@ -320,4 +341,9 @@ async function main() {
   }
 }
 
-main().catch(e => { console.error("[loop] FATAL:", e.message); process.exit(1); });
+module.exports = { main, analyseScout, openTokenIds };
+// Same guard as tasks/code-review.js, so the analysis can be required and tested
+// without the loop running, writing a report or sending Telegram.
+if (require.main === module) {
+  main().catch(e => { console.error("[loop] FATAL:", e.message); process.exit(1); });
+}

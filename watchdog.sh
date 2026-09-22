@@ -10,6 +10,9 @@
 # hour while the loop continues. Telegram token/chat come from .env exactly as alerts.js
 # reads them; nothing from .env is ever echoed or logged.
 #
+# Liveness from OUTSIDE the MACHINE: a dashboard that answers on loopback is not a site
+# anyone can reach. See the public probe below.
+#
 # Liveness from OUTSIDE the process (TASK-66): a port that answers is not a dashboard that
 # works. Every 60 s the watchdog fetches /api/positions with a 20 s limit and reads its
 # `loops` block. Two timeouts in a row = a wedged event loop → one Telegram line and a
@@ -85,6 +88,81 @@ record_restart() {
   write_state
 }
 
+# --- public path probe --------------------------------------------------------------------
+# Everything above watches the dashboard from this machine. None of it can see the failure
+# that took the site down on 2026-09-21: every local port answered, `tailscale funnel status`
+# listed every mapping, the serve config was right and the cert was valid, while the public
+# address answered nothing for hours. The node's Funnel ingress registration had gone stale
+# after the machine's public IP changed; requests reached the relay and were never forwarded.
+# Tailing tailscaled.log during a request showed no new lines at all. Only restarting the
+# daemon fixed it, so that -- not a dashboard restart -- is this probe's recovery.
+#
+# It is deliberately slower and more patient than the local probe: the public path crosses a
+# relay, and ingress takes ~25 s to propagate after a restart, so a single failure means
+# nothing. Three in a row, 5 min apart, is a real outage.
+PUBLIC_URL="${WATCHDOG_PUBLIC_URL:-}"
+PUBLIC_EVERY="${WATCHDOG_PUBLIC_EVERY:-10}"     # cycles of 30 s between public probes
+PUBLIC_MIN_FAILS="${WATCHDOG_PUBLIC_FAILS:-3}"  # consecutive failures before acting
+PUBLIC_REPAIR_GAP="${WATCHDOG_PUBLIC_GAP:-1800}" # never restart the tunnel twice within this
+PUBLIC_FAILS=0
+PUBLIC_REPAIRED_AT=0
+TS_BIN="${WATCHDOG_TS_BIN:-$HOME/.local/tailscale/tailscale}"
+TS_SOCK="${WATCHDOG_TS_SOCK:-$HOME/.local/state/tailscale/tailscaled.sock}"
+
+# Read the address from the funnel config rather than keeping a copy in step with it.
+# No tailscale, or no public mapping, leaves PUBLIC_URL empty and the probe a no-op.
+discover_public_url() {
+  [ -n "$PUBLIC_URL" ] && return 0
+  [ -x "$TS_BIN" ] || return 0
+  PUBLIC_URL=$("$TS_BIN" --socket="$TS_SOCK" funnel status 2>/dev/null \
+    | sed -n 's|^\(https://[^ ]*:8443\).*|\1|p' | head -1)
+  [ -n "$PUBLIC_URL" ] && echo "$(date -Is) public probe watching $PUBLIC_URL" >> "$LOG"
+}
+
+# Restart the tunnel daemon and re-apply the serve config. Never touches the dashboard:
+# the dashboard was never the fault in the outage this exists for.
+repair_tunnel() {
+  local pid i
+  pid=$(pgrep -x tailscaled 2>/dev/null | head -1)   # -x: exact name, never a pattern match
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null
+    for i in $(seq 1 20); do pgrep -x tailscaled >/dev/null 2>&1 || break; sleep 1; done
+  fi
+  bash "$HERE/run-tailscale.sh" >> "$LOG" 2>&1
+}
+
+# public_probe: one fetch through the relay, exactly as a browser does.
+public_probe() {
+  [ -n "$PUBLIC_URL" ] || return 0
+  local code now
+  # The gate answers 200 with its login page to a browser-shaped request. Any HTTP status
+  # means the path works; "000" (no answer, or TLS that never completed) is the failure.
+  code=$("$CURL" -s -o /dev/null -w '%{http_code}' -m 25 -H 'Accept: text/html' "$PUBLIC_URL/" 2>/dev/null)
+  if [ -n "$code" ] && [ "$code" != "000" ]; then
+    [ "$PUBLIC_FAILS" -gt 0 ] && echo "$(date -Is) public path answering again (HTTP $code)" >> "$LOG"
+    PUBLIC_FAILS=0
+    return 0
+  fi
+  PUBLIC_FAILS=$((PUBLIC_FAILS + 1))
+  echo "$(date -Is) public probe failed (${PUBLIC_FAILS}x in a row) $PUBLIC_URL" >> "$LOG"
+  [ "$PUBLIC_FAILS" -ge "$PUBLIC_MIN_FAILS" ] || return 0
+  now=$(date +%s)
+  if [ $((now - PUBLIC_REPAIRED_AT)) -lt "$PUBLIC_REPAIR_GAP" ]; then
+    echo "$(date -Is) public path still down, but the tunnel was restarted recently; leaving it" >> "$LOG"
+    PUBLIC_FAILS=0
+    return 0
+  fi
+  read_state
+  if [ $((now - PROBE_ALERTED_AT)) -ge "$ALERT_COOLDOWN" ]; then
+    notify "⚠️ $PUBLIC_URL stopped answering (${PUBLIC_FAILS} probes) while the dashboard itself is up — restarting the tunnel"
+    PROBE_ALERTED_AT=$now; write_state
+  fi
+  echo "$(date -Is) public path down; restarting tailscaled and re-applying the funnel" >> "$LOG"
+  repair_tunnel
+  PUBLIC_REPAIRED_AT=$now
+  PUBLIC_FAILS=0
+}
+
 # --- liveness probe -----------------------------------------------------------------------
 PROBE_TIMEOUTS=0; PROBE_STALE=0
 # stale_loops BODY -> prints "label (N min)" per stale loop, one per line; empty when healthy.
@@ -131,7 +209,10 @@ probe() {  # fetch once; feeds check_probe
 }
 
 if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl and a temp state file
-  STATE="$(mktemp)"; LOG="/dev/stdout"; CURL="${WATCHDOG_CURL:-true}"
+  STATE="$(mktemp)"; CURL="${WATCHDOG_CURL:-true}"
+  # A temp file, not /dev/stdout: under a pipe (the test runner) that device cannot be
+  # opened and every log line became a "No such device or address" error instead.
+  LOG="$(mktemp)"; SELFTEST_LOG="$LOG"
   record_restart; read_state; echo "after 1: count=$COUNT alertedAt=$ALERTED_AT"
   record_restart; read_state; echo "after 2: count=$COUNT alerted=$([ "$ALERTED_AT" -gt 0 ] && echo yes || echo no)"
   record_restart; read_state; echo "after 3: count=$COUNT (cooldown holds, no second alert)"
@@ -144,6 +225,30 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   check_probe 0 "$STALE"; echo "stale x4 within the hour: no second alert (see 'cooldown' line above)"
   check_probe 0 "$HEALTHY"; echo "healthy again: stale=$PROBE_STALE"
   check_probe 28 ""; echo "timeout 1: restart=$RESTART_NOW"; check_probe 28 ""; echo "timeout 2: restart=$RESTART_NOW (cooldown holds the message, restart still requested)"
+  echo "--- public probe (nothing real is touched: repair_tunnel and curl are stubbed)"
+  REPAIR_LOG="$(mktemp)"
+  repair_tunnel() { echo called >> "$REPAIR_LOG"; }
+  # CURL is a command NAME held in a variable, so the stub has to be pointed at by it;
+  # defining a function called CURL alone leaves "$CURL" still running the real thing.
+  stubcurl() { printf '%s' "$PUBCODE"; }
+  CURL_SAVED="$CURL"; CURL=stubcurl
+  PUBLIC_URL="https://example.invalid:8443"; PUBLIC_MIN_FAILS=3; PUBLIC_FAILS=0; PUBLIC_REPAIRED_AT=0
+  PUBCODE="200"; public_probe
+  echo "answering:  fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  PUBCODE="000"; public_probe; public_probe
+  echo "down x2:    fails=$PUBLIC_FAILS (want 2) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  public_probe
+  echo "down x3:    fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want yes)"
+  [ -s "$REPAIR_LOG" ] || { echo "self-test: the tunnel was not repaired after $PUBLIC_MIN_FAILS failures"; exit 1; }
+  before_at=$PUBLIC_REPAIRED_AT; : > "$REPAIR_LOG"
+  public_probe; public_probe; public_probe
+  echo "inside gap: repaired again=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no, one restart per ${PUBLIC_REPAIR_GAP}s)"
+  [ -s "$REPAIR_LOG" ] && { echo "self-test: the tunnel was restarted twice inside the gap"; exit 1; }
+  [ "$PUBLIC_REPAIRED_AT" = "$before_at" ] || { echo "self-test: the repair timestamp moved inside the gap"; exit 1; }
+  PUBCODE="200"; public_probe
+  echo "recovered:  fails=$PUBLIC_FAILS (want 0)"
+  [ "$PUBLIC_FAILS" = "0" ] || { echo "self-test: the failure count did not reset on recovery"; exit 1; }
+  CURL="$CURL_SAVED"; rm -f "$REPAIR_LOG"
   echo "--- wedged recovery (owned stub listener; never the live dashboard)"
   DASH_PORT=$((20000 + RANDOM % 20000)); START_ALL="echo start-all-called"
   before=$(pgrep -fc "^bash $HERE/watchdog.sh$" 2>/dev/null || true)
@@ -157,10 +262,11 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   after=$(pgrep -fc "^bash $HERE/watchdog.sh$" 2>/dev/null || true)
   echo "wedged recovery: stub dashboard alive=$alive port free=$([ -z "$(dash_pid)" ] && echo yes || echo no) start called=$([ "$out" = "start-all-called" ] && echo yes || echo no) watchdogs before=${before:-0} after=${after:-0}"
   [ "$alive" = "no" ] && [ -z "$(dash_pid)" ] && [ "$out" = "start-all-called" ] && [ "${before:-0}" = "${after:-0}" ] || { echo "self-test: wedged recovery FAILED"; kill "$stub" 2>/dev/null; exit 1; }
-  rm -f "$STATE"; exit 0
+  rm -f "$STATE" "$SELFTEST_LOG"; exit 0
 fi
 
 echo "$(date -Is) watchdog started (pid $$)" >> "$LOG"
+discover_public_url
 CYCLE=0
 while true; do
   sleep 30
@@ -182,6 +288,12 @@ while true; do
       >> "$ARC_DIR/server.log" 2>&1 < /dev/null &
   fi
   CYCLE=$((CYCLE + 1))
+  # The public path, on its own slower clock. Checked before the local probe's restart
+  # branch so a tunnel outage is never confused with a dashboard one.
+  if [ $((CYCLE % PUBLIC_EVERY)) -eq 0 ]; then
+    discover_public_url
+    public_probe
+  fi
   if [ $((CYCLE % PROBE_EVERY)) -eq 0 ]; then
     probe
     if [ "${RESTART_NOW:-0}" = "1" ]; then

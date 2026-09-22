@@ -62,7 +62,7 @@ const dayKey = (t) => daykey.dayKey(t);
 const monthKey = (t) => dayKey(t).slice(0, 7);
 const round = (n, d = 2) => (n == null ? null : +Number(n).toFixed(d));
 
-/** Build a server with the tools: 21 read tools, plus record_strategy_proposal, approve_sale and run_tasks unless role is "read". Each transport gets its own instance. */
+/** Build a server with the tools: 25 read tools, plus record_strategy_proposal, approve_sale and run_tasks unless role is "read". Each transport gets its own instance. */
 /**
  * role: "write" (default — the local stdio server and the in-process agent, which gate writes by
  * channel) registers every tool; "read" leaves out the three that change something
@@ -207,6 +207,63 @@ server.registerTool(
 );
 
 server.registerTool(
+  "claimed_fees",
+  {
+    title: "Claimed fees, reconstructed from the chain",
+    description:
+      "Fees actually settled out of positions, rebuilt from chain events across every wallet, open and closed. This is NOT `collects`: that counts only runs this collector made, so fees the wallet settled itself, or anything else settled, are missing there and present here -- a zero in one is not a zero in the other. Returns token totals, the priced USD subtotal with whatever was excluded for want of a verified price, and coverage. ALWAYS read `state` and `coverage` before quoting a total: while `state` is \"partial\" the USD figure is a subtotal of the records that could be priced, not a lifetime total, and most positions may not be reconstructable at all.",
+    inputSchema: {
+      positions: z.boolean().optional().describe("Include the per-position breakdown and the coverage lists, not just totals"),
+    },
+  },
+  async ({ positions }) => {
+    try {
+      const d = await get("/api/claims/total");
+      const cov = d.coverage || {};
+      const out = {
+        label: d.label,
+        // "partial" means the subtotal below is not a lifetime figure. Kept at the top
+        // so it cannot be read past on the way to the number.
+        state: d.state,
+        stateLabel: d.stateLabel,
+        verifiedZero: d.verifiedZero,
+        tokens: (d.tokens || []).map((t) => ({ symbol: t.symbol, amount: round(t.amount, 8) })),
+        usd: {
+          pricedSubtotal: round(d.usd && d.usd.pricedSubtotal),
+          pricedRecords: d.usd && d.usd.pricedRecords,
+          unpricedRecords: d.usd && d.usd.unpricedRecords,
+          excludedCount: ((d.usd && d.usd.excluded) || []).length,
+        },
+        current: d.current,
+        subtotals: d.subtotals,
+        coverage: {
+          positionsTotal: cov.positionsTotal,
+          positionsComplete: cov.positionsComplete,
+          partialCount: (cov.partial || []).length,
+          unsupportedCount: (cov.unsupported || []).length,
+          discoveryCount: (cov.discovery || []).length,
+          note: cov.note,
+        },
+      };
+      if (positions) {
+        out.positions = (d.positions || []).map((x) => ({
+          tokenId: x.tokenId, wallet: x.walletLabel, pair: x.pair, status: x.status,
+          state: x.state, reason: x.reason, records: x.records,
+          pricedSubtotal: round(x.pricedSubtotal), lastT: x.lastT,
+        }));
+        out.usd.excluded = (d.usd && d.usd.excluded) || [];
+        out.coverage.partial = cov.partial || [];
+        out.coverage.unsupported = cov.unsupported || [];
+        out.coverage.discovery = cov.discovery || [];
+      }
+      return text(out);
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
   "daily_revenue",
   {
     title: "Daily revenue (fees as they accrue)",
@@ -329,6 +386,50 @@ server.registerTool(
 );
 
 server.registerTool(
+  "token_health",
+  {
+    title: "Token contract risk",
+    description:
+      "Contract-level risk for every token these wallets have touched: level (safe / caution / risk), what was found (transfer tax, mint function, guardian or admin role), whether the source is verified, holder count and age in days. By default returns a count per level and only the tokens above `safe`, since most are safe and the full list is long. Pass all for every token, or symbol / address to look one up.",
+    inputSchema: {
+      symbol: z.string().optional().describe("Look one token up by symbol (case-insensitive)"),
+      address: z.string().optional().describe("Look one token up by contract address"),
+      all: z.boolean().optional().describe("Return every token, not only those above safe"),
+    },
+  },
+  async ({ symbol, address, all }) => {
+    try {
+      const d = await get("/api/token-health");
+      const slim = (t) => ({
+        symbol: t.symbol, address: t.address, level: t.level, label: t.label,
+        notes: t.notes, powers: t.powers, verified: t.verified,
+        holders: t.holders, ageDays: round(t.ageDays, 1), live: t.live,
+      });
+      const tokens = d.tokens || [];
+      if (address) {
+        const hit = (d.byAddress || {})[String(address).toLowerCase()];
+        return text(hit ? slim(hit) : { found: false, address, checked: d.count });
+      }
+      if (symbol) {
+        const hits = tokens.filter((t) => String(t.symbol || "").toLowerCase() === String(symbol).toLowerCase());
+        return text(hits.length ? hits.map(slim) : { found: false, symbol, checked: d.count });
+      }
+      const levels = {};
+      for (const t of tokens) levels[t.level] = (levels[t.level] || 0) + 1;
+      const pick = all ? tokens : tokens.filter((t) => t.level !== "safe");
+      return text({
+        checked: d.count,
+        levels,
+        showing: all ? "every token" : "only tokens above safe",
+        tokens: pick.map(slim),
+      });
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
   "vault",
   {
     title: "LOKOVault treasury",
@@ -389,6 +490,24 @@ server.registerTool(
     try {
       const d = await get("/api/digest");
       return { content: [{ type: "text", text: d.text || JSON.stringify(d) }] };
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  "daily_check",
+  {
+    title: "Daily check text",
+    description:
+      "The daily LP check as it would be sent to Telegram: whether the collector is armed and for how much longer, fees collected in the last 24 h with the per-wallet split and the vault's cut, fee tokens sold or skipped and why, open positions and uncollected fees. One call for an end-of-day answer.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const d = await get("/api/daily-check");
+      return { content: [{ type: "text", text: d.text || JSON.stringify(d, null, 1) }] };
     } catch (err) {
       return fail(err);
     }

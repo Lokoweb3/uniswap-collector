@@ -28,7 +28,10 @@ const clock = t => new Date(t).toLocaleString(undefined, { month: 'short', day: 
 
 document.body.classList.add('page-' + PAGE);
 document.title = PAGE === 'analytics' ? 'LP analytics' : document.title;
-$('#nav-' + (PAGE === 'analytics' ? 'analytics' : 'dash')).classList.add('here');
+// A missing nav element must not throw here: this runs at the top level, so an
+// exception stops the whole script and the dashboard renders nothing at all.
+const navHere = $('#nav-' + (PAGE === 'analytics' ? 'analytics' : 'dash'));
+if (navHere) navHere.classList.add('here');
 // localStorage is a per-browser convenience; never let it throw.
 const pref = k => { try { return localStorage.getItem(k); } catch(e){ return null; } };
 const setPref = (k,v) => { try { localStorage.setItem(k,v); } catch(e){} };
@@ -82,7 +85,15 @@ function price(p){
 // Pool statistics line for a card: the scanner's row for the pool, or the v4
 // pool read straight from chain (pools.js directV4), plus sibling pools of the
 // same pair.
-const usdK = n => n == null ? '—' : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'k' : usd(n);
+// Compact money, for chart axes and pool stats. Above a trillion it switches to an
+// exponent: a single misread price on 2026-09-17 printed an axis label forty digits
+// long, which stretched the chart's gutter across the page. No real figure here is
+// that big, so showing it as 2.34e+39 loses nothing and keeps the layout intact.
+const usdK = n => n == null ? '—'
+  : Math.abs(n) >= 1e12 ? '$' + Number(n).toExponential(2)
+  : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M'
+  : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'k'
+  : usd(n);
 // A pool fee rate in percent, with precision that suits its size: two
 // significant digits under 1%, one decimal under 100%, whole numbers above.
 // Tiny positive rates read "<0.01%" rather than rounding to a false 0%. No cap.
@@ -283,6 +294,9 @@ let lastPortfolio = null, lastWatchForPf = null;
 const NATIVE_KEY = 'eth';
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 const pfScope = () => pref('portfolio:scope') || 'all';
+// The picker does not exist on every page, and reading .hidden off null threw from
+// inside two render paths. Absent or hidden both mean the owner's own scope.
+const currentScope = () => { const el = $('#pfscope'); return !el || el.hidden ? 'owner' : pfScope(); };
 // #scope=all / #scope=0x… picks the Portfolio scope from the URL (a shareable link).
 try { const h = new URLSearchParams(location.hash.slice(1)).get('scope'); if (h) setPref('portfolio:scope', h.toLowerCase()); } catch(e){}
 // #positions=open|closed|all picks the position list filter the same way.
@@ -466,7 +480,7 @@ let lastMain = null;
  * and always describe the owner wallet.
  */
 function renderHeadline(){
-  const scope = $('#pfscope').hidden ? 'owner' : pfScope();
+  const scope = currentScope();
   const watched = (lastWatchForPf && lastWatchForPf.wallets || []).filter(w => w.ok);
   const sel = scope === 'all' ? watched : scope === 'owner' ? [] : watched.filter(w => w.address.toLowerCase() === scope);
   const own = scope === 'all' || scope === 'owner';
@@ -513,6 +527,12 @@ function renderHeadline(){
       $('#watchtitle').textContent = `Positions · ${m.totals.count + watchedOpen} open across ${W.wallets + 1} wallets`;
       $('#watchtotal').innerHTML = usd(ownTotal + W.totalUsd) + partialNote;
       $('#watchstats').innerHTML = `<span>${W.wallets + 1} wallets</span><span>tokens in wallets <b>${usd((pf ? pf.totals.walletUsd : 0) + W.walletUsd)}</b></span><span>in pools <b>${usd(m.totals.liquidityUsd + W.liquidityUsd)}</b></span><span>uncollected fees <b>${usd(m.totals.feesUsd + W.feesUsd)}</b></span>`;
+    } else if (sel[0]) {
+      // One watched wallet. renderWatch sets these too, but it does not run on every
+      // render that reaches here -- a portfolio refresh alone calls renderHeadline by
+      // itself -- and the header then still named whichever wallet was chosen before.
+      $('#watchtitle').textContent = `Positions · ${sel[0].label || shortA(sel[0].address)} · ${(sel[0].totals && sel[0].totals.count) || 0} open`;
+      $('#watchtotal').textContent = sel[0].totals ? usd(sel[0].totals.totalUsd) : '';
     }
   }
   const idle = (own && m ? m.totals.idle : 0) + sum('idle');
@@ -544,7 +564,7 @@ function renderPortfolio(){
   if (!d) return;
   fillScopeSelect();
   renderHeadline();
-  const scope = $('#pfscope').hidden ? 'owner' : pfScope();
+  const scope = currentScope();
   const watched = (lastWatchForPf && lastWatchForPf.wallets || []).filter(w => w.ok);
   // Owner rows carry the server's 24h change; give the same token change to the other scopes.
   const chg24 = new Map(d.rows.map(x => [x.native ? NATIVE_KEY : x.address.toLowerCase(), x.change24h]));
@@ -590,7 +610,7 @@ function renderPortfolio(){
   const showDust = pref('portfolio:dust') === '1';
   const main = rows.filter(x => showDust || (x.usd == null ? x.source === 'pools' : x.usd >= 1));
   const dust = rows.length - main.length;
-  const link = x => x.native ? x.symbol : chainRef(d.explorer, `/token/${x.address}${holder ? `?holder_address_hash=${holder}` : ''}`, x.symbol, x.address);
+  const link = x => x.native ? esc(x.symbol) : chainRef(d.explorer, `/token/${x.address}${holder ? `?holder_address_hash=${holder}` : ''}`, esc(x.symbol), x.address);
   $('#baltable').innerHTML = `<table class="etable">
     <tr><th>Token</th><th>Wallet</th><th>In pools</th><th>Fees</th><th>Total</th><th>Price</th><th>≈ USD</th><th>Share</th><th>24h</th></tr>
     ${main.map(x => `<tr>
@@ -599,7 +619,7 @@ function renderPortfolio(){
       <td>${q(x.pools)}</td>
       <td>${q(x.fees)}</td>
       <td><b>${amount(x.total)}</b></td>
-      <td>${x.price == null ? '<span class="unpriced">no pool</span>' : x.via ? `<span title="Priced as ${x.via}, redeemable 1:1">$${price(x.price)} <span class="muted">as ${x.via}</span></span>` : '$' + price(x.price)}</td>
+      <td>${x.price == null ? '<span class="unpriced">no pool</span>' : x.via ? `<span title="Priced as ${esc(x.via)}, redeemable 1:1">$${price(x.price)} <span class="muted">as ${esc(x.via)}</span></span>` : '$' + price(x.price)}</td>
       <td class="u">${x.thin ? `<span class="approx" title="${esc(`The pool this is priced from holds only ${usd(x.depthUsd)} on its pricing side, so selling would move it. Treat as a quote, not cash. ${pricingText()}`)}">≈</span>` : ''}${usd(x.usd)}</td>
       <td>${x.share == null ? '—' : x.share.toFixed(1) + '%'}</td>
       ${chg(x)}
@@ -613,7 +633,8 @@ function renderPortfolio(){
     : `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). ${pricingText()} ≈ marks a value larger than its pricing pool holds.` + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
   renderSidebar();
 }
-$('#pfscope').addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); });
+const pfScopeEl = $('#pfscope');
+if (pfScopeEl) pfScopeEl.addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); });
 
 /* ---- sidebar panels -------------------------------------------------------
  * Wallet overview, collection activity and data coverage are drawn from the
@@ -823,9 +844,9 @@ function tvChart(pts){
   const fmtD = t => new Date(t).toLocaleDateString(undefined, {month:'short', day:'numeric'});
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
     <line class="grid" x1="${PL}" x2="${W-PR}" y1="${Y(vmax).toFixed(1)}" y2="${Y(vmax).toFixed(1)}"/>
-    <text class="axis" x="${W-PR+6}" y="${(Y(vmax)+3).toFixed(1)}">${usd(vmax)}</text>
+    <text class="axis" x="${W-PR+6}" y="${(Y(vmax)+3).toFixed(1)}">${usdK(vmax)}</text>
     <line class="grid" x1="${PL}" x2="${W-PR}" y1="${Y(vmin).toFixed(1)}" y2="${Y(vmin).toFixed(1)}"/>
-    <text class="axis" x="${W-PR+6}" y="${(Y(vmin)+3).toFixed(1)}">${usd(vmin)}</text>
+    <text class="axis" x="${W-PR+6}" y="${(Y(vmin)+3).toFixed(1)}">${usdK(vmin)}</text>
     <polyline class="tline" points="${line}"/>
     <text class="axis" x="${PL}" y="${H-2}">${fmtD(t0)}</text>
     <text class="axis" x="${W-PR}" y="${H-2}" text-anchor="end">${fmtD(t1)}</text>

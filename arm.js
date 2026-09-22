@@ -86,13 +86,16 @@ function storedRecord() {
  * The salt in force: the stored one once set up, otherwise a pending one. A record
  * written before salting has none, and cannot be armed -- the signature it holds was
  * made over the old text, so there is nothing to recompute it from.
+ *
+ * Such a record still gets a fresh pending salt rather than an exception. Throwing here
+ * wedged the whole page: setup and forget both need a signable message, and both route
+ * through this, so the only advertised way out ("run setup again") raised the very error
+ * it was telling the owner to clear. decrypt() refuses the stale record instead, so a
+ * pre-salt secret still cannot be armed -- it can only be replaced or deleted.
  */
 function currentSalt() {
   const rec = storedRecord();
-  if (rec) {
-    if (!rec.salt) throw new Error("this arm-secret.json predates the signed-message nonce; run setup again to replace it");
-    return rec.salt;
-  }
+  if (rec && rec.salt) return rec.salt;
   if (!pendingSalt) pendingSalt = newSalt();
   return pendingSalt;
 }
@@ -111,6 +114,9 @@ const keyFrom = (signature) => Buffer.from(ethers.keccak256(ethers.getBytes(sign
 function configured() {
   try {
     const s = JSON.parse(fs.readFileSync(SECRET_FILE, "utf8"));
+    // A saltless record can never be armed, only replaced. Reporting it as configured
+    // left the page showing "Saved passphrase" over an Arm button that could only fail.
+    if (!s.salt) return { configured: false, staleSecret: true, operator: s.operator, createdAt: s.createdAt };
     return { configured: true, operator: s.operator, createdAt: s.createdAt };
   } catch {
     return { configured: false };
@@ -144,13 +150,20 @@ async function setup(cfg, { signature, passphrase, origin }) {
 
 /** Decrypt the passphrase with the owner's signature. Throws if not set up or the signature does not fit. */
 function decrypt(cfg, signature, origin) {
-  verify(cfg, signature, origin);
   let rec;
   try {
     rec = JSON.parse(fs.readFileSync(SECRET_FILE, "utf8"));
   } catch {
     throw new Error("not set up yet: save the passphrase once with a wallet signature");
   }
+  // Before the signature, because a stale record is checked against a message built from
+  // a *new* salt: verifying first would blame the owner's wallet ("not from the owner")
+  // for a signature that is fine, and hide the real reason. Loopback-only, and this says
+  // nothing a local caller cannot already read off disk.
+  if (!rec.salt) {
+    throw new Error("this arm-secret.json predates the signed-message nonce; run setup again to replace it");
+  }
+  verify(cfg, signature, origin);
   if (rec.operator && operatorAddress() && rec.operator.toLowerCase() !== operatorAddress().toLowerCase()) {
     throw new Error("the operator keystore changed since setup; run setup again");
   }

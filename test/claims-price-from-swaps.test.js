@@ -128,7 +128,14 @@ function run({ swaps, cap, maxLogRange = 50000, priceSearchRequests = 24, block 
 
   // ---- 7. the store says why this exists --------------------------------------
   {
-    assert.match(src, /const DECODER = 7;/, "the decoder version is bumped so old refusals are reconsidered");
+    // What matters is that this change came with its own version, so the records it
+    // had already refused were reconsidered. Pinning the exact number made every later
+    // bump fail here for no reason: version 8 (collector-settled payouts and native
+    // legs) tripped it. Assert the floor and the note that documents 7 instead.
+    const dec = Number((src.match(/const DECODER = (\d+);/) || [])[1]);
+    assert.ok(dec >= 7, `the decoder version is bumped so old refusals are reconsidered (found ${dec})`);
+    assert.match(src, /^\/\/ 7: the pool price behind a liquidity change is read from the swap/m,
+      "and version 7 is the one that says why");
     assert.ok(/sv\.getSlot0\(poolId, \{ blockTag: l\.blockNumber - 1 \}\)/.test(src),
       "the archive read is kept as a last resort for chains that still serve it");
     const order = src.indexOf("lastSwapBefore(poolId, l.blockNumber)") < src.indexOf("sv.getSlot0(poolId,");

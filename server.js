@@ -35,6 +35,7 @@ const verdict = require("./verdict");
 
 const settings = require("./settings");
 const logs = require("./logs");
+const bs = require("./blockscout");        // one Blockscout client; PRO key when configured
 const vaultMeta = require("./vault-metadata");
 const cl = require("./collector-logic");   // native-currency naming, shared with the collector
 const cfg = settings.load();
@@ -587,6 +588,37 @@ function collectSummary(tokenKey, dec0, dec1, usd0, usd1) {
  * separate records. v3 has no equivalent here yet: its claims still sit in the
  * tokenId-only ledgers, which is exactly why they are reported as unverified.
  */
+/**
+ * Native value moves inside one transaction, from Blockscout's internal transactions.
+ * Only successful calls count: a reverted inner call moved nothing.
+ *
+ * Retries once on a transport error before giving up, so a single blip does not stop a
+ * scan chunk; a persistent failure throws, which leaves the cursor where it is rather
+ * than writing a record that says the amount is unknowable.
+ */
+async function internalTransfersOf(txHash) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await bs.bsFetch(`/v2/transactions/${txHash}/internal-transactions`);
+      if (!r.ok) throw new Error(`Blockscout returned HTTP ${r.status}`);
+      const j = await r.json();
+      const items = Array.isArray(j.items) ? j.items : [];
+      return items
+        .filter((k) => k && k.success !== false && !k.error)
+        .map((k) => ({
+          from: (k.from && k.from.hash) || "",
+          to: (k.to && k.to.hash) || "",
+          value: String(k.value || "0"),
+        }));
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) await new Promise((done) => setTimeout(done, 1500));
+    }
+  }
+  throw new Error(`internal transfers for ${txHash} could not be read (${lastErr && (lastErr.shortMessage || lastErr.message)}); this chunk is retried`);
+}
+
 const claimStore = (() => {
   try {
     if (!cfg.contracts.v4 || !cfg.contracts.v4.positionManager || !cfg.contracts.v4.poolManager) return null;
@@ -600,6 +632,17 @@ const claimStore = (() => {
       // Arc refuses a getLogs span over about 1,000 blocks; the backward search for
       // the swap that set a pool's price has to respect that too.
       maxLogRange: cfg.maxLogRange ? Number(cfg.maxLogRange) : null,
+      // This collector settles fees to its operator and sweeps them to the owner, so a
+      // collector-run collect pays the operator, not the position's owner. Without
+      // naming it here every such settlement read as a payment to an unrelated party
+      // and was refused as unattributable.
+      collectors: OPERATOR ? [OPERATOR] : [],
+      // A native leg emits no log; its amount is in the transaction's internal
+      // transfers. Blockscout serves those. A chain without one leaves this null and
+      // native legs stay unreadable, exactly as before. Errors are thrown, not
+      // swallowed: the claims store retries the chunk rather than recording a blip
+      // as a permanent "cannot be read".
+      internalTransfers: bs.available() ? internalTransfersOf : null,
     });
   } catch (err) { console.error(`claims store unavailable: ${err.message}`); return null; }
 })();
@@ -696,9 +739,16 @@ function claimedSummaryNow(tokenKey, dec0, dec1, usd0, usd1, sym0, sym1, openedB
       scope: { chainId: Number(cfg.chainId), tokenId: id, positionManager: null },
       legacyRowsExist: hasLegacyRows(key) };
   }
-  // A native-asset leg is paid by a value transfer that emits no log, so its
-  // history is not reconstructed: excluded and said so, never a zero.
-  if (ctx && [ctx.token0, ctx.token1].some((t) => String(t).toLowerCase() === ethers.ZeroAddress)) {
+  // A native-asset leg is paid by a value transfer that emits no log, so the receipt
+  // alone cannot say how much moved. The amount is in the transaction's internal
+  // transfers: where a source for those is configured, the store reads it and this
+  // position is reconstructed like any other, so the question goes to the store rather
+  // than being refused here. Without such a source there is nothing to read, and the
+  // history is excluded and said so -- never a zero.
+  //
+  // This gate ran before the store was consulted at all, so while it was unconditional
+  // no amount of work in the store could make a native position readable.
+  if (!bs.available() && ctx && [ctx.token0, ctx.token1].some((t) => String(t).toLowerCase() === ethers.ZeroAddress)) {
     return { status: "unavailable", state: "unsupported", verifiedZero: false,
       reason: "this pool pays a native-asset leg by plain value transfer, which emits no log; that history is not reconstructed on this instance",
       scope: { chainId: Number(cfg.chainId), tokenId: id, positionManager: String(cfg.contracts.v4.positionManager).toLowerCase(), wallet: ctx.owner ? String(ctx.owner).toLowerCase() : null } };

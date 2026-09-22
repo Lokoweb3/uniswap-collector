@@ -64,7 +64,13 @@ const BLOCK_MS_FALLBACK = 1000;
 // 7: the pool price behind a liquidity change is read from the swap that set it
 // rather than from pruned archive state, so records previously refused as
 // "the pool price at block N could not be read" are worth decoding again.
-const DECODER = 7;
+// 8: a payout is attributed when the pool manager pays the owner OR an address
+// collecting on the owner's behalf (the configured operator), and a native leg's
+// amount is read from the transaction's internal transfers instead of being refused
+// outright. Both were needed together: this collector takes fees to its operator and
+// sweeps them to the owner, so every collector-run settlement looked like a payment
+// to a stranger, and on the native side there was no amount to attribute anyway.
+const DECODER = 8;
 
 /**
  * Token amounts for a liquidity change, rounded the way v4's SqrtPriceMath does:
@@ -89,12 +95,17 @@ const NATIVE_PSEUDO = new Set([
   "0x0000000000000000000000000000000000000000",
 ]);
 
-function create({ provider, chainId, positionManager, poolManager, stateView, file = null, log = console, maxLogRange = null, priceSearchRequests = 24 }) {
+function create({ provider, chainId, positionManager, poolManager, stateView, file = null, log = console, maxLogRange = null, priceSearchRequests = 24, collectors = [], internalTransfers = null }) {
   if (!chainId) throw new Error("claims-store needs a chainId");
   if (!positionManager) throw new Error("claims-store needs a position manager");
   if (!poolManager) throw new Error("claims-store needs a pool manager");
   const posm = String(positionManager).toLowerCase();
   const pm = String(poolManager).toLowerCase();
+  // Addresses that receive a payout on the owner's behalf -- this collector's operator.
+  // A settlement it runs sends the fees to the operator, which sweeps them to the owner,
+  // so without this every collector-run collect read as a payment to an unrelated party
+  // and was refused. They are the owner's own agents, named in settings, not strangers.
+  const COLLECTORS = new Set((collectors || []).filter(Boolean).map((a) => String(a).toLowerCase()));
   const scope = `${chainId}:${posm}`;
   const FILE = file || dataPath("claims.json");
   const sv = !stateView ? null
@@ -348,10 +359,24 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       const kind = delta < 0n ? "withdrawal" : delta > 0n ? "increase" : "collect";
       let unavailable = null;
       const nativeLeg = t0 === ZERO || t1 === ZERO;
-      // A native-ETH leg is paid by a value transfer, which emits no log. Reading
-      // it as zero would print a verified figure that leaves that leg out.
+      // A native leg is paid by a plain value transfer, which emits no log, so the
+      // receipt alone cannot say how much moved -- and reading it as zero would print a
+      // verified figure with that leg silently missing. The amounts are in the
+      // transaction's internal transfers; with a resolver they are read from there and
+      // attributed exactly like a token transfer, and without one the record stays
+      // unavailable as it was. A transport failure is NOT an answer: it throws, failing
+      // the chunk so the cursor does not advance, rather than freezing a blip into a
+      // permanent "cannot be read" on a record that would never be revisited.
+      let nativeMoves = null;
       if (nativeLeg) {
-        unavailable = "the native ETH leg is paid by a plain value transfer, which emits no log, so its amount cannot be read from the receipt";
+        if (!internalTransfers) {
+          unavailable = "the native ETH leg is paid by a plain value transfer, which emits no log, and no internal-transfer source is configured for this chain, so its amount cannot be read";
+        } else {
+          nativeMoves = await internalTransfers(receipt.hash);
+          if (!Array.isArray(nativeMoves)) {
+            throw new Error(`internal transfers for ${receipt.hash} were unreadable; this chunk is retried`);
+          }
+        }
       }
       if (!unavailable && !owner) unavailable = "the position's owner at this event could not be established";
       if (!unavailable) {
@@ -370,13 +395,35 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       }
       const flow = { out: { [t0]: 0n, [t1]: 0n }, in: { [t0]: 0n, [t1]: 0n } };
       const strangers = new Set();
+      // The owner, or an address collecting for them. Anyone else is a stranger and the
+      // payout cannot be attributed to this position.
+      const isOurs = (a) => a === owner || COLLECTORS.has(a);
+      // Whether any leg was settled through a collector rather than straight to the
+      // owner. Kept on the record: the figure is the owner's either way, but a reader
+      // checking it against the wallet should know the money arrived by way of the
+      // operator and was swept, not as a direct transfer from the pool.
+      let viaCollector = false;
+      const credit = (bucket, token, amount, counterparty) => {
+        if (!isOurs(counterparty)) { strangers.add(counterparty); return; }
+        bucket[token] += amount;
+        if (counterparty !== owner) viaCollector = true;
+      };
       for (const x of receipt.logs) {
         if (x.topics[0] !== TRANSFER || x.topics.length !== 3) continue;
         const a = x.address.toLowerCase();
         if (NATIVE_PSEUDO.has(a) || (a !== t0 && a !== t1)) continue;
         const from = topicAddr(x.topics[1]), to = topicAddr(x.topics[2]);
-        if (from === pm) { if (to === owner) flow.out[a] += BigInt(x.data); else strangers.add(to); }
-        else if (to === pm) { if (from === owner) flow.in[a] += BigInt(x.data); else strangers.add(from); }
+        if (from === pm) credit(flow.out, a, BigInt(x.data), to);
+        else if (to === pm) credit(flow.in, a, BigInt(x.data), from);
+      }
+      // Native value moves, read from the transaction's internal transfers, are
+      // attributed by exactly the same rule as a token transfer.
+      for (const mv of nativeMoves || []) {
+        const v = BigInt(mv.value || 0);
+        if (v === 0n) continue;
+        const from = String(mv.from || "").toLowerCase(), to = String(mv.to || "").toLowerCase();
+        if (from === pm) credit(flow.out, ZERO, v, to);
+        else if (to === pm) credit(flow.in, ZERO, v, from);
       }
       if (!unavailable && strangers.size) {
         unavailable = `the pair's tokens also moved between the pool manager and ${[...strangers].map(short).join(", ")}, not this position's owner, so the payout cannot be attributed`;
@@ -418,7 +465,10 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       // read. Only its capital value depends on the price, so an unreadable price
       // leaves the capital unknown and never makes the FEE history undecodable.
       const isMintDeposit = delta > 0n && minted.has(tokenId);
-      if (isMintDeposit && unavailable && !nativeLeg) { unavailable = null; fee0 = 0n; fee1 = 0n; }
+      // The native-leg exclusion held only while a native amount could not be read at
+      // all; once the internal transfers resolved, a native mint is as decodable as any
+      // other and its fees are zero by the same definition.
+      if (isMintDeposit && unavailable && (!nativeLeg || nativeMoves)) { unavailable = null; fee0 = 0n; fee1 = 0n; }
       const capitalOnly = delta > 0n && !unavailable && ((kind === "increase" && fee0 === 0n && fee1 === 0n) || isMintDeposit);
       out.push({
         key: `${receipt.hash}:${l.index}`, tokenId, chainId: Number(chainId), positionManager: posm,
@@ -429,6 +479,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
         paidOut0: flow.out[t0].toString(), paidOut1: flow.out[t1].toString(),
         paidIn0: flow.in[t0].toString(), paidIn1: flow.in[t1].toString(),
         token0: t0, token1: t1, owner, unavailable, decoder: DECODER,
+        ...(viaCollector && !unavailable ? { viaCollector: true } : {}),
         ...(capitalOnly ? { capitalOnly: true, kind: minted.has(tokenId) ? "deposit" : "increase" } : {}),
       });
     }

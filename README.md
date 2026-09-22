@@ -1015,6 +1015,24 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-09-22
 
+- Claims: a settlement that reaches the owner through this collector is the owner's, and a
+  native leg's amount is read from the transaction's internal transfers. Only 7 of 40
+  positions could be reconstructed before, for two reasons that turned out to be the same
+  money. Twenty were refused because a native leg emits no log -- but the amounts are in the
+  transaction's internal transfers, which Blockscout serves. The rest were refused because
+  "the pair's tokens also moved between the pool manager and 0x8b65…, not this position's
+  owner" -- and 0x8b65 is this collector's own operator, which takes the fees and sweeps them
+  to the owner. Fixing either alone changes nothing: reading the native amount still leaves it
+  paid to the "stranger" operator, and accepting the operator still leaves the native amount
+  unknown. So both, together, under `DECODER = 8`, which re-derives every stored record.
+  A payout settled through a collector is flagged `viaCollector` rather than passed off as a
+  direct payment; an address that is not the owner or a configured collector is still a
+  stranger and still refused; and a failed internal-transfer lookup fails the scan chunk so it
+  is retried, instead of freezing a network blip into a permanent "cannot be read". The
+  server's own native-asset gate, which refused such positions before the store was ever
+  consulted, now defers to the store whenever a source for internal transfers is configured.
+- `settings.json`: `arm.maxMinutes` raised to 10080, so the wallet page's "1 week" window can
+  actually be chosen. `unlock.sh` never honoured this cap and still does not.
 - Watchdog: a public-path probe. Everything it watched before ran on this machine, so it
   could not see the 2026-09-21 outage at all -- the dashboard answered on loopback, the
   funnel listed every mapping, the cert was valid, and the public address answered nothing

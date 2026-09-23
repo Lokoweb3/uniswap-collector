@@ -95,6 +95,24 @@ const NATIVE_PSEUDO = new Set([
   "0x0000000000000000000000000000000000000000",
 ]);
 
+/**
+ * How a fee settlement left the pool: "collect" for an explicit collect (a zero
+ * liquidity change), "liquidity" for the fees v4 settles as a side effect of adding
+ * or removing liquidity. Every record is one or the other.
+ */
+function actionOf(e) {
+  return e.kind === "collect" ? "collect" : "liquidity";
+}
+const newAct = () => ({ count: 0, raw0: 0n, raw1: 0n, hist: 0, priced: 0, unpriced: 0 });
+// Same rule as the whole: a USD total only when every record in it is priced.
+function actOut(a, dec0, dec1, sym0, sym1) {
+  const f = (raw, dec) => Number(ethers.formatUnits(raw, dec)).toLocaleString("en-US", { maximumFractionDigits: 6 });
+  return { count: a.count, raw0: a.raw0.toString(), raw1: a.raw1.toString(),
+    tokens: [{ symbol: sym0, amount: f(a.raw0, dec0) }, { symbol: sym1, amount: f(a.raw1, dec1) }],
+    usd: !a.count ? 0 : a.unpriced ? null : +a.hist.toPrecision(12),
+    usdPricedSubtotal: +a.hist.toPrecision(12), pricedRecords: a.priced, unpricedRecords: a.unpriced };
+}
+
 function create({ provider, chainId, positionManager, poolManager, stateView, file = null, log = console, maxLogRange = null, priceSearchRequests = 24, collectors = [], internalTransfers = null }) {
   if (!chainId) throw new Error("claims-store needs a chainId");
   if (!positionManager) throw new Error("claims-store needs a position manager");
@@ -768,15 +786,22 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     }
     let a0 = 0n, a1 = 0n, last = null, withdrawals = 0, hist = 0, priced = 0, unpriced = 0;
     const priceSources = { block: 0, pricelog: 0, today: 0, none: 0 };
+    // The same fees, split by how they left the pool: an explicit collect, or the
+    // settlement v4 forces whenever liquidity is added or removed. Both are the
+    // owner's fees; the split answers "what did I (or the collector) collect" apart
+    // from "what came out because I changed the position".
+    const acts = { collect: newAct(), liquidity: newAct() };
     for (const e of mine) {
       const r0 = BigInt(e.fee0 || "0"), r1 = BigInt(e.fee1 || "0");
       a0 += r0; a1 += r1;
       const x0 = Number(ethers.formatUnits(r0, dec0)), x1 = Number(ethers.formatUnits(r1, dec1));
+      const act = acts[actionOf(e)];
+      act.count++; act.raw0 += r0; act.raw1 += r1;
       // Historical USD only from a verified price of the claim's own moment. A
       // record without one keeps its exact token amounts and simply has no
       // historical value; today's price is never substituted into this figure.
-      if (e.px) { hist += x0 * e.px.p0 + x1 * e.px.p1; priced++; priceSources[e.px.src === "pricelog" ? "pricelog" : "block"]++; }
-      else { unpriced++; priceSources.none++; }
+      if (e.px) { const v = x0 * e.px.p0 + x1 * e.px.p1; hist += v; act.hist += v; act.priced++; priced++; priceSources[e.px.src === "pricelog" ? "pricelog" : "block"]++; }
+      else { unpriced++; act.unpriced++; priceSources.none++; }
       if (e.kind === "withdrawal") withdrawals++;
       if (e.t && (!last || e.t > last)) last = e.t;
     }
@@ -813,6 +838,10 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       usdBasis, priceSources,
       ...(unpriced ? { usdMissing: `${unpriced} of ${mine.length} claims have no verified price of their moment` } : {}),
       principalSeparated: withdrawals > 0,
+      byAction: {
+        collect: actOut(acts.collect, dec0, dec1, sym0, sym1),
+        liquidity: actOut(acts.liquidity, dec0, dec1, sym0, sym1),
+      },
       coverage: cov,
       basis,
     };
@@ -823,4 +852,4 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
     get readOnly() { return foreign(); }, get scope() { return scope; }, get state() { return S(); } };
 }
 
-module.exports = { create, amountsFor, MODIFY_LIQUIDITY, TRANSFER, SWAP, NATIVE_PSEUDO, ZERO, DECODER };
+module.exports = { create, actionOf, amountsFor, MODIFY_LIQUIDITY, TRANSFER, SWAP, NATIVE_PSEUDO, ZERO, DECODER };

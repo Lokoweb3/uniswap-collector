@@ -184,6 +184,15 @@ async function main() {
     assert.strictEqual(whole.coverage.coversOpening, true);
     assert.ok(whole.coverage.fromBlock <= 10, "coverage reaches back past the mint");
     assert.strictEqual(whole.raw0, "1000000");
+    // A zero liquidity change is an explicit collect, and the split says so.
+    assert.strictEqual(whole.byAction.collect.count, 1);
+    assert.strictEqual(whole.byAction.collect.raw0, "1000000", "the collect's fees are in the collect part");
+    assert.strictEqual(whole.byAction.liquidity.count, 0, "nothing was settled by a liquidity change");
+    assert.strictEqual(whole.byAction.liquidity.raw0, "0");
+    assert.strictEqual(cs.actionOf({ kind: "collect" }), "collect");
+    for (const kind of ["withdrawal", "increase"]) {
+      assert.strictEqual(cs.actionOf({ kind }), "liquidity", `a ${kind} settles fees as a side effect of changing liquidity`);
+    }
     fs.rmSync(d, { recursive: true, force: true });
   }
 

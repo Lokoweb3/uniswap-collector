@@ -970,6 +970,7 @@ async function historyEntry(e) {
  * a separate, labelled figure. Positions whose history cannot be read in full are
  * left out of the totals and listed with the reason.
  */
+const claimAction = require("./claims-store").actionOf;
 async function claimTotal(sel, status, from, to) {
   const bucketOf = (st) => (st === "open" ? "open" : st === "closed" ? "closed" : "other");
   const newSub = () => ({ tokens: new Map(), usdHistorical: 0, pricedSubtotal: 0, unpriced: 0, records: 0, positions: 0 });
@@ -983,6 +984,9 @@ async function claimTotal(sel, status, from, to) {
     raw: x.raw.toString(), amount: Number(ethers.formatUnits(x.raw, x.decimals)) }));
   const tokens = new Map();
   const subs = { open: newSub(), closed: newSub(), other: newSub() };
+  // The same fees split by how they left the pool: explicit collects apart from the
+  // settlement v4 forces on every liquidity add or removal.
+  const acts = { collect: newSub(), liquidity: newSub() };
   const positions = [], rows = [], excluded = [], partial = [], unsupported = [];
   let complete = true, hist = 0, priced = 0, unpriced = 0, inScope = 0;
   for (const e0 of registry.entries(sel.set)) {
@@ -1011,16 +1015,20 @@ async function claimTotal(sel, status, from, to) {
     let pHist = 0, pUnpriced = 0, lastT = null;
     const sub = subs[bucket];
     sub.positions++;
+    const actSeen = new Set();
     for (const r of recs) {
       const r0 = BigInt(r.fee0 || "0"), r1 = BigInt(r.fee1 || "0");
+      const act = acts[claimAction(r)];
+      if (!actSeen.has(act)) { actSeen.add(act); act.positions++; }
       addTok(tokens, h.token0, r0); addTok(tokens, h.token1, r1);
       addTok(ptoks, h.token0, r0); addTok(ptoks, h.token1, r1);
       addTok(sub.tokens, h.token0, r0); addTok(sub.tokens, h.token1, r1);
+      addTok(act.tokens, h.token0, r0); addTok(act.tokens, h.token1, r1);
       const x0 = Number(ethers.formatUnits(r0, h.token0.decimals)), x1 = Number(ethers.formatUnits(r1, h.token1.decimals));
       const usdRow = r.px ? x0 * r.px.p0 + x1 * r.px.p1 : null;
-      if (usdRow == null) { unpriced++; pUnpriced++; sub.unpriced++; excluded.push({ key: r.key, tokenId: h.tokenId, reason: "no verified price of this claim's moment" }); }
-      else { priced++; hist += usdRow; pHist += usdRow; sub.pricedSubtotal += usdRow; }
-      sub.records++;
+      if (usdRow == null) { unpriced++; pUnpriced++; sub.unpriced++; act.unpriced++; excluded.push({ key: r.key, tokenId: h.tokenId, reason: "no verified price of this claim's moment" }); }
+      else { priced++; hist += usdRow; pHist += usdRow; sub.pricedSubtotal += usdRow; act.pricedSubtotal += usdRow; }
+      sub.records++; act.records++;
       if (r.t && (!lastT || r.t > lastT)) lastT = r.t;
       rows.push({ key: r.key, positionKey: h.key, logIndex: Number(String(r.key).split(":")[1]), tokenId: h.tokenId, wallet: h.wallet, walletLabel: h.walletLabel,
         status: h.status, t: r.t ?? null, block: r.block, tx: r.tx, kind: r.kind, recipient: r.owner || null,
@@ -1077,6 +1085,7 @@ async function claimTotal(sel, status, from, to) {
     usd: { historical: unpriced ? null : +hist.toPrecision(12), pricedSubtotal: +hist.toPrecision(12), pricedRecords: priced, unpricedRecords: unpriced, excluded },
     current,
     subtotals: { open: subOut(subs.open), closed: subOut(subs.closed), other: subOut(subs.other) },
+    byAction: { collect: subOut(acts.collect), liquidity: subOut(acts.liquidity) },
     positions, rows,
     coverage: { positionsTotal: inScope, positionsComplete: positions.filter((p) => p.state === "complete").length, partial, unsupported, discovery, note },
     pricing: PRICING,

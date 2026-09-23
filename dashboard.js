@@ -2697,6 +2697,20 @@ function ctotalPanelHtml(d, walletScoped) {
       `<span class="msub">${Number(s.positions) || 0} position${s.positions === 1 ? '' : 's'} · ${Number(s.records) || 0} record${s.records === 1 ? '' : 's'}</span>` +
       `<span class="ctamts">${ctTokenList(s.tokens)}</span></div>`;
   }).join('') + '</div>');
+  // by how the fees left the pool
+  const acts = d.byAction;
+  if (acts) {
+    out.push('<h4 class="cth">By how it was settled</h4><div class="ctsubs">' + [
+      ['collect', 'Explicit collects', 'a collect call that took fees and left liquidity untouched, by the collector or the wallet'],
+      ['liquidity', 'Settled on liquidity changes', 'fees v4 pays out automatically whenever liquidity is added or removed; no collect was pressed'],
+    ].map(([k, name, what]) => {
+      const s = acts[k];
+      if (!s) return `<div class="ctsub"><span class="ml">${name}</span><span class="msub">not in this answer</span></div>`;
+      return `<div class="ctsub" title="${esc(what)}"><span class="ml">${name}</span><span class="ctsv">${esc(ctUsdText(s.usdHistorical, s.pricedSubtotal, s.records))}</span>` +
+        `<span class="msub">${Number(s.records) || 0} record${s.records === 1 ? '' : 's'} across ${Number(s.positions) || 0} position${s.positions === 1 ? '' : 's'} · ${esc(what)}</span>` +
+        `<span class="ctamts">${ctTokenList(s.tokens)}</span></div>`;
+    }).join('') + '</div>');
+  }
   // per position
   // A position the chain cannot reconstruct still shows "none", because none of its
   // payout can be verified from logs -- a native-asset leg moves no ERC-20 and leaves
@@ -3013,6 +3027,16 @@ function rangeStatus(p, v, near) {
     sub: `needs a ${reenter.pct.toFixed(1)}% ${reenter.dir} to start earning`, cls: 'out' };
 }
 
+// The claimed total split by how it left the pool: explicit collects versus fees v4
+// settled when liquidity was added or removed. Each part follows the total's own
+// rule -- a USD figure only when every record in it is priced -- and a part with no
+// records is left out rather than printed as $0.
+function claimSplitText(c) {
+  const b = c && c.byAction;
+  if (!b || !b.collect || !b.liquidity) return '';
+  const part = (a, name) => !a.count ? '' : `${name} ${a.usd != null ? usd(a.usd) : `${a.count}× (no USD total)`}`;
+  return [part(b.collect, 'collected'), part(b.liquidity, 'on liquidity changes')].filter(Boolean).join(' · ');
+}
 // The claimed-fees metric: the state from claimState(), condensed to a tile. A
 // number only with verified records behind it; a floor reads "at least"; a zero
 // only when verified. Its title says how the figure was valued, because the
@@ -3053,7 +3077,8 @@ function claimedMetric(p, uid, wallet) {
       `${val.text ? ' USD ' + val.text + '.' : ''}${part ? ' ' + endStop(part.note) : c.usdMissing ? ' No USD total: ' + c.usdMissing + '.' : ''}` + tail,
       money ? (val.approx ? 'approx' : '') : part ? 'partial' : 'unavail', money ? esc(money) : part ? esc(part.text) : 'No USD total',
       `${nClaims}${when ? ' · last ' + esc(when) : ''} · complete history${money && val.short ? ' · ' + esc(val.short) : ''}` +
-      `${part ? ` · ${part.excluded} without a historical price excluded` : ''}${cur ? ' · ' + esc(cur.text) + ' (separate)' : ''}`);
+      `${part ? ` · ${part.excluded} without a historical price excluded` : ''}${cur ? ' · ' + esc(cur.text) + ' (separate)' : ''}` +
+      `${claimSplitText(c) ? '<br>' + esc(claimSplitText(c)) : ''}`);
   }
   if (st === 'scanning' || st === 'lookback-reached') {
     const found = n > 0 && c.tokens && c.tokens.length;
@@ -3063,11 +3088,13 @@ function claimedMetric(p, uid, wallet) {
     const floorNote = found ? ` ${nClaims} verified in that range; the figure is a floor, not a lifetime total.` : ' None found in that range so far, which is not the same as none claimed.';
     const title = why + blocks + floorNote + (money && val.text ? ' USD ' + val.text + '.' : '') + tail;
     const label = st === 'scanning' ? 'scan in progress' : 'lifetime history incomplete';
-    const sub = st === 'scanning'
+    const split = found ? claimSplitText(c) : '';
+    const sub = (st === 'scanning'
       ? `${found ? nClaims + ' found so far' : 'none found so far'}${from ? ' since ' + esc(from) : ''} · ${label}`
-      : `${label} · covers ${from ? 'since ' + esc(from) : 'a limited range'}${found ? ' · ' + nClaims : ''}`;
-    if (money) return tile(title, 'partial', esc(money), sub + (val.approx ? ' · ' + esc(val.short) : ''));
-    if (part) return tile(title + ' ' + endStop(part.note), 'partial', esc(part.text), `${sub} · ${part.excluded} without a historical price excluded`);
+      : `${label} · covers ${from ? 'since ' + esc(from) : 'a limited range'}${found ? ' · ' + nClaims : ''}`);
+    const splitHtml = split ? '<br>' + esc(split) : '';
+    if (money) return tile(title, 'partial', esc(money), sub + (val.approx ? ' · ' + esc(val.short) : '') + splitHtml);
+    if (part) return tile(title + ' ' + endStop(part.note), 'partial', esc(part.text), `${sub} · ${part.excluded} without a historical price excluded${splitHtml}`);
     return tile(title, 'partial', st === 'scanning' ? 'Scanning…' : 'Incomplete', sub);
   }
   if (st === 'undecodable') {

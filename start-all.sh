@@ -48,7 +48,7 @@ start_arc() {
     echo "arc viewer: already running on :${port}"
     return 0
   fi
-  LP_READONLY=1 nohup node server.js --data-dir="$dir" --port="$port" --no-loops --no-services \
+  LP_READONLY=1 nohup node server.js --data-dir="$dir" --port="$port" --no-loops --no-services --claim-scan \
     >> "$dir/server.log" 2>&1 < /dev/null &
   echo "arc viewer: started (pid $!) on :${port} — read-only, logs in $dir/server.log"
 }

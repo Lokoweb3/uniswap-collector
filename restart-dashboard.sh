@@ -16,7 +16,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-8797}"
 DATA="${DATA:-/home/steven/arc-data}"
-FLAGS="${FLAGS---no-loops --no-services}"   # unset -> Arc's read-only pair; FLAGS="" -> none
+FLAGS="${FLAGS---no-loops --no-services --claim-scan}"   # unset -> Arc's viewer flags; FLAGS="" -> none
 LOG="${LOG:-$HERE/dashboard-$PORT.log}"
 
 pids() { ss -ltnp 2>/dev/null | grep ":$PORT " | sed 's/.*pid=\([0-9]*\).*/\1/' | sort -u; }

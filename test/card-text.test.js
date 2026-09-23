@@ -33,7 +33,7 @@ function liftConst(name) {
 const consts = ["esc", "usd", "usdK", "COPY_ICON", "CLAIM_STATES", "cDate", "cTime", "CLAIM_MIXED_NOTE", "endStop",
   "POOL_RATE_LABEL", "approxRate", "ACTIVE_LIQ_TIP", "DIRECT_RATE_TIP", "SCANNER_RATE_TIP", "LT_NEEDS",
   "PRICING_FALLBACK", "fetchedAt", "clock", "ltPctText", "ltDate"];
-const fns = ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimSubtotal", "claimCurrent", "claimWhy", "claimRowValue",
+const fns = ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", "claimSubtotal", "claimSplitText", "claimCurrent", "claimWhy", "claimRowValue",
   "chainRef", "txRef",
   "claimKindLabel", "claimPriceLabel", "claimPanelHtml", "claimedMetric", "coverageText", "claimedLine",
   "ratePct", "incomeLine", "poolRateText", "poolLine", "rangeStatus", "ltNeeds", "perfEmptyNote", "ltBasisText", "longTermLine",

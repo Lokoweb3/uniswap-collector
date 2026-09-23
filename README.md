@@ -1013,6 +1013,21 @@ only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
 
+### 2026-09-23
+
+- Claimed fees are split by how they left the pool: **explicit collects** (a zero liquidity
+  change, by the collector or the wallet) and **settled on liquidity changes** (v4 pays out a
+  position's fees whenever liquidity is added or removed, with no collect involved). Both are
+  the owner's fees and both stay in the total; the split answers "what was collected" apart from
+  "what came out because the position was changed". `summary()` carries `byAction`, and
+  `/api/claims/total` carries `byAction` in the shape of `subtotals`; the Total claimed fees
+  panel shows it under "By how it was settled" and each card's Claimed fees tile adds a line.
+  Each part takes a USD figure only when every record in it is priced, as the total does.
+- Arc's viewer runs the background claims scan (`--claim-scan`, in `start-all.sh` and
+  `restart-dashboard.sh`). `--no-loops` had switched it off, so Arc scanned only ~54k blocks
+  (about 7.5 hours) each time a claims panel was opened and never reached collects older than
+  that. The scanner only reads logs and writes `claims.json`; the viewer stays `LP_READONLY`.
+
 ### 2026-09-22
 
 - Claims: a settlement that reaches the owner through this collector is the owner's, and a

@@ -1027,9 +1027,9 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   const root = document.getElementById('sec-arm');
   const $ = (s) => root.querySelector(s);
   const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
-  let st = null, provider = null, signer = null, account = null;
+  let st = null, stError = null, provider = null, signer = null, account = null;
   const status = (el, msg, cls = '') => { $(el).innerHTML = `<span class="${cls}">${msg}</span>`; };
-  const isOwner = () => !!(account && st && account.toLowerCase() === st.owner.toLowerCase());
+  const isOwner = () => !!(account && st && st.owner && account.toLowerCase() === st.owner.toLowerCase());
 
   function local() {
     return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
@@ -1037,8 +1037,11 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 
   async function load() {
     const r = await fetch('/api/arm/status', { cache: 'no-store' });
-    st = await r.json();
-    if (!st.ok) throw new Error(st.error || 'status failed');
+    const j = await r.json();
+    // A refusal (a read-only instance) is not a status: keep none, so nothing below
+    // reads an owner that was never sent, and remember why for Connect to repeat.
+    if (!j.ok) { st = null; stError = j.error || 'status failed'; throw new Error(stError); }
+    st = j; stError = null;
     render();
   }
 
@@ -1087,6 +1090,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 
   async function connect() {
     if (!window.ethereum) { status('[data-id="status"]', 'No wallet found. Install Rabby or MetaMask.', 'bad'); return; }
+    if (!st) { status('[data-id="status"]', `Cannot arm here: ${stError || 'the arm status has not loaded'}`, 'bad'); return; }
     try {
       provider = new ethers.BrowserProvider(window.ethereum);
       const accounts = await provider.send('eth_requestAccounts', []);

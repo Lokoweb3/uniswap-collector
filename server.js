@@ -2136,7 +2136,7 @@ async function handleRequest(req, res) {
   // unconditionally — LP_ALLOW_REMOTE_COLLECT does not open it.
   if (READONLY && (url.pathname === "/api/unlock" || url.pathname === "/api/lock" || url.pathname.startsWith("/api/arm") || (url.pathname === "/api/collect" && req.method === "POST"))) {
     res.writeHead(403, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ ok: false, error: "This dashboard is read-only; the collector runs on another machine." }));
+    return res.end(JSON.stringify({ ok: false, error: "This dashboard is read-only and cannot arm. Arm from the main dashboard: the unlock is held by the process that runs the collector, and one window covers every chain it collects on." }));
   }
 
   // The Wallet page: arming, approvals (audit + operator approvals), the vault and the operator, as tabs.

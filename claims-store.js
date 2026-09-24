@@ -70,7 +70,10 @@ const BLOCK_MS_FALLBACK = 1000;
 // outright. Both were needed together: this collector takes fees to its operator and
 // sweeps them to the owner, so every collector-run settlement looked like a payment
 // to a stranger, and on the native side there was no amount to attribute anyway.
-const DECODER = 8;
+// 9: the position manager is an accepted counterparty in a transaction the owner or a
+// collector sent. It is how a native leg is paid in (msg.value -> position manager ->
+// pool manager), so every native increase was refused as a payment by a stranger.
+const DECODER = 9;
 
 /**
  * Token amounts for a liquidity change, rounded the way v4's SqrtPriceMath does:
@@ -415,7 +418,17 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       const strangers = new Set();
       // The owner, or an address collecting for them. Anyone else is a stranger and the
       // payout cannot be attributed to this position.
-      const isOurs = (a) => a === owner || COLLECTORS.has(a);
+      //
+      // The position manager itself also counts, but only in a transaction the owner or
+      // a collector sent. A native leg is paid with the transaction's value: the sender
+      // hands ETH to the position manager, which settles it with the pool manager and
+      // sweeps any change back. So on every native increase the payer the pool manager
+      // sees is the position manager, spending the sender's own msg.value, and treating
+      // it as a stranger refused every such deposit. It only ever acts for the account
+      // that called it, so when that account is ours, so is the money it moves.
+      const sender = String(receipt.from || "").toLowerCase();
+      const senderIsOurs = sender === owner || COLLECTORS.has(sender);
+      const isOurs = (a) => a === owner || COLLECTORS.has(a) || (a === posm && senderIsOurs);
       // Whether any leg was settled through a collector rather than straight to the
       // owner. Kept on the record: the figure is the owner's either way, but a reader
       // checking it against the wallet should know the money arrived by way of the
@@ -424,7 +437,7 @@ function create({ provider, chainId, positionManager, poolManager, stateView, fi
       const credit = (bucket, token, amount, counterparty) => {
         if (!isOurs(counterparty)) { strangers.add(counterparty); return; }
         bucket[token] += amount;
-        if (counterparty !== owner) viaCollector = true;
+        if (COLLECTORS.has(counterparty)) viaCollector = true;
       };
       for (const x of receipt.logs) {
         if (x.topics[0] !== TRANSFER || x.topics.length !== 3) continue;

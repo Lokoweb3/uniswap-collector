@@ -59,7 +59,7 @@ function fakeProvider(world, head = 1000) {
     },
     async getTransactionReceipt(h) {
       const logs = world.logs.filter((l) => l.transactionHash === h).concat(world.transfers[h] || []);
-      return logs.length ? { hash: h, logs } : null;
+      return logs.length ? { hash: h, from: (world.from || {})[h] || null, logs } : null;
     },
   };
 }
@@ -147,6 +147,28 @@ async function main() {
     const internalTransfers = async () => [{ from: PM, to: OPERATOR, value: "73840620000000000" }];
     const { rows } = await run(nativeWorld, 9100, { internalTransfers });
     assert.ok(rows[0].unavailable, "reading the amount alone still leaves it paid to a stranger");
+    assert.strictEqual(rows[0].fee0, null, "so still no figure");
+  }
+
+  // ---- 2b. the position manager moving the sender's own ETH -------------------
+  // A native leg is paid with msg.value: the sender hands ETH to the position manager,
+  // which settles it with the pool manager. The pool manager's counterparty is then the
+  // position manager, which refused every native increase (#3010813, 2026-09-24).
+  // The same holds on the way out (take to the position manager, then a sweep): a
+  // collect paid through it, in a transaction the owner sent, is the owner's.
+  {
+    const internalTransfers = async () => [{ from: PM, to: POSM, value: "54373489660421970" }];
+    const world = { ...nativeWorld, from: { "0xbb": OWNER } };
+    const { rows } = await run(world, 9100, { internalTransfers, collectors: [OPERATOR] });
+    assert.strictEqual(rows[0].unavailable, null, "in a transaction the owner sent, the position manager is moving the owner's ETH");
+    assert.strictEqual(rows[0].fee0, "54373489660421970", "so the amount is the owner's");
+    assert.ok(!rows[0].viaCollector, "and it did not come by way of the operator");
+  }
+  {
+    const internalTransfers = async () => [{ from: PM, to: POSM, value: "54373489660421970" }];
+    const world = { ...nativeWorld, from: { "0xbb": STRANGER } };
+    const { rows } = await run(world, 9100, { internalTransfers, collectors: [OPERATOR] });
+    assert.ok(rows[0].unavailable, "sent by anyone else, the position manager is acting for them, not the owner");
     assert.strictEqual(rows[0].fee0, null, "so still no figure");
   }
 

@@ -214,4 +214,4 @@ function clearWindow() {
   fs.rmSync(WINDOW_FILE, { force: true });
 }
 
-module.exports = { message, currentMessage, currentSalt, verify, configured, setup, arm, forget, operatorAddress, SECRET_FILE, rememberWindow, expectedWindow, clearWindow };
+module.exports = { message, currentMessage, currentSalt, verify, configured, setup, arm, decrypt, forget, operatorAddress, SECRET_FILE, rememberWindow, expectedWindow, clearWindow };

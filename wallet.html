@@ -1111,6 +1111,10 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     // The message carries a nonce stored at setup, so it cannot be composed by
     // anyone who has not read that file. Without one there is nothing safe to sign:
     // say so rather than putting an empty prompt in front of the owner's wallet.
+    // No status means this page cannot arm at all (a read-only instance, or the public
+    // gate): say why, rather than crashing on a message that was never sent.
+    if (!st) throw new Error(`cannot arm here: ${stError || 'the arm status has not loaded'}`);
+    if (!local()) throw new Error('arming only works on the dashboard machine (http://127.0.0.1:8800/wallet)');
     if (!st.message) throw new Error(st.messageError || 'the dashboard did not provide a message to sign');
     status('[data-id="status"]', 'Confirm the signature in your wallet…', 'warn');
     return signer.signMessage(st.message);
@@ -1182,7 +1186,11 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   $('[data-id="lock"]').addEventListener('click', lock);
   $('[data-id="pass"]').addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
 
-  if (!local()) status('[data-id="status"]', 'Arming only works when this page is opened on the dashboard machine (http://127.0.0.1:8787/wallet).', 'bad');
+  // The buttons start disabled and are enabled by updateButtons() once the status has
+  // loaded and the owner is connected. They used to start enabled, so on the public
+  // address Save & arm could be pressed with no status loaded at all.
+  updateButtons();
+  if (!local()) status('[data-id="status"]', 'Arming only works when this page is opened on the dashboard machine (http://127.0.0.1:8800/wallet).', 'bad');
   whenTab('arm', () => load().then(() => setInterval(load, 60000)).catch((e) => status('[data-id="status"]', `Could not load status: ${e.message}`, 'bad')));
 })();
 

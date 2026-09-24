@@ -53,6 +53,18 @@ const CHAINS = [
 const DEFAULT = arg("default", "robinhood");
 const byKey = (k) => CHAINS.find((c) => c.key === k) || null;
 
+// Arming is not per chain. The unlock lives in the process that runs the collector
+// (Robinhood's), and one window covers every chain's collector run on this machine;
+// the other instances are read-only and refuse it. So arm, unlock and lock always go
+// to that instance, whichever chain the picker shows -- otherwise the Arc view's
+// Wallet page offered an Arm button that could only ever answer "read-only".
+const ARM_CHAIN = arg("arm-chain", "robinhood");
+const ARM_PATH = /^\/api\/(arm|unlock|lock)(\/|$)/;
+/** The instance a request is sent to: the picked chain, except for arming. */
+function targetFor(chain, pathname) {
+  return ARM_PATH.test(pathname) ? byKey(ARM_CHAIN) || chain : chain;
+}
+
 /** The chain for this request: an explicit ?chain= wins, then the cookie, then the default. */
 function chainFor(req, url) {
   const asked = url.searchParams.get("chain");
@@ -213,23 +225,25 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({ ok: false, error: "cross-site request" }));
   }
 
-  const headers = { ...req.headers, host: `127.0.0.1:${chain.port}` };
-  if (headers.origin) headers.origin = `http://127.0.0.1:${chain.port}`;
-  if (headers.referer) headers.referer = String(headers.referer).replace(/^https?:\/\/[^/]+/, `http://127.0.0.1:${chain.port}`);
-  const cookies = restoreCookieHeader(req.headers.cookie, chain.key);
+  const picked = chain;
+  const target = targetFor(picked, url.pathname);
+  const headers = { ...req.headers, host: `127.0.0.1:${target.port}` };
+  if (headers.origin) headers.origin = `http://127.0.0.1:${target.port}`;
+  if (headers.referer) headers.referer = String(headers.referer).replace(/^https?:\/\/[^/]+/, `http://127.0.0.1:${target.port}`);
+  const cookies = restoreCookieHeader(req.headers.cookie, target.key);
   if (cookies) headers.cookie = cookies; else delete headers.cookie;
   delete headers["accept-encoding"];    // so HTML can be rewritten without decompressing
 
-  const upstream = http.request({ host: "127.0.0.1", port: chain.port, path: req.url, method: req.method, headers }, (r) => {
+  const upstream = http.request({ host: "127.0.0.1", port: target.port, path: req.url, method: req.method, headers }, (r) => {
     const out = { ...r.headers };
-    if (out["set-cookie"]) out["set-cookie"] = [].concat(out["set-cookie"]).map((c) => renameSetCookie(c, chain.key));
+    if (out["set-cookie"]) out["set-cookie"] = [].concat(out["set-cookie"]).map((c) => renameSetCookie(c, target.key));
     const isHtml = String(out["content-type"] || "").includes("text/html");
     if (!isHtml) { res.writeHead(r.statusCode, out); return r.pipe(res); }
     let body = "";
     r.setEncoding("utf8");
     r.on("data", (c) => (body += c));
     r.on("end", () => {
-      const html = injectPicker(body, chain);
+      const html = injectPicker(body, picked);
       delete out["content-length"];
       res.writeHead(r.statusCode, out);
       res.end(html);
@@ -239,12 +253,12 @@ const server = http.createServer((req, res) => {
   upstream.on("error", (err) => {
     // A chain that is down says which chain and where, rather than a bare 502.
     res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(`<!doctype html><meta charset="utf-8"><title>${chain.label} is not answering</title>
+    res.end(`<!doctype html><meta charset="utf-8"><title>${target.label} is not answering</title>
 <body style="font:14px/1.5 system-ui;margin:40px;color:#e2e8f0;background:#0f172a">
-<h1 style="font-size:18px">${chain.label} is not answering</h1>
-<p>The dashboard for <b>${chain.label}</b> should be listening on 127.0.0.1:${chain.port}. It is not: <code>${err.code || err.message}</code>.</p>
+<h1 style="font-size:18px">${target.label} is not answering</h1>
+<p>The dashboard for <b>${target.label}</b> should be listening on 127.0.0.1:${target.port}. It is not: <code>${err.code || err.message}</code>.</p>
 <p>The other chain is unaffected — nothing here is shared between them.</p>
-${injectPicker("", chain)}
+${injectPicker("", picked)}
 </body>`);
   });
 
@@ -258,4 +272,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { chainFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, vaultOf, CHAINS, COOKIE, nsName, server };
+module.exports = { chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, vaultOf, CHAINS, COOKIE, nsName, server };

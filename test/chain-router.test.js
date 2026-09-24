@@ -8,7 +8,7 @@
 "use strict";
 const assert = require("assert");
 const http = require("http");
-const { chainFor, renameSetCookie, restoreCookieHeader, injectPicker, CHAINS, COOKIE, nsName } = require("../chain-router");
+const { chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, CHAINS, COOKIE, nsName } = require("../chain-router");
 
 const req = (cookie) => ({ headers: cookie ? { cookie } : {} });
 const url = (q = "") => new URL(`http://x/page${q}`);
@@ -17,6 +17,15 @@ const url = (q = "") => new URL(`http://x/page${q}`);
 {
   assert.strictEqual(chainFor(req(), url()).chain.key, "robinhood", "the default chain when nothing is chosen");
   assert.strictEqual(chainFor(req(`${COOKIE}=arc`), url()).chain.key, "arc", "the cookie decides");
+  // Arming is one window for every chain, held by Robinhood's process: from the Arc
+  // view it must still reach Robinhood, and nothing else may follow it there.
+  const arc = CHAINS.find((c) => c.key === "arc");
+  for (const p of ["/api/arm/status", "/api/arm", "/api/arm/setup", "/api/arm/forget", "/api/unlock", "/api/lock"]) {
+    assert.strictEqual(targetFor(arc, p).key, "robinhood", `${p} goes to the instance that holds the unlock`);
+  }
+  for (const p of ["/api/positions", "/api/armory", "/wallet", "/api/collect", "/api/claims"]) {
+    assert.strictEqual(targetFor(arc, p).key, "arc", `${p} stays on the picked chain`);
+  }
   const q = chainFor(req(`${COOKIE}=arc`), url("?chain=robinhood"));
   assert.strictEqual(q.chain.key, "robinhood", "an explicit ?chain= overrides the cookie");
   assert.strictEqual(q.fromQuery, true, "and is remembered, so the query can be dropped");

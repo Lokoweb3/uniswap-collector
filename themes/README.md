@@ -46,7 +46,14 @@ same markup.
   `./themes/apply.sh 2026-10-18-midnight-neon-v2`; it shares the current markup, so this
   is a clean swap.
 
-The current look, **Velvet**, is a skin appended to the end of `dashboard.css` (plum-black
-ground with a slow aurora, frosted-glass cards, one magenta → violet → cyan gradient for the
-portfolio total, the active page, the primary button and the range rails; Space Grotesk for
-headings and big figures). Deleting that final block returns Midnight Neon.
+- **2026-10-18-velvet** — plum-black ground with a slow aurora, frosted-glass cards, one
+  magenta → violet → cyan gradient for the portfolio total, active page, primary button and
+  range rails; Space Grotesk headings (add `&family=Space+Grotesk:wght@500;600;700` back to
+  the font link in `dashboard.html` and `wallet.html` if you restore it).
+
+The current look, **Phosphor**, is a terminal skin appended to the end of `dashboard.css`:
+monospace everywhere, pale phosphor text on near-black, faint scanlines, a blinking prompt
+cursor, bracketed labels and a soft glow on the figures that matter; green / amber / red
+still only mean a status. Mobile first: 44px touch targets, no sideways scroll, and the chain
+picker moved to the bottom-left on phones so it no longer covers the page tabs. Deleting that
+final block returns Midnight Neon.

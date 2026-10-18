@@ -149,6 +149,10 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       pnlLegs: { deposited: depositedUsd, depositedAtOpen, adds, withdrawn: withdrawnUsd, collected: collectedUsd, collects, held: valueUsd || 0, uncollected: feesUsd || 0 },
     };
   }
+  // Positions on other concentrated-liquidity DEXes (settings.json contracts.slipstream;
+  // on Robinhood Chain, "up"). Read into `external`, never `positions`: see slipstream.js.
+  const slipReaders = ((cfg.contracts && cfg.contracts.slipstream) || []).filter((x) => x && x.positionManager && x.factory).map((spec) =>
+    require("./slipstream").create({ provider, cfg, spec, priceSides, toFloat, bsFetch: require("./blockscout").bsFetch }));
   const discovery = new Map(); // address -> v4 discovery (own state file per wallet)
   let accrual = { last: {}, hours: {} }; // last[wallet:tokenId] = {t,f0,f1}; hours[wallet][hourMs] = usd
   try {
@@ -362,6 +366,22 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     await Promise.all(Array.from({ length: CONCURRENCY }, async () => { while (cursor < work.length) await one(work[cursor++]); }));
     positions.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
     recordAccrual(w.address, positions);
+    const external = [];
+    for (const r of slipReaders) {
+      try {
+        const x = await r.positionsOf(w.address, wethUsd);
+        external.push(...x.positions);
+        closed += x.closed;
+        errors.push(...x.errors);
+      } catch (err) {
+        // Unread is not empty: say so on the wallet rather than show it holding nothing there.
+        errors.push({ tokenId: r.name, error: `${r.name} positions could not be read: ${err.shortMessage || err.message}` });
+      }
+    }
+    for (const p of external) {
+      if (p.usd0 != null) seenPrices[p.token0.toLowerCase()] = p.usd0;
+      if (p.usd1 != null) seenPrices[p.token1.toLowerCase()] = p.usd1;
+    }
     const earned = earnedFor(w.address);
 
     // Collector approval state for wallets the collector should collect for.
@@ -385,19 +405,24 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         errors.push({ tokenId: "wallet", error: err.shortMessage || err.message });
       }
     }
-    const liquidityUsd = positions.reduce((s, p) => s + (p.valueUsd || 0), 0);
-    const feesUsd = positions.reduce((s, p) => s + (p.feesUsd || 0), 0);
+    const open = [...positions, ...external];
+    const liquidityUsd = open.reduce((s, p) => s + (p.valueUsd || 0), 0);
+    const feesUsd = open.reduce((s, p) => s + (p.feesUsd || 0), 0);
+    // Pending gauge rewards are shown on their cards and summed here, but kept out of
+    // totalUsd: like Merkl rewards, they are a claim, not something the wallet holds yet.
+    const rewardsUsd = external.reduce((s, p) => s + ((p.rewards && p.rewards.usd) || 0), 0);
     const walletUsd = holdings ? holdings.walletUsd : null;
     return {
-      ...w, ok: true, positions, closed, errors, known, truncated, earned, collector, discovery,
+      ...w, ok: true, positions, external, closed, errors, known, truncated, earned, collector, discovery,
       holdings: holdings
         ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, unscaled: holdings.unscaled || [], partialTotals: holdings.partialTotals, tokens: holdings.rows, tokenCount: holdings.rows.length }
         : null,
       totals: {
-        count: positions.length,
-        idle: positions.filter((p) => !p.inRange).length,
+        count: open.length,
+        idle: open.filter((p) => !p.inRange).length,
         liquidityUsd,
         feesUsd,
+        rewardsUsd,
         walletUsd,
         totalUsd: liquidityUsd + feesUsd + (walletUsd || 0),
       },

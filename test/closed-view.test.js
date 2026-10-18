@@ -77,13 +77,13 @@ function page() {
     return { status: a.status, json: async () => { if (a.body instanceof Error) throw a.body; return a.body; } };
   };
   const body = `
-    let EXPLORER = 'https://explorer.example', CHAIN = { id: 5042, name: null };
+    let EXPLORER = 'https://explorer.example', CHAIN = { id: 5042, name: null }, lastWatchForPf = null;
     const shortA = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
     const amount = (n) => String(n), price = (n) => String(n), linkify = (s) => esc(s);
     ${lifted(["histListHtml", "closedCard", "posFilterHtml", "posFilterCounts", "posFilterStep", "histWallet", "unsettledText",
-      "histDateLine", "loadPosHistory", "renderPosHistory", "setPosFilter", "refreshClaimPanel", "claimedMetric"], PROVIDED)}
+      "histDateLine", "loadPosHistory", "renderPosHistory", "setPosFilter", "refreshClaimPanel", "claimedMetric", "externalOpen"], PROVIDED)}
     return { histListHtml, closedCard, posFilterHtml, posFilterCounts, posFilterStep, histWallet, unsettledText, histDateLine,
-      loadPosHistory, renderPosHistory, setPosFilter, refreshClaimPanel, HIST };`;
+      loadPosHistory, renderPosHistory, setPosFilter, refreshClaimPanel, HIST, setWatch: (w) => { lastWatchForPf = w; } };`;
   const api = new Function("document", "fetch", "$", "pref", "setPref", "loadOk", "loadFailed", "histScope", body)(
     document, fetch, (s) => els[s] || null,
     (k) => (prefs.has(k) ? prefs.get(k) : null), (k, v) => prefs.set(k, v),
@@ -390,6 +390,18 @@ async function main() {
     assert.strictEqual(els["#histstale"].hidden, true);
     assert.match(els["#posfilter"].innerHTML, /aria-label="Closed, 6 positions"/);
     assert.deepStrictEqual(h.oks, ["Position history"]);
+
+    // open positions on another DEX (the watch payload's `external`) count as open in the scope
+    a.setWatch({ wallets: [{ ok: true, address: W2, external: [{ tokenId: "up-1" }, { tokenId: "up-2" }] }] });
+    a.renderPosHistory();
+    assert.match(els["#posfilter"].innerHTML, /aria-label="Open, 3 positions"/);
+    assert.match(els["#posfilter"].innerHTML, /aria-label="All, 9 positions"/);
+    h.scope = W1.toLowerCase();                 // another wallet's external positions are not this one's
+    a.renderPosHistory();
+    assert.match(els["#posfilter"].innerHTML, /aria-label="Open, 1 position"/);
+    h.scope = "all";
+    a.setWatch(null);
+    a.renderPosHistory();
 
     // failures of every kind keep it, marked stale
     for (const bad of [

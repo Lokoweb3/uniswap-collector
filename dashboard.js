@@ -324,7 +324,7 @@ function watchedRows(w){
     r.pools += amt; r.fees += fee; r.source = 'pools';
     if (r.price == null && usdPer != null) r.price = usdPer;
   };
-  for (const p of w.positions || []) {
+  for (const p of [...(w.positions || []), ...(w.external || [])]) {
     side(p, p.token0, p.symbol0, p.amount0, p.fee0, p.usd0);
     side(p, p.token1, p.symbol1, p.amount1, p.fee1, p.usd1);
   }
@@ -1910,7 +1910,7 @@ const expectedDaily = p => { if (p.dailyUsd == null) return null; const w = rang
 
 // Explorer link for a position NFT, on whichever position manager minted it.
 function nftLink(d, p, label){
-  const mgr = p.version === 4 ? d.positionManagerV4 : d.positionManager;
+  const mgr = p.positionManager || (p.version === 4 ? d.positionManagerV4 : d.positionManager);
   return EXPLORER && mgr
     ? `<a href="${EXPLORER}/token/${mgr}/instance/${p.nftId || p.tokenId}" target="_blank" rel="noopener">${label}</a>`
     : label;
@@ -2568,7 +2568,11 @@ function renderPosHistory() {
   const box = $('#posfilter');
   if (box) {
     const had = !!(document.activeElement && box.contains(document.activeElement));
-    box.innerHTML = posFilterHtml(filter, d ? posFilterCounts(d.counts) : null);
+    // The history counts Uniswap positions; open positions on other DEXes come from the watch payload.
+    const c = d ? posFilterCounts(d.counts) : null;
+    const ext = externalOpen();
+    if (c && ext) { c.open += ext; c.all += ext; }
+    box.innerHTML = posFilterHtml(filter, c);
     const on = had && box.querySelector('[aria-checked="true"]');
     if (on) on.focus();
   }
@@ -2585,6 +2589,12 @@ function renderPosHistory() {
   if (html === HIST.html) return;            // unchanged: keep any open history panel as it is
   HIST.html = html;
   list.innerHTML = html;
+}
+function externalOpen() {
+  const w = String(histScope() || '').toLowerCase();
+  return ((lastWatchForPf && lastWatchForPf.wallets) || [])
+    .filter(x => x.ok && (w === 'all' || String(x.address).toLowerCase() === w))
+    .reduce((n, x) => n + ((x.external || []).length), 0);
 }
 async function loadPosHistory() {
   const w = histScope();
@@ -3199,8 +3209,9 @@ function positionCard(p, d, opts) {
         <h3>${p.pair}</h3>
         ${o.wallet ? `<span class="pcwallet" title="Held by ${esc(o.wallet)}">${esc(o.wallet)}</span>` : ''}
         <span class="nft mono">${nftLink(d, p, '#' + (p.nftId || p.tokenId))}</span>
-        <span class="tier">${p.version === 4 ? 'v4' : 'v3'}</span>
+        <span class="tier"${p.protocol ? ` title="A position on ${esc(p.protocol)}, not Uniswap: shown here, never collected, closed or sold by this dashboard"` : ''}>${p.protocol ? esc(p.protocol) : p.version === 4 ? 'v4' : 'v3'}</span>
         <span class="tier">${p.feeTierLabel}</span>
+        ${p.staked ? `<span class="tier" title="Deposited in the pool's gauge ${esc(p.gauge || '')}: it earns ${esc((p.rewards && p.rewards.symbol) || 'the gauge reward')} instead of trading fees">staked</span>` : ''}
         ${full ? '<span class="full" title="Liquidity across the whole price range">full range</span>' : ''}
         ${p.approved === false ? '<span class="tag-noappr">not approved</span>' : ''}
         ${p.eligible === true ? '<span class="tag-elig">collectable</span>' : ''}
@@ -3212,8 +3223,8 @@ function positionCard(p, d, opts) {
     <div class="metrics">
       <div class="metric"><span class="ml">Position value</span><span class="mv">${usd(p.valueUsd)}</span>
         <span class="msub">${p.symbol0} + ${p.symbol1}</span></div>
-      <div class="metric"><span class="ml">Uncollected fees</span>${feeMetric(p)}</div>
-      ${claimedMetric(p, uid, o.walletAddr)}
+      <div class="metric"><span class="ml">${p.staked ? 'Staking rewards' : 'Uncollected fees'}</span>${feeMetric(p)}</div>
+      ${p.protocol ? platformMetric(p) : claimedMetric(p, uid, o.walletAddr)}
       <div class="metric"><span class="ml">Range status</span><span class="mv ${st.cls}">${st.text}</span>
         <span class="msub">${st.sub}</span></div>
     </div>
@@ -3249,8 +3260,11 @@ function positionCard(p, d, opts) {
         </section>
 
         <section class="dgroup">
-          <h4>Uncollected fee breakdown</h4>
-          ${p.feesOk === false
+          <h4>${p.staked ? 'Earnings while staked' : 'Uncollected fee breakdown'}</h4>
+          ${p.staked
+            ? `<span class="amts">${p.rewards && p.rewards.amount != null ? `<b>${amount(p.rewards.amount)}</b> ${esc(p.rewards.symbol || '')} pending` : 'Reward read unavailable'}</span>
+               <span class="rate muted">Staked in the gauge, so trading fees go to its voters and the position earns ${esc((p.rewards && p.rewards.symbol) || 'the reward token')} instead${p.rewards && p.rewards.priceUsd != null ? ` · priced at ${usd(p.rewards.priceUsd)} from its pool` : ''}</span>`
+            : p.feesOk === false
             ? `<span class="amts unavail">Fee read unavailable — ${esc(String(p.feesError || 'the read did not return a value'))}</span>`
             : `<span class="amts"><b>${amount(p.fee0)}</b> ${p.symbol0} · <b>${amount(p.fee1)}</b> ${p.symbol1}</span>
                <span class="rate muted">${usd(p.feesUsd)} at current prices · not yet withdrawn, still in the pool</span>`}
@@ -3295,7 +3309,22 @@ function dgroupBody(parts, emptyNote) {
 }
 
 // The uncollected-fee metric body. A failed read is not zero and says so.
+// Where a non-Uniswap position lives. Its claim history is not scanned (that covers
+// the Uniswap managers), so the tile says where it is instead of "not scanned yet".
+function platformMetric(p) {
+  const where = p.staked ? 'Staked in gauge' : 'In wallet';
+  const link = p.gauge ? chainRef(EXPLORER, `/address/${p.gauge}`, shortA(p.gauge), p.gauge) : '';
+  return `<div class="metric"><span class="ml">On ${esc(p.protocol)}</span><span class="mv">${where}</span>` +
+    `<span class="msub">${p.staked ? `gauge ${link} · ` : ''}read only: not collected, closed or sold here</span></div>`;
+}
 function feeMetric(p) {
+  // A staked position's trading fees go to the gauge's voters; what it earns is the reward.
+  if (p.staked) {
+    const r = p.rewards || {};
+    if (r.amount == null) return `<span class="mv unavail">Unavailable</span><span class="msub">${esc(String(r.error || 'the reward read did not return a value'))}</span>`;
+    return `<span class="mv">${r.usd == null ? `${amount(r.amount)} ${esc(r.symbol || '')}` : usd(r.usd)}</span>` +
+      `<span class="msub" title="Pending in the gauge, claimable by the wallet. Trading fees on staked liquidity go to the gauge's voters, not the position.">${r.usd == null ? 'no price for it' : `${amount(r.amount)} ${esc(r.symbol || '')}`} \u00b7 staking reward, unclaimed</span>`;
+  }
   if (p.feesOk === false) {
     return `<span class="mv unavail">Unavailable</span><span class="msub">${esc(String(p.feesError || 'the fee read did not return a value'))}</span>`;
   }
@@ -3568,19 +3597,20 @@ function renderWatch(d){
     // collector is approved are all kept, one disclosure down.
     const head = `<div class="wh">
       <div class="wh-main">${link}<span class="wcount"><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>
-      <div class="wh-side">${ratePart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span>${w.positions.length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
+      <div class="wh-side">${ratePart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span>${w.positions.length || (w.external || []).length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
       <details class="whmore"><summary>Wallet detail</summary><div class="whmore-body"><span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}</div></details>
     </div>`;
     // Top tokens sitting in the wallet, compact.
     const toks = h && h.tokens.length
       ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
       : '';
-    if (!w.positions.length) {
+    const open = [...w.positions, ...(w.external || [])];
+    if (!open.length) {
       quiet.push(`<div class="wqrow"><div class="wqline">${link}<span class="muted">${w.closed ? `${w.closed} closed` : 'none opened'}</span><span class="wqval">${usd(t.totalUsd)}</span></div>`
         + `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">${walletPart}${earnedPart}${collectorPart}</div>${toks}</details></div>`);
       return '';
     }
-    const cards = sortLT(w.positions).map(p =>
+    const cards = sortLT(open).map(p =>
       // The same card as the owner's, so the two can never drift apart. The wallet
       // label rides in the header because a watched card is read out of context.
       positionCard(p, d, { wallet: w.label || shortA(w.address), walletAddr: w.address })
@@ -3589,9 +3619,10 @@ function renderWatch(d){
   }).join('') + (quiet.length
     ? `<div class="watchwallet wquiet"><div class="wqhead">No open positions <span class="muted">· ${quiet.length} wallet${quiet.length === 1 ? '' : 's'}</span></div>${quiet.join('')}</div>`
     : '');
-  for (const w of shown) if (w.ok && w.positions && w.positions.length)
+  for (const w of shown) if (w.ok && ((w.positions && w.positions.length) || (w.external && w.external.length)))
     applyWalletOpen(w.address.toLowerCase(), 'wcards-' + w.address.toLowerCase());
   renderSidebar();
+  renderPosHistory(); // its Open count includes the external positions just drawn
 }
 // The watched-wallet cards. A failed read or an ok:false answer never replaces
 // them: the last good cards stay, marked with their age and the failure. Only a

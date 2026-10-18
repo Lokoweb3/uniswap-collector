@@ -36,7 +36,7 @@
     "usdReferenceFeeTier": 100
   },
   "contracts": {
-    "_comment": "Uniswap v3 (positionManager, factory, swapRouter02, quoterV2), v4 (positionManager, stateView, poolManager, universalRouter, quoter, permit2, pricingHooks) and v2Factory on Robinhood Chain.",
+    "_comment": "Uniswap v3 (positionManager, factory, swapRouter02, quoterV2), v4 (positionManager, stateView, poolManager, universalRouter, quoter, permit2, pricingHooks) and v2Factory on Robinhood Chain. slipstream: other concentrated-liquidity DEXes built on Aerodrome Slipstream (up), read only for the watched wallets, staked positions included.",
     "positionManager": "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3",
     "swapRouter02": "0xCaf681a66D020601342297493863E78C959E5cb2",
     "quoterV2": "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
@@ -54,7 +54,10 @@
         "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044"
       ]
     },
-    "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f"
+    "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
+    "slipstream": [
+      { "name": "up", "positionManager": "0x07F44c47743A2f36414A82b9F558ECFCf0EEdCEf", "factory": "0x1ac9dB4a2608ba45D6127B1737949b51Bb54B7F3", "poolFactory": "0xFA5429AEBa338BEa2BFcc1b9a889862Ee395bc28" }
+    ]
   },
   "collector": {
     "_comment": "sweepDestination: where the main wallet's swept fees go (default the main wallet). thresholds: minWethPerPosition (collect when a position's fees are worth this much), maxGasPriceGwei, dailyGasCapEth, slippageBps, maxSwapValueWeth, minOperatorGasBalanceEth. sweep: enabled, target/targetToken/targetFeeTier (USDG), keepGasReserveEth (floor kept on the operator), gasTargetEth (float refilled from the sweep). tokenIds pins positions, denylist skips them, v4Collect covers v4 positions.",

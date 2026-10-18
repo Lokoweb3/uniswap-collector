@@ -513,8 +513,8 @@ function renderHeadline(){
     const partialNote = tokensKnown ? '' : ' <span class="muted" title="This wallet\'s loose tokens could not be valued, so they are not in this figure.">+ tokens unknown</span>';
     $('#ownerhead').innerHTML =
       `<div class="wh-main">${link}<span class="wcount"><b>${m.totals.count}</b> open${m.totals.idle ? ` · <span class="idle">${m.totals.idle} idle</span>` : ''}</span></div>` +
-      `<div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b></span>` +
-      walletToggle('owner', 'list', m.totals.count) + `</div>` +
+      (m.totals.count ? `<div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b></span>` +
+      walletToggle('owner', 'list', m.totals.count) + `</div>` : '') +
       `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">` +
       `<span class="wtotal">total <b>${usd(ownTotal)}</b>${partialNote}</span>` +
       (pf ? `<span>tokens <b>${usd(pf.totals.walletUsd)}</b>${pf.totals.unpricedCount ? ` <span class="muted">+${pf.totals.unpricedCount} unpriced</span>` : ''}</span>` : '') +
@@ -2109,7 +2109,7 @@ function render(d){
   }
 
   if (!d.positions.length){
-    $('#list').innerHTML = '<div class="empty">No open positions found for this address.</div>';
+    $('#list').innerHTML = '<div class="wempty">No open positions.</div>';
     return;
   }
 
@@ -3536,6 +3536,9 @@ function renderWatch(d){
   }
   $('#watchstats').hidden = scopeW !== 'all';
   renderHeadline(); // the combined header needs both payloads
+  // Wallets with nothing open share one compact card at the end instead of a full
+  // card each saying so; their balance, tokens and collector state stay one click down.
+  const quiet = [];
   $('#watchlist').innerHTML = shown.map(w => {
     const name = w.label ? `${w.label} <span class="muted">${shortA(w.address)}</span>` : shortA(w.address);
     const link = chainRef(d.explorer, `/address/${w.address}`, name, w.address);
@@ -3570,14 +3573,20 @@ function renderWatch(d){
     const toks = h && h.tokens.length
       ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
       : '';
-    if (!w.positions.length) return `<div class="watchwallet">${head}${toks}<div class="wempty">No open positions.</div></div>`;
+    if (!w.positions.length) {
+      quiet.push(`<div class="wqrow"><div class="wqline">${link}<span class="muted">${w.closed ? `${w.closed} closed` : 'none opened'}</span><span class="wqval">${usd(t.totalUsd)}</span></div>`
+        + `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">${walletPart}${earnedPart}${collectorPart}</div>${toks}</details></div>`);
+      return '';
+    }
     const cards = sortLT(w.positions).map(p =>
       // The same card as the owner's, so the two can never drift apart. The wallet
       // label rides in the header because a watched card is read out of context.
       positionCard(p, d, { wallet: w.label || shortA(w.address), walletAddr: w.address })
     ).join('');
     return `<div class="watchwallet">${head}${toks}<div class="wcards" id="${cardsId}">${cards}</div></div>`;
-  }).join('');
+  }).join('') + (quiet.length
+    ? `<div class="watchwallet wquiet"><div class="wqhead">No open positions <span class="muted">· ${quiet.length} wallet${quiet.length === 1 ? '' : 's'}</span></div>${quiet.join('')}</div>`
+    : '');
   for (const w of shown) if (w.ok && w.positions && w.positions.length)
     applyWalletOpen(w.address.toLowerCase(), 'wcards-' + w.address.toLowerCase());
   renderSidebar();

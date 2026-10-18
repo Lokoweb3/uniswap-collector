@@ -730,6 +730,14 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
 .wtokens{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);margin-top:var(--s2);font-size:12px;color:var(--muted)}
 .wtokens b{color:var(--ink);font-family:var(--mono);font-weight:500}
 .wempty{font-size:12px;color:var(--muted);padding:var(--s2) 0}
+.wqhead{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:var(--s2)}
+.wqrow{border-top:1px solid var(--rule-soft);padding:var(--s2) 0}
+.wqhead + .wqrow{border-top:0}
+.wqline{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;font-size:13px}
+.wqline a{color:var(--ink);text-decoration:none;font-weight:600}
+.wqline a:hover{text-decoration:underline}
+.wqval{margin-left:auto;font-family:var(--mono);color:var(--ink)}
+.wqrow .whmore .wtokens{margin-top:var(--s2)}
 
 /* ---- position cards: three across, two, then one ---- */
 .wcards,#ownergroup #list{

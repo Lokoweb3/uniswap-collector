@@ -75,8 +75,9 @@ const feeFace = new Function("usd", "esc", src.slice(from, to) + "; return feeFa
 // shared card, used by both renderers, and it goes through feeMetric().
 {
   const uses = (src.match(/positionCard\(p, d, \{/g) || []).length;   // calls, not the definition
-  assert.strictEqual(uses, 2,
-    "the owner card and the watched card must both render through positionCard(), found " + uses);
+  // owner cards, watched cards, and the owner's positions on other DEXes (d.external)
+  assert.strictEqual(uses, 3,
+    "the owner card, the watched card and the owner's external card must all render through positionCard(), found " + uses);
   assert.ok(/\$\{feeMetric\(p\)\}/.test(src),
     "positionCard must print the uncollected figure through feeMetric(), which carries the failure check");
 

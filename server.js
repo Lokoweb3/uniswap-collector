@@ -1861,8 +1861,14 @@ async function build() {
     for (const { walletAddress, p } of entries) p.longTerm = lt.get(`${String(walletAddress).toLowerCase()}:${longterm.idKey(p.tokenId, p.version)}`) || null;
   }
 
-  const liquidityUsd = positions.reduce((s, p) => s + (p.valueUsd || 0), 0);
-  const feesUsd = positions.reduce((s, p) => s + (p.feesUsd || 0), 0);
+  // The main wallet's positions on other CL DEXes (slipstream.js). Kept out of
+  // `positions`, which the collector and guardian act on; counted in the value totals.
+  const ext = await watch.externalOf(cfg.ownerAddress, wethUsd);
+  errors.push(...ext.errors);
+  const external = ext.positions;
+  const open = [...positions, ...external];
+  const liquidityUsd = open.reduce((s, p) => s + (p.valueUsd || 0), 0);
+  const feesUsd = open.reduce((s, p) => s + (p.feesUsd || 0), 0);
 
   const unapproved = OPERATOR
     ? positions.filter((p) => p.approved === false).map((p) => p.tokenId)
@@ -1906,8 +1912,9 @@ async function build() {
     totals: {
       liquidityUsd,
       feesUsd,
-      count: positions.length,
-      idle: positions.filter((p) => !p.inRange).length,
+      count: open.length,
+      idle: open.filter((p) => !p.inRange).length,
+      rewardsUsd: external.reduce((s, p) => s + ((p.rewards && p.rewards.usd) || 0), 0),
       collectableUsd: eligiblePositions.reduce((s, p) => s + (p.feesUsd || 0), 0),
       eligibleCount: eligiblePositions.length,
       // Verified PnL only: a position whose deposit basis disagrees with its
@@ -1923,6 +1930,7 @@ async function build() {
         (s, p) => s + (p.pnlLegs && !p.pnlApprox ? p.pnlUsd - p.pnlLegs.collected - p.pnlLegs.uncollected : 0), 0),
     },
     positions,
+    external,
     closed,
     errors,
   };

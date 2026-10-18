@@ -77,7 +77,7 @@ function page() {
     return { status: a.status, json: async () => { if (a.body instanceof Error) throw a.body; return a.body; } };
   };
   const body = `
-    let EXPLORER = 'https://explorer.example', CHAIN = { id: 5042, name: null }, lastWatchForPf = null;
+    let EXPLORER = 'https://explorer.example', CHAIN = { id: 5042, name: null }, lastWatchForPf = null, lastMain = null;
     const shortA = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
     const amount = (n) => String(n), price = (n) => String(n), linkify = (s) => esc(s);
     ${lifted(["histListHtml", "closedCard", "posFilterHtml", "posFilterCounts", "posFilterStep", "histWallet", "unsettledText",

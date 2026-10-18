@@ -153,6 +153,22 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   // on Robinhood Chain, "up"). Read into `external`, never `positions`: see slipstream.js.
   const slipReaders = ((cfg.contracts && cfg.contracts.slipstream) || []).filter((x) => x && x.positionManager && x.factory).map((spec) =>
     require("./slipstream").create({ provider, cfg, spec, priceSides, toFloat, bsFetch: require("./blockscout").bsFetch }));
+  /** Open positions on the configured Slipstream DEXes, for any wallet (the main one included). */
+  async function externalOf(address, wethUsd) {
+    const out = { positions: [], closed: 0, errors: [] };
+    for (const r of slipReaders) {
+      try {
+        const x = await r.positionsOf(address, wethUsd);
+        out.positions.push(...x.positions);
+        out.closed += x.closed;
+        out.errors.push(...x.errors);
+      } catch (err) {
+        // Unread is not empty: say so on the wallet rather than show it holding nothing there.
+        out.errors.push({ tokenId: r.name, error: `${r.name} positions could not be read: ${err.shortMessage || err.message}` });
+      }
+    }
+    return out;
+  }
   const discovery = new Map(); // address -> v4 discovery (own state file per wallet)
   let accrual = { last: {}, hours: {} }; // last[wallet:tokenId] = {t,f0,f1}; hours[wallet][hourMs] = usd
   try {
@@ -366,18 +382,10 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     await Promise.all(Array.from({ length: CONCURRENCY }, async () => { while (cursor < work.length) await one(work[cursor++]); }));
     positions.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
     recordAccrual(w.address, positions);
-    const external = [];
-    for (const r of slipReaders) {
-      try {
-        const x = await r.positionsOf(w.address, wethUsd);
-        external.push(...x.positions);
-        closed += x.closed;
-        errors.push(...x.errors);
-      } catch (err) {
-        // Unread is not empty: say so on the wallet rather than show it holding nothing there.
-        errors.push({ tokenId: r.name, error: `${r.name} positions could not be read: ${err.shortMessage || err.message}` });
-      }
-    }
+    const ext = await externalOf(w.address, wethUsd);
+    const external = ext.positions;
+    closed += ext.closed;
+    errors.push(...ext.errors);
     for (const p of external) {
       if (p.usd0 != null) seenPrices[p.token0.toLowerCase()] = p.usd0;
       if (p.usd1 != null) seenPrices[p.token1.toLowerCase()] = p.usd1;
@@ -468,7 +476,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   }
 
   // discoveryFor: the position registry reads the same per-wallet discovery (ids and tombstones).
-  return { refresh, readWallets, ownerLabel, discoveryFor, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
+  return { refresh, readWallets, ownerLabel, discoveryFor, externalOf, get latest() { return latest; }, get inFlight() { return !!inFlight; } };
 }
 
 /**

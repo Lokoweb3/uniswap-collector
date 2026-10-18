@@ -2110,8 +2110,10 @@ function render(d){
     cl.hidden = true;
   }
 
+  // Positions on other DEXes (d.external) draw with the shared card; nothing here acts on them.
+  const ext = sortLT(d.external || []).map(p => positionCard(p, d, { wallet: d.ownerLabel || 'Main', walletAddr: d.owner })).join('');
   if (!d.positions.length){
-    $('#list').innerHTML = '<div class="wempty">No open positions.</div>';
+    $('#list').innerHTML = ext || '<div class="wempty">No open positions.</div>';
     return;
   }
 
@@ -2127,7 +2129,7 @@ function render(d){
       p.pnlUsd != null ? `<span class="rate pnl" tabindex="0">PnL vs HODL <b class="${p.pnlUsd < 0 ? 'neg' : ''}">${p.pnlUsd >= 0 ? '+' : '−'}${usd(Math.abs(p.pnlUsd))}${p.pnlPct != null ? ' (' + (p.pnlPct >= 0 ? '+' : '−') + Math.abs(p.pnlPct).toFixed(1) + '%)' : ''}</b>${p.pnlApprox ? ' ≈' : ''}${p.pnlSince ? ' · since ' + new Date(p.pnlSince).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : ''}${pnlTip(p)}</span>` : '',
     ].filter(Boolean).join('');
     return positionCard(p, d, { wallet: d.ownerLabel || 'Main', walletAddr: d.owner, eta: etaBadge(p, d), perf });
-  }).join('');
+  }).join('') + ext;
 }
 
 // Claimed fees opens this position's collection history. A real <button> means
@@ -2592,7 +2594,9 @@ function renderPosHistory() {
 }
 function externalOpen() {
   const w = String(histScope() || '').toLowerCase();
-  return ((lastWatchForPf && lastWatchForPf.wallets) || [])
+  const main = lastMain && (w === 'all' || String(lastMain.owner).toLowerCase() === w)
+    ? (lastMain.external || []).length : 0;
+  return main + ((lastWatchForPf && lastWatchForPf.wallets) || [])
     .filter(x => x.ok && (w === 'all' || String(x.address).toLowerCase() === w))
     .reduce((n, x) => n + ((x.external || []).length), 0);
 }

@@ -37,7 +37,7 @@ const fns = ["claimState", "claimVerifiedZero", "claimValuation", "claimMoney", 
   "chainRef", "txRef",
   "claimKindLabel", "claimPriceLabel", "claimPanelHtml", "claimedMetric", "coverageText", "claimedLine",
   "ratePct", "incomeLine", "poolRateText", "poolLine", "rangeStatus", "ltNeeds", "perfEmptyNote", "ltBasisText", "longTermLine",
-  "notePricing", "pricingText", "freshText", "feeMetric", "renderWalletPanel"];
+  "notePricing", "pricingText", "pricingRef", "freshText", "feeMetric", "renderWalletPanel"];
 const exported = ["claimState", "claimVerifiedZero", "claimPanelHtml", "claimedMetric", "coverageText", "claimedLine",
   "ratePct", "incomeLine", "poolLine", "rangeStatus", "perfEmptyNote", "longTermLine", "notePricing", "pricingText", "freshText",
   "feeMetric", "renderWalletPanel"];
@@ -353,19 +353,20 @@ const tokens = [{ symbol: "USDC", amount: "70.85" }, { symbol: "ARGUS", amount: 
   // wallet overview note, without pricing
   api.setData({ owner: "0xowner", totals: { liquidityUsd: 10, feesUsd: 1, count: 1 } }, { totals: { walletUsd: 5, unpricedCount: 2 } }, null);
   api.renderWalletPanel();
-  assert.match(els["#walletpanelnote"].textContent, /unit of account.*Unpriced tokens are excluded/);
+  assert.match(els["#walletpanelnote"].innerHTML, /Unpriced tokens are excluded/);
+  assert.match(els["#walletpanelnote"].innerHTML, /href="#foot"/, "the note points at the footer's description");
   // with pricing
   const text = "Prices are read on-chain against USDC: position tokens from the position's own pool, wallet tokens from the deepest USDC pool. USDC is counted at $1 by configuration. A token with no such pool is left unpriced.";
   api.notePricing({ pricing: { unit: "USDC", unitUsd: 1, stable: null, text } });
   assert.strictEqual(api.pricingText(), text);
   assert.strictEqual(els.pricefoot.textContent, text);
   api.renderWalletPanel();
-  assert.ok(els["#walletpanelnote"].textContent.includes(text));
+  assert.ok(!els["#walletpanelnote"].innerHTML.includes(text), "the description is written once, in the footer, not in every note");
   // a later payload without pricing keeps the known description
   api.notePricing({ ok: true });
   assert.strictEqual(api.pricingText(), text);
-  // every place that described pricing now reads pricingText()
-  for (const fn of ["renderPortfolio", "renderWalletPanel", "renderWatch"]) assert.match(lift(fn), /pricingText\(\)/, `${fn} uses pricingText()`);
+  // every note that described pricing now points at the footer, which reads pricingText()
+  for (const fn of ["renderPortfolio", "renderWalletPanel", "renderWatch"]) assert.match(lift(fn), /pricingRef\(\)/, `${fn} points at the footer`);
   assert.match(lift("renderPortfolio"), /pricing side[^`]*\$\{pricingText\(\)\}/, "thin-pool tooltip uses pricingText()");
   for (const fn of ["render", "renderWatch"]) assert.match(lift(fn), /notePricing\(d\)/);
   assert.match(lift("loadBalances"), /notePricing\(d\)/);

@@ -21,6 +21,9 @@ function notePricing(d) {
   if (f) f.textContent = pricingText();
 }
 function pricingText() { return (PRICING && PRICING.text) || PRICING_FALLBACK; }
+// The description is long and the same everywhere, so it is written once, in the
+// page footer (#pricefoot); each panel note points there instead of repeating it.
+function pricingRef() { return '<a href="#foot" class="pricingref">How prices are read ↓</a>'; }
 // Client time of the last successful fetch of each payload, kept apart from the
 // payload's own `at` (when the server last read the data).
 const fetchedAt = new WeakMap();
@@ -633,9 +636,9 @@ function renderPortfolio(){
   const dt = $('#dusttoggle');
   if (dt) dt.addEventListener('click', e => { e.preventDefault(); setPref('portfolio:dust', showDust ? '0' : '1'); renderPortfolio(); });
   const scopeNote = scope === 'owner' ? '' : ` Showing ${label}; the collectable, PnL and projection tiles cover the main wallet only.${series.length >= 2 ? ' The chart is the hourly total for this selection.' : ' The value chart appears after a few hours of history.'}`;
-  $('#pnote').textContent = (series.length >= 2
-    ? `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). Chart is hourly since ${new Date(series[0].t).toLocaleDateString(undefined,{month:'short',day:'numeric'})}. ${pricingText()} 24h change once a day of history exists.`
-    : `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). ${pricingText()} ≈ marks a value larger than its pricing pool holds.` + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
+  $('#pnote').innerHTML = esc((series.length >= 2
+    ? `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). Chart is hourly since ${new Date(series[0].t).toLocaleDateString(undefined,{month:'short',day:'numeric'})}. 24h change once a day of history exists.`
+    : `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). ≈ marks a value larger than its pricing pool holds.` + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote) + ' ' + pricingRef();
   renderSidebar();
 }
 /**
@@ -759,10 +762,9 @@ function renderWalletPanel(){
       + bar + `<div class="wmeta">${meta}</div></div>`;
   }).join('');
   const unpricedTotal = rows.reduce((s, r) => s + (r.unpriced || 0), 0);
-  note.textContent = 'Value = tokens in the wallet + open positions + uncollected fees, at current prices. '
-    + pricingText() + ' '
+  note.innerHTML = esc('Value = tokens in the wallet + open positions + uncollected fees, at current prices. '
     + (unpricedTotal ? 'Unpriced tokens are excluded. ' : '')
-    + (priced.length < rows.length ? 'Wallets without a value are left out of the shares.' : 'Shares are of the priced total above.');
+    + (priced.length < rows.length ? 'Wallets without a value are left out of the shares.' : 'Shares are of the priced total above.')) + ' ' + pricingRef();
 }
 
 function renderCollectPanel(){
@@ -3527,7 +3529,7 @@ function renderWatch(d){
   if (!d || !d.ok || !d.wallets || !d.wallets.length) { $('#watchlist').innerHTML = ''; $('#watchnote').textContent = ''; return; }
   $('#watchsec').hidden = false;
   notePricing(d);
-  $('#watchnote').textContent = 'Watched wallets are read-only and never collected from. Value = tokens in the wallet + open positions + uncollected fees, at current prices. ' + pricingText() + ' ' + freshText(d);
+  $('#watchnote').innerHTML = esc('Watched wallets are read-only and never collected from. Value = tokens in the wallet + open positions + uncollected fees, at current prices. ' + freshText(d)) + ' ' + pricingRef();
   const scopeW = pfScope();
   const shown = scopeW === 'owner' || scopeW === 'all' ? d.wallets : d.wallets.filter(w => w.address.toLowerCase() === scopeW);
   if (scopeW !== 'all' && scopeW !== 'owner') {

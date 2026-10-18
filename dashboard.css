@@ -581,8 +581,11 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
 .foot{margin-top:var(--s8);font-size:12px;color:var(--muted)}
 
 /* ---- C. five summary cards ---- */
-.summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--s4);padding:var(--s5) 0 var(--s1)}
+/* As many cards as there is something to say: tiles with nothing to report are
+   hidden, so the track count follows what is left rather than a fixed five. */
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:var(--s4);padding:var(--s5) 0 var(--s1)}
 .summary .stat{grid-column:auto}
+.summary .stat[hidden]{display:none}
 .summary .stat>*{order:0}
 .stat{
   display:flex;flex-direction:column;gap:var(--s1);min-width:0;min-height:132px;
@@ -601,6 +604,7 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
 .stat .n.sm{font-size:28px;font-weight:600}
 .stat .n.fees{color:var(--pos)}
 .stat .n.loss{color:var(--neg)}
+#claimtile{cursor:pointer}
 .stat .l.scope,.stat .l.cover{
   font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted);line-height:1.5;
 }
@@ -935,11 +939,6 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
 
 /* ---- responsive: content-driven, widest first ---- */
 @media (max-width:1240px){
-  /* Five cards over two rows: three, then two that fill the row instead of
-     leaving a third of it empty. Six tracks make both splits land evenly. */
-  .summary{grid-template-columns:repeat(6,minmax(0,1fr))}
-  .summary .stat{grid-column:span 2}
-  .summary .stat:nth-child(4),.summary .stat:nth-child(5){grid-column:span 3}
   .wcards,#ownergroup #list{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media (max-width:1100px){
@@ -948,10 +947,11 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
   .col-side .panel,.col-side>.panel:first-child{margin-top:var(--s4)}
 }
 @media (max-width:860px){
-  /* Two up, and the fifth takes the whole last row rather than half of it. */
+  /* Two up, with the portfolio total across the top. */
   .summary{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .summary .stat,.summary .stat:nth-child(4){grid-column:span 1}
-  .summary .stat:nth-child(5){grid-column:span 2}
+  .summary .stat{grid-column:span 1}
+  .summary .stat:first-child{grid-column:1/-1}
+  .summary .stat.wide{grid-column:1/-1}
   .insightcards{grid-template-columns:1fr}
   .col-side{grid-template-columns:minmax(0,1fr)}
 }
@@ -975,7 +975,7 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
 }
 @media (max-width:520px){
   .summary{grid-template-columns:minmax(0,1fr);gap:var(--s3)}
-  .summary .stat,.summary .stat:nth-child(4),.summary .stat:nth-child(5){grid-column:auto}
+  .summary .stat{grid-column:auto}
   .stat .n{font-size:28px}
   .stat .n.sm{font-size:24px}
   .pos,.wcards .pos,#ownergroup .pos{padding:var(--s3)}
@@ -1103,8 +1103,8 @@ select.scope option{background:var(--card);color:var(--ink)}
 }
 @media (max-width:520px){
   .summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-  .summary .stat,.summary .stat:nth-child(4),.summary .stat:nth-child(5){grid-column:auto;padding:12px;min-width:0}
-  .summary .stat:first-child{grid-column:1/-1}
+  .summary .stat{grid-column:auto;padding:12px;min-width:0}
+  .summary .stat:first-child,.summary .stat.wide{grid-column:1/-1}
   .summary .stat .n{font-size:clamp(20px,5.5vw,28px)}
   .summary .stat:first-child .n{font-size:30px}
   .summary .stat .l{font-size:12px}

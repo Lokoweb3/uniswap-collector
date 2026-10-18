@@ -491,7 +491,11 @@ function renderHeadline(){
   const count = (own && m ? m.totals.count : 0) + sum('count');
   const who = scope === 'owner' ? ownerName() : scope === 'all' ? `all ${watched.length + 1} wallets` : (sel[0] && (sel[0].label || shortA(sel[0].address))) || 'wallet';
   $('#pfwho').textContent = `· ${scope === 'all' ? who : scope === 'owner' ? ownerName() : (sel[0] ? walletName(sel[0]) : who)}`;
-  $('#tvl').textContent = usd(liq);
+  const known = !!(m || sel.length), idle = (own && m ? m.totals.idle : 0) + sum('idle');
+  // A scope with nothing open says so once, instead of three tiles of zeros.
+  $('#tvl').textContent = known && !count ? 'None open' : usd(liq);
+  $('#feestile').hidden = known && !count && !fees;
+  $('#idletile').hidden = known && !idle;
   $('#count').textContent = count;
   $('#countlabel').textContent = scope === 'owner' ? 'In' : `${who} · in`;
   $('#fees').textContent = usd(fees);
@@ -535,13 +539,13 @@ function renderHeadline(){
       $('#watchtotal').textContent = sel[0].totals ? usd(sel[0].totals.totalUsd) : '';
     }
   }
-  const idle = (own && m ? m.totals.idle : 0) + sum('idle');
-  $('#idle').textContent = m || sel.length ? idle : '—';
+  $('#idle').textContent = known ? idle : '—';
   if (PAGE === 'dashboard') {
     document.body.classList.toggle('scope-watched', !own);
     document.body.classList.toggle('scope-owner', scope === 'owner');
     document.body.classList.toggle('scope-all', scope === 'all');
   }
+  summaryLayout();
   const nwp = $('#networthparts');
   // Net worth is withheld in EVERY scope when the owner's tokens are unvalued: the
   // guard used to cover 'owner' only, so 'all' returned early leaving a stale figure
@@ -601,9 +605,10 @@ function renderPortfolio(){
     (totals.assumedUsd ? `<span class="assumed" title="${esc(assumedTip(totals))}">${usd(totals.assumedUsd)} assumed${totals.totalUsd ? ` (${Math.round(totals.assumedUsd / totals.totalUsd * 100)}% of the total)` : ''}</span>` : '');
   // Value chart: the owner's hourly series, or the combined / per-wallet series recorded by the server.
   let series = [];
-  if (scope === 'owner') series = (d.series || []).map(s => ({ t: s.t, v: s.total }));
-  else if (allSeriesD) series = allSeriesD.points.map(p => ({ t: p.t, v: scope === 'all' ? p.total : (p.wallets && p.wallets[scope]) })).filter(p => p.v != null);
+  if (scope === 'owner') series = (d.series || []).map(s => ({ t: s.t, v: s.total, partial: !!s.partial }));
+  else if (allSeriesD) series = allSeriesD.points.map(p => ({ t: p.t, v: scope === 'all' ? p.total : (p.wallets && p.wallets[scope]), partial: !!p.partial })).filter(p => p.v != null);
   $('#pchart').innerHTML = series.length >= 2 ? tvChart(series) : '';
+  renderChange(series);
   const chg = x => x.change24h == null ? '<td class="chg">—</td>'
     : `<td class="chg ${x.change24h >= 0 ? 'up' : 'down'}">${x.change24h >= 0 ? '+' : '−'}${Math.abs(x.change24h).toFixed(1)}%</td>`;
   const q = x => Math.abs(x) < 1e-6 ? '<span class="unpriced">0</span>' : amount(x);
@@ -632,6 +637,51 @@ function renderPortfolio(){
     ? `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). Chart is hourly since ${new Date(series[0].t).toLocaleDateString(undefined,{month:'short',day:'numeric'})}. ${pricingText()} 24h change once a day of history exists.`
     : `Total = wallet + positions + uncollected fees, at current prices; claimed fees are not added (they are already in the wallet). ${pricingText()} ≈ marks a value larger than its pricing pool holds.` + (scope === 'owner' ? ' The value chart appears after a few hours of history.' : '')) + scopeNote;
   renderSidebar();
+}
+/**
+ * Two-up layouts put the portfolio total across the top and pair the rest; with an
+ * odd number left, the last one takes the whole row instead of leaving half empty.
+ * Tiles come and go with what there is to say, so CSS alone cannot count them.
+ */
+function summaryLayout(){
+  const tiles = [...document.querySelectorAll('#summary > .stat')].filter(t => !t.hidden && getComputedStyle(t).display !== 'none');
+  tiles.forEach(t => t.classList.remove('wide'));
+  if (tiles.length > 1 && (tiles.length - 1) % 2) tiles[tiles.length - 1].classList.add('wide');
+}
+/**
+ * The Change tile: how the selected scope's total moved over 24 hours, 7 and 30
+ * days. Both ends come from the hourly series the Portfolio chart draws, so a
+ * change compares two recorded readings, never a live figure against an old one.
+ * A reading is partial when a token worth over 1% of the total had lost its price;
+ * a change from a complete reading to a partial one is partly a pricing gap, and
+ * the tile says so rather than reporting the gap as a loss.
+ */
+function renderChange(series){
+  const tile = $('#changetile');
+  if (!tile) return;
+  const last = series[series.length - 1];
+  // The reading nearest the target time, if one lies close enough to stand for it.
+  const at = h => {
+    const want = last.t - h * 3600e3, slack = Math.max(6, h / 10) * 3600e3;
+    let best = null;
+    for (const p of series) if (p !== last && Math.abs(p.t - want) <= slack && (!best || Math.abs(p.t - want) < Math.abs(best.t - want))) best = p;
+    return best;
+  };
+  const spans = [[24, '24h'], [168, '7d'], [720, '30d']].map(([h, name]) => ({ name, p: last ? at(h) : null })).filter(x => x.p && x.p.v > 0);
+  tile.hidden = !spans.length;
+  summaryLayout();
+  if (!spans.length) return;
+  const fmt = p => { const dv = last.v - p.v, pct = dv / p.v * 100; return { dv, txt: `${dv >= 0 ? '+' : '−'}${usd(Math.abs(dv))}`, pct: `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%` }; };
+  const head = spans[0], f = fmt(head.p);
+  const gap = s => s.p.partial !== last.partial;
+  $('#changelabel').textContent = `Change · ${head.name}`;
+  const n = $('#change24');
+  n.textContent = `${gap(head) ? '≈ ' : ''}${f.txt}`;
+  n.className = 'n sm ' + (f.dv >= 0 ? 'fees' : 'loss');
+  const rest = spans.slice(1).map(s => { const g = fmt(s.p); return `${s.name} <b class="${g.dv < 0 ? 'neg' : ''}">${gap(s) ? '≈ ' : ''}${g.txt}</b> (${g.pct})`; });
+  $('#changeparts').innerHTML = [`${f.pct} since ${new Date(head.p.t).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`, ...rest].join(' · ')
+    + (spans.some(gap) ? '<br>≈ a token worth over 1% lost its price between the two readings; part of the change is that gap' : '');
+  tile.title = 'Between two recorded readings of the total shown in the Portfolio chart, at current prices at each time. Claimed fees are already in the wallet, so they are not counted twice.';
 }
 const pfScopeEl = $('#pfscope');
 if (pfScopeEl) pfScopeEl.addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); });
@@ -837,7 +887,9 @@ function tvChart(pts){
   const t0 = pts[0].t, t1 = pts[pts.length-1].t;
   const vs = pts.map(p => p.v);
   const vmin = Math.min(...vs), vmax = Math.max(...vs);
-  const pad = (vmax - vmin) * 0.1 || vmax * 0.01;
+  // A flat series (all zeros on an instance with no positions) has no spread to pad
+  // from; without the last fallback every y below divides 0 by 0 and draws NaN.
+  const pad = (vmax - vmin) * 0.1 || Math.abs(vmax) * 0.01 || 1;
   const X = t => PL + (t1 === t0 ? 0 : (t - t0) / (t1 - t0)) * (W - PL - PR);
   const Y = v => PT + (1 - (v - vmin + pad) / (vmax - vmin + 2*pad)) * (H - PT - PB);
   const line = pts.map(p => `${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ');
@@ -1961,7 +2013,6 @@ function render(d){
   $('#collectlabel').textContent = d.totals.eligibleCount
     ? 'Collectable now, across ' + d.totals.eligibleCount + ' position' + (d.totals.eligibleCount === 1 ? '' : 's')
     : 'Collectable now (threshold ' + d.minWethPerPosition + ' WETH each)';
-  $('#idle').textContent = d.totals.idle;
   applyReadOnly(d);
 
   // Headline profit: verified PnL vs HODL across open positions.
@@ -1997,6 +2048,8 @@ function render(d){
   }
 
   const pt = $('#pnltotal'), pl = $('#pnllabel'), pp = $('#pnlparts');
+  $('#pnltile').hidden = !d.totals.pnlCount;
+  summaryLayout();
   if (d.totals.pnlCount){
     const net = d.totals.pnlUsd, fees = d.totals.feesEarnedUsd || 0, move = d.totals.holdCostUsd || 0;
     const n = d.totals.pnlCount, excl = d.totals.pnlApproxCount;
@@ -2806,6 +2859,18 @@ function renderClaimTotalButton() {
   const h = g ? ctotalHeadline(g.d) : e ? ctotalFailHead(e) : ctotalHeadline(null);
   const stale = g && e && e.kind !== 'pending' ? e.msg : null;
   b.innerHTML = ctotalButtonHtml(label, h, stale);
+  const tile = $('#claimtile');
+  if (tile) {
+    // The same answer as the button, lifted into the top row; a click opens its breakdown.
+    tile.hidden = !g;
+    if (g) {
+      // A priced subtotal leaves out the records with no historical price: a floor, not a total.
+      $('#claimfig').textContent = h.fig.replace(/^Priced subtotal /, 'at least ');
+      $('#claimfig').className = 'n sm' + (h.cls ? '' : ' fees');
+      $('#claimsub').textContent = h.sub + (stale ? ' · stale: latest refresh failed' : '');
+    }
+    summaryLayout();
+  }
   b.title = 'Read-only history — no transaction. Opens a breakdown of fees already claimed.' + (stale ? ` Showing the last successful refresh; the latest failed: ${stale}.` : '');
 }
 function renderClaimTotalPanel() {
@@ -3590,6 +3655,14 @@ if (PAGE === 'dashboard') {
     if (p) p.hidden = !CTOT.open;
     if (CTOT.open) { renderClaimTotalPanel(); loadClaimTotal('panel'); }
   });
+  // The top-row tile opens the same breakdown, and brings it into view.
+  const ctile = document.getElementById('claimtile');
+  if (ctile && btn) ctile.addEventListener('click', () => {
+    if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
+    const p = document.getElementById('ctotalpanel');
+    (p && !p.hidden ? p : btn).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  if (ctile) ctile.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ctile.click(); } });
   const form = document.getElementById('ctfilters');
   if (form) {
     form.addEventListener('change', () => { readCtFilters(); loadClaimTotal('panel'); });

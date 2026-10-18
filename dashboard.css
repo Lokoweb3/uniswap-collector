@@ -1773,136 +1773,250 @@ body.pf-closed .histsec .ehead:has(h3){margin-top:0;padding-top:0;border-top:0}
 }
 
 /* ============================================================================
-   Phosphor — a terminal skin over Midnight Neon (2026-10-18).
-   A dark CRT: monospace everywhere, pale phosphor text, faint scanlines and a
-   soft glow on the figures that matter. Cyan is what you can act on, hot pink is
-   the second chart series, and green / amber / red still only ever mean a real
-   status. Built for a phone first: 44px touch targets, no sideways scroll, the
-   chain picker moved off the page tabs, and the glow kept cheap.
+   Event Horizon — a deep-space skin over Midnight Neon (2026-10-18).
+   The page floats in a nebula: three layers of stars drift at different speeds
+   (parallax), a shooting star crosses now and then, cards are smoked glass with
+   an iridescent rim, and the portfolio total is holographic — its colour slowly
+   turning through aqua, violet, rose and gold. Status colours keep their meaning:
+   green earns, amber warns, red is out of range. Phones keep the nebula and the
+   stars but drop the motion and the blur, so it stays fast and readable.
    `html:root` outranks the wallet page's own :root block, so both pages follow.
-   Earlier looks: ./themes/apply.sh 2026-10-18-velvet  (or -midnight-neon-v2)
+   Earlier looks: ./themes/apply.sh 2026-10-18-phosphor (or -velvet, -midnight-neon-v2)
    ========================================================================= */
+@property --eh-angle{syntax:'<angle>';inherits:false;initial-value:0deg}
 html:root{
-  --bg:#020403;
-  --card:#06100A;
-  --raised:#0A1710;
-  --rule:rgba(80,255,150,.16);
-  --rule-soft:rgba(80,255,150,.09);
-  --ink:#D4FFE2;
-  --muted:#7FB596;
-  --faint:#56806A;
-  --bright:#F0FFF5;
-  --cyan:#3BF0FF;
-  --violet:#FF3EA5;
-  --pos:#39FF88;
-  --warn:#FFB000;
-  --neg:#FF4D6A;
-  --cyan-dim:rgba(59,240,255,.10);
-  --violet-dim:rgba(255,62,165,.12);
-  --pos-dim:rgba(57,255,136,.10);
-  --warn-dim:rgba(255,176,0,.11);
-  --neg-dim:rgba(255,77,106,.11);
-  --glow-cyan:rgba(59,240,255,.6);
-  --glow-green:rgba(57,255,136,.6);
-  --btn-ink:#00140A;
-  --shadow:rgba(0,0,0,.7);
-  --r-card:4px;
-  --r-ctl:3px;
-  --r-pill:3px;
-  --sans:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
-  --font-sans:var(--sans);
-  --glow:0 0 6px rgba(57,255,136,.35),0 0 18px rgba(57,255,136,.12);
+  --bg:#030108;
+  --card:rgba(13,9,30,.56);
+  --raised:rgba(20,14,44,.72);
+  --rule:rgba(175,165,255,.15);
+  --rule-soft:rgba(175,165,255,.09);
+  --ink:#F4F2FF;
+  --muted:#A9A6D2;
+  --faint:#7A77A3;
+  --bright:#FFFFFF;
+  --cyan:#7DF9FF;            /* what you can act on: electric aqua */
+  --violet:#FF6AD5;          /* the second chart series */
+  --pos:#4CFFB5;
+  --warn:#FFD166;
+  --neg:#FF5470;
+  --cyan-dim:rgba(125,249,255,.12);
+  --violet-dim:rgba(255,106,213,.13);
+  --pos-dim:rgba(76,255,181,.11);
+  --warn-dim:rgba(255,209,102,.12);
+  --neg-dim:rgba(255,84,112,.12);
+  --glow-cyan:rgba(125,249,255,.6);
+  --glow-green:rgba(76,255,181,.6);
+  --btn-ink:#06021A;
+  --shadow:rgba(1,0,6,.7);
+  --holo:linear-gradient(110deg,#7DF9FF 0%,#A78BFA 28%,#FF6AD5 52%,#FFD166 74%,#7DF9FF 100%);
+  --rim:conic-gradient(from var(--eh-angle),rgba(125,249,255,.55),rgba(167,139,250,.35),rgba(255,106,213,.55),rgba(255,209,102,.35),rgba(125,249,255,.55));
+  --r-card:20px;
+  --r-ctl:12px;
+  --display:'Sora',var(--sans);
 }
 
-/* ---- the tube: scanlines, a vignette, one faint flicker ---------------------- */
-html{background:var(--bg)}
-body{
-  font-family:var(--sans);
-  background:radial-gradient(120% 90% at 50% 0%,#04120A 0%,var(--bg) 60%) fixed;
-  -webkit-font-smoothing:antialiased;
-}
-body::after{
-  content:"";position:fixed;inset:0;z-index:9500;pointer-events:none;
+/* ---- the sky ---------------------------------------------------------------
+   The nebula sits on <html>; the stars are fixed layers behind the page. The
+   body is transparent so nothing paints over them. */
+html{
   background:
-    repeating-linear-gradient(180deg,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.22) 3px,rgba(0,0,0,0) 4px),
-    radial-gradient(130% 100% at 50% 50%,transparent 62%,rgba(0,0,0,.55) 100%);
-  animation:crt-flicker 7s steps(1) infinite;
+    /* the accretion ring of something very heavy, just off the top-right corner */
+    radial-gradient(circle at 104% -18%,#000 0 300px,rgba(255,224,160,.75) 302px,rgba(255,150,205,.42) 314px,rgba(167,139,250,.18) 345px,transparent 440px),
+    radial-gradient(900px 600px at 12% 8%,rgba(167,80,255,.28),transparent 62%),
+    radial-gradient(800px 560px at 88% 18%,rgba(255,80,190,.20),transparent 60%),
+    radial-gradient(1100px 700px at 70% 95%,rgba(40,200,255,.16),transparent 62%),
+    radial-gradient(700px 500px at 20% 85%,rgba(255,190,90,.08),transparent 60%),
+    radial-gradient(140% 100% at 50% 40%,#0A0520 0%,#030108 70%);
+  background-color:var(--bg);
+  background-attachment:fixed;
+  min-height:100%;
 }
-@keyframes crt-flicker{0%,96%,100%{opacity:1}97%{opacity:.86}98%{opacity:.95}}
-::selection{background:var(--pos);color:var(--btn-ink)}
+body{background:transparent !important}
+body::before{
+  content:"";position:fixed;inset:-50%;z-index:-1;pointer-events:none;
+  /* three tiles of scattered stars, sized so their repeats never line up */
+  background-image:
+    radial-gradient(circle at 114px 25px,rgba(220,235,255,0.64) 0 0.9px,transparent 1.62px),
+    radial-gradient(circle at 104px 558px,rgba(255,255,255,0.7) 0 0.63px,transparent 1.13px),
+    radial-gradient(circle at 95px 223px,rgba(255,235,200,0.76) 0 0.69px,transparent 1.24px),
+    radial-gradient(circle at 203px 558px,rgba(255,228,250,0.71) 0 0.77px,transparent 1.39px),
+    radial-gradient(circle at 6px 163px,rgba(220,235,255,0.67) 0 0.88px,transparent 1.58px),
+    radial-gradient(circle at 220px 344px,rgba(255,228,250,0.68) 0 0.64px,transparent 1.15px),
+    radial-gradient(circle at 352px 270px,rgba(255,235,200,0.81) 0 0.92px,transparent 1.66px),
+    radial-gradient(circle at 127px 387px,rgba(255,235,200,0.65) 0 0.63px,transparent 1.13px),
+    radial-gradient(circle at 370px 591px,rgba(220,235,255,0.57) 0 0.68px,transparent 1.22px),
+    radial-gradient(circle at 296px 81px,rgba(200,245,255,0.85) 0 0.94px,transparent 1.69px),
+    radial-gradient(circle at 284px 464px,rgba(255,228,250,0.68) 0 0.85px,transparent 1.53px),
+    radial-gradient(circle at 363px 214px,rgba(255,255,255,0.8) 0 0.87px,transparent 1.57px),
+    radial-gradient(circle at 175px 546px,rgba(200,245,255,0.61) 0 0.89px,transparent 1.6px),
+    radial-gradient(circle at 276px 570px,rgba(255,255,255,0.66) 0 0.69px,transparent 1.24px),
+    radial-gradient(circle at 234px 32px,rgba(255,255,255,0.69) 0 0.92px,transparent 1.66px),
+    radial-gradient(circle at 216px 580px,rgba(200,245,255,0.66) 0 0.95px,transparent 1.71px),
+    radial-gradient(circle at 405px 469px,rgba(255,235,200,0.6) 0 0.66px,transparent 1.19px),
+    radial-gradient(circle at 551px 269px,rgba(255,235,200,0.7) 0 0.9px,transparent 1.62px),
+    radial-gradient(circle at 408px 370px,rgba(255,235,200,0.9) 0 0.69px,transparent 1.24px),
+    radial-gradient(circle at 505px 93px,rgba(220,235,255,0.85) 0 0.9px,transparent 1.62px),
+    radial-gradient(circle at 163px 432px,rgba(255,235,200,0.68) 0 0.84px,transparent 1.51px),
+    radial-gradient(circle at 479px 541px,rgba(255,255,255,0.74) 0 0.7px,transparent 1.26px),
+    radial-gradient(circle at 117px 549px,rgba(255,228,250,0.82) 0 0.9px,transparent 1.62px),
+    radial-gradient(circle at 114px 300px,rgba(255,228,250,0.71) 0 0.77px,transparent 1.39px),
+    radial-gradient(circle at 512px 182px,rgba(255,228,250,0.59) 0 0.8px,transparent 1.44px),
+    radial-gradient(circle at 519px 203px,rgba(255,235,200,0.82) 0 0.66px,transparent 1.19px),
+    radial-gradient(circle at 797px 543px,rgba(200,245,255,0.88) 0 1.36px,rgba(200,245,255,0.22) 2.99px,transparent 4.08px),
+    radial-gradient(circle at 19px 114px,rgba(255,228,250,0.96) 0 1.36px,rgba(255,228,250,0.24) 2.99px,transparent 4.08px),
+    radial-gradient(circle at 245px 59px,rgba(255,255,255,0.87) 0 1.02px,transparent 1.84px),
+    radial-gradient(circle at 87px 749px,rgba(255,235,200,0.72) 0 1.14px,transparent 2.05px),
+    radial-gradient(circle at 784px 128px,rgba(255,235,200,0.84) 0 0.96px,transparent 1.73px),
+    radial-gradient(circle at 169px 271px,rgba(220,235,255,0.88) 0 1.16px,transparent 2.09px),
+    radial-gradient(circle at 552px 773px,rgba(255,228,250,0.76) 0 1.26px,rgba(255,228,250,0.19) 2.77px,transparent 3.78px),
+    radial-gradient(circle at 408px 687px,rgba(255,235,200,0.83) 0 1.22px,rgba(255,235,200,0.21) 2.68px,transparent 3.66px),
+    radial-gradient(circle at 462px 123px,rgba(255,255,255,0.72) 0 1.02px,transparent 1.84px),
+    radial-gradient(circle at 602px 567px,rgba(255,255,255,0.77) 0 1.02px,transparent 1.84px),
+    radial-gradient(circle at 724px 646px,rgba(255,255,255,0.72) 0 0.93px,transparent 1.67px),
+    radial-gradient(circle at 880px 338px,rgba(200,245,255,0.77) 0 0.94px,transparent 1.69px),
+    radial-gradient(circle at 219px 552px,rgba(255,235,200,0.98) 0 0.97px,transparent 1.75px),
+    radial-gradient(circle at 590px 484px,rgba(200,245,255,0.84) 0 1.02px,transparent 1.84px),
+    radial-gradient(circle at 194px 96px,rgba(200,245,255,0.83) 0 0.95px,transparent 1.71px),
+    radial-gradient(circle at 420px 478px,rgba(255,255,255,0.72) 0 1.33px,rgba(255,255,255,0.18) 2.93px,transparent 3.99px),
+    radial-gradient(circle at 62px 412px,rgba(255,255,255,0.94) 0 1.26px,rgba(255,255,255,0.23) 2.77px,transparent 3.78px),
+    radial-gradient(circle at 254px 196px,rgba(200,245,255,0.83) 0 1.0px,transparent 1.8px),
+    radial-gradient(circle at 375px 570px,rgba(255,255,255,0.98) 0 1.67px,rgba(255,255,255,0.24) 3.67px,transparent 5.01px),
+    radial-gradient(circle at 907px 1127px,rgba(255,235,200,0.95) 0 1.38px,rgba(255,235,200,0.24) 3.04px,transparent 4.14px),
+    radial-gradient(circle at 30px 191px,rgba(220,235,255,0.98) 0 2.04px,rgba(220,235,255,0.24) 4.49px,transparent 6.12px),
+    radial-gradient(circle at 832px 994px,rgba(255,255,255,0.98) 0 1.69px,rgba(255,255,255,0.24) 3.72px,transparent 5.07px),
+    radial-gradient(circle at 337px 776px,rgba(200,245,255,0.91) 0 1.3px,rgba(200,245,255,0.23) 2.86px,transparent 3.9px),
+    radial-gradient(circle at 584px 866px,rgba(255,235,200,0.96) 0 1.86px,rgba(255,235,200,0.24) 4.09px,transparent 5.58px),
+    radial-gradient(circle at 996px 317px,rgba(255,255,255,0.88) 0 1.45px,rgba(255,255,255,0.22) 3.19px,transparent 4.35px),
+    radial-gradient(circle at 1110px 124px,rgba(255,235,200,0.86) 0 1.9px,rgba(255,235,200,0.21) 4.18px,transparent 5.7px),
+    radial-gradient(circle at 976px 1029px,rgba(255,255,255,0.93) 0 2.04px,rgba(255,255,255,0.23) 4.49px,transparent 6.12px),
+    radial-gradient(circle at 1040px 164px,rgba(255,255,255,0.86) 0 1.98px,rgba(255,255,255,0.21) 4.36px,transparent 5.94px);
+  background-size:613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,613px 613px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,887px 887px,1171px 1171px,1171px 1171px,1171px 1171px,1171px 1171px,1171px 1171px,1171px 1171px,1171px 1171px,1171px 1171px,1171px 1171px,1171px 1171px;
+  opacity:.9;
+  animation:eh-drift 160s linear infinite;
+}
+@keyframes eh-drift{
+  from{transform:translate3d(0,0,0)}
+  to{transform:translate3d(-200px,-320px,0)}
+}
+/* a shooting star, every 13 seconds or so */
+body::after{
+  content:"";position:fixed;top:12%;left:-10%;z-index:-1;pointer-events:none;
+  width:180px;height:2px;border-radius:2px;
+  background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.95));
+  filter:drop-shadow(0 0 6px rgba(160,230,255,.9));
+  transform:rotate(-18deg);opacity:0;
+  animation:eh-meteor 13s ease-in 4s infinite;
+}
+@keyframes eh-meteor{
+  0%{transform:translate3d(0,0,0) rotate(-18deg);opacity:0}
+  2%{opacity:1}
+  9%{transform:translate3d(70vw,-22vh,0) rotate(-18deg);opacity:0}
+  100%{transform:translate3d(70vw,-22vh,0) rotate(-18deg);opacity:0}
+}
+::selection{background:rgba(255,106,213,.4);color:#fff}
 
-/* ---- surfaces: flat panels with a phosphor edge ------------------------------ */
+/* ---- smoked glass with an iridescent rim ------------------------------------ */
 .stat,.earnings,.col-side .panel,.pos,.pos.card2,.watchwallet .wh,.ctotbtn,.ctpanel,.insightcard{
-  background:var(--card);
-  border:1px solid var(--rule);
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0) 34%) padding-box,
+    linear-gradient(var(--card),var(--card)) padding-box,
+    linear-gradient(135deg,rgba(125,249,255,.28),rgba(167,139,250,.12) 40%,rgba(255,106,213,.26)) border-box;
+  border:1px solid transparent;
   border-radius:var(--r-card);
-  box-shadow:inset 0 0 0 1px rgba(80,255,150,.03),0 0 24px -12px rgba(57,255,136,.25);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);
+  backdrop-filter:blur(18px) saturate(160%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 24px 60px -30px rgba(120,60,255,.45);
 }
-.stat:hover,.pos.card2:hover{border-color:rgba(80,255,150,.42);box-shadow:0 0 0 1px rgba(80,255,150,.12),0 0 28px -8px rgba(57,255,136,.35)}
+.stat,.pos.card2{transition:transform .35s cubic-bezier(.2,.8,.2,1),box-shadow .35s ease}
+.stat:hover,.pos.card2:hover{
+  transform:translateY(-3px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 30px 70px -26px rgba(255,106,213,.45),0 0 0 1px rgba(125,249,255,.15);
+}
+/* The total gets a rim that slowly turns through the spectrum. */
+.summary .stat:first-child{
+  background:
+    radial-gradient(120% 140% at 0% 0%,rgba(125,249,255,.14),transparent 55%) padding-box,
+    radial-gradient(120% 140% at 100% 100%,rgba(255,106,213,.14),transparent 55%) padding-box,
+    linear-gradient(var(--card),var(--card)) padding-box,
+    var(--rim) border-box;
+  border:1.5px solid transparent;
+  animation:eh-spin 9s linear infinite;
+  box-shadow:0 0 50px -12px rgba(167,139,250,.55),inset 0 1px 0 rgba(255,255,255,.1);
+}
+@keyframes eh-spin{to{--eh-angle:360deg}}
 
-/* ---- header: a status line --------------------------------------------------- */
-header.topbar{background:rgba(2,8,5,.94);border-bottom:1px solid var(--rule)}
-.brand{font-family:var(--sans);font-size:15px;font-weight:700;color:var(--pos);text-shadow:var(--glow);letter-spacing:0}
-.brand::before{content:"~$";width:auto;height:auto;margin-right:8px;border-radius:0;background:none;box-shadow:none;color:var(--muted);font-weight:500;text-shadow:none}
-.brand::after{content:"_";margin-left:2px;color:var(--pos);animation:term-blink 1.05s steps(1) infinite}
-@keyframes term-blink{50%{opacity:0}}
-.pages a{text-transform:lowercase;letter-spacing:0}
-.pages a.here{color:var(--pos);border-bottom-color:var(--pos);text-shadow:var(--glow)}
-.pages a.here::before{content:"./"}
+/* ---- header: glass, with the spectrum along its lower edge ------------------- */
+header.topbar{
+  background:rgba(6,3,18,.62);
+  -webkit-backdrop-filter:blur(20px) saturate(170%);backdrop-filter:blur(20px) saturate(170%);
+  border-bottom:1px solid transparent;border-image:var(--holo) 1;
+}
+.brand{font-family:var(--display);font-size:17px;font-weight:700;letter-spacing:-.02em}
+.brand::before{width:11px;height:11px;border-radius:50%;
+  background:radial-gradient(circle at 35% 35%,#fff,#7DF9FF 30%,#A78BFA 60%,#FF6AD5);
+  box-shadow:0 0 12px rgba(125,249,255,.9),0 0 26px rgba(255,106,213,.6)}
+.pages a.here{color:transparent;background:var(--holo);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;
+  border-bottom:2px solid transparent;border-image:var(--holo) 1}
 
-/* ---- headings and labels read like a prompt ---------------------------------- */
-h2,h3,.ehead h2{font-family:var(--sans);letter-spacing:0}
-.ehead h2::before{content:"> ";color:var(--pos)}
-.stat>.l:not(.parts):not(.scope):not(.cover){color:var(--muted);letter-spacing:.08em}
-.stat>.l:not(.parts):not(.scope):not(.cover)::before{content:"[ ";color:var(--faint)}
-.stat>.l:not(.parts):not(.scope):not(.cover)::after{content:" ]";color:var(--faint)}
+/* ---- figures ---------------------------------------------------------------- */
+h2,h3,.ehead h2,.stat .n{font-family:var(--display)}
+.stat .n{font-variant-numeric:tabular-nums;letter-spacing:-.03em}
+.summary .stat:first-child .n,#networth{
+  color:transparent;background:var(--holo);background-size:250% 100%;
+  -webkit-background-clip:text;background-clip:text;font-weight:700;
+  animation:eh-holo 8s ease-in-out infinite alternate;
+  filter:drop-shadow(0 0 24px rgba(167,139,250,.45));
+}
+@keyframes eh-holo{from{background-position:0% 50%}to{background-position:100% 50%}}
+.stat .n.fees,.etotal{color:var(--pos);text-shadow:0 0 22px rgba(76,255,181,.35)}
+.stat .n.loss{color:var(--neg);text-shadow:0 0 22px rgba(255,84,112,.3)}
 
-/* ---- figures glow; the total glows most -------------------------------------- */
-.stat .n{font-family:var(--sans);font-variant-numeric:tabular-nums;letter-spacing:-.02em;color:var(--ink);text-shadow:0 0 10px rgba(212,255,226,.18)}
-.summary .stat:first-child .n,#networth{color:var(--pos);text-shadow:var(--glow);font-weight:700}
-.summary .stat:first-child{border-color:rgba(80,255,150,.38);box-shadow:0 0 0 1px rgba(80,255,150,.1),0 0 34px -10px rgba(57,255,136,.4)}
-.stat .n.fees,.etotal{color:var(--pos);text-shadow:var(--glow)}
-.stat .n.loss{color:var(--neg);text-shadow:0 0 8px rgba(255,77,106,.4)}
+/* ---- controls ---------------------------------------------------------------- */
+button.reload{border-radius:999px;background:rgba(255,255,255,.04);border-color:var(--rule)}
+button.reload:hover{border-color:rgba(125,249,255,.55);color:var(--ink);background:var(--cyan-dim);box-shadow:0 0 18px -4px rgba(125,249,255,.5)}
+button.collect,.pfopt[aria-checked="true"]{
+  color:var(--btn-ink);border-color:transparent;
+  background:var(--holo);background-size:200% 100%;
+  box-shadow:0 10px 30px -10px rgba(255,106,213,.7),0 0 22px -6px rgba(125,249,255,.6),inset 0 1px 0 rgba(255,255,255,.4);
+  font-weight:700;
+}
+button.collect:hover{color:var(--btn-ink);background:var(--holo);background-size:200% 100%;background-position:100% 0;filter:brightness(1.08)}
+.pfopt[aria-checked="true"] .pfn{background:rgba(6,2,26,.18);color:var(--btn-ink)}
+select.scope,.msel,#ltsort,.armform input,.armform select{background:rgba(10,6,26,.85);border-radius:var(--r-ctl)}
+.chip{border-radius:999px;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
 
-/* ---- controls: bracketed commands -------------------------------------------- */
-button.reload{border-radius:var(--r-ctl);background:transparent;border-color:var(--rule);text-transform:lowercase}
-button.reload:hover{border-color:var(--cyan);color:var(--cyan);background:var(--cyan-dim);text-shadow:0 0 8px var(--glow-cyan)}
-button.collect{color:var(--btn-ink);background:var(--pos);border-color:var(--pos);box-shadow:0 0 16px -2px rgba(57,255,136,.55);text-transform:lowercase}
-button.collect::before{content:"$ "}
-button.collect:hover{color:var(--btn-ink);background:var(--pos);filter:brightness(1.12)}
-.pfopt[aria-checked="true"]{color:var(--btn-ink);background:var(--pos);box-shadow:0 0 14px -3px rgba(57,255,136,.6)}
-select.scope,.msel,#ltsort,.armform input,.armform select{background:#030A06;border-color:var(--rule);font-family:var(--sans)}
-.chip{border-radius:var(--r-ctl);font-family:var(--sans)}
-a{color:var(--cyan)}
+/* ---- range rails: an aurora band ------------------------------------------------ */
+.bar{background:linear-gradient(90deg,rgba(125,249,255,.5),rgba(167,139,250,.45),rgba(255,106,213,.5));box-shadow:0 0 14px -2px rgba(167,139,250,.5)}
+.pos.out .bar{background:var(--neg-dim);box-shadow:none}
+.marker{box-shadow:0 0 0 3px rgba(255,255,255,.1),0 0 16px rgba(255,255,255,.8)}
+polyline.tline{stroke:#C9B8FF;filter:drop-shadow(0 0 6px rgba(167,139,250,.8))}
 
-/* ---- range rails: segmented, like a progress bar in a shell ------------------ */
-.bar{background:repeating-linear-gradient(90deg,rgba(57,255,136,.4) 0 6px,transparent 6px 9px);border-radius:0}
-.pos.out .bar{background:repeating-linear-gradient(90deg,rgba(255,77,106,.4) 0 6px,transparent 6px 9px)}
-.marker{border-radius:0;box-shadow:0 0 10px var(--glow-green)}
-polyline.tline{stroke:var(--pos);filter:drop-shadow(0 0 4px rgba(57,255,136,.6))}
+*{scrollbar-color:rgba(167,139,250,.35) transparent}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:linear-gradient(180deg,rgba(125,249,255,.4),rgba(255,106,213,.4));border-radius:999px}
 
-*{scrollbar-color:rgba(80,255,150,.3) transparent}
-::-webkit-scrollbar{width:8px;height:8px}
-::-webkit-scrollbar-thumb{background:rgba(80,255,150,.25);border-radius:0}
-
-/* ---- mobile ------------------------------------------------------------------- */
+/* ---- phones ------------------------------------------------------------------------ */
 @media (max-width:700px){
-  /* The chain picker sat fixed over the page tabs; on a phone it moves to a slim
-     bar at the bottom-left, clear of the tabs and of the chat button. */
+  /* the chain picker leaves the page tabs alone: a slim bar at the bottom-left */
   #lp-chain-picker{top:auto !important;right:auto !important;left:10px !important;
-    bottom:calc(12px + env(safe-area-inset-bottom)) !important;padding:5px 6px !important;border-radius:4px !important;
-    font-family:var(--sans) !important;background:rgba(2,8,5,.96) !important}
+    bottom:calc(12px + env(safe-area-inset-bottom)) !important;padding:5px 6px !important;border-radius:14px !important;
+    background:rgba(8,4,22,.92) !important}
   #lp-chain-picker > span:first-child{display:none}
-  #lp-chain-picker a{padding:9px 12px !important;min-height:40px;border-radius:3px !important}
-  /* nothing may push the page sideways */
+  #lp-chain-picker a{padding:9px 12px !important;min-height:40px;border-radius:10px !important}
   html,body{overflow-x:hidden}
-  .wrap{padding-bottom:84px}       /* room above the picker and the chat button */
+  .wrap{padding-bottom:84px}
   button.reload,.pfopt,select.scope,.msel,#ltsort{min-height:44px}
-  .stat .n{text-shadow:none}
-  .summary .stat:first-child .n,#networth{text-shadow:0 0 8px rgba(57,255,136,.4)}
   .etable{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  /* still, cheaper: no drift, no blur, solid glass */
+  body::before{animation:none;inset:0}
+  body::after{display:none}
+  .stat,.earnings,.col-side .panel,.pos,.pos.card2,.watchwallet .wh,.ctotbtn,.ctpanel,.insightcard,header.topbar{
+    -webkit-backdrop-filter:none;backdrop-filter:none}
+  html:root{--card:rgba(13,9,30,.9)}
 }
 @media (prefers-reduced-motion:reduce){
-  body::after{animation:none}
-  .brand::after{animation:none}
+  body::before,body::after,.summary .stat:first-child,.summary .stat:first-child .n,#networth{animation:none}
+  body::after{display:none}
+  .stat,.pos.card2{transition:none}
+  .stat:hover,.pos.card2:hover{transform:none}
 }

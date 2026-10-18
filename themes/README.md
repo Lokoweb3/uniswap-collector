@@ -51,9 +51,15 @@ same markup.
   range rails; Space Grotesk headings (add `&family=Space+Grotesk:wght@500;600;700` back to
   the font link in `dashboard.html` and `wallet.html` if you restore it).
 
-The current look, **Phosphor**, is a terminal skin appended to the end of `dashboard.css`:
-monospace everywhere, pale phosphor text on near-black, faint scanlines, a blinking prompt
-cursor, bracketed labels and a soft glow on the figures that matter; green / amber / red
-still only mean a status. Mobile first: 44px touch targets, no sideways scroll, and the chain
-picker moved to the bottom-left on phones so it no longer covers the page tabs. Deleting that
-final block returns Midnight Neon.
+- **2026-10-18-phosphor** — the terminal skin: monospace everywhere, phosphor text on
+  near-black, scanlines, a blinking prompt cursor, bracketed labels. Restore it, then remove
+  `&family=Sora:wght@500;600;700` from the font link in `dashboard.html` and `wallet.html`.
+
+The current look, **Event Horizon**, is a deep-space skin appended to the end of
+`dashboard.css`: a nebula on `<html>`, a scattered starfield drifting behind the page, a
+shooting star every ~13 s, the glowing accretion ring of a black hole off the top-right
+corner, smoked-glass cards with an iridescent rim, and a holographic portfolio total whose
+rim and colour slowly turn through aqua, violet, rose and gold. Sora for headings and big
+figures. Status colours keep their meaning. Phones keep the sky but drop the motion and the
+blur; reduced motion stops every animation. The chain picker sits at the bottom-left on
+phones. Deleting that final block returns Midnight Neon.

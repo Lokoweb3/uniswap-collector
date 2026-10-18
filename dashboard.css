@@ -1771,3 +1771,147 @@ body.pf-closed .histsec .ehead:has(h3){margin-top:0;padding-top:0;border-top:0}
   .pos .metrics{grid-template-columns:minmax(0,1fr)}
   .pos .detailgrid{grid-template-columns:minmax(0,1fr)}
 }
+
+/* ============================================================================
+   Velvet — a skin over Midnight Neon (2026-10-18).
+   Same layout and the same meaning for every colour; a richer surface on top:
+   a plum-black ground lit by a slow aurora, frosted-glass cards with a soft
+   highlight on their top edge, and one magenta → violet → cyan gradient that
+   marks the few things worth looking at first (the portfolio total, the active
+   page, the primary button, the range rails). Green, amber and coral still only
+   ever mean a real status.
+   `html:root` outranks the wallet page's own :root block, so both pages follow.
+   The look before this is saved in themes/2026-10-18-midnight-neon-v2:
+     ./themes/apply.sh 2026-10-18-midnight-neon-v2
+   ========================================================================= */
+html:root{
+  --bg:#07050E;
+  --card:rgba(22,16,38,.62);
+  --raised:rgba(30,22,52,.72);
+  --rule:rgba(196,170,255,.13);
+  --rule-soft:rgba(196,170,255,.08);
+  --ink:#F4EEFF;
+  --muted:#A99DC6;
+  --faint:#7D7299;
+  --bright:#FFFFFF;
+  --cyan:#C49BFF;             /* what you can act on: lavender, so it never reads as a status */
+  --violet:#FF5CAA;           /* second chart series */
+  --pos:#3DF2B0;
+  --warn:#FFC15E;
+  --neg:#FF5E73;
+  --cyan-dim:rgba(196,155,255,.14);
+  --violet-dim:rgba(255,92,170,.14);
+  --pos-dim:rgba(61,242,176,.12);
+  --warn-dim:rgba(255,193,94,.13);
+  --neg-dim:rgba(255,94,115,.13);
+  --glow-cyan:rgba(196,155,255,.55);
+  --glow-green:rgba(61,242,176,.55);
+  --btn-ink:#14061F;
+  --shadow:rgba(3,1,10,.6);
+  --grad:linear-gradient(100deg,#FF5CAA 0%,#A66BFF 48%,#45D7FF 100%);
+  --grad-soft:linear-gradient(100deg,rgba(255,92,170,.22),rgba(166,107,255,.18),rgba(69,215,255,.2));
+  --r-card:18px;
+  --r-ctl:10px;
+  --display:'Space Grotesk',var(--sans);
+}
+
+/* ---- ground: a slow aurora behind everything ----------------------------- */
+html{background:var(--bg)}
+body{
+  background:
+    radial-gradient(1100px 620px at 8% -8%,rgba(255,92,170,.16),transparent 60%),
+    radial-gradient(900px 600px at 96% 0%,rgba(140,90,255,.18),transparent 62%),
+    radial-gradient(1000px 700px at 50% 112%,rgba(69,215,255,.10),transparent 60%),
+    var(--bg);
+  background-attachment:fixed;
+}
+body::before{
+  content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(40% 35% at 25% 30%,rgba(255,92,170,.10),transparent 70%),
+    radial-gradient(35% 30% at 75% 60%,rgba(120,80,255,.10),transparent 70%);
+  filter:blur(40px);animation:velvet-drift 28s ease-in-out infinite alternate;
+}
+@keyframes velvet-drift{from{transform:translate3d(-3%,-2%,0) rotate(0deg)}to{transform:translate3d(3%,2%,0) rotate(6deg)}}
+::selection{background:rgba(255,92,170,.35);color:#fff}
+
+/* ---- glass surfaces -------------------------------------------------------- */
+.stat,.earnings,.col-side .panel,.pos,.pos.card2,.watchwallet .wh,.ctotbtn,.ctpanel,.insightcard,
+.wrap section.card,.wrap .card{
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,0) 38%),var(--card);
+  border:1px solid var(--rule);
+  border-radius:var(--r-card);
+  -webkit-backdrop-filter:blur(16px) saturate(150%);
+  backdrop-filter:blur(16px) saturate(150%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 18px 40px -22px var(--shadow);
+}
+.stat{transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease}
+.stat:hover{
+  transform:translateY(-2px);border-color:rgba(196,155,255,.32);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 22px 46px -20px rgba(166,107,255,.38);
+}
+.pos.card2{transition:border-color .2s ease,box-shadow .2s ease}
+.pos.card2:hover{border-color:rgba(196,155,255,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 24px 50px -26px rgba(166,107,255,.35)}
+
+/* ---- header: frosted, with a hairline of the gradient under it ------------- */
+header.topbar{
+  background:rgba(12,8,24,.66);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);
+  border-bottom:1px solid transparent;
+  border-image:var(--grad) 1;
+}
+.brand{font-family:var(--display);font-size:17px;font-weight:700;letter-spacing:-.02em}
+.brand::before{width:10px;height:10px;border-radius:50%;background:var(--grad);box-shadow:0 0 14px rgba(255,92,170,.7)}
+.pages a.here{
+  color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;
+  border-image:var(--grad) 1;border-bottom-width:2px;border-bottom-style:solid;
+}
+
+/* ---- numbers ---------------------------------------------------------------- */
+.stat .n,.ehead h2,h2,h3{font-family:var(--display)}
+.stat .n{font-variant-numeric:tabular-nums;letter-spacing:-.025em}
+.summary .stat:first-child .n,#networth{
+  background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;
+  font-weight:700;filter:drop-shadow(0 6px 22px rgba(255,92,170,.25));
+}
+.summary .stat:first-child{
+  background:var(--grad-soft),linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,0) 40%),var(--card);
+  border-color:rgba(255,140,200,.28);
+}
+.stat .n.fees,.etotal{color:var(--pos);text-shadow:0 0 18px rgba(61,242,176,.25)}
+.stat .n.loss{color:var(--neg);text-shadow:0 0 18px rgba(255,94,115,.22)}
+
+/* ---- controls ---------------------------------------------------------------- */
+button.reload{border-radius:var(--r-pill);background:rgba(255,255,255,.03)}
+button.reload:hover{border-color:rgba(196,155,255,.5);color:var(--ink);background:var(--cyan-dim)}
+button.collect,.pfopt[aria-checked="true"]{
+  background:var(--grad);border-color:transparent;color:#fff;
+  box-shadow:0 8px 24px -8px rgba(255,92,170,.55),inset 0 1px 0 rgba(255,255,255,.25);
+}
+button.collect:hover{background:var(--grad);color:#fff;filter:brightness(1.1) saturate(1.1)}
+.pfopt[aria-checked="true"] .pfn{background:rgba(255,255,255,.22);color:#fff}
+select.scope,.msel,#ltsort,.armform input,.armform select{background:rgba(20,14,36,.8);border-radius:var(--r-ctl)}
+.chip{border-radius:var(--r-pill);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+
+/* ---- range rails: the gradient carries the band ------------------------------ */
+.bar{background:linear-gradient(90deg,rgba(255,92,170,.35),rgba(166,107,255,.35),rgba(69,215,255,.35))}
+.pos.out .bar{background:var(--neg-dim)}
+.marker{box-shadow:0 0 0 3px rgba(255,255,255,.08),0 0 14px rgba(255,92,170,.6)}
+
+/* ---- charts: the portfolio line glows ---------------------------------------- */
+polyline.tline{stroke:#C49BFF;filter:drop-shadow(0 0 6px rgba(196,155,255,.55))}
+
+/* ---- scrollbars ---------------------------------------------------------------- */
+*{scrollbar-color:rgba(196,155,255,.28) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:rgba(196,155,255,.22);border-radius:999px;border:2px solid transparent;background-clip:padding-box}
+
+@media (prefers-reduced-motion:reduce){
+  body::before{animation:none}
+  .stat,.stat:hover{transition:none;transform:none}
+}
+/* Phones: blur is costly on small GPUs and the aurora is mostly off-screen. */
+@media (max-width:520px){
+  body::before{display:none}
+  .stat,.earnings,.col-side .panel,.pos,.pos.card2{-webkit-backdrop-filter:none;backdrop-filter:none;background:rgba(22,16,38,.9)}
+}

@@ -40,3 +40,13 @@ same markup.
   #29D9FF for what you can act on, violet #8B5CFF as the second chart series, and
   green/amber/coral only for real status. IBM Plex Sans for the interface, JetBrains Mono
   for every figure. Snapshot taken after the redesign; see the note above about markup.
+- **2026-10-18-midnight-neon-v2** — Midnight Neon as it stood on 2026-10-18, just before
+  the Velvet skin: same palette as above, with the October changes (the Change and Fees
+  claimed tiles, compact empty wallets, the pricing footer link). Put it back with
+  `./themes/apply.sh 2026-10-18-midnight-neon-v2`; it shares the current markup, so this
+  is a clean swap.
+
+The current look, **Velvet**, is a skin appended to the end of `dashboard.css` (plum-black
+ground with a slow aurora, frosted-glass cards, one magenta → violet → cyan gradient for the
+portfolio total, the active page, the primary button and the range rails; Space Grotesk for
+headings and big figures). Deleting that final block returns Midnight Neon.

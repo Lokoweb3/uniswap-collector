@@ -20,17 +20,40 @@ const ROOT = path.join(__dirname, "..");
 const { CHROME, PAGES, loadPage } = require("./smoke-lib");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const LOG_PATH = path.join(ROOT, "test", ".tmp", "smoke-server.log");
 
-async function waitFor(url, ms, perRequestMs = 3000) {
+// Sleep that wakes early when the server exits; its timer is always cleared.
+function sleepOrExit(ms, exitP) {
+  let t;
+  return Promise.race([new Promise((r) => { t = setTimeout(r, ms); }), exitP]).finally(() => clearTimeout(t));
+}
+
+// Resolves true when the url answers, false on timeout, and the EXITED marker
+// as soon as the server process has died (no point polling a dead server).
+const EXITED = Symbol("exited");
+async function waitFor(url, ms, perRequestMs = 3000, exitP = new Promise(() => {})) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(perRequestMs) });
+      const r = await Promise.race([fetch(url, { signal: AbortSignal.timeout(perRequestMs) }), exitP.then(() => EXITED)]);
+      if (r === EXITED) return EXITED;
       if (r.ok) return true;
     } catch {}
-    await sleep(1000);
+    if ((await sleepOrExit(1000, exitP)) === EXITED) return EXITED;
   }
   return false;
+}
+
+// Build the failure message for a server that died before the run finished.
+function earlyExitMessage(info) {
+  let text = "";
+  try { text = fs.readFileSync(LOG_PATH, "utf8"); } catch {}
+  if (/settings\.json is missing/.test(text)) {
+    return `settings.json missing: copy settings.example.json to settings.json and fill it in (or pass --data-dir); server log: ${LOG_PATH}`;
+  }
+  const tail = text.split("\n").slice(-20).join("\n").slice(-2048);
+  const what = info.error ? `error=${info.error.message}` : `code=${info.code} signal=${info.signal}`;
+  return `server exited before answering (${what})\n--- tail of ${LOG_PATH} ---\n${tail}`;
 }
 
 async function main() {
@@ -39,22 +62,31 @@ async function main() {
     process.exit(1);
   }
   fs.mkdirSync(path.join(ROOT, "test", ".tmp"), { recursive: true });
-  const log = fs.openSync(path.join(ROOT, "test", ".tmp", "smoke-server.log"), "w");
+  const log = fs.openSync(LOG_PATH, "w");
   const server = spawn(process.execPath, ["server.js", `--port=${PORT}`], { cwd: ROOT, stdio: ["ignore", log, log], env: { ...process.env, TELEGRAM_TOKEN: "", TELEGRAM_CHAT_ID: "" } });
+  let exited = null;
+  let onExit, onError;
+  const exitP = new Promise((resolve) => {
+    onExit = (code, signal) => { exited = { code, signal }; resolve(EXITED); };
+    onError = (error) => { exited = { error }; resolve(EXITED); };
+    server.once("exit", onExit);
+    server.once("error", onError);
+  });
   let failed = 0;
   try {
     const base = `http://127.0.0.1:${PORT}`;
-    if (!(await waitFor(`${base}/api/positions`, 360000))) {
-      console.error("smoke: server did not answer /api/positions within 6 min (see test/.tmp/smoke-server.log)");
-      process.exit(1);
-    }
+    const up = await waitFor(`${base}/api/positions`, 360000, 3000, exitP);
+    if (up === EXITED) throw new Error(earlyExitMessage(exited));
+    if (!up) throw new Error("server did not answer /api/positions within 6 min (see test/.tmp/smoke-server.log)");
     // Warm the views the Analytics page fetches: the collect history prices its
     // events through the RPC on a cold server, which can take minutes and would
     // otherwise outlast the per-page Chrome limit below.
     // The Wallet page also fetches the approval audit on load (it scans the chain
     // for every operator the wallets ever approved), which is minutes on a cold server.
     for (const warm of ["/api/history", "/api/strategy/lots", "/api/approvals"]) {
-      if (!(await waitFor(`${base}${warm}`, 300000, 240000))) console.error(`smoke: ${warm} did not answer within 5 min; continuing`);
+      const ok = await waitFor(`${base}${warm}`, 300000, 240000, exitP);
+      if (ok === EXITED) throw new Error(earlyExitMessage(exited));
+      if (!ok) console.error(`smoke: ${warm} did not answer within 5 min; continuing`);
     }
     // Every page at desktop width and at a 375 px phone width: same markers, no console errors.
     for (const width of [1280, 375]) for (const p of PAGES) {
@@ -93,9 +125,13 @@ async function main() {
       } else console.log(`ok   ${file} (${ct})`);
     }
   } finally {
-    server.kill("SIGTERM");
-    await sleep(500);
-    if (server.exitCode == null) server.kill("SIGKILL");
+    server.off("exit", onExit);
+    server.off("error", onError);
+    if (server.exitCode == null && server.signalCode == null) {
+      server.kill("SIGTERM");
+      await sleep(500);
+      if (server.exitCode == null && server.signalCode == null) server.kill("SIGKILL");
+    }
     fs.closeSync(log);
   }
   if (failed) {

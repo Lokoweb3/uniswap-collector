@@ -60,7 +60,10 @@ const block = src.slice(at - 400, at + 300);
 {
   // If this ever stops being true the bug is gone, but so is the reason for the
   // fix -- and someone should see that here rather than rediscover it in a log.
-  const dir = (/^SCANNER_DIR=(.*)$/m.exec(fs.readFileSync(path.join(__dirname, "..", ".env"), "utf8").trim()) || [])[1];
+  // No .env (a fresh checkout, CI) means no SCANNER_DIR, so there is nothing to check.
+  const envFile = path.join(__dirname, "..", ".env");
+  const envText = fs.existsSync(envFile) ? fs.readFileSync(envFile, "utf8").trim() : "";
+  const dir = (/^SCANNER_DIR=(.*)$/m.exec(envText) || [])[1];
   if (dir && fs.existsSync(path.join(dir.replace(/^["']|["']$/g, ""), "server.js"))) {
     const scanner = fs.readFileSync(path.join(dir.replace(/^["']|["']$/g, ""), "server.js"), "utf8");
     assert.ok(/process\.env\.PORT \|\| 3847/.test(scanner),

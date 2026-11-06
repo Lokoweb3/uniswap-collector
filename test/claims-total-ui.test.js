@@ -157,6 +157,10 @@ async function main() {
     assert.match(html, /<button type="button" class="ctotbtn" id="ctotbtn" aria-expanded="false" aria-controls="ctotalpanel"[\s\S]*?title="Read-only history — no transaction"/);
     assert.match(html, /<section class="ctpanel" id="ctotalpanel"[^>]*aria-labelledby="ctotaltitle"[^>]*hidden>/);
     assert.match(html, /<h3 id="ctotaltitle">Total claimed fees<\/h3>/);
+    // EXTRA A: the top-row "Fees claimed to date" tile is gone; the button and panel stay
+    assert.ok(!/claimtile|claimfig|claimsub/.test(html), "claimtile removed from dashboard.html");
+    assert.ok(!/claimtile|claimfig|claimsub/.test(src), "no dead tile code in dashboard.js");
+    assert.ok(html.includes('id="ctotbtn"') && html.includes('id="ctotalpanel"'));
     const b = api.ctotalButtonHtml(TOTAL.label, api.ctotalHeadline(TOTAL), null);
     assert.match(strip(b), /Total claimed fees · Arc LP · Open \+ closed \$123\.45 Verified claimed — complete history Read-only history — no transaction/);
     assert.ok(!/claim now|collect|withdraw/i.test(strip(b)), "nothing on the control suggests it moves money");

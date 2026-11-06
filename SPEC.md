@@ -367,3 +367,7 @@ In: `package-lock.json`, and `package.json` only if `npm audit fix` itself chang
 
 ### Prior open questions
 1. Env override for the server command in smoke (assumption: none). 2. Chrome check order in smoke (assumption: unchanged). 3. Partial `npm audit fix` is a pass with leftovers listed. 4. `trust proxy 1` out of scope then; now handled by Task 1 above.
+
+## EXTRA A: remove the "Fees claimed to date" tile
+Goal: drop the top-row `#claimtile` (claimfig/claimsub) from dashboard.html in every wallet view, with its dead JS (tile branch of renderClaimTotalButton, click/keydown handlers) and `#claimtile{cursor:pointer}` CSS (base and themes). Keep `#ctotbtn`/`#ctotalpanel`, per-position Claimed fees tiles and the Analytics claims table.
+Acceptance: (1) no `claimtile`/`claimfig`/`claimsub` in dashboard.html/js/css; (2) test asserts absence while `#ctotbtn` and `#ctotalpanel` remain; (3) full suite: only smoke.js may fail; `npx eslint .` clean.

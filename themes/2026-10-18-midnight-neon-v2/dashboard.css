@@ -604,7 +604,6 @@ select.scope option,.msel option,#ltsort option{background:var(--card);color:var
 .stat .n.sm{font-size:28px;font-weight:600}
 .stat .n.fees{color:var(--pos)}
 .stat .n.loss{color:var(--neg)}
-#claimtile{cursor:pointer}
 .stat .l.scope,.stat .l.cover{
   font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted);line-height:1.5;
 }

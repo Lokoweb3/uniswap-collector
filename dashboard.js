@@ -2964,18 +2964,6 @@ function renderClaimTotalButton() {
   const h = g ? ctotalHeadline(g.d) : e ? ctotalFailHead(e) : ctotalHeadline(null);
   const stale = g && e && e.kind !== 'pending' ? e.msg : null;
   b.innerHTML = ctotalButtonHtml(label, h, stale);
-  const tile = $('#claimtile');
-  if (tile) {
-    // The same answer as the button, lifted into the top row; a click opens its breakdown.
-    tile.hidden = !g;
-    if (g) {
-      // A priced subtotal leaves out the records with no historical price: a floor, not a total.
-      $('#claimfig').textContent = h.fig.replace(/^Priced subtotal /, 'at least ');
-      $('#claimfig').className = 'n sm' + (h.cls ? '' : ' fees');
-      $('#claimsub').textContent = h.sub + (stale ? ' · stale: latest refresh failed' : '');
-    }
-    summaryLayout();
-  }
   b.title = 'Read-only history — no transaction. Opens a breakdown of fees already claimed.' + (stale ? ` Showing the last successful refresh; the latest failed: ${stale}.` : '');
 }
 function renderClaimTotalPanel() {
@@ -3819,14 +3807,6 @@ if (PAGE === 'dashboard') {
     if (p) p.hidden = !CTOT.open;
     if (CTOT.open) { renderClaimTotalPanel(); loadClaimTotal('panel'); }
   });
-  // The top-row tile opens the same breakdown, and brings it into view.
-  const ctile = document.getElementById('claimtile');
-  if (ctile && btn) ctile.addEventListener('click', () => {
-    if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
-    const p = document.getElementById('ctotalpanel');
-    (p && !p.hidden ? p : btn).scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
-  if (ctile) ctile.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ctile.click(); } });
   const form = document.getElementById('ctfilters');
   if (form) {
     form.addEventListener('change', () => { readCtFilters(); loadClaimTotal('panel'); });

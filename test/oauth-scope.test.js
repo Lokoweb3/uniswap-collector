@@ -44,7 +44,7 @@ async function toolsFor(token) {
 }
 
 (async () => {
-  for (const f of ["lp-mcp-remote.mjs", "lp-mcp.mjs", "daykey.js"]) fs.copyFileSync(path.join(ROOT, f), path.join(tmp, f));
+  for (const f of ["lp-mcp-remote.mjs", "lp-mcp.mjs", "login-throttle.mjs", "daykey.js"]) fs.copyFileSync(path.join(ROOT, f), path.join(tmp, f));
   fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(tmp, "node_modules"), "dir");
   const pass = "synthetic-test-passphrase", salt = "synthetic-salt";
   const staleOauth = "stale-oauth-access-token-with-write", staleRefresh = "stale-oauth-refresh-with-write", machine = "machine-token-with-write";

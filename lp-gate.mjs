@@ -15,12 +15,14 @@
  *   /api/lock are refused whatever the method. Those endpoints trust loopback,
  *   and through a proxy every request is loopback, so they must never pass.
  * - Both sites additionally accept POST /api/chat and /api/chat/reset (read-only chat).
- * - Five wrong passphrases from one address lock that address for 15 minutes.
+ * - Five wrong passphrases from one address lock that address for 15 minutes; a
+ *   global failure budget caps total guesses (see login-throttle.mjs).
  */
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { clientKey, clientAddr, createThrottle, loginAttempt } from "./login-throttle.mjs";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const AUTH_FILE = path.join(HERE, "mcp-auth.json");
@@ -82,18 +84,10 @@ function cookies(req) {
 }
 
 // -- login throttle ------------------------------------------------------------
-const fails = new Map(); // ip -> { n, until }
-function clientIp(req) {
-  const xff = req.headers["x-forwarded-for"];
-  return (xff ? String(xff).split(",")[0].trim() : "") || req.socket.remoteAddress || "?";
-}
-function locked(ip) { const f = fails.get(ip); return !!(f && f.until > Date.now()); }
-function fail(ip) {
-  if (fails.size > 5000) fails.clear();
-  const f = fails.get(ip) || { n: 0, until: 0 };
-  f.n++; if (f.n >= 5) { f.until = Date.now() + 15 * 60_000; f.n = 0; }
-  fails.set(ip, f);
-}
+// Shared with lp-mcp-remote.mjs. The key is the LAST X-Forwarded-For entry (the one
+// the trusted local hop appended), never the client-controlled first one.
+const throttle = createThrottle({ onEngage: () => console.log("global login budget engaged") });
+const clientIp = (req) => clientKey(req); // throttle key (IPv6 folded to /64)
 
 // -- pages ---------------------------------------------------------------------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -129,7 +123,7 @@ function proxy(site, req, res) {
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k)) headers[k] = v;
   headers.host = `127.0.0.1:${site.upstream}`;
-  headers["x-forwarded-for"] = clientIp(req);
+  headers["x-forwarded-for"] = clientAddr(req); // normalized client IP, never the raw header
   headers["x-lp-gate"] = "1";
   // Cookie is a hop header above, so nothing a client holds reaches upstream -- this
   // gate's session least of all. The chain selection is the one thing that must,
@@ -164,17 +158,17 @@ for (const site of SITES) {
     const ip = clientIp(req);
     try {
       if (url.pathname === "/__gate/login" && req.method === "POST") {
-        if (locked(ip)) return send(res, 429, loginPage(site, "/", "Too many attempts. Try again in 15 minutes."));
-        const form = await readForm(req);
-        if (!checkPassphrase(form.p || "")) { fail(ip); console.log(`[${site.name}] wrong passphrase from ${ip}`); return send(res, 401, loginPage(site, safeNext(form.next), "Wrong passphrase.")); }
-        fails.delete(ip);
+        const r = await loginAttempt({ throttle, ip, readForm: () => readForm(req), checkPassphrase });
+        if (r.status === "throttled") return send(res, 429, loginPage(site, "/", "Too many attempts. Try again in 15 minutes."));
+        if (r.status === "bad") { console.log(`[${site.name}] wrong passphrase from ${ip}`); return send(res, 401, loginPage(site, safeNext(r.form.next), "Wrong passphrase.")); }
+        const form = r.form;
         console.log(`[${site.name}] login from ${ip}`);
         return send(res, 303, "", "text/plain", { location: safeNext(form.next), "set-cookie": `${COOKIE}=${issue()}; Path=/; Max-Age=${TTL_S}; HttpOnly; Secure; SameSite=Lax` });
       }
       if (url.pathname === "/__gate/logout") return send(res, 303, "", "text/plain", { location: "/", "set-cookie": `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` });
       if (!valid(cookies(req)[COOKIE])) {
         const wantsHtml = /text\/html/.test(req.headers.accept || "") && (req.method === "GET" || req.method === "HEAD");
-        if (wantsHtml) return send(res, 200, loginPage(site, req.url, locked(ip) ? "Too many attempts. Try again in 15 minutes." : ""));
+        if (wantsHtml) return send(res, 200, loginPage(site, req.url, !throttle.check(ip).ok ? "Too many attempts. Try again in 15 minutes." : ""));
         return send(res, 401, JSON.stringify({ ok: false, error: "sign in first" }), "application/json");
       }
       if (!site.allow(req.method, url.pathname)) return send(res, 403, JSON.stringify({ ok: false, error: "not available through the public gate" }), "application/json");

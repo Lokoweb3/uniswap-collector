@@ -666,6 +666,44 @@ will fail or, worse, interact with an unrelated contract. Confirm first.
 
 ## Security model
 
+### Login throttle (gate and remote MCP)
+
+`lp-gate.mjs` and `lp-mcp-remote.mjs` share `login-throttle.mjs`. Both listen on
+127.0.0.1 only, so the socket peer is always loopback and the real client comes from
+`X-Forwarded-For`: the throttle key is the **last** entry (the one the trusted local
+hop appended) and only when the peer is loopback; the first entry is client-controlled
+and never used. Invalid or missing values fall back to the peer address; IPv6 keys on
+the /64. `LP_GATE_TRUST_PROXY=0` ignores XFF entirely.
+
+- 5 wrong passphrases lock a key for 15 minutes; a key with failures but no lock
+  expires 15 minutes after its last failure. Storage is capped at 5000 records; under
+  pressure the oldest unlocked record is evicted, locked records never are, and if
+  nothing is evictable new keys are refused (429, fail closed). Nothing is ever cleared in bulk.
+- Global budget: 60 failures per 15 minutes across all keys (`LP_GATE_GLOBAL_MAX`,
+  `LP_GATE_GLOBAL_WINDOW_MS`). While engaged every login, even with the right
+  passphrase, gets 429. Trade-off: a distributed guesser can deny service (including
+  to you) for up to the window, but cannot exceed about 60 guesses per 15 minutes
+  (about 5,700 a day). A successful login clears only its own key, never the global count.
+- The gate and the remote MCP each have their **own** budget (separate processes), and
+  both check the same shared passphrase, so together they allow about 120 guesses per
+  15 minutes (60 each).
+- `lp-mcp-remote.mjs` uses `trust proxy "loopback"` (XFF honoured only from a loopback
+  peer) instead of a hop count. If a second proxy hop is ever added in front of it, or
+  the bind address is widened, change that setting deliberately.
+- Open question: if the Tailscale Funnel forwards a client-sent `X-Forwarded-For`
+  without appending the real address, the last entry is client-controlled and only the
+  global budget limits guessing. Do a one-time live check: send
+  `X-Forwarded-For: 203.0.113.1` through the Funnel URL and confirm the gate log shows
+  your real IP, not 203.0.113.1.
+- `lp-gate.mjs` and `lp-mcp-remote.mjs` hard-code the `127.0.0.1` bind instead of
+  honouring `HOST`. This is deliberate and part of the trust model (the loopback peer
+  is what makes the last-XFF-entry rule safe), so it is an exception to the usual
+  `HOST` convention.
+- `LP_GATE_GLOBAL_MAX` must be an integer 1..10000 and `LP_GATE_GLOBAL_WINDOW_MS`
+  60000..86400000; anything else falls back to the default with a warning. The gate
+  forwards the normalized client IP (not the raw header) upstream; the /64 folding is
+  only the throttle key.
+
 The script runs as a separate **operator** wallet that is not your position
 owner. Its entire balance is a small gas float. If the operator key leaks, the
 attacker gets the float plus whatever fees happen to be mid-flight.

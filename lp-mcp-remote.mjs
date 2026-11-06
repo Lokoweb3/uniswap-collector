@@ -36,6 +36,7 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { InvalidGrantError, InvalidTokenError, InvalidClientMetadataError, InvalidScopeError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer as createLpServer } from "./lp-mcp.mjs";
+import { clientKey, createThrottle } from "./login-throttle.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = process.env.LP_MCP_STATE || path.join(HERE, "mcp-auth.json");
@@ -145,18 +146,10 @@ if (process.argv.includes("--revoke-token")) {
   process.exit(0);
 }
 
-// -- Login throttle: five wrong passphrases from one address lock that
-// address out for 15 minutes; a stranger cannot lock you out from theirs.
-const failures = new Map(); // ip -> { count, until }
-function loginAllowed(ip) { const f = failures.get(ip); return !f || Date.now() >= f.until; }
-function loginFailed(ip) {
-  const f = failures.get(ip) || { count: 0, until: 0 };
-  f.count++;
-  if (f.count >= 5) { f.until = Date.now() + 15 * 60 * 1000; f.count = 0; }
-  failures.set(ip, f);
-  if (failures.size > 5000) for (const [k, v] of failures) { if (Date.now() >= v.until && v.count === 0) failures.delete(k); }
-}
-function loginSucceeded(ip) { failures.delete(ip); }
+// -- Login throttle: shared with lp-gate.mjs (per-key lockout, TTL, bounded
+// storage, global failure budget). Keyed on the last X-Forwarded-For entry from
+// a loopback peer; a stranger cannot lock you out from their own address.
+const throttle = createThrottle({ onEngage: () => console.error("global login budget engaged") });
 
 // -- OAuth provider ----------------------------------------------------------
 const pending = new Map(); // login page nonce -> { client, params, expiresAt }
@@ -303,9 +296,11 @@ function main() {
 
   const app = express();
   app.disable("x-powered-by");
-  // One proxy hop in front (the tunnel), so client IPs come from X-Forwarded-For
-  // and the SDK's rate limiters see the real caller rather than 127.0.0.1.
-  app.set("trust proxy", 1);
+  // The tunnel connects from loopback (this server binds 127.0.0.1) and appends the
+  // real client to X-Forwarded-For. Trust XFF only from a loopback peer, so a hop
+  // count cannot be widened by mistake. If a second proxy hop is ever added, change
+  // this deliberately (see README).
+  app.set("trust proxy", "loopback");
   app.use((_req, res, next) => {
     res.set({
       "Cache-Control": "no-store",
@@ -332,12 +327,14 @@ function main() {
   app.post("/login", express.urlencoded({ extended: false, limit: "4kb" }), (req, res) => {
     const p = pending.get(req.body.n);
     if (!p || p.expiresAt < Date.now()) return res.status(400).type("text").send("This sign-in page has expired. Go back to Claude and connect again.");
-    if (!loginAllowed(req.ip)) return res.status(429).type("html").send(loginPage({ ...p, nonce: req.body.n, error: "Too many attempts. Try again in 15 minutes." }));
+    const key = clientKey(req);
+    const gate = throttle.check(key);
+    if (!gate.ok) { return res.status(429).type("html").send(loginPage({ ...p, nonce: req.body.n, error: "Too many attempts. Try again in 15 minutes." })); }
     if (!checkPassphrase(String(req.body.p || ""))) {
-      loginFailed(req.ip);
+      throttle.fail(key);
       return res.status(401).type("html").send(loginPage({ ...p, nonce: req.body.n, error: "Wrong passphrase." }));
     }
-    loginSucceeded(req.ip);
+    throttle.success(key);
     pending.delete(req.body.n);
     const code = rand();
     state.codes[h(code)] = {

@@ -887,6 +887,9 @@ function positionIncome(tokenId, wallet, token0, token1, { claimed, uncollectedU
   };
 }
 
+// The wallet a guardian entry belongs to: its own address, the main wallet when none (or a malformed one) is recorded.
+function riskClaimOwner(p) { return p && ethers.isAddress(p.walletAddress) ? p.walletAddress : cfg.ownerAddress; }
+
 /** A registry entry's claim summary, scoped to the wallet that held it. */
 function registryClaim(e) {
   const scope = { chainId: Number(cfg.chainId), positionManager: lcAddr(cfg.contracts.v4.positionManager), tokenId: e.tokenId, wallet: e.wallet };
@@ -2465,7 +2468,7 @@ async function handleRequest(req, res) {
           const m = await positionMeta(key);
           const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
           p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
-          p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedBlock ?? null, { token0: m.t0.address, token1: m.t1.address, owner: cfg.ownerAddress });
+          p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedBlock ?? null, { token0: m.t0.address, token1: m.t1.address, owner: riskClaimOwner(p) });
         } catch { p.collected = null; p.claimed = { status: "unavailable", reason: "this position's token metadata could not be read, so its claims cannot be valued" }; }
         // keep / watch / close / hold, from this row plus the collect history and
         // the hourly fee accrual (main wallet only; watched wallets accrue per wallet).

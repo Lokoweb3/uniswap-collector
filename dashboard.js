@@ -690,7 +690,7 @@ function renderChange(series){
 const pfScopeEl = $('#pfscope');
 const stakeScopeEl = $('#stakescope');
 if (stakeScopeEl) stakeScopeEl.addEventListener('change', e => { setPref('staking:scope', e.target.value); renderStaking(); });
-if (pfScopeEl) pfScopeEl.addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); if (stakingD && $('#stakesec')) { renderStaking(); renderAnalytics(); } });
+if (pfScopeEl) pfScopeEl.addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); loadRisk(); if (stakingD && $('#stakesec')) { renderStaking(); renderAnalytics(); } });
 
 /* ---- sidebar panels -------------------------------------------------------
  * Wallet overview, collection activity and data coverage are drawn from the
@@ -2093,7 +2093,9 @@ function render(d){
 
   $('#summary').hidden = false;
   $('#watchsec').hidden = false;
+  const ownerChanged = !lastMain || lastMain.owner !== d.owner;
   lastMain = d;
+  if (ownerChanged && PAGE !== 'analytics') loadRisk();
   renderHeadline();
   renderSidebar();
   const coll = $('#collectable');
@@ -3884,6 +3886,17 @@ function rulesLine(p){
   return `<div class="reasons rules" data-nft="${p.tokenId}" title="This position's rules; click a threshold to change it">${parts.join(' · ')} · auto-close <button class="rk-toggle ${p.canClose ? 'on' : ''}" ${READ_ONLY ? 'disabled' : ''} title="${p.canClose ? 'Auto-close is ON: the operator closes the position when a close trigger holds for 3 checks' : 'Auto-close is off: rules only alert'}">${p.canClose ? 'ON' : 'off'}</button> · hold <button class="rk-hold ${r.hold ? 'on' : ''}" ${READ_ONLY ? 'disabled' : ''} title="${r.hold ? 'Hold is ON: you keep this position by choice; the daily verdict says hold instead of close' : 'Hold is off: the daily verdict follows the data'}">${r.hold ? 'ON' : 'off'}</button>${p.closeConfirm ? ` <span class="warn">closing ${p.closeConfirm}</span>` : ''}</div>`;
 }
 
+// Risk-panel entries belong to one wallet each (walletAddress). 'all' keeps everything; 'owner' the
+// main wallet's (an entry with no address is the main wallet's); an address only that wallet's.
+function riskInScope(positions, scope, ownerAddr) {
+  const own = ownerAddr ? String(ownerAddr).toLowerCase() : null;
+  return (positions || []).filter(p => {
+    if (scope === 'all') return true;
+    const a = p.walletAddress ? String(p.walletAddress).toLowerCase() : null;
+    if (scope === 'owner') return !a || (own != null && a === own);
+    return a === String(scope).toLowerCase();
+  });
+}
 async function loadRisk(){
   try {
     const r = await fetch('/api/risk', { cache: 'no-store' });
@@ -3896,17 +3909,20 @@ async function loadRisk(){
     const pct = (n, d = 1) => n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(d) + '%';
     const cls = n => n == null ? '' : n >= 0 ? 'up' : 'down';
     const age = d.at ? Math.round((Date.now() - d.at) / 1000) : null;
-    $('#risknote').textContent = d.stale ? 'guardian not reporting' : `${d.watching} watched · updated ${age}s ago · v4 every 60 s, v3 every 5 min${d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : ''}`;
+    const scopeNow = currentScope();
+    const shown = riskInScope((d.positions || []).filter(p => !p.closed), scopeNow, lastMain && lastMain.owner);
+    const watchedTxt = scopeNow === 'all' || shown.length === d.watching ? `${d.watching}` : `${shown.length} of ${d.watching}`;
+    $('#risknote').textContent = d.stale ? 'guardian not reporting' : `${watchedTxt} watched · updated ${age}s ago · v4 every 60 s, v3 every 5 min${d.wethUsd ? ' · ETH ' + usd(d.wethUsd) : ''}`;
     const order = { red: 0, yellow: 1, green: 2 };
     // One card per wallet:tokenId, whatever the guardian sends (a re-mint or a rule block for a
     // position it also discovered must never show the same position twice).
     const seenKey = new Set();
-    const list = (d.positions || []).filter(p => !p.closed).filter(p => { const k = `${p.wallet || ''}:${p.tokenId}`; if (seenKey.has(k)) return false; seenKey.add(k); return true; }).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.valueUsd || 0) - (a.valueUsd || 0));
+    const list = shown.filter(p => { const k = `${p.wallet || ''}:${p.tokenId}`; if (seenKey.has(k)) return false; seenKey.add(k); return true; }).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.valueUsd || 0) - (a.valueUsd || 0));
     $('#risklist').innerHTML = list.map(p => {
       const lc = p.lastClose;
       return `<article class="pos meme ${p.status === 'red' ? 'out' : ''} ${d.stale ? 'stale' : ''}">
         <div class="top">
-          <div class="name"><span class="dot ${p.status}"></span><h3>${p.pair}</h3><span class="tier">v${p.version || 4} #${p.tokenId}</span><span class="muted">${p.wallet}</span>
+          <div class="name"><span class="dot ${p.status}"></span><h3>${esc(String(p.pair))}</h3><span class="tier">v${p.version || 4} #${p.tokenId}</span><span class="muted">${esc(String(p.wallet || ''))}</span>
             <span class="state ${p.inRange ? '' : 'out'}">${p.inRange ? 'In range' : 'Out of range · ' + Math.round(p.outMinutes) + ' min'}</span>${verdictBadge(p)}</div>
           <div class="vals"><span class="v">${usd(p.valueUsd)}</span><span class="f ${(p.feeUsd || 0) < 0.005 ? 'zero' : ''}">${usd(p.feeUsd)} uncollected</span>${claimedLine(p)}</div>
         </div>
@@ -3923,12 +3939,12 @@ async function loadRisk(){
         ${rulesLine(p)}
         ${p.reasons && p.reasons.length ? `<div class="reasons">${p.reasons.map(x => esc(String(x))).join(' · ')}</div>` : ''}
         ${lc ? `<div class="reasons">last close attempt: ${esc(String(lc.status))}${lc.error ? ' — ' + esc(String(lc.error)) : ''}</div>` : ''}
-        <button class="reload closebtn" data-close="${p.tokenId}" data-pair="${p.pair}" ${READ_ONLY ? 'disabled' : ''}>Close now</button>
+        <button class="reload closebtn" data-close="${p.tokenId}" data-pair="${esc(String(p.pair))}" ${READ_ONLY ? 'disabled' : ''}>Close now</button>
       </article>`;
     }).join('');
     const df = d.defaults || {};
     $('#riskrecent').innerHTML = (d.recent || []).length
-      ? 'Recent: ' + d.recent.slice(0, 5).map(r => `${new Date(r.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${esc(r.pair)} ${esc(r.status)}${r.tx ? ' <a href="' + (EXPLORER || '') + '/tx/' + r.tx + '" target="_blank" rel="noopener">tx</a>' : ''}${r.error ? ' (' + esc(String(r.error)) + ')' : ''}`).join(' · ')
+      ? 'Recent: ' + d.recent.slice(0, 5).map(r => `${new Date(r.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${esc(String(r.pair))} ${esc(String(r.status))}${r.tx ? ' <a href="' + (EXPLORER || '') + '/tx/' + r.tx + '" target="_blank" rel="noopener">tx</a>' : ''}${r.error ? ' (' + esc(String(r.error)) + ')' : ''}`).join(' · ')
       : `One Telegram message per event. Defaults for discovered positions: dump -${df.alertPct ?? 20}%/1h, close-now -${df.closePct ?? 50}% from entry, out of range ${df.outOfRangeMinutes ?? 120} min, liquidity -${df.tvlDropPct ?? 50}% vs 24h high. Auto-close only where switched on; proceeds go to the position's own wallet.`;
   } catch(e){ loadFailed('Risk guardian', e); }
 }

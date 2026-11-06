@@ -44,6 +44,15 @@ async function waitFor(url, ms, perRequestMs = 3000, exitP = new Promise(() => {
   return false;
 }
 
+// Mask likely secrets (credentialed/key-bearing URLs, private keys, bot tokens) before echoing log text.
+function redact(text) {
+  return text
+    .replace(/https?:\/\/\S*(key|token|apikey|secret)\S*/gi, "<redacted-url>")
+    .replace(/\/\/[^\s/:@]+:[^\s/@]+@/g, "//<redacted>@")
+    .replace(/\b(0x)?[0-9a-fA-F]{64}\b/g, "<redacted-hex>")
+    .replace(/\d+:[A-Za-z0-9_-]{30,}/g, "<redacted-token>");
+}
+
 // Build the failure message for a server that died before the run finished.
 function earlyExitMessage(info) {
   let text = "";
@@ -51,7 +60,7 @@ function earlyExitMessage(info) {
   if (/settings\.json is missing/.test(text)) {
     return `settings.json missing: copy settings.example.json to settings.json and fill it in (or pass --data-dir); server log: ${LOG_PATH}`;
   }
-  const tail = text.split("\n").slice(-20).join("\n").slice(-2048);
+  const tail = redact(text.split("\n").slice(-20).join("\n").slice(-2048));
   const what = info.error ? `error=${info.error.message}` : `code=${info.code} signal=${info.signal}`;
   return `server exited before answering (${what})\n--- tail of ${LOG_PATH} ---\n${tail}`;
 }

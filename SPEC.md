@@ -57,7 +57,7 @@ In: `package-lock.json`, and `package.json` only if `npm audit fix` itself chang
   - `lp-gate.mjs:86-89` `clientIp()` takes the first `x-forwarded-for` entry, else `socket.remoteAddress`. Used for the login throttle only, not an authorisation decision; no proxy-addr.
   - `lp-mcp-remote.mjs` is express: `app.set("trust proxy", 1)` (line 308) and `req.ip` for the login throttle (lines 335-340). This is the only path through proxy-addr. It is used for rate-limiting keys, not for a loopback/authorisation decision.
   - `arm.js` and `csrf.js` rely on loopback by the comments; check by grep that they take no peer address from proxy-addr.
-- **zod users:** `lp-mcp.mjs` (about 40 uses, MCP tool schemas), `daykey.js`, `test/claims-pipeline.test.js`, `test/claims-store.test.js`. `lp-mcp-remote.mjs` has no direct zod import but the MCP SDK uses zod internally.
+- **zod users:** only `lp-mcp.mjs` imports zod directly (about 40 uses, MCP tool schemas). `daykey.js` and the claims tests do not import it; `lp-mcp-remote.mjs` uses zod only via the MCP SDK. Note: `npm test -- <filter>` passes the filter to eslint (the script is `node test/run-all.js && eslint .`); to run one test file use `node test/run-all.js <filter>` (run-all.js takes the filter from `process.argv[2]`).
 
 ### 4. Constraints
 - Use only `npm audit fix` (no `--force`, no `--legacy-peer-deps` tricks). Run from the project folder; `npm ci` state is the baseline.

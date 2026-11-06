@@ -43,6 +43,11 @@ const cfg = settings.load();
 // "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
 // network and would have added chain 5042 to their wallet under that name.
 const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc" };
+// Token symbols reach innerHTML templates: strip markup characters, and fall back to a short address when nothing is left.
+function cleanSymbol(sym, address) {
+  const c = String(sym || "").replace(/[^A-Za-z0-9 ._$+-]/g, "").slice(0, 16).trim();
+  return c || String(address || "").slice(0, 10);
+}
 function chainDisplayName() {
   return cfg.chainName || KNOWN_CHAIN_NAMES[Number(cfg.chainId)] || `Chain ${Number(cfg.chainId)}`;
 }
@@ -2873,7 +2878,7 @@ async function handleRequest(req, res) {
         if (usd != null && usd < 1) return; // dust
         // Price 1 h and 24 h ago from the hourly price log, so a drop is visible before selling.
         const ch = (agoMs) => { const hs = priceHoursSorted(); const target = Date.now() - agoMs; let best = null; for (const hh of hs) if (Math.abs(hh - target) <= 3 * 3600 * 1000 && (best == null || Math.abs(hh - target) < Math.abs(best - target))) best = hh; const old = best != null ? priceLogRow(best)[h.address.toLowerCase()] : null; return price != null && old > 0 ? +(((price - old) / old) * 100).toFixed(1) : null; };
-        rows.push({ symbol: meta.symbol || h.symbol, address: meta.address, decimals: meta.decimals, raw: raw.toString(), balance, usd, priceUsd: price ?? null, change1hPct: ch(3600 * 1000), change24hPct: ch(24 * 3600 * 1000) });
+        rows.push({ symbol: cleanSymbol(meta.symbol || h.symbol, meta.address), address: meta.address, decimals: meta.decimals, raw: raw.toString(), balance, usd, priceUsd: price ?? null, change1hPct: ch(3600 * 1000), change24hPct: ch(24 * 3600 * 1000) });
       });
       rows.sort((a, b) => (b.usd || 0) - (a.usd || 0));
       res.writeHead(200);

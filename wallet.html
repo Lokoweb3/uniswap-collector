@@ -1238,8 +1238,8 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     const d = data;
     const tb = $('[data-id="allow"] tbody');
     tb.innerHTML = d.allowances.map((r, i) => `<tr>
-      <td><b>${escHtml(r.symbol || '?')}</b>${healthBadge(r.token)}<div class="mono muted"><a href="${escHtml(d.explorer)}/token/${escHtml(r.token)}" target="_blank" rel="noopener">${short(r.token)}</a></div></td>
-      <td>${r.spenderLabel ? `<b>${escHtml(r.spenderLabel)}</b><div class="mono muted">${short(r.spender)}</div>` : `<span class="mono">${escHtml(r.spender)}</span>`}</td>
+      <td><b>${escHtml(r.symbol || '?')}</b>${healthBadge(r.token)}<div class="mono muted"><a href="${escHtml(d.explorer)}/token/${escHtml(r.token)}" target="_blank" rel="noopener">${escHtml(short(r.token))}</a></div></td>
+      <td>${r.spenderLabel ? `<b>${escHtml(r.spenderLabel)}</b><div class="mono muted">${escHtml(short(r.spender))}</div>` : `<span class="mono">${escHtml(r.spender)}</span>`}</td>
       <td>${fmtAmt(r)}</td>
       <td>${when(r.grantedAt)}</td>
       <td>${r.unlimited ? '<span class="pill bad">unlimited</span> ' : ''}${r.old ? '<span class="pill warn">older than 90 days</span>' : ''}${!r.spenderLabel ? ' <span class="pill warn" title="Not a known Uniswap / vault contract">unknown spender</span>' : ''}</td>
@@ -1272,18 +1272,18 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     }
     const ob = $('[data-id="ops"] tbody');
     ob.innerHTML = d.operators.map((o, i) => `<tr>
-      <td>Uniswap ${o.version} <span class="mono muted">${short(o.manager)}</span></td>
-      <td><span class="mono">${o.operator}</span></td>
+      <td>Uniswap ${o.version} <span class="mono muted">${escHtml(short(o.manager))}</span></td>
+      <td><span class="mono">${escHtml(o.operator)}</span></td>
       <td>${o.isCollector ? '<span class="pill ok">the collector</span>' : '<span class="pill warn">not the current collector</span>'}</td>
       <td><button class="danger revoke-op" data-i="${i}" ${canSign() ? '' : 'disabled'}>Revoke</button></td>
     </tr>`).join('') || '<tr><td colspan="4" class="muted">No operator approvals.</td></tr>';
     const v = d.vault;
     $('[data-id="vault"]').innerHTML = !v ? '<span class="muted">No vault configured.</span>' : v.error ? `<span class="bad">${escHtml(v.error)}</span>` : `
-      <div class="row"><span class="k">NFT #1 holder (controls the vault)</span><span class="mono">${v.holder} ${v.holder.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
-      <div class="row"><span class="k">NFT contract admin (fee split, pause)</span><span class="mono">${v.admin} ${v.admin.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
+      <div class="row"><span class="k">NFT #1 holder (controls the vault)</span><span class="mono">${escHtml(v.holder)} ${v.holder.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
+      <div class="row"><span class="k">NFT contract admin (fee split, pause)</span><span class="mono">${escHtml(v.admin)} ${v.admin.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
       <div class="row"><span class="k">Collector operator power over the vault NFT</span><span>${v.operatorHasVaultPower ? '<span class="pill bad">approved — revoke this</span>' : '<span class="pill ok">none</span>'}</span></div>
       <div class="row"><span class="k">Fee split</span><span>${v.feeSplitPct == null ? '—' : v.feeSplitPct + '%'}${v.paused ? ' · <span class="bad">paused</span>' : ''}</span></div>
-      <div class="row"><span class="k">Vault account</span><span class="mono">${v.tba || '—'}</span></div>`;
+      <div class="row"><span class="k">Vault account</span><span class="mono">${escHtml(v.tba || '—')}</span></div>`;
   }
 
   async function connect() {
@@ -1356,7 +1356,7 @@ const initApprove = ((root, VERSION) => {
       : `With this approval the operator can call <span class="mono">modifyLiquidities</span> on v4 positions this wallet owns. The collector uses it only to take accrued fees (decrease 0 liquidity, then take both currencies to the sweep recipient); the same permission would also allow withdrawing liquidity, so grant it only to an operator key you control. It cannot move tokens or ETH held in your wallet, and you can revoke it any time with <span class="mono">setApprovalForAll(operator, false)</span>.`;
     $('[data-id="owner"]').textContent = cfg.owner;
     $('[data-id="ownerlabel"]').textContent = cfg.ownerLabel || '—';
-    $('[data-id="wallets"]').innerHTML = (cfg.wallets || []).map((w) => `<div class="row"><span><span class="mono">${w.address}</span> <span class="note">${w.label}${w.main ? ' · main' : w.collect ? ' · collect on' : ' · watch only'}</span></span><span>${w.approved === true ? '<span class="pill ok">approved</span>' : w.approved === false ? '<span class="pill bad">not approved</span>' : '<span class="pill warn">unknown</span>'}${account && account.toLowerCase() === w.address.toLowerCase() ? ' <span class="pill ok">connected</span>' : ''}</span></div>`).join('');
+    $('[data-id="wallets"]').innerHTML = (cfg.wallets || []).map((w) => `<div class="row"><span><span class="mono">${escHtml(w.address)}</span> <span class="note">${escHtml(w.label)}${w.main ? ' · main' : w.collect ? ' · collect on' : ' · watch only'}</span></span><span>${w.approved === true ? '<span class="pill ok">approved</span>' : w.approved === false ? '<span class="pill bad">not approved</span>' : '<span class="pill warn">unknown</span>'}${account && account.toLowerCase() === w.address.toLowerCase() ? ' <span class="pill ok">connected</span>' : ''}</span></div>`).join('');
     $('[data-id="operator"]').textContent = cfg.operator || 'unknown (no operator keystore on the server)';
     $('[data-id="posm"]').textContent = cfg.posm;
     $('[data-id="network"]').textContent = `${cfg.chainName} (chainId ${cfg.chainId})`;
@@ -1373,7 +1373,7 @@ const initApprove = ((root, VERSION) => {
     $('[data-id="verify"]').disabled = !cfg.operator;
     const others = cfg.others || [];
     $('[data-id="otherscard"]').hidden = !others.length;
-    $('[data-id="others"]').innerHTML = others.map((o) => `<div class="row"><span class="mono">${o.address}</span><span><span class="pill bad">approved</span> <button class="revoke-other" data-op="${o.address}" ${account && chainOk ? '' : 'disabled'}>Revoke</button></span></div>`).join('');
+    $('[data-id="others"]').innerHTML = others.map((o) => `<div class="row"><span class="mono">${escHtml(o.address)}</span><span><span class="pill bad">approved</span> <button class="revoke-other" data-op="${escHtml(o.address)}" ${account && chainOk ? '' : 'disabled'}>Revoke</button></span></div>`).join('');
     for (const b of root.querySelectorAll('.revoke-other')) b.addEventListener('click', () => { if (confirm(`Revoke approval for ${b.dataset.op}? The collector must not depend on this key any more.`)) revokeOther(b.dataset.op); });
     updateButtons();
   }
@@ -1386,7 +1386,7 @@ const initApprove = ((root, VERSION) => {
       const tx = await c.setApprovalForAll(op, false);
       statusHtml(`Sent <a href="${escHtml(cfg.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>, waiting for confirmation…`, 'warn');
       const rc = await tx.wait();
-      statusHtml(`Revoked ${short(op)} in block ${rc.blockNumber}. <a href="${escHtml(cfg.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      statusHtml(`Revoked ${escHtml(short(op))} in block ${rc.blockNumber}. <a href="${escHtml(cfg.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
       await loadConfig();
       await refreshApproval();
     } catch (e) {
@@ -2277,7 +2277,7 @@ loadConfig().then(async () => {
     try {
       const r = await (await fetch('/api/risk', { cache: 'no-store' })).json();
       const loops = r.loops || {};
-      $('[data-id="op-loops"]').innerHTML = Object.keys(loops).length ? Object.values(loops).map((l) => `<div class="row"><span class="k">${l.label}</span><span>${l.stale ? '<span class="pill bad">late</span>' : '<span class="pill ok">ok</span>'} last cycle ${ago(l.ageMin == null ? null : Date.now() - l.ageMin * 60000)}${l.lastResult ? ' · exit ' + l.lastResult.code : ''}</span></div>`).join('') : '<span class="muted">loops run in the main dashboard process only</span>';
+      $('[data-id="op-loops"]').innerHTML = Object.keys(loops).length ? Object.values(loops).map((l) => `<div class="row"><span class="k">${escHtml(l.label)}</span><span>${l.stale ? '<span class="pill bad">late</span>' : '<span class="pill ok">ok</span>'} last cycle ${ago(l.ageMin == null ? null : Date.now() - l.ageMin * 60000)}${l.lastResult ? ' · exit ' + l.lastResult.code : ''}</span></div>`).join('') : '<span class="muted">loops run in the main dashboard process only</span>';
     } catch (e) { $('[data-id="op-loops"]').textContent = 'could not load loop health'; }
   }
   load(); setInterval(load, 60000);
@@ -2307,7 +2307,7 @@ loadConfig().then(async () => {
     const ws = q('sl-wallet');
     if (!ws.options.length) ws.innerHTML = data.wallets.map((w) => `<option value="${escHtml(w.address)}">${escHtml(w.label)} (${escHtml(short(w.address))})</option>`).join('');
     ws.value = data.wallet.address;
-    q('sl-token').innerHTML = data.rows.length ? data.rows.map((t) => `<option value="${t.address}">${t.symbol} — ${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })}${t.usd != null ? ' (≈ ' + usdF(t.usd) + ')' : ''}</option>`).join('') : '<option value="">nothing to sell in this wallet</option>';
+    q('sl-token').innerHTML = data.rows.length ? data.rows.map((t) => `<option value="${escHtml(t.address)}">${escHtml(t.symbol)} — ${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })}${t.usd != null ? ' (≈ ' + usdF(t.usd) + ')' : ''}</option>`).join('') : '<option value="">nothing to sell in this wallet</option>';
     hideQuote();
     fillPct(100);
     renderTokenInfo();
@@ -2317,7 +2317,7 @@ loadConfig().then(async () => {
   const selectedToken = () => (data && data.rows || []).find((t) => t.address === q('sl-token').value) || null;
   function renderTokenInfo() {
     const t = selectedToken();
-    q('sl-tokinfo').innerHTML = !t ? '' : `<span>Price <b>${t.priceUsd == null ? '—' : '$' + Number(t.priceUsd).toLocaleString('en-US', { maximumSignificantDigits: 4 })}</b></span><span>1 h ${pctF(t.change1hPct)}</span><span>24 h ${pctF(t.change24hPct)}</span><span>Holding <b>${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${t.symbol}</b> ≈ <b>${usdF(t.usd)}</b></span>`;
+    q('sl-tokinfo').innerHTML = !t ? '' : `<span>Price <b>${t.priceUsd == null ? '—' : '$' + Number(t.priceUsd).toLocaleString('en-US', { maximumSignificantDigits: 4 })}</b></span><span>1 h ${pctF(t.change1hPct)}</span><span>24 h ${pctF(t.change24hPct)}</span><span>Holding <b>${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${escHtml(t.symbol)}</b> ≈ <b>${usdF(t.usd)}</b></span>`;
   }
   function fillPct(pct) {
     const t = selectedToken(); if (!t) { q('sl-amount').value = ''; return; }
@@ -2348,7 +2348,7 @@ loadConfig().then(async () => {
       quote = { ...j, token: t }; quoteAt = Date.now();
       q('q-out-big').textContent = `${fmt(j.quotedOut, j.outDecimals, 4)} ${j.outSymbol}`;
       q('q-out-usd').textContent = j.usd != null ? `≈ ${usdF(j.usd)}` : '';
-      q('q-in').innerHTML = `${fmt(j.amountIn, t.decimals)} ${t.symbol}${j.partial ? ` <span class="warn">— a slice: the whole ${fmt(raw, t.decimals, 0)} would move the pool more than ${q('sl-impact').value}%; sell in a few rounds or raise the cap</span>` : ''}`;
+      q('q-in').innerHTML = `${fmt(j.amountIn, t.decimals)} ${escHtml(t.symbol)}${j.partial ? ` <span class="warn">— a slice: the whole ${fmt(raw, t.decimals, 0)} would move the pool more than ${q('sl-impact').value}%; sell in a few rounds or raise the cap</span>` : ''}`;
       q('q-pool').textContent = `${t.symbol} / ${j.outSymbol} ${(j.pool.fee / 10000).toFixed(2)}% (Uniswap v4)`;
       q('q-impact').innerHTML = j.impactPct == null ? '—' : `<b class="${j.impactPct > 2 ? 'warn' : 'ok'}">${j.impactPct.toFixed(2)}%</b> <span class="muted">(the pool fee is already in the number above)</span>`;
       q('q-min').textContent = `${fmt(j.minOut, j.outDecimals, 4)} ${j.outSymbol}`;
@@ -2424,7 +2424,7 @@ loadConfig().then(async () => {
   }
   function renderHistory() {
     const card = q('sl-history'); card.hidden = !history.length;
-    q('sl-historyrows').innerHTML = history.map((h) => `<div class="row"><span>${new Date(h.at).toLocaleTimeString()} · ${h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${h.symbol} → ${h.out}${h.usd != null ? ' (≈ ' + usdF(h.usd) + ')' : ''}</span><span><a href="${h.explorer}/tx/${h.tx}" target="_blank" rel="noopener">${short(h.tx)}</a></span></div>`).join('');
+    q('sl-historyrows').innerHTML = history.map((h) => `<div class="row"><span>${new Date(h.at).toLocaleTimeString()} · ${h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${escHtml(h.symbol)} → ${escHtml(h.out)}${h.usd != null ? ' (≈ ' + usdF(h.usd) + ')' : ''}</span><span><a href="${escHtml(h.explorer)}/tx/${escHtml(h.tx)}" target="_blank" rel="noopener">${escHtml(short(h.tx))}</a></span></div>`).join('');
   }
   q('sl-wallet').addEventListener('change', () => loadTokens(q('sl-wallet').value));
   q('sl-token').addEventListener('change', () => { hideQuote(); renderTokenInfo(); fillPct(100); });
@@ -2460,7 +2460,7 @@ loadConfig().then(async () => {
   const auto = [false, false];
 
   const isEth = (a) => !a || /^0x0{40}$/i.test(a);
-  const tokOpt = (t) => `<option value="${t.address}">${t.symbol}${t.usd != null ? ' (≈ ' + usdF(t.usd) + ')' : ''}</option>`;
+  const tokOpt = (t) => `<option value="${escHtml(t.address)}">${escHtml(t.symbol)}${t.usd != null ? ' (≈ ' + usdF(t.usd) + ')' : ''}</option>`;
   async function loadContext(wallet) {
     status('mt-status', 'Loading…', 'muted');
     const r = await fetch('/api/mint/context' + (wallet ? '?wallet=' + wallet : ''), { cache: 'no-store' });
@@ -2474,7 +2474,7 @@ loadConfig().then(async () => {
     a.innerHTML = ctx.tokens.map(tokOpt).join(''); b.innerHTML = ctx.tokens.map(tokOpt).join('');
     a.value = ctx.tokens.some((t) => t.address === prevA) ? prevA : ctx.tokens[0].address;
     b.value = ctx.tokens.some((t) => t.address === prevB && prevB !== a.value) ? prevB : (ctx.tokens.find((t) => t.address !== a.value) || ctx.tokens[0]).address;
-    q('mt-from').innerHTML = ctx.positions.length ? ctx.positions.map((p) => `<option value="${p.version}:${p.tokenId}">${p.pair} v${p.version} #${p.tokenId} · ${usdF(p.valueUsd)}${p.inRange ? '' : ' · out of range'}</option>`).join('') : '<option value="">no open position in this wallet</option>';
+    q('mt-from').innerHTML = ctx.positions.length ? ctx.positions.map((p) => `<option value="${escHtml(p.version)}:${escHtml(p.tokenId)}">${escHtml(p.pair)} v${escHtml(p.version)} #${escHtml(p.tokenId)} · ${usdF(p.valueUsd)}${p.inRange ? '' : ' · out of range'}</option>`).join('') : '<option value="">no open position in this wallet</option>';
     hideQuote(); closed = null; closeQ = null;
     status('mt-status', '', '');
     await loadPools();
@@ -2490,7 +2490,7 @@ loadConfig().then(async () => {
       if (!j.ok) throw new Error(j.error || 'no pools');
       pools = j.pools;
       if (!pools.length) { q('mt-pool').innerHTML = '<option value="">no initialised pool for this pair</option>'; return; }
-      q('mt-pool').innerHTML = pools.map((p, i) => `<option value="${i}">${p.label}${BigInt(p.liquidity) === 0n ? ' (empty)' : ''}</option>`).join('');
+      q('mt-pool').innerHTML = pools.map((p, i) => `<option value="${i}">${escHtml(p.label)}${BigInt(p.liquidity) === 0n ? ' (empty)' : ''}</option>`).join('');
       // A move keeps its pool unless you pick another; otherwise the deepest pool.
       const from = q('mt-mode').value === 'move' ? selPos() : null;
       let idx = from ? pools.findIndex((p) => p.version === from.version && p.fee === from.feeTier) : pools.findIndex((p) => p.version === 4 && BigInt(p.liquidity) > 0n);
@@ -2506,7 +2506,7 @@ loadConfig().then(async () => {
     q('mt-sym0').textContent = pool.token0.symbol; q('mt-sym1').textContent = pool.token1.symbol;
     q('mt-priceunit').textContent = `${pool.token1.symbol} per ${pool.token0.symbol}`;
     q('mt-payethwrap').hidden = !(pool.version === 3 && (pool.token0.isWeth || pool.token1.isWeth));
-    q('mt-poolinfo').innerHTML = `<span>Price <b>${num(pool.price)}</b> ${pool.token1.symbol} per ${pool.token0.symbol}</span><span>Tick <b>${pool.tick}</b> · spacing ${pool.tickSpacing}</span><span>Liquidity <b>${BigInt(pool.liquidity) === 0n ? 'none yet' : Number(pool.liquidity).toPrecision(3)}</b></span><span>Uniswap v${pool.version} · ${pool.feePct}% fee</span>`;
+    q('mt-poolinfo').innerHTML = `<span>Price <b>${num(pool.price)}</b> ${escHtml(pool.token1.symbol)} per ${escHtml(pool.token0.symbol)}</span><span>Tick <b>${pool.tick}</b> · spacing ${pool.tickSpacing}</span><span>Liquidity <b>${BigInt(pool.liquidity) === 0n ? 'none yet' : Number(pool.liquidity).toPrecision(3)}</b></span><span>Uniswap v${pool.version} · ${pool.feePct}% fee</span>`;
     const from = q('mt-mode').value === 'move' ? selPos() : null;
     if (from && from.priceLower != null && from.version === pool.version) { q('mt-lo').value = num(from.priceLower, 8).replace(/,/g, ''); q('mt-hi').value = num(from.priceUpper, 8).replace(/,/g, ''); }
     else if (!q('mt-lo').value && !q('mt-hi').value) setRange(10);
@@ -2578,8 +2578,8 @@ loadConfig().then(async () => {
       q('mq-big').textContent = `${fmt(j.amount0, t0.decimals)} ${t0.symbol} + ${fmt(j.amount1, t1.decimals)} ${t1.symbol}`;
       q('mq-usd').textContent = j.human.usd != null ? `≈ ${usdF(j.human.usd)}` : '';
       q('mq-pool').textContent = j.label;
-      q('mq-range').innerHTML = `${num(j.human.priceLower)} – ${j.tickUpper >= MAX_TICK - pool.tickSpacing ? '∞' : num(j.human.priceUpper)} ${t1.symbol} per ${t0.symbol} <span class="muted">(ticks ${j.tickLower} to ${j.tickUpper})</span>`;
-      q('mq-price').innerHTML = `${num(j.human.price)} ${t1.symbol} per ${t0.symbol} ${j.inRange ? '<span class="ok">in range</span>' : '<span class="warn">out of range: one-sided deposit</span>'}`;
+      q('mq-range').innerHTML = `${num(j.human.priceLower)} – ${j.tickUpper >= MAX_TICK - pool.tickSpacing ? '∞' : num(j.human.priceUpper)} ${escHtml(t1.symbol)} per ${escHtml(t0.symbol)} <span class="muted">(ticks ${j.tickLower} to ${j.tickUpper})</span>`;
+      q('mq-price').innerHTML = `${num(j.human.price)} ${escHtml(t1.symbol)} per ${escHtml(t0.symbol)} ${j.inRange ? '<span class="ok">in range</span>' : '<span class="warn">out of range: one-sided deposit</span>'}`;
       q('mq-share').textContent = j.shareInRangePct != null ? `${j.shareInRangePct.toFixed(3)}%` : '—';
       q('mq-owner').textContent = q('mt-wallet').selectedOptions[0].textContent;
       q('mq-warn').innerHTML = (j.blocked ? `<div class="bad">✖ ${escHtml(j.blocked)}</div>` : '') + (j.capped ? `<div class="muted">ⓘ ${escHtml(j.capped)}</div>` : '') + (j.warnings.length ? j.warnings.map((w) => `<div class="warn">⚠ ${escHtml(w)}</div>`).join('') : '');
@@ -2594,10 +2594,10 @@ loadConfig().then(async () => {
   function renderSteps() {
     const li = [];
     const from = q('mt-mode').value === 'move' ? selPos() : null;
-    if (from) li.push(`<li data-step="close" class="${closed ? 'done' : ''}">Close ${from.pair} #${from.tokenId}${closeQ ? ` <span class="muted">(returns ${fmt(closeQ.expect.amount0, closeQ.token0.decimals)} ${closeQ.token0.symbol} + ${fmt(closeQ.expect.amount1, closeQ.token1.decimals)} ${closeQ.token1.symbol}${closeQ.dryRun && !closeQ.dryRun.ok ? '; dry run failed: ' + escHtml(closeQ.dryRun.error) : ''})</span>` : ''}</li>`);
+    if (from) li.push(`<li data-step="close" class="${closed ? 'done' : ''}">Close ${escHtml(from.pair)} #${escHtml(from.tokenId)}${closeQ ? ` <span class="muted">(returns ${fmt(closeQ.expect.amount0, closeQ.token0.decimals)} ${escHtml(closeQ.token0.symbol)} + ${fmt(closeQ.expect.amount1, closeQ.token1.decimals)} ${escHtml(closeQ.token1.symbol)}${closeQ.dryRun && !closeQ.dryRun.ok ? '; dry run failed: ' + escHtml(closeQ.dryRun.error) : ''})</span>` : ''}</li>`);
     for (const a of quote.approvals) {
-      if (a.via === 'permit2') { li.push(`<li data-step="approve:${a.token}">Approve ${a.symbol} for Permit2 <span class="muted">(once per token)</span></li>`); li.push(`<li data-step="permit:${a.token}">Allow the PositionManager to take ${fmt(a.amount, (a.token.toLowerCase() === pool.token0.address.toLowerCase() ? pool.token0 : pool.token1).decimals)} ${a.symbol} <span class="muted">(1 hour)</span></li>`); }
-      else li.push(`<li data-step="approve:${a.token}">Approve ${a.symbol} for the position manager <span class="muted">(this amount)</span></li>`);
+      if (a.via === 'permit2') { li.push(`<li data-step="approve:${escHtml(a.token)}">Approve ${escHtml(a.symbol)} for Permit2 <span class="muted">(once per token)</span></li>`); li.push(`<li data-step="permit:${escHtml(a.token)}">Allow the PositionManager to take ${fmt(a.amount, (a.token.toLowerCase() === pool.token0.address.toLowerCase() ? pool.token0 : pool.token1).decimals)} ${escHtml(a.symbol)} <span class="muted">(1 hour)</span></li>`); }
+      else li.push(`<li data-step="approve:${escHtml(a.token)}">Approve ${escHtml(a.symbol)} for the position manager <span class="muted">(this amount)</span></li>`);
     }
     li.push(`<li data-step="mint">Mint the position</li>`);
     q('mt-steps').innerHTML = li.join('');
@@ -2720,7 +2720,7 @@ loadConfig().then(async () => {
   }
   function renderHistory() {
     const card = q('mt-history'); card.hidden = !history.length;
-    q('mt-historyrows').innerHTML = history.map((h) => `<div class="row"><span>${new Date(h.at).toLocaleTimeString()} · ${h.label} · ${h.text}${h.usd != null ? ' (≈ ' + usdF(h.usd) + ')' : ''}</span><span><a href="${ctx.explorer}/tx/${h.tx}" target="_blank" rel="noopener">${short(h.tx)}</a></span></div>`).join('');
+    q('mt-historyrows').innerHTML = history.map((h) => `<div class="row"><span>${new Date(h.at).toLocaleTimeString()} · ${escHtml(h.label)} · ${escHtml(h.text)}${h.usd != null ? ' (≈ ' + usdF(h.usd) + ')' : ''}</span><span><a href="${escHtml(ctx.explorer)}/tx/${escHtml(h.tx)}" target="_blank" rel="noopener">${escHtml(short(h.tx))}</a></span></div>`).join('');
   }
   q('mt-wallet').addEventListener('change', () => loadContext(q('mt-wallet').value));
   q('mt-mode').addEventListener('change', async () => { const move = q('mt-mode').value === 'move'; q('mt-fromwrap').hidden = !move; closed = null; closeQ = null; if (move) await loadCloseQuote(); else { hideQuote(); scheduleQuote(0); } });

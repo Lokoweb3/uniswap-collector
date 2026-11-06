@@ -73,6 +73,7 @@ function stub() {
   for (const l of html.split("\n")) if (/statusHtml\(/.test(l) && !/const statusHtml/.test(l)) {
     assert.ok(!/\$\{(m|e\.\w+|j\.error|data\.error|ctx\.error)\}/.test(l), `statusHtml has no raw error: ${l.trim().slice(0, 90)}`);
     assert.ok(!/\$\{[\w.]*explorer\}|\$\{tx\.hash\}/.test(l), `statusHtml escapes explorer and hash: ${l.trim().slice(0, 90)}`);
+    assert.ok(!/\$\{short\(/.test(l), `statusHtml escapes short(): ${l.trim().slice(0, 90)}`);
   }
 }
 

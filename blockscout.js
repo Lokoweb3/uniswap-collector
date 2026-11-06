@@ -25,6 +25,13 @@ try {
 
 const hasKey = () => !!KEY;
 
+// Chains whose public Blockscout API answers JSON without a key and is not served by the PRO
+// gateway (PulseChain: api.scan.pulsechain.com; the scan.pulsechain.com frontend host answers an
+// HTML 404). For these the PRO key is never used or sent, and the host is allow-listed for full URLs.
+const KEYLESS_HOSTS = { 369: "api.scan.pulsechain.com" };
+const keyless = () => Object.prototype.hasOwnProperty.call(KEYLESS_HOSTS, chainId);
+const useKey = () => !!KEY && !keyless();
+
 /**
  * Whether a Blockscout API covers this chain at all. A PRO key changes how we
  * reach it, not whether it exists, so this asks only whether one is configured
@@ -41,19 +48,20 @@ const PRO_HOST = "api.blockscout.com";
 /** Hosts a request (and so the bearer key) may go to: the PRO gateway and this chain's configured explorer. */
 function allowedHosts() {
   const hosts = new Set([PRO_HOST]);
+  if (keyless()) hosts.add(KEYLESS_HOSTS[chainId]);
   try { if (EXPLORER) hosts.add(new URL(EXPLORER).host.toLowerCase()); } catch { /* no explorer */ }
   return hosts;
 }
 
 /** Base URL for the explorer API ("…/api"), PRO or anonymous. */
 function apiBase() {
-  return KEY && chainId ? `https://${PRO_HOST}/${chainId}/api` : `${EXPLORER}/api`;
+  return useKey() && chainId ? `https://${PRO_HOST}/${chainId}/api` : `${EXPLORER}/api`;
 }
 
 /** Headers for any Blockscout request. */
 function headers(extra = {}) {
   const h = { "User-Agent": UA, Accept: "application/json", ...extra };
-  if (KEY) h.Authorization = `Bearer ${KEY}`;
+  if (useKey()) h.Authorization = `Bearer ${KEY}`;
   return h;
 }
 
@@ -79,7 +87,7 @@ function bsFetch(pathOrUrl, { timeoutMs = 20000, ...init } = {}) {
   } else {
     url = apiBase() + pathOrUrl;
   }
-  return fetch(url, { ...init, ...(KEY ? { redirect: "manual" } : {}), headers: headers(init.headers), signal: AbortSignal.timeout(timeoutMs) });
+  return fetch(url, { ...init, ...(useKey() ? { redirect: "manual" } : {}), headers: headers(init.headers), signal: AbortSignal.timeout(timeoutMs) });
 }
 
 module.exports = { EXPLORER, UA, apiBase, headers, bsFetch, hasKey, available, allowedHosts };

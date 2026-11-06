@@ -1,0 +1,59 @@
+{
+  "noTransactionData": true,
+  "_noTransactionDataComment": "true: this instance reads no operator key file and serves no unsigned calldata (/api/approval, /api/sell/quote, /api/mint/* answer 403) and the Wallet page hides the operator approvals, Sell and Mint tabs. Set explicitly here as well as being the default for chain 369.",
+  "_comment": "PulseChain (369), READ-ONLY instance: PulseX v1 and v2 liquidity (Uniswap-v2-style LP tokens) and the PulseX farm, for six wallets. Copy to $HOME/pulse-data/settings.json (or LP_PULSE_DATA_DIR). No collector, vault, risk.autoCollect or risk.sell sections: this instance cannot sign. Secrets are NEVER written here: a keyed RPC goes in the environment as LP_PULSE_RPC_URL (from .env). Every address below is proven by: node tools/verify-onchain.js pulse",
+  "chain": {
+    "name": "PulseChain",
+    "rpcUrl": "https://rpc.pulsechain.com",
+    "_rpcUrlComment": "Public. Answers eth_call, Multicall3 and 2,000,000-block eth_getLogs (it caps the number of logs returned, not the range). LP_PULSE_RPC_URL in the environment overrides it in that process only and is never shown to a page or logged.",
+    "chainId": 369,
+    "explorer": "https://scan.pulsechain.com",
+    "blockscout": "https://api.scan.pulsechain.com",
+    "_blockscoutComment": "The API host answers JSON without a key (scan.pulsechain.com itself is the HTML frontend and answers 404 to the API). The Blockscout PRO key is never used on this chain. If it is unreachable the factory enumeration finds the LPs instead.",
+    "_logRangeComment": "maxLogRange is read by logs.js, staking.js and ledger-v4.js (blocks per eth_getLogs call); historyStartBlock by history.js (where the v3 position-history scan starts). This instance has no Uniswap v3 (server.js V3 is false), so the history scan and the v3 liquidity ledger do not run here; both keys are kept so enabling a log-based feature does not start from the wrong block or an over-wide range.",
+    "maxLogRange": 100000,
+    "historyStartBlock": 27900000,
+    "nativeCurrency": { "symbol": "PLS", "decimals": 18 }
+  },
+  "wallets": {
+    "_comment": "main: Main. watched: the other five, shown read-only (nothing here can collect for them).",
+    "main": { "address": "0x698C3A3F06B7EdBD175169d1cfa219c8232F48d8", "label": "Main" },
+    "watched": [
+      { "address": "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb", "label": "Wallet 11" },
+      { "address": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "label": "Wallet 12" },
+      { "address": "0x6314077131232f7D8282d07DcB4c31387dDC81DA", "label": "Wallet 2" },
+      { "address": "0xA78c81a0b7551BD9a6F6965fB01AafaE9CEf96ca", "label": "Wallet 3" },
+      { "address": "0xb4e5753644BAe0dCbB9D6e7B5ea7EaC8d5aF5cf0", "label": "Wallet 5" }
+    ]
+  },
+  "tokens": {
+    "_comment": "WETH is the legacy key for the wrapped native token: here WPLS (the numeraire, 18 decimals). USDG is the legacy key for the USD reference stable: here Dai Stablecoin from Ethereum (bridged DAI, 18 decimals; NOT the forked pDAI 0x6B17...1d0F, which is not a dollar). usdReferencePair: the PulseX v1 WPLS/DAI pair, the deepest WPLS/stable pair found (~322,890 DAI); WPLS/USD is its DAI reserve over its WPLS reserve, unpriced if the DAI side falls below usdReferenceMinLiquidityUsd.",
+    "USDG": "0xefD766cCb38EaF1dfd701853BFCe31359239F305",
+    "WETH": "0xA1077a294dDE1B09bB078844df40758a5D0f9a27",
+    "usdReferencePair": "0xE56043671df55dE5CDf8459710433C10324DE0aE",
+    "usdReferenceMinLiquidityUsd": 1000
+  },
+  "numeraire": { "symbol": "WPLS", "address": "0xA1077a294dDE1B09bB078844df40758a5D0f9a27", "decimals": 18 },
+  "contracts": {
+    "_comment": "v2lp: the PulseX factories, one reader each (the name prefixes the position id). A pair counts only if pair.factory() equals the factory written here: both factories' LP tokens are called 'PLP', and unrelated 'PLP' tokens exist. pairs: optional pinned LP addresses. scan: unset = the factory is enumerated (allPairs + balanceOf, resumable, bounded per refresh) only while the Blockscout token list is unavailable; false switches it off, true forces it. pulsex.stables: stablecoins by ADDRESS, counted at $1. pulsex.farms: view-only farm adapters (kind pulsex-masterchef: poolLength, poolInfo, userInfo, pendingInc). v2Factory: the factory the portfolio uses to price loose wallet tokens from their v2 pairs (PulseX v2). No Uniswap v3/v4 contracts: PulseX is v2-style.",
+    "v2Factory": "0x29eA7545DEf87022BAdc76323F373EA1e707C523",
+    "v2lp": [
+      { "name": "pulsex-v1", "factory": "0x1715a3E4A142d8b698131108995174F37aEBA10D" },
+      { "name": "pulsex-v2", "factory": "0x29eA7545DEf87022BAdc76323F373EA1e707C523" }
+    ],
+    "pulsex": {
+      "multicall": "0xcA11bde05977b3631167028862bE2a173976CA11",
+      "stables": [
+        "0xefD766cCb38EaF1dfd701853BFCe31359239F305",
+        "0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07",
+        "0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f"
+      ],
+      "minQuoteUsd": 100,
+      "farms": [
+        { "name": "pulsex-farm", "address": "0xB2Ca4A66d3e57a5a9A12043B6bAD28249fE302d4", "kind": "pulsex-masterchef" }
+      ]
+    }
+  },
+  "portfolio": {},
+  "dashboard": { "port": 8795 }
+}

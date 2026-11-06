@@ -109,8 +109,15 @@ const provider = require("./rpc").createProvider(cfg); // retries throttled (429
 // eth_getLogs goes here when settings name a separate endpoint for it (Base's main public RPC refuses every getLogs). Null otherwise.
 const logsProvider = require("./rpc").createLogsProvider(cfg);
 const RPC_SHOWN = endpoint.publicRpc(cfg);  // what a page may be told about the RPC: an origin, never a key
-const npm = new ethers.Contract(cfg.contracts.positionManager, u.NPM_ABI, provider);
-const factory = new ethers.Contract(cfg.contracts.factory, u.FACTORY_ABI, provider);
+// A chain with no Uniswap v3 (PulseChain: PulseX is v2-style, read by v2lp.js) configures neither
+// contracts.positionManager nor contracts.factory. Then V3 is false, no v3 position list is ever read
+// (listV3Ids), and npm/factory point at the zero address only so that the rest of this file can
+// still construct them; nothing calls them.
+const V3 = !!(cfg.contracts.positionManager && cfg.contracts.factory);
+const NPM_ADDRESS = cfg.contracts.positionManager || ethers.ZeroAddress;
+const npm = new ethers.Contract(NPM_ADDRESS, u.NPM_ABI, provider);
+const factory = new ethers.Contract(cfg.contracts.factory || ethers.ZeroAddress, u.FACTORY_ABI, provider);
+const listV3Ids = (owner, explicit) => (V3 ? u.listTokenIds(npm, owner, explicit) : Promise.resolve([]));
 
 // Uniswap v4, read-only. Absent from config = v3 only.
 const v4 = require("./univ4");
@@ -188,9 +195,9 @@ if (STABLE && STABLE !== WETH) {
 }
 const priceSides = require("./pricing").makePriceSides({ weth: WETH, stable: STABLE });
 
-const hist = history.create({ provider, npmAddress: cfg.contracts.positionManager, cfg });
+const hist = history.create({ provider, npmAddress: NPM_ADDRESS, cfg });
 const basis = require("./basis");
-const bf = basis.create({ npmAddress: cfg.contracts.positionManager });
+const bf = basis.create({ npmAddress: NPM_ADDRESS });
 // Pool stats (TVL, fees, APR, siblings) from the scanner on :3847; see pools.js.
 const pools = require("./pools").create({ cfg, provider });
 
@@ -218,7 +225,7 @@ const watch = require("./watch").create({
 // Blockscout's, which has dropped transactions on this chain.
 const ledger = require("./ledger").create({
   provider,
-  npmAddress: cfg.contracts.positionManager,
+  npmAddress: NPM_ADDRESS,
   forwardStart: hist.startBlock,
 });
 /**
@@ -302,7 +309,7 @@ const ledgerV4 = V4 && cfg.contracts.v4.poolManager && cfg.contracts.v4.stateVie
 // Portfolio: every token held, in the wallet or inside positions, valued.
 const portfolio = require("./portfolio").create({
   provider,
-  factory,
+  factory: V3 ? factory : null,
   cfg,
   explorerApi: BLOCKSCOUT_API,
 });
@@ -1369,7 +1376,7 @@ async function historyWallets() {
   const list = [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main", ids: latestIds.filter((id) => !isV4Key(id)), main: true }];
   for (const w of watch.readWallets()) {
     try {
-      const ids = (await u.listTokenIds(npm, w.address, [])).map((id) => id.toString());
+      const ids = (await listV3Ids(w.address, [])).map((id) => id.toString());
       list.push({ address: w.address, label: w.label || w.address, ids, main: false });
     } catch (err) {
       console.error("history wallets:", w.address.slice(0, 8), err.shortMessage || err.message);
@@ -1609,7 +1616,7 @@ async function build() {
         };
 
   const deny = new Set((cfg.denylist || []).map(String));
-  const ids = (await u.listTokenIds(npm, cfg.ownerAddress, cfg.tokenIds)).filter(
+  const ids = (await listV3Ids(cfg.ownerAddress, cfg.tokenIds)).filter(
     (id) => !deny.has(id.toString())
   );
   latestIds = ids.map((id) => id.toString());
@@ -1854,7 +1861,12 @@ async function build() {
   const notes = ext.notes || [];
   const external = ext.positions;
   const open = [...positions, ...external];
-  const liquidityUsd = open.reduce((s, p) => s + (p.valueUsd || 0), 0);
+  // Thin, price-gapped or anchor-less v2 pools are shown on their cards but not counted (p.counted).
+  const liquidityUsd = open.filter((p) => !p.thin && p.counted !== false).reduce((s, p) => s + (p.valueUsd || 0), 0);
+  // What cards show but liquidityUsd leaves out (thin, price-gapped, anchor-less), so the headline can say so.
+  const uncounted = open.filter((p) => (p.thin || p.counted === false) && p.valueUsd != null);
+  const uncountedUsd = uncounted.reduce((s, p) => s + (p.valueUsd || 0), 0);
+  const uncountedCount = uncounted.length;
   const feesUsd = open.reduce((s, p) => s + (p.feesUsd || 0), 0);
 
   const unapproved = OPERATOR
@@ -1898,9 +1910,11 @@ async function build() {
     wethUsd,
     totals: {
       liquidityUsd,
+      uncountedUsd,
+      uncountedCount,
       feesUsd,
       count: open.length,
-      idle: open.filter((p) => !p.inRange).length,
+      idle: open.filter((p) => p.inRange === false).length,
       rewardsUsd: external.reduce((s, p) => s + ((p.rewards && p.rewards.usd) || 0), 0),
       collectableUsd: eligiblePositions.reduce((s, p) => s + (p.feesUsd || 0), 0),
       eligibleCount: eligiblePositions.length,
@@ -3589,10 +3603,12 @@ async function backgroundTick() {
     console.error("portfolio-all:", err.shortMessage || err.message);
   }
   advisorTick(); // === pool-scout-and-IL === (hourly work, runs in the background)
-  try {
-    await hist.scan(await historyWallets(), { mainAddress: cfg.ownerAddress });
-  } catch (err) {
-    console.error("history scan:", err.shortMessage || err.message);
+  if (V3) { // the history scan reads the v3 position manager's logs; a chain without one has nothing to scan
+    try {
+      await hist.scan(await historyWallets(), { mainAddress: cfg.ownerAddress });
+    } catch (err) {
+      console.error("history scan:", err.shortMessage || err.message);
+    }
   }
   if (V4) {
     try {
@@ -3615,12 +3631,12 @@ async function backgroundTick() {
       allIds = [...new Set([...latestIds, ...watchedIds])];
       allOpenIds = [...new Set([...latestOpenIds, ...watchedOpen])];
     } catch {}
-    try {
+    if (V3) try {
       await ledger.scanForward(allIds, cache.payload.blockNumber);
     } catch (err) {
       console.error("ledger forward:", err.shortMessage || err.message);
     }
-    if (ledger.forwardCaughtUp && ledger.pendingBack(allOpenIds).length) {
+    if (V3 && ledger.forwardCaughtUp && ledger.pendingBack(allOpenIds).length) {
       ledger.scanBack(allOpenIds, 600).catch((err) => console.error("ledger back:", err.shortMessage || err.message));
     }
     // v4 ledger: the main wallet's discovered ids plus every watched wallet's
@@ -3676,7 +3692,7 @@ async function backgroundTick() {
     console.error("daily:", err.shortMessage || err.message);
   }
   // === end weekly-digest-and-vault ===
-  if (bf.stale && latestIds.length) {
+  if (V3 && bf.stale && latestIds.length) {
     try {
       await bf.build(latestIds, latestOpenIds, hist.startBlock);
       console.log(`backfill: ${bf.events.length} historical fee event(s), basis for ${Object.keys(bf.basis).length} position(s)`);

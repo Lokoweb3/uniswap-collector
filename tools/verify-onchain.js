@@ -6,6 +6,9 @@
  * writes no file. Needs no secret: the RPC is public.
  *
  *   node tools/verify-onchain.js base
+ *   node tools/verify-onchain.js pulse
+ *   PULSE_RPC=https://rpc.pulsechain.com          node tools/verify-onchain.js pulse  # (or LP_PULSE_RPC_URL; shown as an origin only)
+ *   EXAMPLE=/path/settings.pulsechain.example.json node tools/verify-onchain.js pulse
  *   BASE_RPC=https://mainnet.base.org            node tools/verify-onchain.js base   # calls (default)
  *   BASE_LOGS_RPC=https://base-rpc.publicnode.com node tools/verify-onchain.js base  # the eth_getLogs probe
  *   CAND=0xmanagerA,0xmanagerB                    node tools/verify-onchain.js base   # test candidate managers
@@ -23,15 +26,19 @@ const { ethers } = require("ethers");
 const { validateEndpoint, redactUrl, redactText, registerEndpoint } = require("../endpoint");
 
 const mode = process.argv[2];
-if (mode !== "base") {
-  console.error("usage: node tools/verify-onchain.js base");
+if (mode !== "base" && mode !== "pulse") {
+  console.error("usage: node tools/verify-onchain.js base|pulse");
   process.exit(2);
 }
+const PULSE = mode === "pulse";
 
-const RPC = validateEndpoint(process.env.BASE_RPC || "https://mainnet.base.org", "BASE_RPC");
-const LOGS_RPC = validateEndpoint(process.env.BASE_LOGS_RPC || "https://base-rpc.publicnode.com", "BASE_LOGS_RPC");
-const EXAMPLE = process.env.EXAMPLE || path.join(__dirname, "..", "settings.base.example.json");
-registerEndpoint(RPC); registerEndpoint(LOGS_RPC);
+const pulseEnvRpc = process.env.PULSE_RPC || process.env.LP_PULSE_RPC_URL || "";
+const RPC = PULSE
+  ? validateEndpoint(pulseEnvRpc || "https://rpc.pulsechain.com", "PULSE_RPC")
+  : validateEndpoint(process.env.BASE_RPC || "https://mainnet.base.org", "BASE_RPC");
+const LOGS_RPC = PULSE ? RPC : validateEndpoint(process.env.BASE_LOGS_RPC || "https://base-rpc.publicnode.com", "BASE_LOGS_RPC");
+const EXAMPLE = process.env.EXAMPLE || path.join(__dirname, "..", PULSE ? "settings.pulsechain.example.json" : "settings.base.example.json");
+registerEndpoint(RPC, { env: !!pulseEnvRpc }); registerEndpoint(LOGS_RPC);
 const provider = new ethers.JsonRpcProvider(RPC, undefined, { staticNetwork: true, batchMaxCount: 1 });
 const logsProvider = new ethers.JsonRpcProvider(LOGS_RPC, undefined, { staticNetwork: true, batchMaxCount: 1 });
 
@@ -159,7 +166,154 @@ async function managerCheck(label, mgr, factory, id, expect, deployBlock) {
   }
 }
 
+/** PulseChain (369): WPLS and the stables, both PulseX factories, the deepest WPLS/stable pair, Multicall3, the farm, the wallets. */
+async function runPulse() {
+  const P = {
+    wpls: "0xA1077a294dDE1B09bB078844df40758a5D0f9a27",
+    dai: "0xefD766cCb38EaF1dfd701853BFCe31359239F305",
+    usdc: "0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07",
+    usdt: "0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f",
+    pdai: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+    v1: "0x1715a3E4A142d8b698131108995174F37aEBA10D",
+    v2: "0x29eA7545DEf87022BAdc76323F373EA1e707C523",
+    farm: "0xB2Ca4A66d3e57a5a9A12043B6bAD28249fE302d4",
+    multicall: "0xcA11bde05977b3631167028862bE2a173976CA11",
+  };
+  const wallets = { Main: "0x698C3A3F06B7EdBD175169d1cfa219c8232F48d8", "Wallet 11": "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb", "Wallet 12": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "Wallet 2": "0x6314077131232f7D8282d07DcB4c31387dDC81DA", "Wallet 3": "0xA78c81a0b7551BD9a6F6965fB01AafaE9CEf96ca", "Wallet 5": "0xb4e5753644BAe0dCbB9D6e7B5ea7EaC8d5aF5cf0" };
+  console.log(`verify-onchain pulse: calls ${redactUrl(RPC)}, example ${path.basename(EXAMPLE)}`);
+  await check("eth_chainId is 369", [], async () => {
+    const id = Number((await provider.getNetwork()).chainId);
+    return id === 369 ? { detail: `chainId ${id}, block ${await provider.getBlockNumber()}` } : { fail: `chainId ${id}` };
+  });
+  const tok = async (name, addr, symbol, decimals) => check(`${name} ${addr} symbol/decimals`, [addr], async () => {
+    const [sy, d] = [await call(addr, "symbol()", [], "string"), Number(await call(addr, "decimals()", [], "uint8"))];
+    return sy === symbol && d === decimals ? { detail: `${sy} / ${d}` } : { fail: `got ${sy} / ${d}, expected ${symbol} / ${decimals}` };
+  });
+  await tok("WPLS", P.wpls, "WPLS", 18);
+  await tok("bridged DAI", P.dai, "DAI", 18);
+  await tok("bridged USDC", P.usdc, "USDC", 6);
+  await tok("bridged USDT", P.usdt, "USDT", 6);
+
+  // Both factories: allPairsLength, getPair(WPLS, stable), pair.factory() equal to its factory, reserves.
+  const rows = [];
+  for (const [label, fac] of [["PulseX v1", P.v1], ["PulseX v2", P.v2]]) {
+    await check(`${label} factory ${fac}: has code, allPairsLength()`, [fac], async () => {
+      const code = await provider.getCode(fac);
+      const n = await call(fac, "allPairsLength()", [], "uint256");
+      return code !== "0x" && n > 0n ? { detail: `${(code.length - 2) / 2} bytes, ${n} pairs` } : { fail: `code ${code.length} chars, ${n} pairs` };
+    });
+    for (const [sname, st, sdec] of [["DAI", P.dai, 18], ["USDC", P.usdc, 6], ["USDT", P.usdt, 6]]) {
+      await check(`${label} getPair(WPLS, ${sname}): non-zero, pair.factory() = ${fac}, reserves`, [], async () => {
+        const pair = await call(fac, "getPair(address,address)", [P.wpls, st], "address");
+        if (pair === ethers.ZeroAddress) return { fail: "no pair" };
+        const [pf, t0, r, sym] = [await call(pair, "factory()", [], "address"), await call(pair, "token0()", [], "address"), await call(pair, "getReserves()", [], "uint112 r0,uint112 r1,uint32 t"), await call(pair, "symbol()", [], "string")];
+        if (!eq(pf, fac)) return { fail: `pair.factory() = ${pf}` };
+        proven.add(lc(pair));
+        const wIs0 = eq(t0, P.wpls);
+        const wpls = Number(ethers.formatUnits(wIs0 ? r.r0 : r.r1, 18)), stable = Number(ethers.formatUnits(wIs0 ? r.r1 : r.r0, sdec));
+        rows.push({ label, sname, pair, stable, wpls });
+        return { detail: `${pair} (LP symbol "${sym}"): ${stable.toFixed(0)} ${sname} / ${wpls.toFixed(0)} WPLS => WPLS $${(stable / wpls).toExponential(4)}` };
+      });
+    }
+  }
+  rows.sort((a, b) => b.stable - a.stable);
+  let want = null;
+  try { want = JSON.parse(fs.readFileSync(EXAMPLE, "utf8")).tokens.usdReferencePair; } catch { /* reported below */ }
+  await check("deepest WPLS/stable pair and the example's tokens.usdReferencePair", [], async () => {
+    if (!rows.length) return { fail: "no WPLS/stable pair found" };
+    const top = rows[0], mine = rows.find((r) => want && eq(r.pair, want));
+    const list = rows.slice(0, 4).map((r) => `${r.label} ${r.sname} ${r.pair} (${r.stable.toFixed(0)})`).join(" | ");
+    if (!mine) return { fail: `the example's pair ${want} is not a verified WPLS/stable pair; deepest: ${list}` };
+    // The WPLS/DAI and WPLS/USDC v1 pairs are within a fraction of a percent of each other: either is a valid reference.
+    return mine.stable >= top.stable * 0.9 ? { detail: `example pair ${mine.pair}: ${mine.stable.toFixed(0)} ${mine.sname}; deepest ${top.label} ${top.sname} ${top.pair}: ${top.stable.toFixed(0)}; ranking ${list}` } : { fail: `example pair holds ${mine.stable.toFixed(0)}, the deepest ${top.pair} holds ${top.stable.toFixed(0)}` };
+  });
+  await check("the forked pDAI (symbol DAI) is NOT a dollar: it is keyed out by address", [], async () => {
+    const [sy, pair] = [await call(P.pdai, "symbol()", [], "string"), await call(P.v1, "getPair(address,address)", [P.wpls, P.pdai], "address")];
+    let px = "no v1 WPLS pair";
+    if (pair !== ethers.ZeroAddress) {
+      const [t0, r] = [await call(pair, "token0()", [], "address"), await call(pair, "getReserves()", [], "uint112 r0,uint112 r1,uint32 t")];
+      const wIs0 = eq(t0, P.wpls);
+      const w = Number(ethers.formatUnits(wIs0 ? r.r0 : r.r1, 18)), d = Number(ethers.formatUnits(wIs0 ? r.r1 : r.r0, 18));
+      px = `${d.toFixed(0)} pDAI / ${w.toFixed(0)} WPLS`;
+    }
+    return { info: true, detail: `symbol "${sy}" at ${P.pdai}; v1 WPLS pair: ${px}; never counted as $1` };
+  });
+  await check(`Multicall3 ${P.multicall} has code and answers aggregate3`, [P.multicall], async () => {
+    const code = await provider.getCode(P.multicall);
+    const mc = new ethers.Contract(P.multicall, ["function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[])"], provider);
+    const r = await mc.aggregate3([{ target: P.wpls, allowFailure: true, callData: new ethers.Interface(["function symbol() view returns (string)"]).encodeFunctionData("symbol") }]);
+    return code !== "0x" && r[0].success ? { detail: `${(code.length - 2) / 2} bytes; aggregate3(WPLS.symbol()) succeeded` } : { fail: "aggregate3 failed" };
+  });
+
+  // The farm: a MasterChef with poolLength / poolInfo / userInfo / pendingInc / inc.
+  await check(`PulseX MasterChef ${P.farm}: poolLength(), inc(), poolInfo(i) lpTokens are PulseX v1/v2 pairs`, [P.farm], async () => {
+    const n = Number(await call(P.farm, "poolLength()", [], "uint256"));
+    const inc = await call(P.farm, "inc()", [], "address");
+    const isym = await call(inc, "symbol()", [], "string");
+    let pairs = 0, other = 0;
+    for (let i = 0; i < n; i++) {
+      const info = await call(P.farm, "poolInfo(uint256)", [i], "address lpToken,uint256 allocPoint,uint256 lastRewardTime,uint256 accIncPerShare");
+      const f = await call(info.lpToken, "factory()", [], "address").catch(() => null);
+      if (f && (eq(f, P.v1) || eq(f, P.v2))) pairs++; else other++;
+    }
+    return n > 0 && pairs > 0 ? { detail: `${n} pools (${pairs} PulseX pairs, ${other} other), reward token inc() ${inc} "${isym}"` } : { fail: `${n} pools, ${pairs} pairs` };
+  });
+  await check("MasterChef userInfo(pid, wallet) and pendingInc(pid, wallet) answer for every example wallet (pid 0)", [], async () => {
+    const out = [];
+    for (const [label, w] of Object.entries(wallets)) {
+      const ui = await call(P.farm, "userInfo(uint256,address)", [0, w], "uint256 amount,uint256 rewardDebt");
+      const pend = await call(P.farm, "pendingInc(uint256,address)", [0, w], "uint256");
+      out.push(`${label}: staked ${ui.amount}, pending ${pend}`);
+    }
+    return { detail: out.join("; ") };
+  });
+  // Proof the farm adapter reads a REAL stake: a staker found from the farm's own Deposit events (bounded ranges),
+  // for whom userInfo(pid, staker).amount is above zero and pendingInc answers. A staker seen at block 27,985,530 is tried
+  // first; if that wallet has since withdrawn, the last 200,000 blocks of Deposit logs are searched.
+  await check(`PulseX MasterChef ${P.farm}: a real staker (Deposit logs) has userInfo(pid, staker).amount > 0 and pendingInc`, [P.farm], async () => {
+    const ui = (pid, who) => call(P.farm, "userInfo(uint256,address)", [pid, who], "uint256 amount,uint256 rewardDebt");
+    const seen = [{ pid: 1, user: "0xeB03658Ff4B3F4DE46E0A4D686257DF964F5a404", how: "pinned (seen at block 27,985,530)" }];
+    let hit = null;
+    const tryOne = async (c) => { const x = await ui(c.pid, c.user); return x.amount > 0n ? { ...c, amount: x.amount } : null; };
+    for (const c of seen) { hit = await tryOne(c).catch(() => null); if (hit) break; }
+    let scanned = 0;
+    if (!hit) {
+      const head = await provider.getBlockNumber();
+      const logs = []; // two windows of at most 100,000 blocks (the RPC's maxLogRange)
+      for (let to = head; to > head - 200000; to -= 100000) {
+        logs.push(...await provider.getLogs({ address: P.farm, topics: [ethers.id("Deposit(address,uint256,uint256)")], fromBlock: to - 99999, toBlock: to }));
+      }
+      const cands = new Map();
+      for (const l of logs) cands.set(l.topics[1] + l.topics[2], { pid: Number(BigInt(l.topics[2])), user: ethers.getAddress("0x" + l.topics[1].slice(26)), how: `Deposit log at block ${l.blockNumber}` });
+      scanned = cands.size;
+      for (const c of cands.values()) { hit = await tryOne(c).catch(() => null); if (hit) break; }
+    }
+    if (!hit) return { fail: `no staker with amount > 0 among ${scanned} (user, pid) pairs in the last 200,000 blocks of Deposit logs` };
+    const [pend, info] = [await call(P.farm, "pendingInc(uint256,address)", [hit.pid, hit.user], "uint256"), await call(P.farm, "poolInfo(uint256)", [hit.pid], "address lpToken,uint256 allocPoint,uint256 lastRewardTime,uint256 accIncPerShare")];
+    const f = await call(info.lpToken, "factory()", [], "address").catch(() => null);
+    return pend >= 0n && f && (eq(f, P.v1) || eq(f, P.v2))
+      ? { detail: `${hit.how}: pid ${hit.pid}, staker ${hit.user}, LP ${info.lpToken} (${eq(f, P.v1) ? "v1" : "v2"} pair), userInfo.amount ${ethers.formatUnits(hit.amount, 18)} LP, pendingInc ${ethers.formatUnits(pend, 18)} INC` }
+      : { fail: `pid ${hit.pid} staker ${hit.user}: pendingInc ${pend}, lpToken factory ${f}` };
+  });
+  for (const [label, w] of Object.entries(wallets)) {
+    await check(`${label} ${w} reachable (eth_getBalance)`, [w], async () => ({ detail: `${ethers.formatEther(await provider.getBalance(w))} PLS` }));
+  }
+
+  // Coverage: every address written in the example file must have a PASS above.
+  let example = null;
+  try { example = fs.readFileSync(EXAMPLE, "utf8"); } catch { out("FAIL", `cannot read ${EXAMPLE}`); }
+  if (example) {
+    const addrs = [...new Set(example.match(/0x[0-9a-fA-F]{40}\b/g) || [])];
+    const missing = addrs.filter((a) => !proven.has(lc(a)));
+    if (missing.length) out("FAIL", `${missing.length} address(es) in the example have no PASS line (remove them from the example)`, missing.join(", "));
+    else out("PASS", `all ${addrs.length} addresses in ${path.basename(EXAMPLE)} are proven above`);
+  }
+  console.log(fails ? `\n${fails} check(s) FAILED` : "\nall checks passed");
+  process.exit(fails ? 1 : 0);
+}
+
 (async () => {
+  if (PULSE) return runPulse();
   console.log(`verify-onchain base: calls ${redactUrl(RPC)}, logs probe ${redactUrl(LOGS_RPC)}, example ${path.basename(EXAMPLE)}`);
   await check("eth_chainId is 8453", [], async () => {
     const id = Number((await provider.getNetwork()).chainId);

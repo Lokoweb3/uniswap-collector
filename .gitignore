@@ -55,6 +55,8 @@ fee-split-ledger.json
 v4-positions*.json
 watch-*.json
 slipstream-scan-*.json
+v2lp-scan-*.json
+v2lp-scan-*.json.*.tmp
 backups/
 backup.log
 .claude/

@@ -8,7 +8,7 @@
 "use strict";
 const assert = require("assert");
 const http = require("http");
-const { chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, CHAINS, COOKIE, nsName } = require("../chain-router");
+const { chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, CHAINS, KNOWN_CHAINS, COOKIE, nsName } = require("../chain-router");
 
 const req = (cookie) => ({ headers: cookie ? { cookie } : {} });
 const url = (q = "") => new URL(`http://x/page${q}`);
@@ -33,6 +33,15 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   assert.strictEqual(chainFor(req(), url("?chain=http://evil")).chain.key, "robinhood");
   assert.strictEqual(chainFor(req(`${COOKIE}=../../etc`), url()).chain.key, "robinhood");
   assert.strictEqual(chainFor(req(`${COOKIE}=ARC`), url()).chain.key, "robinhood", "keys are exact, not fuzzy");
+}
+
+// ---- 1b. PulseChain is a known chain, but not in the default list --------------
+{
+  assert.deepStrictEqual(CHAINS.map((c) => c.key), ["robinhood", "arc"], "the default list is unchanged");
+  const pulse = KNOWN_CHAINS.find((c) => c.key === "pulsechain");
+  assert.ok(pulse, "pulsechain is a known chain");
+  assert.strictEqual(pulse.port, 8795); assert.strictEqual(pulse.accent, "#c026d3"); assert.strictEqual(pulse.label, "PulseChain");
+  assert.strictEqual(chainFor(req(`${COOKIE}=pulsechain`), url()).chain.key, "robinhood", "not listed by default: its cookie falls back");
 }
 
 // ---- 2. cookies never cross between chains -----------------------------------

@@ -24,6 +24,7 @@
  *
  *   node chain-router.js                  # 8800, Robinhood + Arc
  *   node chain-router.js --chains=robinhood,arc,base   # also Base (:8796)
+ *   node chain-router.js --chains=robinhood,arc,pulsechain   # also PulseChain (:8795)
  *
  * Not 8799: test/smoke.js starts its own dashboard there, and a router squatting on
  * that port makes the whole smoke suite fail with "fetch failed".
@@ -51,8 +52,9 @@ const KNOWN_CHAINS = [
   { key: "robinhood", label: "Robinhood", accent: "#34d399", port: Number(arg("robinhood-port", 8787)) },
   { key: "arc", label: "Arc", accent: "#38bdf8", port: Number(arg("arc-port", 8797)) },
   { key: "base", label: "Base", accent: "#0052ff", port: Number(arg("base-port", 8796)) },
+  { key: "pulsechain", label: "PulseChain", accent: "#c026d3", port: Number(arg("pulsechain-port", 8795)) },
 ];
-// Which of the known chains this router fronts: --chains=robinhood,arc,base or LP_ROUTER_CHAINS.
+// Which of the known chains this router fronts: --chains=robinhood,arc,base,pulsechain or LP_ROUTER_CHAINS.
 // The default is exactly the list it has always had, so nothing changes unless a chain is
 // named. An unknown name is ignored (a request still cannot name a target), and the list
 // keeps the order given, so the picker reads the way the operator wrote it.

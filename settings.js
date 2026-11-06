@@ -4,7 +4,7 @@
  * Sections (see settings.example.json):
  *   chain      rpcUrl, chainId, explorer
  *   wallets    main { address, label }, watched [ { address, label, collect } ]
- *   tokens     USDG, WETH (each address written once), usdReferenceFeeTier
+ *   tokens     USDG, WETH (each address written once), usdReferenceFeeTier, usdReferencePair (a v2 pair, PulseChain)
  *   contracts  Uniswap v3 / v4 / v2 addresses (weth comes from tokens.WETH)
  *   collector  sweepDestination, thresholds, sweep, tokenIds, denylist, v4Collect, swapFeeTierOverrides
  *   vault      nft, tba, implementation, tokenId, feeSplitPct, feeSplitMax, withdrawAlertUsdg
@@ -33,7 +33,7 @@ const endpoint = require("./endpoint");
 // chain.strictEndpoints: true or LP_STRICT_ENDPOINTS=1 opts any chain in.
 const STRICT_CHAINS = new Set([8453, 369]);
 // An RPC URL that may carry a provider key, from the environment only, never from a file.
-const ENV_RPC = { 8453: "LP_BASE_RPC_URL" };
+const ENV_RPC = { 8453: "LP_BASE_RPC_URL", 369: "LP_PULSE_RPC_URL" };
 
 /** The endpoint settings of `chain`, validated (strict chains) and with the env override applied. */
 function endpointsOf(chain) {
@@ -150,7 +150,12 @@ function toLegacy(raw) {
     denylist: col.denylist || [],
     v4Collect: col.v4Collect || {},
     swapFeeTierOverrides: col.swapFeeTierOverrides || {},
-    usdReference: { stable: tokens.USDG, feeTier: tokens.usdReferenceFeeTier ?? 100 },
+    // tokens.usdReferencePair (a v2 pair address, PulseChain) switches the numeraire's USD rate from a v3
+    // pool's slot0 to that pair's reserves (pricing.js); usdReferenceMinLiquidityUsd is its stable-side floor.
+    usdReference: {
+      stable: tokens.USDG, feeTier: tokens.usdReferenceFeeTier ?? 100,
+      ...(tokens.usdReferencePair ? { pair: tokens.usdReferencePair, minLiquidityUsd: tokens.usdReferenceMinLiquidityUsd ?? 1000 } : {}),
+    },
     // The unit of account the read path prices everything in. On a chain with a
     // wrapped native token that is WETH, and its USD rate is discovered from the
     // reference stable pool (usdRate null). On a chain whose unit is already a
@@ -216,6 +221,7 @@ function fromLegacy(c, w = null, chats = {}) {
       USDG: c.usdReference && c.usdReference.stable,
       WETH: weth,
       usdReferenceFeeTier: (c.usdReference && c.usdReference.feeTier) ?? 100,
+      ...(c.usdReference && c.usdReference.pair ? { usdReferencePair: c.usdReference.pair, usdReferenceMinLiquidityUsd: c.usdReference.minLiquidityUsd } : {}),
     },
     contracts: { _comment: "Uniswap v3 (positionManager, factory, swapRouter02, quoterV2), v4 (positionManager, stateView, poolManager, universalRouter, quoter, permit2, pricingHooks) and v2Factory on Robinhood Chain.", ...contracts },
     collector: {

@@ -34,7 +34,7 @@ const upstream = (key, port) => new Promise((resolve) => {
   {
     const R = require("../chain-router");
     assert.deepStrictEqual(R.CHAINS.map((c) => c.key), ["robinhood", "arc"], "the default list is exactly what it was");
-    assert.deepStrictEqual(R.KNOWN_CHAINS.map((c) => c.key), ["robinhood", "arc", "base"]);
+    assert.deepStrictEqual(R.KNOWN_CHAINS.map((c) => c.key), ["robinhood", "arc", "base", "pulsechain"]);
     assert.strictEqual(R.KNOWN_CHAINS.find((c) => c.key === "base").port, 8796);
     assert.strictEqual(R.KNOWN_CHAINS.find((c) => c.key === "base").accent, "#0052ff");
     R.server.close();

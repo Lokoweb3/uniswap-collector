@@ -12,6 +12,7 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const { redactText } = require("./endpoint");
 const basisLedger = require("./position-basis");
 
 // Blockscout base for v4 NFT discovery, from settings rather than one chain
@@ -153,9 +154,24 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   // on Robinhood Chain, "up"). Read into `external`, never `positions`: see slipstream.js.
   const slipReaders = ((cfg.contracts && cfg.contracts.slipstream) || []).filter((x) => x && x.positionManager && x.factory).map((spec) =>
     require("./slipstream").create({ provider, cfg, spec, priceSides, toFloat, bsFetch: require("./blockscout").bsFetch, logsProvider }));
-  /** Open positions on the configured Slipstream DEXes, for any wallet (the main one included). */
+  // Uniswap-v2-style LP (PulseX v1/v2 on PulseChain; settings.json contracts.v2lp, contracts.pulsex.farms): LP-token balances, not NFTs. Also `external`.
+  const v2Set = Array.isArray(cfg.contracts && cfg.contracts.v2lp) && cfg.contracts.v2lp.some((x) => x && x.factory)
+    ? require("./v2lp").createSet({ provider, cfg, toFloat, bsFetch: require("./blockscout").bsFetch })
+    : null;
+  /** Open positions on the configured Slipstream / v2-style DEXes, for any wallet (the main one included). */
   async function externalOf(address, wethUsd) {
     const out = { positions: [], closed: 0, errors: [], notes: [] };
+    if (v2Set) {
+      try {
+        const x = await v2Set.positionsOf(address, wethUsd);
+        out.positions.push(...x.positions);
+        out.closed += x.closed;
+        out.errors.push(...x.errors);
+        out.notes.push(...(x.notes || []));
+      } catch (err) {
+        out.errors.push({ tokenId: "v2lp", error: `v2 LP positions could not be read: ${redactText(err.shortMessage || err.message)}` });
+      }
+    }
     for (const r of slipReaders) {
       try {
         const x = await r.positionsOf(address, wethUsd);
@@ -165,7 +181,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         out.notes.push(...(x.notes || []));
       } catch (err) {
         // Unread is not empty: say so on the wallet rather than show it holding nothing there.
-        out.errors.push({ tokenId: r.name, error: `${r.name} positions could not be read: ${err.shortMessage || err.message}` });
+        out.errors.push({ tokenId: r.name, error: `${r.name} positions could not be read: ${redactText(err.shortMessage || err.message)}` });
       }
     }
     return out;
@@ -301,7 +317,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   async function loadWallet(w, wethUsd) {
     // The position readers take the owner from cfg (fee simulation, v4 ownerOf check).
     const wcfg = { ...cfg, ownerAddress: w.address, tokenIds: [], denylist: [] };
-    const ids = await u.listTokenIds(npm, w.address, []);
+    const ids = cfg.contracts.positionManager && cfg.contracts.factory ? await u.listTokenIds(npm, w.address, []) : [];   // no v3 on this chain (PulseChain): v2lp.js reads its LPs
     const disc = discoveryFor(w.address);
     const v4Ids = disc ? await disc.discover(20) : [];
     // Whether the v4 history has actually been read. An unfinished or refused
@@ -378,7 +394,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
           tickLower: p.tickLower, tickUpper: p.tickUpper, currentTick: p.currentTick,
         });
       } catch (err) {
-        errors.push({ tokenId: version === 4 ? `v4-${id}` : id.toString(), error: err.shortMessage || err.message });
+        errors.push({ tokenId: version === 4 ? `v4-${id}` : id.toString(), error: redactText(err.shortMessage || err.message) });
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, async () => { while (cursor < work.length) await one(work[cursor++]); }));
@@ -413,11 +429,16 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         const extra = Object.keys(seenPrices);
         holdings = await pf.holdingsOf(w.address, { wethUsd, extraTokens: extra, prices: { ...(getPrices ? getPrices() : {}), ...seenPrices } });
       } catch (err) {
-        errors.push({ tokenId: "wallet", error: err.shortMessage || err.message });
+        errors.push({ tokenId: "wallet", error: redactText(err.shortMessage || err.message) });
       }
     }
     const open = [...positions, ...external];
-    const liquidityUsd = open.reduce((s, p) => s + (p.valueUsd || 0), 0);
+    // Thin, price-gapped or anchor-less v2 pools are shown on their cards but not counted (p.counted).
+    const liquidityUsd = open.filter((p) => !p.thin && p.counted !== false).reduce((s, p) => s + (p.valueUsd || 0), 0);
+    // What cards show but liquidityUsd leaves out (thin, price-gapped, anchor-less), so the headline can say so.
+    const uncounted = open.filter((p) => (p.thin || p.counted === false) && p.valueUsd != null);
+    const uncountedUsd = uncounted.reduce((s, p) => s + (p.valueUsd || 0), 0);
+    const uncountedCount = uncounted.length;
     const feesUsd = open.reduce((s, p) => s + (p.feesUsd || 0), 0);
     // Pending gauge rewards are shown on their cards and summed here, but kept out of
     // totalUsd: like Merkl rewards, they are a claim, not something the wallet holds yet.
@@ -430,8 +451,10 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         : null,
       totals: {
         count: open.length,
-        idle: open.filter((p) => !p.inRange).length,
+        idle: open.filter((p) => p.inRange === false).length,
         liquidityUsd,
+        uncountedUsd,
+        uncountedCount,
         feesUsd,
         rewardsUsd,
         walletUsd,
@@ -459,14 +482,14 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
           out.push(await loadWallet(w, wethUsd));
         } catch (err) {
           const prev = latest && (latest.wallets || []).find((x) => x.address && x.address.toLowerCase() === String(w.address).toLowerCase());
-          out.push(keepLastGood(w, prev, err.shortMessage || err.message, now, latest && latest.at));
+          out.push(keepLastGood(w, prev, err.shortMessage || err.message, now, latest && latest.at)); // keepLastGood redacts
         }
       }
       const failed = out.filter((w) => !w.ok || w.stale).length;
       if (failed && retryN < RETRY_MS.length) { clearTimeout(retryTimer); retryTimer = setTimeout(() => { refresh().catch(() => {}); }, RETRY_MS[retryN++]); retryTimer.unref && retryTimer.unref(); }
       else if (!failed) retryN = 0;
       const sum = (k) => out.reduce((s, w) => s + ((w.totals && w.totals[k]) || 0), 0);
-      const totals = { wallets: out.length, liquidityUsd: sum("liquidityUsd"), feesUsd: sum("feesUsd"), walletUsd: sum("walletUsd") };
+      const totals = { wallets: out.length, liquidityUsd: sum("liquidityUsd"), uncountedUsd: sum("uncountedUsd"), feesUsd: sum("feesUsd"), walletUsd: sum("walletUsd") };
       totals.totalUsd = totals.liquidityUsd + totals.feesUsd + totals.walletUsd;
       latest = {
         ok: true, at: Date.now(), wethUsd, explorer: (cfg && cfg.explorer) || "", wallets: out, totals,
@@ -487,7 +510,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
  * stale (with when it was built and the error), or an empty failed row when
  * there is nothing good to keep.
  */
-function keepLastGood(w, prev, error, now = Date.now(), prevAt = null) {
+function keepLastGood(w, prev, rawError, now = Date.now(), prevAt = null) {
+  const error = rawError == null ? rawError : redactText(String(rawError));
   if (prev && prev.ok) return { ...prev, ok: true, stale: true, staleSince: prev.staleSince || prevAt || now, staleError: error };
   return { ...w, ok: false, error, positions: [], closed: 0, errors: [], totals: null };
 }

@@ -646,6 +646,65 @@ node tools/verify-onchain.js base      # read-only proof of every address in the
   ever told an origin (`rpc` in `/api/chain` etc.), errors and logs have URL paths and `proapi_` keys
   redacted, and the Bearer key is sent only to `api.blockscout.com` and the configured explorer host.
 
+## PulseChain (read-only instance): PulseX v1 and v2 liquidity
+
+A third read-only dashboard, for PulseChain (chain 369), started and fronted exactly like Base: its own data
+directory and port, `LP_READONLY=1 ... --no-loops --no-services`, no `collector`/`vault`/`risk` sections,
+`"noTransactionData": true`, view calls only. PulseX is Uniswap-v2-style, so a position is a balance of the
+pair's own LP token, not an NFT: `v2lp.js` reads it (reserves, totalSupply, your share, value) and puts it in
+`external`, never `positions`, so the collector, guardian and Sell tab cannot act on it. There are no
+Uniswap v3/v4 contracts in its settings and the v3 paths are skipped.
+
+```
+mkdir -p ~/pulse-data && cp settings.pulsechain.example.json ~/pulse-data/settings.json   # edit wallets
+./start-all.sh        # starts :8795 (LP_PULSE_PORT) and adds PulseChain to the router (--chains=...,pulsechain)
+./stop-all.sh         # stops it by its port only, and only if it is that server.js with that --data-dir
+node tools/verify-onchain.js pulse            # read-only proof of every address in the example (PASS / FAIL)
+node tools/verify-pulsechain-wallets.js       # what each wallet holds right now (add --json for JSON)
+```
+
+- Data dir `${LP_PULSE_DATA_DIR:-$HOME/pulse-data}`, port `${LP_PULSE_PORT:-8795}`; nothing starts unless
+  `settings.json` exists there. A keyed RPC goes in `.env` as `LP_PULSE_RPC_URL` (same handling as
+  `LP_BASE_RPC_URL`: validated, never shown to a page, redacted from logs and errors). The Blockscout PRO key is
+  never used on this chain (`api.scan.pulsechain.com` answers JSON without one; `scan.pulsechain.com` is the HTML
+  frontend).
+- `contracts.v2lp` lists the PulseX factories (`pulsex-v1`, `pulsex-v2`; the name prefixes the position id). A pair
+  counts only if `pair.factory()` equals the configured factory: both factories' LP tokens are called "PLP" and
+  unrelated "PLP" tokens exist, so symbols are never trusted. `pairs: [..]` pins LP addresses.
+- Discovery, as a union: pinned pairs; the explorer's token list (JSON only, every candidate confirmed on chain;
+  an HTML/Cloudflare answer is "unavailable" and logged once); and, while the list is unavailable (or with
+  `"scan": true`), a resumable enumeration of the factory (`allPairs(i)` + `balanceOf`, cursor in
+  `v2lp-scan-<name>.json`, at most `scanBudget` requests and 10 s per wallet per refresh). Reads go through
+  Multicall3 (~150 sub-calls per request), so ~200 LPs per wallet cost a handful of requests; at most `maxPairs`
+  (300) pairs are read in full per refresh and what is left over is reported as partial.
+- Values: WPLS/USD comes from `tokens.usdReferencePair` (the PulseX v1 WPLS/DAI pair, ~323k DAI deep): its DAI
+  reserve over its WPLS reserve, unpriced when the DAI side is under `usdReferenceMinLiquidityUsd`. Stablecoins are
+  keyed by ADDRESS (`contracts.pulsex.stables`: bridged DAI, USDC, USDT). The forked pDAI
+  (`0x6B17...1d0F`, also symbol "DAI") is not a dollar and is priced like any other token. Another token is priced
+  from its WPLS or stable pools on either factory, never from the pair being valued, and never from a pool whose
+  quote side holds under `minQuoteUsd` ($100). No price gives `valueUsd: null` with the reason, never 0; a pair
+  whose smaller side is under that floor is flagged thin. Because a memecoin's only market is usually its own
+  pair, many LPs show "no price": that is the honest answer, not an error.
+  - A non-anchor side (anything but WPLS or a configured stable) is capped at what its amount would sell for
+    through its price-source pool (x*y=k), never its face value.
+  - If the two sides differ by more than 10%, the position is shown as 2 x the smaller side, marked "≈", with a
+    note, and is not counted.
+  - Only an LP that is not thin, not gap-flagged and has a WPLS or configured-stable side (by address) counts
+    toward "LP value" and "in pools". Others stay on their cards with "not counted in the liquidity total: ...",
+    and the headline shows their sum as "+$X shown, not counted" (`totals.uncountedUsd`). The totals are
+    deliberately conservative: memecoin/memecoin LPs never count.
+  - Portfolio loose tokens follow the same cap, but only on chains with v2 LP readers configured (PulseChain):
+    there every row with a known pool depth is limited to `depthUsd x amount / (depthTok + amount)` (and to the
+    pool's quote-side depth), as for LPs, in the owner and the watched views alike. Other chains cap thin rows
+    only, as before.
+- Fees accrue inside the reserves of a v2 pair and are realised on removal, so fee0/fee1 are 0 with that note.
+- Farm: `contracts.pulsex.farms` holds the PulseX MasterChef (`0xB2Ca...02d4`, 19 pools, reward INC), read by a
+  view-only adapter (`kind: "pulsex-masterchef"`: `poolLength`, `poolInfo`, `userInfo`, `pendingInc`). LP staked
+  there is valued like unstaked LP and marked `staked: true` with the pending INC. None of the configured wallets
+  has a stake today.
+- Loose wallet tokens are priced by the portfolio from their PulseX v2 pairs (`contracts.v2Factory`); a wallet
+  with hundreds of spam tokens makes that read slow.
+
 ## Blockscout API key
 
 Every Blockscout call goes through `blockscout.js`. Put a free PRO key (https://dev.blockscout.com, value

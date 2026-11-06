@@ -516,7 +516,7 @@ function renderHeadline(){
     const partialNote = tokensKnown ? '' : ' <span class="muted" title="This wallet\'s loose tokens could not be valued, so they are not in this figure.">+ tokens unknown</span>';
     $('#ownerhead').innerHTML =
       `<div class="wh-main">${link}<span class="wcount"><b>${m.totals.count}</b> open${m.totals.idle ? ` · <span class="idle">${m.totals.idle} idle</span>` : ''}</span></div>` +
-      (m.totals.count ? `<div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b></span>` +
+      (m.totals.count ? `<div class="wh-side"><span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(m.totals.liquidityUsd)}</b>${uncountedPart(m.totals)}</span>` +
       walletToggle('owner', 'list', m.totals.count) + `</div>` : '') +
       `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">` +
       `<span class="wtotal">total <b>${usd(ownTotal)}</b>${partialNote}</span>` +
@@ -534,7 +534,7 @@ function renderHeadline(){
       const watchedOpen = (lastWatchForPf.wallets || []).reduce((a, w) => a + ((w.totals && w.totals.count) || 0), 0);
       $('#watchtitle').textContent = `Positions · ${m.totals.count + watchedOpen} open across ${W.wallets + 1} wallets`;
       $('#watchtotal').innerHTML = usd(ownTotal + W.totalUsd) + partialNote;
-      $('#watchstats').innerHTML = `<span>${W.wallets + 1} wallets</span><span>tokens in wallets <b>${usd((pf ? pf.totals.walletUsd : 0) + W.walletUsd)}</b></span><span>in pools <b>${usd(m.totals.liquidityUsd + W.liquidityUsd)}</b></span><span>uncollected fees <b>${usd(m.totals.feesUsd + W.feesUsd)}</b></span>`;
+      $('#watchstats').innerHTML = `<span>${W.wallets + 1} wallets</span><span>tokens in wallets <b>${usd((pf ? pf.totals.walletUsd : 0) + W.walletUsd)}</b></span><span>in pools <b>${usd(m.totals.liquidityUsd + W.liquidityUsd)}</b>${uncountedPart({ uncountedUsd: (m.totals.uncountedUsd || 0) + (W.uncountedUsd || 0) })}</span><span>uncollected fees <b>${usd(m.totals.feesUsd + W.feesUsd)}</b></span>`;
     } else if (sel[0]) {
       // One watched wallet. renderWatch sets these too, but it does not run on every
       // render that reaches here -- a portfolio refresh alone calls renderHeadline by
@@ -3069,6 +3069,8 @@ async function load(fresh){
 let coTimer = null;
 
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const UNCOUNTED_WHY = 'Positions shown on their cards but deliberately not in the liquidity total: thin pools, pools whose two sides are priced more than 10% apart, and pools with neither a WPLS nor a stablecoin side.';
+const uncountedPart = (t, sep = ' · ') => t && t.uncountedUsd > 0 ? `${sep}<span class="muted" title="${esc(UNCOUNTED_WHY)}">+${usd(t.uncountedUsd)} shown, not counted</span>` : '';
 
 // ---- Long-term returns (TASK-52): fee APR and net return side by side, from /api/positions
 // longTerm (longterm.js). Last 30 days on the card, since-open in the tooltip; when the
@@ -3267,8 +3269,65 @@ function claimedMetric(p, uid, wallet) {
   return tile(why + ' Nothing is known either way; this is not a zero.', 'unavail', 'Not scanned yet', 'no block range scanned yet');
 }
 
+// A Uniswap-v2-style LP position (PulseX v1/v2): a balance of the pair's own token, not an NFT and
+// not a price range, so there is no rail, no tick and no fee tile. Read-only like every external card.
+function v2Card(p, d, o) {
+  const pair = chainRef(EXPLORER, `/address/${p.pairAddress}`, shortA(p.pairAddress), p.pairAddress);
+  const farm = p.staked ? chainRef(EXPLORER, `/address/${p.farmAddress}`, esc(p.farm || 'farm'), p.farmAddress || '') : '';
+  const val = p.valueUsd == null
+    ? `<span class="mv unavail">No price</span><span class="msub">${esc(String(p.valueNote || 'no price for one side'))}</span>`
+    : `<span class="mv">${p.priceGapPct != null || p.counted === false ? `<span class="approx" title="${esc(String(p.valueNote || p.countNote || ''))}">≈</span>` : ''}${usd(p.valueUsd)}</span><span class="msub">${esc(p.symbol0)} + ${esc(p.symbol1)}${p.counted === false && p.countNote ? ` · ${esc(p.countNote)}` : ''}</span>`;
+  const r = p.rewards;
+  const rew = !p.staked ? `<span class="mv zero">$0.00</span><span class="msub" title="${esc(p.feesNote || '')}">fees accrue in the reserves</span>`
+    : r && r.amount != null ? `<span class="mv">${r.usd == null ? amount(r.amount) + ' ' + esc(r.symbol || '') : usd(r.usd)}</span><span class="msub">${r.usd == null ? 'no price for it' : amount(r.amount) + ' ' + esc(r.symbol || '')} · pending farm reward</span>`
+    : `<span class="mv unavail">Unavailable</span><span class="msub">${esc(String((r && r.error) || 'the reward read did not return a value'))}</span>`;
+  const s0 = p.usd0 != null && p.usd1 != null && (p.amount0 * p.usd0 + p.amount1 * p.usd1) > 0 ? (p.amount0 * p.usd0) / (p.amount0 * p.usd0 + p.amount1 * p.usd1) * 100 : 50;
+  return `
+  <article class="pos card2">
+    <header class="pchead">
+      <div class="pcid">
+        <h3>${esc(p.pair)}</h3>
+        ${o.wallet ? `<span class="pcwallet" title="Held by ${esc(o.wallet)}">${esc(o.wallet)}</span>` : ''}
+        <span class="nft mono">${pair}</span>
+        <span class="tier" title="A liquidity position on ${esc(p.protocol)}, not Uniswap: shown here, never collected, closed or sold by this dashboard">${esc(p.protocol)}</span>
+        ${p.staked ? `<span class="tier" title="Staked in the farm ${esc(p.farmAddress || '')}">staked · ${farm}</span>` : ''}
+        ${p.thin ? `<span class="tier" title="${esc(p.thinNote || '')}">thin pool</span>` : ''}
+      </div>
+      <span class="state">${p.sharePct < 0.001 ? '<0.001' : p.sharePct.toFixed(3)}% of the pool</span>
+    </header>
+    <div class="metrics">
+      <div class="metric"><span class="ml">Position value</span>${val}</div>
+      <div class="metric"><span class="ml">${p.staked ? 'Farm reward' : 'Uncollected fees'}</span>${rew}</div>
+      <div class="metric"><span class="ml">On ${esc(p.protocol)}</span><span class="mv">${p.staked ? 'Staked in farm' : 'In wallet'}</span>
+        <span class="msub">read only: not collected, closed or sold here</span></div>
+      <div class="metric"><span class="ml">LP balance</span><span class="mv">${amount(p.lpBalance)}</span>
+        <span class="msub">of ${amount(p.totalSupply)} total</span></div>
+    </div>
+    <details class="posmore">
+      <summary>View details</summary>
+      <div class="detailgrid">
+        <section class="dgroup">
+          <h4>Position composition</h4>
+          <div class="split" role="img" aria-label="${s0.toFixed(0)} percent ${esc(p.symbol0)}, ${(100 - s0).toFixed(0)} percent ${esc(p.symbol1)}">
+            <i class="a" style="width:${s0}%"></i><i class="b" style="width:${100 - s0}%"></i>
+          </div>
+          <span class="amts"><b>${amount(p.amount0)}</b> ${esc(p.symbol0)} · <b>${amount(p.amount1)}</b> ${esc(p.symbol1)}</span>
+          <span class="rate muted">your share of the pool's reserves (${amount(p.reserve0)} ${esc(p.symbol0)} / ${amount(p.reserve1)} ${esc(p.symbol1)})</span>
+        </section>
+        <section class="dgroup">
+          <h4>Fees</h4>
+          <span class="rate muted">${esc(p.feesNote || '')}</span>
+          ${p.thin ? `<span class="rate muted">${esc(p.thinNote || '')}</span>` : ''}
+        </section>
+      </div>
+      <footer class="dfoot"><span>${esc(freshText(d))}</span></footer>
+    </details>
+  </article>`;
+}
+
 function positionCard(p, d, opts) {
   const o = opts || {};
+  if (p.kind === 'v2lp') return v2Card(p, d, o);
   const v = orient(p);
   const near = p.inRange && (v.toUpper < NEAR || v.toLower < NEAR);
   // Full range: liquidity across the whole tick space, so there is no floor or
@@ -3691,12 +3750,12 @@ function renderWatch(d){
     // collector is approved are all kept, one disclosure down.
     const head = `<div class="wh">
       <div class="wh-main">${link}<span class="wcount"><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>
-      <div class="wh-side">${ratePart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span>${w.positions.length || (w.external || []).length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
+      <div class="wh-side">${ratePart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b>${uncountedPart(t)}</span>${w.positions.length || (w.external || []).length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
       <details class="whmore"><summary>Wallet detail</summary><div class="whmore-body"><span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${stakingPart(stakingTokensFor(w.address.toLowerCase()))}${collectorPart}</div></details>
     </div>`;
     // Top tokens sitting in the wallet, compact.
     const toks = h && h.tokens.length
-      ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${x.amount.toLocaleString('en-US',{maximumFractionDigits:6})} ${x.symbol}${x.thin ? ' (thin pool, quote only)' : ''}">${x.symbol} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
+      ? `<div class="wtokens">${h.tokens.filter(x => x.usd != null && x.usd >= 0.5).slice(0, 8).map(x => `<span title="${esc(x.amount.toLocaleString('en-US',{maximumFractionDigits:6}) + ' ' + String(x.symbol) + (x.thin ? ' (thin pool, quote only)' : ''))}">${esc(String(x.symbol))} <b>${x.usd == null ? 'unpriced' : usd(x.usd)}</b>${x.thin ? '<span class="idle">≈</span>' : ''}</span>`).join('')}${(n => n > 0 ? `<span class="muted">+${n} more</span>` : '')(h.tokens.filter(x => x.usd != null && x.usd >= 0.5).length - 8)}</div>`
       : '';
     const open = [...w.positions, ...(w.external || [])];
     if (!open.length) {

@@ -137,6 +137,34 @@ function create({ provider, factory, cfg, explorerApi }) {
   const v2Factory = cfg.contracts.v2Factory && ethers.isAddress(cfg.contracts.v2Factory)
     ? new ethers.Contract(cfg.contracts.v2Factory, V2_FACTORY_ABI, provider)
     : null;
+  // LP tokens of the configured v2-style factories (PulseX): the LP readers (v2lp.js) value them as
+  // positions, so holdingsOf must not list or probe them as loose tokens. A token counts only if its
+  // symbol is "PLP", its factory() is a configured one AND that factory lists it back (getPair).
+  const lpFactories = new Set(((cfg.contracts && cfg.contracts.v2lp) || []).filter((s) => s && ethers.isAddress(s.factory)).map((s) => s.factory.toLowerCase()));
+  const lpPairCache = new Map();
+  const PAIR_ABI = ["function factory() view returns (address)", "function token0() view returns (address)", "function token1() view returns (address)"];
+  async function isConfiguredPair(addr, symbol) {
+    if (!lpFactories.size || symbol !== "PLP") return false;
+    const hit = lpPairCache.get(addr);
+    if (hit && Date.now() < hit.until) return hit.yes;
+    try {
+      const pair = new ethers.Contract(addr, PAIR_ABI, provider);
+      let fac;
+      try { fac = String(await pair.factory()).toLowerCase(); } catch (e) { if (e && typeof e === "object") e.__factoryCall = true; throw e; }
+      let yes = false;
+      if (lpFactories.has(fac)) {
+        const [t0, t1] = await Promise.all([pair.token0(), pair.token1()]);
+        const back = await new ethers.Contract(fac, V2_FACTORY_ABI, provider).getPair(t0, t1);
+        yes = String(back).toLowerCase() === addr;
+      }
+      lpPairCache.set(addr, { yes, until: Infinity });
+      return yes;
+    } catch (err) {
+      // A revert from factory() alone is an answer (not a pair): remembered for 6 h (as v2lp NEG_TTL). Anything else is asked again next time.
+      if (err && (err.code === "CALL_EXCEPTION" || err.code === 3) && err.__factoryCall) lpPairCache.set(addr, { yes: false, until: Date.now() + 6 * 3600e3 });
+      return false;
+    }
+  }
   // Uniswap v4: StateView for slot0/liquidity, plus the hook addresses whose
   // pools are worth checking (launchpad hooks); the hookless key is always tried.
   const V4 = cfg.contracts.v4 && cfg.contracts.v4.stateView
@@ -321,11 +349,12 @@ function create({ provider, factory, cfg, explorerApi }) {
     const native = await provider.getBalance(address).catch(() => null);
     if (native != null) {
       const bal = Number(ethers.formatEther(native)); // native: 18 decimals, always
-      if (bal > 0) rows.push({ symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : "ETH", address: null, native: true, amount: bal, price: UNIT.nativeSameAsErc20 ? (UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd) : wethUsd });
+      if (bal > 0) rows.push({ symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : (cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "ETH", address: null, native: true, amount: bal, price: UNIT.nativeSameAsErc20 ? (UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd) : wethUsd });
     }
     if (UNIT.nativeSameAsErc20 && WETH) addrs.delete(WETH); // same balance, already counted natively
     const held = await mapLimit([...addrs], CONCURRENCY, async (addr) => {
       const meta = await u.getToken(addr, provider);
+      if (await isConfiguredPair(addr, meta.symbol)) return null; // an LP position, read by v2lp.js
       const raw = await new ethers.Contract(addr, ERC20_BAL, provider).balanceOf(address);
       // A balance cannot be scaled without decimals that were actually read. Show
       // the holding as unpriced with the reason rather than a number on a guess.
@@ -341,18 +370,20 @@ function create({ provider, factory, cfg, explorerApi }) {
       if (x.unavailable) {
         return { symbol: x.meta.symbol, address: x.meta.address, native: false, amount: null, price: null, unavailable: x.unavailable };
       }
-      let price = prices[x.addr], depthUsd = null, via = null;
-      if (price == null) ({ price, depthUsd, via = null } = await priceOf(x.addr, wethUsd));
+      let price = prices[x.addr], depthUsd = null, via = null, depthTok = null;
+      if (price == null) ({ price, depthUsd, via = null, depthTok = null } = await priceOf(x.addr, wethUsd));
       // `via` is set only by the priceVia branch, so it is the honest test for
       // "this price was carried from another token" whatever path found it.
       const assumed = !!(via && price != null) || !!(priceVia[x.addr] && price != null);
-      return { symbol: x.meta.symbol, address: x.meta.address, native: false, amount: x.amount, price, depthUsd, assumed, via: via ? (await u.getToken(via, provider)).symbol : null };
+      return { symbol: x.meta.symbol, address: x.meta.address, native: false, amount: x.amount, price, depthUsd, depthTok, assumed, via: via ? (await u.getToken(via, provider)).symbol : null };
     });
     rows.push(...priced.filter(Boolean));
     save(); // pool choices made above
     for (const r of rows) {
       r.usd = r.price == null || r.amount == null ? null : r.amount * r.price;
       r.thin = r.depthUsd != null && r.usd != null && r.usd > r.depthUsd;
+      if (r.thin || lpFactories.size) r.usd = realisable(r.usd, r.amount, r.depthUsd, r.depthTok); // never more than x*y=k through the price-source pool
+      delete r.depthTok;
     }
     rows.sort((a, b) => (b.usd || 0) - (a.usd || 0));
     return {
@@ -374,7 +405,8 @@ function create({ provider, factory, cfg, explorerApi }) {
     const cached = state.pools[addr];
     if (cached && Date.now() - cached.at < POOL_RECHECK_MS) return cached.pool ? cached : null;
     let best = null;
-    for (const quote of [WETH, STABLE].filter(Boolean)) {
+    // factory is null on a chain with no Uniswap v3 (PulseChain): no v3 pool to look for, the v2 pairs below are the market.
+    for (const quote of factory ? [WETH, STABLE].filter(Boolean) : []) {
       if (quote === addr) continue;
       const qMeta = await u.getToken(quote, provider);
       const qMin = quote === WETH ? MIN_QUOTE_WETH : MIN_QUOTE_STABLE;
@@ -414,6 +446,16 @@ function create({ provider, factory, cfg, explorerApi }) {
     }
     state.pools[addr] = { at: Date.now(), ...(best || { pool: null }) };
     return best;
+  }
+
+  /**
+   * USD a holding of `amount` could realise through its price-source pool: amount x price, capped at the pool's quote-side
+   * depth (and, for a v2 pool whose token reserve is known, at x*y=k). No depth known (a deep or configured price) leaves it alone.
+   */
+  function realisable(usd, amount, depthUsd, depthTok) {
+    if (usd == null || depthUsd == null || amount == null) return usd;
+    const k = depthTok > 0 ? depthUsd * amount / (depthTok + amount) : depthUsd;
+    return Math.min(usd, depthUsd, k);
   }
 
   /** USD price of one token via its pricing pool, and that pool's depth in USD. */
@@ -462,7 +504,7 @@ function create({ provider, factory, cfg, explorerApi }) {
         const rq = Number(ethers.formatUnits(tokenIs0 ? r1 : r0, q.decimals));
         if (!(rt > 0)) return { price: null, depthUsd };
         const quoteUsd = pc.quote === WETH ? wethUsd : 1;
-        return { price: quoteUsd == null ? null : (rq / rt) * quoteUsd, depthUsd };
+        return { price: quoteUsd == null ? null : (rq / rt) * quoteUsd, depthUsd, depthTok: rt };
       } catch {
         return { price: null, depthUsd };
       }
@@ -503,7 +545,7 @@ function create({ provider, factory, cfg, explorerApi }) {
     if (native != null) {
       const bal = Number(ethers.formatEther(native)); // native: 18 decimals, always
       rows.push({
-        symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : "ETH",
+        symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : (cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "ETH",
         address: null, native: true, wallet: bal, pools: 0, fees: 0,
         price: UNIT.nativeSameAsErc20 && UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd,
         source: "wallet",
@@ -523,12 +565,12 @@ function create({ provider, factory, cfg, explorerApi }) {
     const priced = await mapLimit(held.filter(Boolean), CONCURRENCY, async (x) => {
       // Position tokens are priced off the pools actually held (deep by
       // construction); anything else goes through the deepest pool found.
-      let price = prices[x.addr], depthUsd = null, via = null;
-      if (price == null) ({ price, depthUsd, via = null } = await priceOf(x.addr, wethUsd));
+      let price = prices[x.addr], depthUsd = null, via = null, depthTok = null;
+      if (price == null) ({ price, depthUsd, via = null, depthTok = null } = await priceOf(x.addr, wethUsd));
       const assumed = !!(via && price != null) || !!(priceVia[x.addr] && price != null);
       return {
         symbol: x.meta.symbol, address: x.meta.address, native: false,
-        wallet: x.wallet, pools: x.h.amount, fees: x.h.fees, price, depthUsd,
+        wallet: x.wallet, pools: x.h.amount, fees: x.h.fees, price, depthUsd, depthTok,
         via: via ? (await u.getToken(via, provider)).symbol : null,
         assumed,
         source: positionTokens.has(x.addr) ? "pools" : "wallet",
@@ -544,6 +586,8 @@ function create({ provider, factory, cfg, explorerApi }) {
       // Worth more than the pool that prices it holds: the number is a
       // quote, not something you could sell for.
       r.thin = r.depthUsd != null && r.usd != null && r.usd > r.depthUsd;
+      if (r.thin || lpFactories.size) { r.walletUsd = realisable(r.walletUsd, r.wallet, r.depthUsd, r.depthTok); r.usd = realisable(r.usd, r.total, r.depthUsd, r.depthTok); }
+      delete r.depthTok;
     }
     const walletUsd = rows.reduce((s, r) => s + (r.walletUsd || 0), 0);
     const totalUsd = walletUsd + (lpUsd || 0) + (feesUsd || 0);

@@ -39,10 +39,38 @@ function makePriceSides({ weth, stable }) {
  * to look up and no pool to depend on.
  */
 function makeGetWethUsd({ cfg, unit, factory, provider, u }) {
+  const V2_PAIR_ABI = ["function token0() view returns (address)", "function token1() view returns (address)", "function getReserves() view returns (uint112,uint112,uint32)"];
+  /**
+   * USD per unit token from a v2 pair's reserves: reserveStable / reserveWeth, decimals-adjusted, the
+   * stable taken at a dollar. Null (unpriced, never a guess) when the pair is not exactly weth/stable,
+   * a side's decimals were not read, or the stable side holds less than ref.minLiquidityUsd.
+   */
+  async function v2ReferenceRate(ref, blockTag) {
+    try {
+      const o = blockTag != null ? { blockTag } : {};
+      const pair = new ethers.Contract(ref.pair, V2_PAIR_ABI, provider);
+      const [t0, t1, res] = await Promise.all([pair.token0(o), pair.token1(o), pair.getReserves(o)]);
+      const w = cfg.contracts.weth.toLowerCase(), s = ref.stable.toLowerCase();
+      const a0 = t0.toLowerCase(), a1 = t1.toLowerCase();
+      if (!((a0 === w && a1 === s) || (a0 === s && a1 === w))) return null;
+      const [tw, ts] = await Promise.all([u.getToken(cfg.contracts.weth, provider), u.getToken(ref.stable, provider)]);
+      if (!tw || tw.decimalsOk !== true || !ts || ts.decimalsOk !== true) return null;
+      const rw = a0 === w ? res[0] : res[1], rs = a0 === w ? res[1] : res[0];
+      const stableAmt = Number(ethers.formatUnits(rs, ts.decimals)), wethAmt = Number(ethers.formatUnits(rw, tw.decimals));
+      const min = Number(ref.minLiquidityUsd) >= 0 && ref.minLiquidityUsd != null ? Number(ref.minLiquidityUsd) : 1000;
+      if (!(wethAmt > 0) || !(stableAmt > 0) || stableAmt < min) return null;
+      return stableAmt / wethAmt;
+    } catch {
+      return null;
+    }
+  }
   return async function getWethUsd(blockTag) {
     if (unit && unit.usdRate != null) return Number(unit.usdRate);
     const ref = cfg.usdReference;
     if (!ref || !ref.stable || !cfg.contracts.weth) return null;
+    // A chain with no Uniswap v3 stable pool (PulseChain: PulseX is Uniswap-v2 style) names the v2
+    // pair to read instead: tokens.usdReferencePair. Chains without it never reach this branch.
+    if (ref.pair) return v2ReferenceRate(ref, blockTag);
     try {
       const poolAddr = await factory.getPool(cfg.contracts.weth, ref.stable, ref.feeTier);
       if (poolAddr === ethers.ZeroAddress) return null;

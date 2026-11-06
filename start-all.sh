@@ -71,6 +71,23 @@ start_base() {
 }
 start_base
 
+# PulseChain (PulseX v1/v2 LP), the same way and for the same reasons: read-only, its own
+# data directory and port, no loops, no companion services. Opt-in: nothing starts unless
+# $dir/settings.json exists (copy settings.pulsechain.example.json there). LP_PULSE_RPC_URL,
+# when wanted, comes from ./.env above.
+start_pulse() {
+  local dir="${LP_PULSE_DATA_DIR:-$HOME/pulse-data}" port="${LP_PULSE_PORT:-8795}"
+  [ -f "$dir/settings.json" ] || return 0
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then
+    echo "pulsechain viewer: already running on :${port}"
+    return 0
+  fi
+  LP_READONLY=1 nohup node server.js --data-dir="$dir" --port="$port" --no-loops --no-services \
+    >> "$dir/server.log" 2>&1 < /dev/null &
+  echo "pulsechain viewer: started (pid $!) on :${port} — read-only, logs in $dir/server.log"
+}
+start_pulse
+
 # One URL for every chain: the router proxies to each chain's dashboard, namespaces
 # their cookies so a session on one is never presented to the other, and injects the
 # chain picker. The public gate (lp-gate.mjs) fronts this rather than a single
@@ -78,11 +95,13 @@ start_base
 # running when there is a second chain to switch to.
 start_router() {
   local port="${LP_ROUTER_PORT:-8800}" chains="robinhood,arc"
-  local arc_on=0 base_on=0
+  local arc_on=0 base_on=0 pulse_on=0
   [ -f "${LP_ARC_DATA_DIR:-$HOME/arc-data}/settings.json" ] && arc_on=1
   [ -f "${LP_BASE_DATA_DIR:-$HOME/base-data}/settings.json" ] && base_on=1
-  [ "$arc_on" = 1 ] || [ "$base_on" = 1 ] || return 0
+  [ -f "${LP_PULSE_DATA_DIR:-$HOME/pulse-data}/settings.json" ] && pulse_on=1
+  [ "$arc_on" = 1 ] || [ "$base_on" = 1 ] || [ "$pulse_on" = 1 ] || return 0
   [ "$base_on" = 1 ] && chains="robinhood,arc,base"
+  [ "$pulse_on" = 1 ] && chains="${chains},pulsechain"
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then
     echo "chain router: already running on :${port}"
     return 0

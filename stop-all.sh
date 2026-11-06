@@ -24,6 +24,18 @@ if [ -n "$basepid" ]; then
   esac
 fi
 
+# And the PulseChain viewer, the same way: its own port only, and only a process that really is it.
+pulseport="${LP_PULSE_PORT:-8795}"
+pulsedir="${LP_PULSE_DATA_DIR:-$HOME/pulse-data}"
+pulsepid=$(ss -ltnp 2>/dev/null | awk -v p=":${pulseport} " 'index($0, p) { print $NF }' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
+if [ -n "$pulsepid" ]; then
+  pulsecmd=$(tr "\0" " " 2>/dev/null < "$PROC_ROOT/$pulsepid/cmdline") || pulsecmd=""
+  case " $pulsecmd" in
+    *"server.js"*" --data-dir=$pulsedir "*) kill "$pulsepid" 2>/dev/null && echo "pulsechain viewer: stopped (pid $pulsepid)" ;;
+    *) echo "pulsechain viewer: port $pulseport is held by pid $pulsepid, which is not the PulseChain viewer (server.js --data-dir=$pulsedir); left running" ;;
+  esac
+fi
+
 pid=$(ss -ltnp 2>/dev/null | awk '/:8787 /{print $NF}' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
 if [ -z "$pid" ]; then echo "dashboard: not running"; exit 0; fi
 kill "$pid" && echo "dashboard: stopped (pid $pid)"

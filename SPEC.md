@@ -60,18 +60,36 @@ Every row was proven by `eth_call` / `eth_getCode` against the public RPC (Base 
 | mainnet.base.org logs | https://mainnet.base.org | eth_getLogs | HTTP 429 for every range while eth_call works | FAIL for logs, hence `logsRpcUrl` |
 | Blockscout | base.blockscout.com / api.blockscout.com/8453 | GET /api/v2 | Cloudflare HTML 403 / JSON 402 without a key | UNAVAILABLE: treated as "unavailable", RPC discovery covers it |
 
-### PulseChain (369), public RPC https://rpc.pulsechain.com
-| Item | Address | Check | Expected | Status |
+### PulseChain (369), public RPC https://rpc.pulsechain.com  (VERIFIED 2026-11-06, read-only; re-run: `node tools/verify-onchain.js pulse`)
+Run at block 27,985,312. Every address in `settings.pulsechain.example.json` has a PASS line in that run (15 of 15). Reserves move; the figures are as read.
+| Item | Address | Call | Result | Status |
 |---|---|---|---|---|
-| chain | - | eth_chainId | 0x171 | UNVERIFIED |
-| WPLS (memory) | 0xA1077a294dDE1B09bB078844df40758a5D0f9a27 | symbol()/decimals() | WPLS/18 | UNVERIFIED |
-| DAI from Ethereum (memory) | 0xefD766cCb38EaF1dfd701853BFCe31359239F305 | symbol()/decimals() | DAI/18 | UNVERIFIED |
-| USDC / USDT from Ethereum (memory) | 0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07 / 0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f | symbol()/decimals() | USDC/6, USDT/6 | UNVERIFIED |
-| PulseX v1 factory (memory) | 0x1715a3E4A142d8b698131108995174F37aEBA10D | `allPairsLength()`, `getPair(WPLS, DAI)`, then `pair.factory()` equals it | non-zero pair | UNVERIFIED |
-| PulseX v2 factory (memory) | 0x29eA7545DEf87022BAdc76323F373EA1e707C523 | same | non-zero pair | UNVERIFIED |
-| Deepest WPLS/stable pair | via the factories | `getReserves()` of WPLS/DAI, WPLS/USDC, WPLS/USDT on both v1, v2 | choose the pair with the largest stable-side reserve; record address + reserves | UNVERIFIED |
-| PulseX farm contract | NOT KNOWN | must be found AND verified (e.g. `poolLength()`, `lpToken(i)`, `userInfo(pid, wallet)` or equivalent) | else skip with a note | UNVERIFIED, may not exist (Open Q4) |
-| Multicall3 | 0xcA11bde05977b3631167028862bE2a173976CA11 | `getCode` | present | UNVERIFIED (optional) |
+| chain | - | eth_chainId | 369 (0x171) | PASS |
+| WPLS | 0xA1077a294dDE1B09bB078844df40758a5D0f9a27 | symbol() / decimals() | WPLS / 18 | PASS |
+| DAI from Ethereum (bridged) | 0xefD766cCb38EaF1dfd701853BFCe31359239F305 | symbol() / decimals() | DAI / 18 ("Dai Stablecoin from Ethereum") | PASS |
+| USDC from Ethereum | 0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07 | symbol() / decimals() | USDC / 6 | PASS |
+| USDT from Ethereum | 0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f | symbol() / decimals() | USDT / 6 | PASS |
+| forked pDAI (NOT a stable) | 0x6B175474E89094C44Da98b954EedeAC495271d0F | symbol(); v1 getPair(WPLS, it) reserves | "DAI"; 18,075,386 pDAI / 3,734,429,205 WPLS (about $0.001 per pDAI at the WPLS price) | INFO: never counted as $1, absent from the example |
+| PulseX v1 factory | 0x1715a3E4A142d8b698131108995174F37aEBA10D | getCode; allPairsLength() | 14,134 bytes; 65,500 pairs | PASS |
+| PulseX v2 factory | 0x29eA7545DEf87022BAdc76323F373EA1e707C523 | getCode; allPairsLength() | 14,151 bytes; 191,995 pairs | PASS |
+| v1 WPLS/DAI (reference pair, deepest) | 0xE56043671df55dE5CDf8459710433C10324DE0aE | getPair(WPLS, DAI) on v1; pair.factory(); getReserves() | non-zero; = v1 factory; 323,668 DAI / 58,861,667,328 WPLS => WPLS $5.4988e-6; LP symbol "PLP" | PASS (used as `tokens.usdReferencePair`) |
+| v1 WPLS/USDC | 0x6753560538ECa67617A9Ce605178F788bE7E524E | same | = v1 factory; 323,035 USDC / 58,675,151,729 WPLS | PASS (second, within 0.2 %) |
+| v1 WPLS/USDT | 0x322Df7921F28F1146Cdf62aFdaC0D6bC0Ab80711 | same | = v1 factory; 231,656 USDT / 42,182,586,642 WPLS | PASS |
+| v2 WPLS/DAI | 0x146E1f1e060e5b5016Db0D118D2C5a11A240ae32 | getPair(WPLS, DAI) on v2; pair.factory(); getReserves() | = v2 factory; 31,114 DAI / 5,675,221,464 WPLS | PASS (shallow) |
+| v2 WPLS/USDC | 0x8eBe62D5e9D26b637673d91f56900233d6A4910d | same | = v2 factory; 9,914 USDC / 1,806,153,300 WPLS | PASS (shallow) |
+| v2 WPLS/USDT | 0x21e4d9dfB30B097316De38ea49c68776C9735329 | same | = v2 factory; 1,206 USDT / 220,243,851 WPLS | PASS (shallow) |
+| Multicall3 | 0xcA11bde05977b3631167028862bE2a173976CA11 | getCode; aggregate3([WPLS.symbol()]) | 3,808 bytes; success | PASS |
+| PulseX farm (MasterChef; Blockscout-verified name "MasterChef") | 0xB2Ca4A66d3e57a5a9A12043B6bAD28249fE302d4 | poolLength(); inc(); inc().symbol(); poolInfo(0..18).lpToken.factory() | 19 pools; reward token 0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d "INC"; 18 of 19 lpTokens are PulseX v1/v2 pairs (pid 17 is not a pair) | PASS |
+| same | same | userInfo(pid, wallet), pendingInc(pid, wallet) for the six wallets (all 19 pids, `tools/verify-pulsechain-wallets.js`) | amount 0, pending 0 everywhere: no farm stake today | PASS (interface proven; no stake to value) |
+| same | same | a real staker found from the farm's Deposit logs (bounded ranges, rpc.pulsechain.com): `userInfo(pid, staker)`, `pendingInc(pid, staker)`, `poolInfo(pid).lpToken.factory()` | pid 1, staker 0xeB03658Ff4B3F4DE46E0A4D686257DF964F5a404 (block 27,985,530): amount 779,475.52 LP of the v1 WPLS/DAI pair 0xE56043671df55dE5CDf8459710433C10324DE0aE, pendingInc 0.8540 INC. Other stakers found: pid 5 (v1 WPLS/USDT) 0x5A26b889Dff34C4f159A76A95EcBf85591c9ed2A, pid 9 0x7Cc0a0ca2f9346AceAdd5110cfa15C4FA12f9251 | PASS (a non-zero stake is read; `tools/verify-onchain.js pulse`) |
+| Main | 0x698C3A3F06B7EdBD175169d1cfa219c8232F48d8 | eth_getBalance | 2,998,501.70 PLS | PASS |
+| Wallet 11 | 0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb | eth_getBalance; LP via `tools/verify-pulsechain-wallets.js` | 11,570,092.60 PLS; 199 PulseX LP positions | PASS |
+| Wallet 12 | 0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A | same | 1,553,762.33 PLS; 39 LP positions | PASS |
+| Wallet 2 | 0x6314077131232f7D8282d07DcB4c31387dDC81DA | same | 999,773.44 PLS; 4 LP positions | PASS |
+| Wallet 3 | 0xA78c81a0b7551BD9a6F6965fB01AafaE9CEf96ca | same | 56,049,720.26 PLS; no LP | PASS |
+| Wallet 5 | 0xb4e5753644BAe0dCbB9D6e7B5ea7EaC8d5aF5cf0 | same | 19,827.82 PLS; no LP | PASS |
+
+Explorer: `https://api.scan.pulsechain.com/api/v2/addresses/{addr}/token-balances` answers JSON 200 without a key; the `scan.pulsechain.com` host is the HTML frontend. `rpc.pulsechain.com` accepts 2,000,000-block `eth_getLogs` but caps the number of logs returned.
 
 ---
 

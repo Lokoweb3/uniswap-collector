@@ -35,9 +35,19 @@ const hasKey = () => !!KEY;
  */
 const available = () => !!EXPLORER;
 
+/** The PRO gateway; the only host besides the configured explorer that a full URL may name. */
+const PRO_HOST = "api.blockscout.com";
+
+/** Hosts a request (and so the bearer key) may go to: the PRO gateway and this chain's configured explorer. */
+function allowedHosts() {
+  const hosts = new Set([PRO_HOST]);
+  try { if (EXPLORER) hosts.add(new URL(EXPLORER).host.toLowerCase()); } catch { /* no explorer */ }
+  return hosts;
+}
+
 /** Base URL for the explorer API ("…/api"), PRO or anonymous. */
 function apiBase() {
-  return KEY && chainId ? `https://api.blockscout.com/${chainId}/api` : `${EXPLORER}/api`;
+  return KEY && chainId ? `https://${PRO_HOST}/${chainId}/api` : `${EXPLORER}/api`;
 }
 
 /** Headers for any Blockscout request. */
@@ -50,10 +60,26 @@ function headers(extra = {}) {
 /**
  * fetch() against a path under the API base: `bsFetch("/v2/addresses/0x…/tokens?type=ERC-20")`
  * or a full URL. Timeout defaults to 20 s.
+ *
+ * A full URL is accepted only for an allow-listed host (api.blockscout.com and the
+ * configured explorer), and the PRO key is sent only to those: a URL assembled from
+ * data the chain or an API returned must not be able to carry the key to a stranger.
+ * The check is on the parsed URL, so credentials, "@" tricks and look-alike hosts
+ * do not pass. Redirects are not followed with the key attached.
  */
 function bsFetch(pathOrUrl, { timeoutMs = 20000, ...init } = {}) {
-  const url = /^https?:/.test(pathOrUrl) ? pathOrUrl : apiBase() + pathOrUrl;
-  return fetch(url, { ...init, headers: headers(init.headers), signal: AbortSignal.timeout(timeoutMs) });
+  let url = pathOrUrl;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(String(pathOrUrl))) {
+    let u;
+    try { u = new URL(pathOrUrl); } catch { throw new Error("blockscout: not a valid URL"); }
+    if (u.protocol !== "https:" || u.username || u.password || !allowedHosts().has(u.host.toLowerCase())) {
+      throw new Error(`blockscout: ${u.host || "that host"} is not an allowed Blockscout host`);
+    }
+    url = u.toString();
+  } else {
+    url = apiBase() + pathOrUrl;
+  }
+  return fetch(url, { ...init, ...(KEY ? { redirect: "manual" } : {}), headers: headers(init.headers), signal: AbortSignal.timeout(timeoutMs) });
 }
 
-module.exports = { EXPLORER, UA, apiBase, headers, bsFetch, hasKey, available };
+module.exports = { EXPLORER, UA, apiBase, headers, bsFetch, hasKey, available, allowedHosts };

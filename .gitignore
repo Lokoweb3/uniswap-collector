@@ -54,6 +54,7 @@ digest-state.json
 fee-split-ledger.json
 v4-positions*.json
 watch-*.json
+slipstream-scan-*.json
 backups/
 backup.log
 .claude/

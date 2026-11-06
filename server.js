@@ -69,6 +69,20 @@ const HOST = process.env.LP_BIND || "127.0.0.1";
 // and arm endpoints refuse, and the page hides those controls. The ops strip
 // still shows the last run, from files the collector machine pushes here.
 const READONLY = process.env.LP_READONLY === "1";
+// noTransactionData: this instance neither reads an operator keystore nor serves unsigned
+// calldata (approval state, sell and mint quotes). Explicit setting "noTransactionData": true|false;
+// absent, it is true for the strict, new chains (Base 8453, PulseChain 369) only.
+// LP_READONLY alone does NOT imply it: the Arc viewer and the Robinhood VM are read-only
+// but legitimately serve calldata for Sell/Mint and show the real collector operator.
+const NO_TX = typeof cfg.noTransactionData === "boolean"
+  ? cfg.noTransactionData
+  : settings.STRICT_CHAINS.has(Number(cfg.chainId));
+// A no-transaction-data instance must also be read-only: it has no keystore, so nothing on it may
+// arm, unlock or collect. Refuse to start rather than run half-guarded.
+if (NO_TX && !READONLY) {
+  console.error("Refusing to start: this instance has noTransactionData (Base / PulseChain style) but LP_READONLY is not 1. Start it with LP_READONLY=1.");
+  process.exit(1);
+}
 // Background loops (risk guardian, fee auto-collect, nightly backup) and the
 // companion services (gate, remote MCP, tailscale) run only in the main
 // dashboard process: the configured port, not read-only, not --no-loops. A
@@ -84,7 +98,12 @@ const CACHE_MS = 60_000;
 let cache = { at: 0, payload: null };
 let buildInFlight = null;
 
+const endpoint = require("./endpoint");
+endpoint.installConsoleRedaction();         // a provider key in a URL never reaches a log line
 const provider = require("./rpc").createProvider(cfg); // retries throttled (429/403) answers before failing a read
+// eth_getLogs goes here when settings name a separate endpoint for it (Base's main public RPC refuses every getLogs). Null otherwise.
+const logsProvider = require("./rpc").createLogsProvider(cfg);
+const RPC_SHOWN = endpoint.publicRpc(cfg);  // what a page may be told about the RPC: an origin, never a key
 const npm = new ethers.Contract(cfg.contracts.positionManager, u.NPM_ABI, provider);
 const factory = new ethers.Contract(cfg.contracts.factory, u.FACTORY_ABI, provider);
 
@@ -99,6 +118,7 @@ const V4 = cfg.contracts.v4 && cfg.contracts.v4.positionManager
         posmAddress: cfg.contracts.v4.positionManager,
         owner: cfg.ownerAddress,
         explorerApi: BLOCKSCOUT_API,
+        logsProvider,
       }),
     }
   : null;
@@ -119,7 +139,7 @@ const WETH = String(UNIT.address || cfg.contracts.weth || "").toLowerCase();
 // passphrase involved. Used only to flag open positions the operator cannot
 // collect from yet (new mints won't be approved until you approve them).
 let OPERATOR = null;
-try {
+if (!NO_TX) try {
   const ksPath =
     process.env.LP_KEYSTORE_PATH ||
     path.join(process.env.HOME || "", ".lp-collector", "operator-keystore.json");
@@ -129,36 +149,7 @@ try {
   // No keystore on this machine: skip approval checks rather than fail reads.
 }
 
-/**
- * The unit of account's price in USD, read from a reference stable pool's slot0.
- * When the unit is itself a dollar (cfg.numeraire.usdRate, e.g. Arc's USDC)
- * there is nothing to look up and no pool to depend on.
- */
-async function getWethUsd(blockTag) {
-  if (UNIT.usdRate != null) return Number(UNIT.usdRate);
-  const ref = cfg.usdReference;
-  if (!ref || !ref.stable || !cfg.contracts.weth) return null;
-  try {
-    const poolAddr = await factory.getPool(cfg.contracts.weth, ref.stable, ref.feeTier);
-    if (poolAddr === ethers.ZeroAddress) return null;
-
-    const pool = new ethers.Contract(poolAddr, u.POOL_ABI, provider);
-    const slot0 = await pool.slot0(blockTag != null ? { blockTag } : {});
-    const [t0, t1] = await Promise.all([
-      u.getToken(cfg.contracts.weth, provider),
-      u.getToken(ref.stable, provider),
-    ]);
-
-    // Pool orders tokens by address; work out which side WETH landed on.
-    const wethIsToken0 = cfg.contracts.weth.toLowerCase() < ref.stable.toLowerCase();
-    const d0 = wethIsToken0 ? t0.decimals : t1.decimals;
-    const d1 = wethIsToken0 ? t1.decimals : t0.decimals;
-    const p = u.priceFromSqrt(slot0.sqrtPriceX96, d0, d1);
-    return wethIsToken0 ? p : 1 / p;
-  } catch {
-    return null;
-  }
-}
+const getWethUsd = require("./pricing").makeGetWethUsd({ cfg, unit: UNIT, factory, provider, u }); // see pricing.js
 
 function toFloat(amountStr, decimals) {
   return Number(ethers.formatUnits(amountStr, decimals));
@@ -190,20 +181,7 @@ PRICING.text = pricingText();
 if (STABLE && STABLE !== WETH) {
   u.getToken(STABLE, provider, Number(cfg.chainId)).then((t) => { if (t && t.symbol) { PRICING.stable = t.symbol; PRICING.text = pricingText(); } }).catch(() => {});
 }
-function priceSides(p, wethUsd) {
-  const a0 = p.token0.address.toLowerCase(), a1 = p.token1.address.toLowerCase();
-  // Native ETH (v4 pools) is priced as WETH.
-  const t0IsWeth = a0 === WETH || a0 === ethers.ZeroAddress;
-  const t1IsWeth = a1 === WETH || a1 === ethers.ZeroAddress;
-  if (wethUsd == null) return { usd0: null, usd1: null };
-
-  if (t1IsWeth) return { usd0: p.prices.current * wethUsd, usd1: wethUsd };
-  if (t0IsWeth) return { usd0: wethUsd, usd1: (1 / p.prices.current) * wethUsd };
-  // Pairs against the reference stable: take it at a dollar.
-  if (STABLE && a1 === STABLE) return { usd0: p.prices.current, usd1: 1 };
-  if (STABLE && a0 === STABLE) return { usd0: 1, usd1: 1 / p.prices.current };
-  return { usd0: null, usd1: null };
-}
+const priceSides = require("./pricing").makePriceSides({ weth: WETH, stable: STABLE });
 
 const hist = history.create({ provider, npmAddress: cfg.contracts.positionManager, cfg });
 const basis = require("./basis");
@@ -213,11 +191,11 @@ const pools = require("./pools").create({ cfg, provider });
 
 // Extra wallets to show read-only (config.watchWallets); see watch.js.
 const watch = require("./watch").create({
-  provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, pools,
+  provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, pools, logsProvider,
   getPortfolio: () => portfolio, // created below; only used at refresh time
   getPrices: () => lastPrices,
   priceAtOpen: (addr, t) => longterm.priceAt(priceLogData().hours, addr, t), // price-log price at the deposit hour (TASK-82)
-  getOperator: () => require("./arm").operatorAddress(), // keystore's public address, re-read each time
+  getOperator: () => (NO_TX ? null : require("./arm").operatorAddress()), // keystore's public address, re-read each time
   // === performance-attribution === PnL vs HODL for watched positions: liquidity ledger basis + collect events
   getBasis: (tokenId) => {
     const id = String(tokenId);
@@ -1865,6 +1843,7 @@ async function build() {
   // `positions`, which the collector and guardian act on; counted in the value totals.
   const ext = await watch.externalOf(cfg.ownerAddress, wethUsd);
   errors.push(...ext.errors);
+  const notes = ext.notes || [];
   const external = ext.positions;
   const open = [...positions, ...external];
   const liquidityUsd = open.reduce((s, p) => s + (p.valueUsd || 0), 0);
@@ -1933,6 +1912,7 @@ async function build() {
     external,
     closed,
     errors,
+    notes,
   };
 }
 
@@ -2066,6 +2046,10 @@ const server = http.createServer((req, res) => {
   let counted = true;
   const done = () => { if (counted) { counted = false; activeRequests--; } };
   res.on("finish", done); res.on("close", done);
+  // Defence in depth: whatever a handler puts in a JSON/text body, a configured
+  // endpoint's path or key and any Blockscout PRO key are removed on the way out.
+  const endBody = res.end.bind(res);
+  res.end = (chunk, ...rest) => endBody(res.staticAsset ? chunk : endpoint.redactChunk(chunk), ...rest); // static files from disk (res.staticAsset) hold no secrets // strings, Buffers and Uint8Arrays
   handleRequest(req, res).catch((err) => {
     console.error(`request ${req.method} ${String(req.url).slice(0, 80)} failed: ${err && (err.shortMessage || err.message || err)}`);
     try {
@@ -2142,9 +2126,17 @@ async function handleRequest(req, res) {
   // keystore (same check as unlock.sh), then cache it in RAM with a TTL.
   // The passphrase travels over plain HTTP, so this is loopback-only
   // unconditionally — LP_ALLOW_REMOTE_COLLECT does not open it.
-  if (READONLY && (url.pathname === "/api/unlock" || url.pathname === "/api/lock" || url.pathname.startsWith("/api/arm") || (url.pathname === "/api/collect" && req.method === "POST"))) {
+  if ((READONLY || NO_TX) && (url.pathname === "/api/unlock" || url.pathname === "/api/lock" || url.pathname.startsWith("/api/arm") || (url.pathname === "/api/collect" && req.method === "POST"))) {
     res.writeHead(403, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ ok: false, error: "This dashboard is read-only and cannot arm. Arm from the main dashboard: the unlock is held by the process that runs the collector, and one window covers every chain it collects on." }));
+  }
+
+  // Instances flagged noTransactionData (Base, PulseChain) never touch the operator keystore or
+  // build transaction data (approval state, sell and mint quotes): the Wallet page hides those
+  // tabs too. Other read-only copies (Arc viewer, Robinhood VM) still serve them.
+  if (NO_TX && (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval" || url.pathname === "/api/sell/quote" || url.pathname.startsWith("/api/mint/"))) {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ok: false, operator: null, error: "This dashboard is read-only: no operator keystore and no transaction data here." }));
   }
 
   // The Wallet page: arming, approvals (audit + operator approvals), the vault and the operator, as tabs.
@@ -2156,6 +2148,7 @@ async function handleRequest(req, res) {
       // markup and script inline, so a browser holding an older copy keeps showing
       // old labels and missing controls long after the server was fixed. That is
       // what made a corrected vault page still read "493.293396 ETH".
+      res.staticAsset = true;
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(html);
     } catch {
@@ -2305,7 +2298,7 @@ async function handleRequest(req, res) {
     res.writeHead(200);
     return res.end(JSON.stringify({
       ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
-      rpc: cfg.rpcUrl, explorer: EXPLORER_URL,
+      rpc: RPC_SHOWN, explorer: EXPLORER_URL, readOnly: READONLY, noTx: NO_TX,
       // Null unless settings verify it: a wallet told the wrong native asset keeps
       // showing gas under the wrong ticker.
       nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
@@ -2344,7 +2337,7 @@ async function handleRequest(req, res) {
         owner: ownerAddr, ownerLabel: ownerEntry.label, operator, posm: ethers.getAddress(mgr),
         operators: allOps.map((o) => ({ address: o.address, approved: o.approved, source: o.source })),
         operatorsCoverage: allOps.coverage,
-        chainId: Number(cfg.chainId), chainName: chainDisplayName(), rpc: cfg.rpcUrl,
+        chainId: Number(cfg.chainId), chainName: chainDisplayName(), rpc: RPC_SHOWN,
         // For the page's "add this network" call. Omitted unless the chain's native
         // asset is verified in settings: declaring the wrong one would register the
         // network in someone's wallet with gas labelled as a currency it is not.
@@ -2653,6 +2646,7 @@ async function handleRequest(req, res) {
   }
   if (url.pathname === "/qr.js") {
     try {
+      res.staticAsset = true;
       res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(fs.readFileSync(path.join(__dirname, "qr.js")));
     } catch {
@@ -2685,9 +2679,9 @@ async function handleRequest(req, res) {
       const want = url.searchParams.get("owner");
       const entry = want ? allowed.find((a) => a.address.toLowerCase() === want.toLowerCase()) : allowed[0];
       if (!entry) throw new Error("that wallet is not the main wallet or a wallet listed under wallets in settings.json");
-      const data = await approvalsAudit.audit(entry.address, require("./arm").operatorAddress());
+      const data = await approvalsAudit.audit(entry.address, NO_TX ? null : require("./arm").operatorAddress());
       res.writeHead(200);
-      return res.end(JSON.stringify({ ...data, ownerLabel: entry.label, wallets: allowed, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: EXPLORER_URL, health: tokenHealth.view().byAddress }));
+      return res.end(JSON.stringify({ ...data, ownerLabel: entry.label, wallets: allowed, chainId: Number(cfg.chainId), rpc: RPC_SHOWN, explorer: EXPLORER_URL, health: tokenHealth.view().byAddress }));
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -2701,6 +2695,7 @@ async function handleRequest(req, res) {
   if (url.pathname === "/chat-widget.js") {
     try {
       const body = fs.readFileSync(path.join(__dirname, "chat-widget.js"));
+      res.staticAsset = true;
       res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(body);
     } catch {
@@ -2926,7 +2921,7 @@ async function handleRequest(req, res) {
       const meta = tokenSet.get(token.toLowerCase());
       const outMeta = q.ok ? (q.currencyOut === ethers.ZeroAddress ? { symbol: "ETH", decimals: 18 } : tokenSet.get(q.currencyOut.toLowerCase()) || (q.currencyOut.toLowerCase() === stable ? { symbol: "USDG", decimals: 6 } : { symbol: "?", decimals: 18 })) : null;
       res.writeHead(200);
-      return res.end(JSON.stringify({ ...q, tokenSymbol: meta ? meta.symbol : null, tokenDecimals: meta ? meta.decimals : null, outSymbol: outMeta && outMeta.symbol, outDecimals: outMeta && outMeta.decimals, chainId: Number(cfg.chainId), rpc: cfg.rpcUrl, explorer: EXPLORER_URL }));
+      return res.end(JSON.stringify({ ...q, tokenSymbol: meta ? meta.symbol : null, tokenDecimals: meta ? meta.decimals : null, outSymbol: outMeta && outMeta.symbol, outDecimals: outMeta && outMeta.decimals, chainId: Number(cfg.chainId), rpc: RPC_SHOWN, explorer: EXPLORER_URL }));
     } catch (err) {
       res.writeHead(400);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
@@ -3301,6 +3296,7 @@ async function handleRequest(req, res) {
     const isCss = url.pathname === "/dashboard.css";
     try {
       const body = fs.readFileSync(path.join(__dirname, url.pathname.slice(1)));
+      res.staticAsset = true;
       res.writeHead(200, { "Content-Type": isCss ? "text/css; charset=utf-8" : "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(body);
     } catch {
@@ -3324,6 +3320,7 @@ async function handleRequest(req, res) {
     // The page shell carries the markup the script fills, so a browser holding an
     // older copy shows a page whose controls simply do not exist. The scripts are
     // already no-cache; the shell must be too.
+    res.staticAsset = true;
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     return res.end(html);
   }

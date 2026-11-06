@@ -1,0 +1,65 @@
+{
+  "noTransactionData": true,
+  "_noTransactionDataComment": "true: this instance reads no operator key file and serves no unsigned calldata (/api/approval, /api/v4-approval, /api/sell/quote, /api/mint/* answer 403) and the Wallet page hides the operator approvals, Sell and Mint tabs. Defaults to true for chain 8453 and 369 (PulseChain: set it explicitly in its settings.json too) and false elsewhere: LP_READONLY alone does not imply it.",
+  "_comment": "Base (8453), READ-ONLY instance: Aerodrome Slipstream (two position managers) plus Uniswap v3/v4. Copy to $HOME/base-data/settings.json (or LP_BASE_DATA_DIR). No collector, vault, risk.autoCollect or risk.sell sections: this instance cannot sign. Secrets are NEVER written here: a keyed RPC goes in the environment as LP_BASE_RPC_URL, a Blockscout PRO key as BLOCKSCOUT_API_KEY (both from .env). Every address below is proven by: node tools/verify-onchain.js base",
+  "chain": {
+    "name": "Base",
+    "rpcUrl": "https://mainnet.base.org",
+    "_rpcUrlComment": "Public. mainnet.base.org answers eth_call but refuses every eth_getLogs (HTTP 429), so logs go to logsRpcUrl. Set LP_BASE_RPC_URL in the environment to use a keyed endpoint instead; it overrides this one in that process only and is never shown to a page or logged.",
+    "logsRpcUrl": "https://base-rpc.publicnode.com",
+    "_logsRpcUrlComment": "Public, used only for eth_getLogs: allows 50,000-block ranges but only recent history, so pinned tokenIds remain the primary way to find a staked position.",
+    "chainId": 8453,
+    "explorer": "https://basescan.org",
+    "blockscout": "https://base.blockscout.com",
+    "_blockscoutComment": "Cloudflare answers scripts with an HTML 403, and api.blockscout.com/8453 answers 402 without a key: both are treated as unavailable and the RPC discovery covers it. With BLOCKSCOUT_API_KEY set, requests go to api.blockscout.com/8453.",
+    "maxLogRange": 50000,
+    "historyStartBlock": 53600000,
+    "nativeCurrency": { "symbol": "ETH", "decimals": 18 }
+  },
+  "wallets": {
+    "_comment": "main: Trading, the wallet that holds the Aerodrome positions (no collector exists on this instance). watched: shown read-only.",
+    "main": { "address": "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743", "label": "Trading" },
+    "watched": [
+      { "address": "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb", "label": "Wallet 11" },
+      { "address": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "label": "Wallet 12" }
+    ]
+  },
+  "tokens": {
+    "_comment": "The key USDG is legacy: it is the USD reference stable, here Base USDC (6 decimals). usdReferenceFeeTier 3000: the deepest WETH/USDC pool on Base is Uniswap v3 fee 3000 (42M USDC), not 500.",
+    "USDG": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "WETH": "0x4200000000000000000000000000000000000006",
+    "usdReferenceFeeTier": 3000
+  },
+  "contracts": {
+    "_comment": "positionManager/factory/v4: Uniswap v3 and v4 on Base. slipstream: Aerodrome Slipstream. THREE Aerodrome managers exist and all answer name() 'Slipstream Position NFT v1', so they are told apart by address and by the name given here (which prefixes the token id). The middle 'Gauge Caps' manager 0xa990C6a7...D55F holds none of the positions and is not configured. poolFactory: Aerodrome's classic pool factory, used for the AERO price. tokenIds: positions pinned so a staked one is found without Blockscout. fromBlock: the manager's deploy block, where the log scan stops. scan: false switches the eth_getLogs discovery scan off (pins + the gauges of held pools cover the known ids, and the log RPC cannot reach back that far). To enable it, set scan: true (or remove the key: it then runs only while Blockscout is unavailable) AND set fromBlock to a block inside the log RPC's history (public RPCs keep days to weeks, not years), and scanRange to the widest range that RPC answers (default 2000000, set it to chain.maxLogRange or less for a public RPC).",
+    "positionManager": "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
+    "factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+    "v4": {
+      "positionManager": "0x7C5f5A4bBd8fD63184577525326123B519429bDc",
+      "stateView": "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71",
+      "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b"
+    },
+    "slipstream": [
+      {
+        "name": "aerodrome-v1",
+        "positionManager": "0x827922686190790b37229fd06084350E74485b72",
+        "factory": "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A",
+        "poolFactory": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
+        "tokenIds": [79371151],
+        "scan": false,
+        "fromBlock": 13843719
+      },
+      {
+        "name": "aerodrome-cl2",
+        "positionManager": "0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53",
+        "factory": "0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef",
+        "poolFactory": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
+        "tokenIds": [8905958],
+        "scan": false,
+        "fromBlock": 44394730
+      }
+    ]
+  },
+  "portfolio": {},
+  "dashboard": { "port": 8796 }
+}

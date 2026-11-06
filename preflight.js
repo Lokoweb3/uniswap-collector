@@ -80,7 +80,7 @@ async function main() {
   try {
     chainId = Number((await provider.getNetwork()).chainId);
   } catch (e) {
-    bad(`cannot reach ${cfg.rpcUrl}: ${e.shortMessage || e.message}`);
+    bad(`cannot reach ${require("./endpoint").redactUrl(cfg.rpcUrl)}: ${e.shortMessage || e.message}`);
     return finish();
   }
   if (chainId !== Number(cfg.chainId)) {

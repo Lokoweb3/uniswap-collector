@@ -79,7 +79,7 @@ function create({ provider, cfg, approvedOperators, tokenMeta }) {
       const meta = tokenMeta ? await tokenMeta(token).catch(() => null) : null;
       if (meta) { symbol = meta.symbol; decimals = meta.decimals; }
       else {
-        try { symbol = await c.symbol(); decimals = Number(await c.decimals()); } catch {}
+        try { symbol = String(await c.symbol()).replace(/[^A-Za-z0-9 ._$+-]/g, '').slice(0, 16); decimals = Number(await c.decimals()); } catch {}
       }
       if (!blockCache.has(l.blockNumber)) blockCache.set(l.blockNumber, await blockTime(l.blockNumber));
       const t = blockCache.get(l.blockNumber);

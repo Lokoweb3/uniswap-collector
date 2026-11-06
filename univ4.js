@@ -384,7 +384,7 @@ async function loadPosition(ctx, tokenId) {
  * budgeted steps and persists its progress). Ids stay in the set until a load
  * finds them owned by someone else.
  */
-function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile }) {
+function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile, logsProvider = null }) {
   const FILE = stateFile || dataPath("v4-positions.json");
   let state = { lastScanned: 0, ids: [], blockscoutAt: 0, scannedFrom: null, complete: false, span: 0, lastError: null };
   try {
@@ -427,7 +427,7 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile 
 
   // One getLogs call. No adaptation here — the callers decide the window.
   async function logsIn(lo, hi) {
-    return provider.getLogs({
+    return (logsProvider || provider).getLogs({
       address: posmAddress,
       topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(owner, 32)],
       fromBlock: lo,

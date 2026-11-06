@@ -44,7 +44,6 @@ async function bsLogs(address, topic0, tokenId) {
     `module=logs&action=getLogs&fromBlock=0&toBlock=latest` +
     `&address=${address}&topic0=${topic0}&topic1=${topic1}&topic0_1_opr=and`;
   const url = `${bs.apiBase()}?${query}`;
-  const headers = bs.headers();
   // The anonymous API allows ten requests per window and says when the window
   // resets (x-ratelimit-reset, ms). Once it says no, stop asking until then:
   // retrying inside the window only wastes time, and the build is resumable.
@@ -53,7 +52,7 @@ async function bsLogs(address, topic0, tokenId) {
   }
   let d = null;
   for (let attempt = 0; ; attempt++) {
-    const r = await fetch(url, { headers, signal: AbortSignal.timeout(30000) });
+    const r = await bs.bsFetch(url, { timeoutMs: 30000 }); // allow-listed host, key never follows a redirect
     d = await r.json();
     if (Array.isArray(d.result) || !/too many requests/i.test(d.message || d.result || "")) break;
     const reset = Number(r.headers.get("x-ratelimit-reset"));

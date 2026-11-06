@@ -595,6 +595,57 @@ tick sends it once per ISO week, the first tick at or after Monday 09:00 local, 
 --print` (or `npm run digest`) prints it, `--send` sends now, `/api/digest` returns the text and the Analytics
 page has a "Preview the weekly Telegram digest" link under the Performance panel.
 
+## Base (read-only instance): Aerodrome Slipstream, Uniswap v3/v4
+
+A second, read-only dashboard for Base (chain 8453), started like the Arc viewer and reachable through
+the chain router. It shows Aerodrome Slipstream positions (staked in a gauge and unstaked, with pending
+AERO) through `slipstream.js`, plus Uniswap v3/v4 through the existing readers. It cannot sign: it runs
+`LP_READONLY=1 ... --no-loops --no-services`, its settings have no `collector`, `vault` or `risk`
+sections, and contracts are only ever called with view / `staticCall`.
+
+`"noTransactionData": true` (top level of `settings.json`; set in `settings.base.example.json`, and set it
+in the PulseChain settings too) makes an instance refuse `/api/approval`, `/api/v4-approval`,
+`/api/sell/quote` and `/api/mint/*` (403), skip the operator keystore, and hide the operator approvals,
+Sell and Mint on the Wallet page (`/api/chain` reports `noTx`). It defaults to true for chains 8453 and
+369 and false elsewhere: `LP_READONLY=1` alone does not imply it, so the Arc viewer and the Robinhood VM
+still serve unsigned calldata and show the real operator.
+
+Enable it (nothing changes until `settings.json` exists in its data directory):
+
+```
+mkdir -p ~/base-data && cp settings.base.example.json ~/base-data/settings.json   # edit wallets / tokenIds
+./start-all.sh        # starts :8796 (LP_BASE_PORT) and adds Base to the router (--chains=robinhood,arc,base)
+./stop-all.sh         # stops it by its port only
+node tools/verify-onchain.js base      # read-only proof of every address in the example (PASS / FAIL)
+```
+
+- Two Aerodrome managers coexist and both answer `name()` "Slipstream Position NFT v1", so each is a
+  `contracts.slipstream` entry with its own `name` (it prefixes the token id): `aerodrome-v1` and
+  `aerodrome-cl2` (the "Gauges V3" manager). A gauge whose `nft()` is a different manager is rejected.
+- Staked positions are found without Blockscout: Blockscout when it answers JSON (Base's public one is
+  a Cloudflare page; the PRO gateway needs a key), then pinned `tokenIds` (`ownerOf` is a gauge), the
+  gauges of pools the wallet still holds, and an `eth_getLogs` scan of the manager's Transfer events to and
+  from the wallet (both directions, newest first, resumable: cursor in `slipstream-scan-<name>.json`,
+  chunks of the entry's own `scanRange`, default 2,000,000 -- `chain.maxLogRange` is deliberately not inherited --
+  at most 200 calls and 10 s per wallet per refresh; a log RPC that hangs is cut off at that deadline and
+  backed off, not retried). A failing or partial scan is shown as a quiet note under the errors, never as a
+  position error and never silently empty. `"scan": false` on an entry switches the scan off (the Base example
+  does, for both managers: pins and held-pool gauges cover the known ids); to enable it set `"scan": true`, a
+  `fromBlock` inside the log RPC's history and a `scanRange` that RPC answers. The same code path runs on every chain: it
+  is also what finds a staked NFT on Robinhood when its explorer's Cloudflare blocks scripts.
+- Uniswap v4 on Base is discovered by log scan only (no Blockscout, no indexer) and has not been verified live
+  against a v4 position: the addresses pass `verify-onchain.js`, but treat v4 results there as unconfirmed.
+- The approval and quote routes (`/api/approval`, `/api/v4-approval`, `/api/sell/quote`, `/api/mint/*`) answer 403 on
+  a read-only instance and the operator keystore is never read; the Wallet page hides the approval card.
+- `chain.logsRpcUrl` (public) serves `eth_getLogs` when the main RPC refuses it; `mainnet.base.org` does.
+- A killed gauge (its voter says `isAlive` false) reports `rewards.amount` 0 with the note "gauge killed".
+- An EIP-7702 delegated wallet (code `0xef0100...`) is never mistaken for a gauge.
+- Secrets: a keyed RPC goes in `.env` as `LP_BASE_RPC_URL` (overrides `chain.rpcUrl` in that process, the
+  public one stays as the fallback), the Blockscout PRO key as `BLOCKSCOUT_API_KEY`. Every configured
+  URL is validated (https, no credentials, no localhost/private/link-local/metadata host); a page is only
+  ever told an origin (`rpc` in `/api/chain` etc.), errors and logs have URL paths and `proapi_` keys
+  redacted, and the Bearer key is sent only to `api.blockscout.com` and the configured explorer host.
+
 ## Blockscout API key
 
 Every Blockscout call goes through `blockscout.js`. Put a free PRO key (https://dev.blockscout.com, value

@@ -56,7 +56,7 @@
     },
     "v2Factory": "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
     "slipstream": [
-      { "name": "up", "positionManager": "0x07F44c47743A2f36414A82b9F558ECFCf0EEdCEf", "factory": "0x1ac9dB4a2608ba45D6127B1737949b51Bb54B7F3", "poolFactory": "0xFA5429AEBa338BEa2BFcc1b9a889862Ee395bc28" }
+      { "name": "up", "scanRange": 2000000, "positionManager": "0x07F44c47743A2f36414A82b9F558ECFCf0EEdCEf", "factory": "0x1ac9dB4a2608ba45D6127B1737949b51Bb54B7F3", "poolFactory": "0xFA5429AEBa338BEa2BFcc1b9a889862Ee395bc28" }
     ]
   },
   "collector": {

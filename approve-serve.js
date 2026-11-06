@@ -10,6 +10,7 @@ const path = require("path");
 const { ethers } = require("ethers");
 
 const cfg = require("./settings").load();
+const endpoint = require("./endpoint");
 const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId));
 function operatorAddress() {
   try {
@@ -58,7 +59,7 @@ http
       res.setHeader("Content-Type", "application/json");
       res.writeHead(200);
       return res.end(JSON.stringify({ ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
-        rpc: cfg.rpcUrl, explorer: cfg.explorer || "", nativeCurrency: nativeCurrencyOut() }));
+        rpc: endpoint.publicRpc(cfg), explorer: cfg.explorer || "", nativeCurrency: nativeCurrencyOut() }));
     }
     if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
       res.setHeader("Content-Type", "application/json");
@@ -81,7 +82,7 @@ http
         const others = (await approvedOperators(provider, mgr, ownerEntry.address)).filter((o) => o.approved && (!op || o.address.toLowerCase() !== op.toLowerCase()));
         const wallets = [];
         for (const a of allowed) wallets.push({ ...a, approved: op ? await c.isApprovedForAll(a.address, op).catch(() => null) : null });
-        return res.end(JSON.stringify({ ok: true, version: v, owner: ownerEntry.address, ownerLabel: ownerEntry.label, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: chainDisplayName(), nativeCurrency: nativeCurrencyOut(), rpc: cfg.rpcUrl, explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets }));
+        return res.end(JSON.stringify({ ok: true, version: v, owner: ownerEntry.address, ownerLabel: ownerEntry.label, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: chainDisplayName(), nativeCurrency: nativeCurrencyOut(), rpc: endpoint.publicRpc(cfg), explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets }));
       } catch (err) {
         res.writeHead(500);
         return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));

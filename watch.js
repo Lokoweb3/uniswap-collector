@@ -29,7 +29,7 @@ const CONCURRENCY = 4;
 const MAX_POSITIONS = 300; // a launchpad deployer wallet can own thousands; load the newest ones only
 const tierLabel = (fee) => (fee == null ? "?" : `${+(Number(fee) / 10000).toFixed(3)}%`);
 
-function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator, getBasis, getCollectEvents, getCollectSummary, getClaimedSummary, priceAtOpen = null }) {
+function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, getWethUsd, getPortfolio, getPrices, pools, getOperator, getBasis, getCollectEvents, getCollectSummary, getClaimedSummary, priceAtOpen = null, logsProvider = null }) {
   // === performance-attribution === PnL vs HODL for watched positions.
   // v3: the shared liquidity ledger (getBasis) + collect events (getCollectEvents),
   // the same maths as the main wallet's cards. v4: no per-token liquidity events
@@ -152,16 +152,17 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
   // Positions on other concentrated-liquidity DEXes (settings.json contracts.slipstream;
   // on Robinhood Chain, "up"). Read into `external`, never `positions`: see slipstream.js.
   const slipReaders = ((cfg.contracts && cfg.contracts.slipstream) || []).filter((x) => x && x.positionManager && x.factory).map((spec) =>
-    require("./slipstream").create({ provider, cfg, spec, priceSides, toFloat, bsFetch: require("./blockscout").bsFetch }));
+    require("./slipstream").create({ provider, cfg, spec, priceSides, toFloat, bsFetch: require("./blockscout").bsFetch, logsProvider }));
   /** Open positions on the configured Slipstream DEXes, for any wallet (the main one included). */
   async function externalOf(address, wethUsd) {
-    const out = { positions: [], closed: 0, errors: [] };
+    const out = { positions: [], closed: 0, errors: [], notes: [] };
     for (const r of slipReaders) {
       try {
         const x = await r.positionsOf(address, wethUsd);
         out.positions.push(...x.positions);
         out.closed += x.closed;
         out.errors.push(...x.errors);
+        out.notes.push(...(x.notes || []));
       } catch (err) {
         // Unread is not empty: say so on the wallet rather than show it holding nothing there.
         out.errors.push({ tokenId: r.name, error: `${r.name} positions could not be read: ${err.shortMessage || err.message}` });
@@ -289,6 +290,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         posmAddress: cfg.contracts.v4.positionManager,
         owner: address,
         explorerApi: blockscoutApi(cfg),
+        logsProvider,
         stateFile: dataPath(`v4-positions-${address.toLowerCase()}.json`),
       });
       discovery.set(address, d);
@@ -386,6 +388,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const external = ext.positions;
     closed += ext.closed;
     errors.push(...ext.errors);
+    const notes = ext.notes;
     for (const p of external) {
       if (p.usd0 != null) seenPrices[p.token0.toLowerCase()] = p.usd0;
       if (p.usd1 != null) seenPrices[p.token1.toLowerCase()] = p.usd1;
@@ -421,7 +424,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const rewardsUsd = external.reduce((s, p) => s + ((p.rewards && p.rewards.usd) || 0), 0);
     const walletUsd = holdings ? holdings.walletUsd : null;
     return {
-      ...w, ok: true, positions, external, closed, errors, known, truncated, earned, collector, discovery,
+      ...w, ok: true, positions, external, closed, errors, notes, known, truncated, earned, collector, discovery,
       holdings: holdings
         ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, unscaled: holdings.unscaled || [], partialTotals: holdings.partialTotals, tokens: holdings.rows, tokenCount: holdings.rows.length }
         : null,

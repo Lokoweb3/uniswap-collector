@@ -5,7 +5,7 @@ const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m
 function element(id = '') {
   return { id, hidden: true, style: {}, dataset: {}, value: '', options: [],
     classList: { toggle() {} }, addEventListener() {}, querySelectorAll() { return []; },
-    querySelector() { return element(); } };
+    querySelector() { return element(); }, replaceChildren() {} };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
@@ -15,7 +15,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     const tabs = ids.map(id => Object.assign(element(), { dataset: { tab: id }, textContent: id }));
     const context = {
       location: { hostname: 'localhost', hash: initial ? '#' + initial : '' },
-      document: { getElementById: id => sections.find(s => s.id === id) || (id.startsWith('sec-') ? null : element(id)),
+      document: { createElement: () => element(), getElementById: id => sections.find(s => s.id === id) || (id.startsWith('sec-') ? null : element(id)),
         querySelectorAll: selector => selector === '#tabs a' ? tabs : sections },
       addEventListener: (name, fn) => { listeners[name] = fn; },
       setInterval() {}, setTimeout() {}, clearTimeout() {},

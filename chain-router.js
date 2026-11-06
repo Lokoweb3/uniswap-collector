@@ -23,6 +23,7 @@
  *     on one chain is never presented to the other.
  *
  *   node chain-router.js                  # 8800, Robinhood + Arc
+ *   node chain-router.js --chains=robinhood,arc,base   # also Base (:8796)
  *
  * Not 8799: test/smoke.js starts its own dashboard there, and a router squatting on
  * that port makes the whole smoke suite fail with "fetch failed".
@@ -46,10 +47,18 @@ const COOKIE = "lpchain";
 // The only targets that exist. A request cannot name anything outside this list.
 // accent: each chain gets its own colour so the bar reads as "which chain" at a
 // glance, before any word is read.
-const CHAINS = [
+const KNOWN_CHAINS = [
   { key: "robinhood", label: "Robinhood", accent: "#34d399", port: Number(arg("robinhood-port", 8787)) },
   { key: "arc", label: "Arc", accent: "#38bdf8", port: Number(arg("arc-port", 8797)) },
+  { key: "base", label: "Base", accent: "#0052ff", port: Number(arg("base-port", 8796)) },
 ];
+// Which of the known chains this router fronts: --chains=robinhood,arc,base or LP_ROUTER_CHAINS.
+// The default is exactly the list it has always had, so nothing changes unless a chain is
+// named. An unknown name is ignored (a request still cannot name a target), and the list
+// keeps the order given, so the picker reads the way the operator wrote it.
+const WANTED = String(arg("chains", process.env.LP_ROUTER_CHAINS || "robinhood,arc")).split(",").map((k) => k.trim()).filter(Boolean);
+const CHAINS = [...new Set(WANTED)].map((k) => KNOWN_CHAINS.find((c) => c.key === k)).filter(Boolean);
+if (!CHAINS.length) CHAINS.push(KNOWN_CHAINS[0]);
 const DEFAULT = arg("default", "robinhood");
 const byKey = (k) => CHAINS.find((c) => c.key === k) || null;
 
@@ -272,4 +281,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, vaultOf, CHAINS, COOKIE, nsName, server };
+module.exports = { KNOWN_CHAINS, chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, vaultOf, CHAINS, COOKIE, nsName, server };

@@ -2179,7 +2179,9 @@ function render(d){
     : '';
 
   $('#errors').innerHTML = warn + (d.errors || []).map(e =>
-    `<div class="err">Position ${e.tokenId} could not be read. ${e.error}</div>`).join('');
+    `<div class="err">Position ${esc(String(e.tokenId))} could not be read. ${esc(String(e.error))}</div>`).join('');
+  // Informational lines (e.g. a partial staked-position scan): quiet, not an error.
+  $('#errors').innerHTML += (d.notes || []).map(n => `<div class="muted" style="font-size:12px;opacity:.7;margin:2px 0">${esc(n)}</div>`).join('');
 
   // Closed positions: hidden behind a toggle, remembered per browser.
   const ct = $('#closedtoggle'), cl = $('#closedlist');
@@ -2608,8 +2610,8 @@ function histDiscoveryNote(d) {
   const inc = ((d && d.wallets) || []).filter(w => !w.discovery || w.discovery.complete !== true);
   if (!inc.length) return '';
   return 'Position discovery is not complete for ' + inc.map(w => {
-    const r = w.discovery && w.discovery.error ? `: ${w.discovery.error}` : w.discovery ? '' : ': not started';
-    return `${w.label || shortA(w.address)}${r}`;
+    const r = w.discovery && w.discovery.error ? `: ${esc(String(w.discovery.error))}` : w.discovery ? '' : ': not started';
+    return `${esc(String(w.label || shortA(w.address)))}${r}`;
   }).join('; ') + '. Positions it has not reached yet are not listed.';
 }
 function histListHtml(d, filter) {
@@ -3065,7 +3067,7 @@ async function load(fresh){
     fetchedAt.set(d, Date.now());
     render(d);
   }catch(e){
-    $('#list').innerHTML = `<div class="err">Could not reach the chain. ${e.message}
+    $('#list').innerHTML = `<div class="err">Could not reach the chain. ${esc(String(e.message))}
       <br>Check chain.rpcUrl in settings.json and that the server is still running.</div>`;
   }finally{
     btn.disabled = false;
@@ -3673,9 +3675,9 @@ function renderWatch(d){
   // card each saying so; their balance, tokens and collector state stay one click down.
   const quiet = [];
   $('#watchlist').innerHTML = shown.map(w => {
-    const name = w.label ? `${w.label} <span class="muted">${shortA(w.address)}</span>` : shortA(w.address);
+    const name = w.label ? `${esc(w.label)} <span class="muted">${shortA(w.address)}</span>` : shortA(w.address);
     const link = chainRef(d.explorer, `/address/${w.address}`, name, w.address);
-    if (!w.ok) return `<div class="watchwallet"><div class="wh">${link}<span class="idle">${w.error || 'could not load'}</span></div></div>`;
+    if (!w.ok) return `<div class="watchwallet"><div class="wh">${link}<span class="idle">${esc(String(w.error || 'could not load'))}</span></div>${walletIssues(w)}</div>`;
     const t = w.totals;
     const h = w.holdings;
     const walletPart = h
@@ -3709,7 +3711,7 @@ function renderWatch(d){
     const open = [...w.positions, ...(w.external || [])];
     if (!open.length) {
       quiet.push(`<div class="wqrow"><div class="wqline">${link}<span class="muted">${w.closed ? `${w.closed} closed` : 'none opened'}</span><span class="wqval">${usd(t.totalUsd)}</span></div>`
-        + `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">${walletPart}${earnedPart}${stakingPart(stakingTokensFor(w.address.toLowerCase()))}${collectorPart}</div>${toks}</details></div>`);
+        + `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">${walletPart}${earnedPart}${stakingPart(stakingTokensFor(w.address.toLowerCase()))}${collectorPart}</div>${toks}</details>${walletIssues(w)}</div>`);
       return '';
     }
     const cards = sortLT(open).map(p =>
@@ -3717,7 +3719,7 @@ function renderWatch(d){
       // label rides in the header because a watched card is read out of context.
       positionCard(p, d, { wallet: w.label || shortA(w.address), walletAddr: w.address })
     ).join('');
-    return `<div class="watchwallet">${head}${toks}<div class="wcards" id="${cardsId}">${cards}</div></div>`;
+    return `<div class="watchwallet">${head}${walletIssues(w)}${toks}<div class="wcards" id="${cardsId}">${cards}</div></div>`;
   }).join('') + (quiet.length
     ? `<div class="watchwallet wquiet"><div class="wqhead">No open positions <span class="muted">· ${quiet.length} wallet${quiet.length === 1 ? '' : 's'}</span></div>${quiet.join('')}</div>`
     : '');
@@ -3725,6 +3727,13 @@ function renderWatch(d){
     applyWalletOpen(w.address.toLowerCase(), 'wcards-' + w.address.toLowerCase());
   renderSidebar();
   renderPosHistory(); // its Open count includes the external positions just drawn
+}
+// A watched wallet's per-position read errors and its informational notes (e.g. a partial
+// staked-position scan), escaped, drawn together under that wallet.
+function walletIssues(w) {
+  const errs = (w.errors || []).map(e => `<div class="err">Position ${esc(String(e.tokenId))} could not be read. ${esc(String(e.error))}</div>`);
+  const notes = (w.notes || []).map(n => `<div class="muted wnote" style="font-size:12px;opacity:.7;margin:2px 0">${esc(String(n))}</div>`);
+  return errs.length || notes.length ? `<div class="wissues">${errs.join('')}${notes.join('')}</div>` : '';
 }
 // The watched-wallet cards. A failed read or an ok:false answer never replaces
 // them: the last good cards stay, marked with their age and the failure. Only a
@@ -3932,14 +3941,14 @@ async function loadRisk(){
           <span>Holdings<b>${p.amountEth == null ? '—' : amount(p.amountEth) + ' ' + (p.quoteSymbol || 'ETH') + ' · ' + fmtN(p.amountToken) + ' ' + (p.symbolToken || '')}</b></span>
         </div>
         ${rulesLine(p)}
-        ${p.reasons && p.reasons.length ? `<div class="reasons">${p.reasons.join(' · ')}</div>` : ''}
-        ${lc ? `<div class="reasons">last close attempt: ${lc.status}${lc.error ? ' — ' + lc.error : ''}</div>` : ''}
+        ${p.reasons && p.reasons.length ? `<div class="reasons">${p.reasons.map(x => esc(String(x))).join(' · ')}</div>` : ''}
+        ${lc ? `<div class="reasons">last close attempt: ${esc(String(lc.status))}${lc.error ? ' — ' + esc(String(lc.error)) : ''}</div>` : ''}
         <button class="reload closebtn" data-close="${p.tokenId}" data-pair="${p.pair}" ${READ_ONLY ? 'disabled' : ''}>Close now</button>
       </article>`;
     }).join('');
     const df = d.defaults || {};
     $('#riskrecent').innerHTML = (d.recent || []).length
-      ? 'Recent: ' + d.recent.slice(0, 5).map(r => `${new Date(r.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${r.pair} ${r.status}${r.tx ? ' <a href="' + (EXPLORER || '') + '/tx/' + r.tx + '" target="_blank" rel="noopener">tx</a>' : ''}${r.error ? ' (' + r.error + ')' : ''}`).join(' · ')
+      ? 'Recent: ' + d.recent.slice(0, 5).map(r => `${new Date(r.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${esc(r.pair)} ${esc(r.status)}${r.tx ? ' <a href="' + (EXPLORER || '') + '/tx/' + r.tx + '" target="_blank" rel="noopener">tx</a>' : ''}${r.error ? ' (' + esc(String(r.error)) + ')' : ''}`).join(' · ')
       : `One Telegram message per event. Defaults for discovered positions: dump -${df.alertPct ?? 20}%/1h, close-now -${df.closePct ?? 50}% from entry, out of range ${df.outOfRangeMinutes ?? 120} min, liquidity -${df.tvlDropPct ?? 50}% vs 24h high. Auto-close only where switched on; proceeds go to the position's own wallet.`;
   } catch(e){ loadFailed('Risk guardian', e); }
 }

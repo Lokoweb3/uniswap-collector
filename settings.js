@@ -25,6 +25,34 @@
 const fs = require("fs");
 const path = require("path");
 const { DATA_DIR } = require("./data-dir");
+const endpoint = require("./endpoint");
+
+// Chains whose instances are new and read-only fail closed on any configured URL
+// that is not a plain public https endpoint (H4: no SSRF, no credentials in a URL).
+// Other chains are not re-validated, so their behaviour is exactly what it was;
+// chain.strictEndpoints: true or LP_STRICT_ENDPOINTS=1 opts any chain in.
+const STRICT_CHAINS = new Set([8453, 369]);
+// An RPC URL that may carry a provider key, from the environment only, never from a file.
+const ENV_RPC = { 8453: "LP_BASE_RPC_URL" };
+
+/** The endpoint settings of `chain`, validated (strict chains) and with the env override applied. */
+function endpointsOf(chain) {
+  const id = Number(chain.chainId);
+  const strict = STRICT_CHAINS.has(id) || chain.strictEndpoints === true || process.env.LP_STRICT_ENDPOINTS === "1";
+  const check = (url, what) => (strict && url ? endpoint.validateEndpoint(url, what) : url);
+  const listed = Array.isArray(chain.rpcUrls) ? chain.rpcUrls.filter(Boolean) : [];
+  listed.forEach((u, i) => check(u, `chain.rpcUrls[${i}]`));
+  check(chain.rpcUrl, "chain.rpcUrl");
+  check(chain.explorer, "chain.explorer");
+  check(chain.blockscout, "chain.blockscout");
+  check(chain.logsRpcUrl, "chain.logsRpcUrl");
+  const envName = ENV_RPC[id];
+  const fromEnv = envName && process.env[envName] ? String(process.env[envName]).trim() : "";
+  if (fromEnv) endpoint.validateEndpoint(fromEnv, envName);
+  for (const u of [chain.rpcUrl, ...listed, chain.logsRpcUrl]) endpoint.registerEndpoint(u);
+  endpoint.registerEndpoint(fromEnv, { env: true }); // a keyed URL by definition: every part of it
+  return { fromEnv, listed };
+}
 
 // settings.json belongs to the instance, so it lives in the data directory. A
 // second chain gets its own directory and its own file; with no --data-dir the
@@ -60,9 +88,15 @@ function toLegacy(raw) {
   const s = strip(raw);
   const chain = s.chain || {}, wallets = s.wallets || {}, tokens = s.tokens || {}, col = s.collector || {}, vault = s.vault || {}, risk = s.risk || {}, al = s.alerts || {};
   const main = wallets.main && typeof wallets.main === "object" ? wallets.main : { address: wallets.main, label: "Main" };
-  const extraRpcs = Array.isArray(chain.rpcUrls) ? chain.rpcUrls.filter(Boolean) : [];
+  const { fromEnv, listed } = endpointsOf(chain);
+  // With an env override the keyed URL leads and the file's public one stays as the fallback.
+  const extraRpcs = fromEnv ? [...new Set([fromEnv, chain.rpcUrl, ...listed].filter(Boolean))] : listed;
   const cfg = {
-    rpcUrl: chain.rpcUrl,
+    rpcUrl: fromEnv || chain.rpcUrl,
+    // What a browser may be shown (an origin): the file's public URL, never the env one.
+    ...(fromEnv ? { rpcPublic: chain.rpcUrl || null, rpcFromEnv: true } : {}),
+    // A public RPC that answers eth_getLogs when the main one refuses it (Base's does).
+    ...(chain.logsRpcUrl ? { logsRpcUrl: chain.logsRpcUrl } : {}),
     // Extra endpoints for the same chain, in priority order. Reads fail over to
     // a later one when an earlier stops answering; each is checked for the right
     // chain id before use. The key is absent entirely when the chain has only
@@ -93,6 +127,8 @@ function toLegacy(raw) {
     // it saves two RPC calls and pins the value for a chain with irregular blocks.
     ...(Number(chain.blockMs) > 0 ? { blockMs: Number(chain.blockMs) } : {}),
     chainId: chain.chainId,
+    // Top-level "noTransactionData": true|false. Absent, server.js defaults it to true for Base/PulseChain.
+    ...(typeof s.noTransactionData === "boolean" ? { noTransactionData: s.noTransactionData } : {}),
     // No fallback to a particular chain's explorer: an empty string means this
     // chain has none, and the page renders identifiers as plain text with a copy
     // button instead of dead links.
@@ -249,4 +285,4 @@ function save(mutate, file = FILE) {
   return toLegacy(raw);
 }
 
-module.exports = { FILE, EXAMPLE, read, load, wallets, save, toLegacy, fromLegacy };
+module.exports = { STRICT_CHAINS, FILE, EXAMPLE, read, load, wallets, save, toLegacy, fromLegacy };

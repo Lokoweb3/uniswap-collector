@@ -18,30 +18,47 @@ H6. Follow `/mnt/c/Swarm-Projects/CLAUDE.md`: servers bind 127.0.0.1 (override `
 
 ## ON-CHAIN VERIFICATION (status as of this spec)
 
-IMPORTANT: the spec-writer agent had NO shell tool (only file read/search/write), so it could not run curl/node and performed ZERO on-chain calls. Nothing below is verified. The addresses marked "given" come from the task description / live `settings.json`; the rest are from model memory and are UNVERIFIED. A ready, untested, read-only script was written at
+NOTE (superseded for Base, see the table below, verified at implementation time): the spec-writer agent had NO shell tool (only file read/search/write), so it could not run curl/node and performed ZERO on-chain calls. Nothing below is verified. The addresses marked "given" come from the task description / live `settings.json`; the rest are from model memory and are UNVERIFIED. A ready, untested, read-only script was written at
 `/tmp/claude-1000/-mnt-c-Swarm-Projects/07a8a466-72c6-4b70-8eb0-c9f28bbb12a1/scratchpad/verify-onchain.js`
 (run `node <that path> base` and `node <that path> pulse`; `CAND=0xmgr1,0xmgr2 node ... base` to test candidate newer Aerodrome managers). The orchestrator (or the Task 4 implementer, as its first step) must run it and paste the output into the table below / into `REPORT.md`. It uses ethers from the project's `node_modules`, public RPCs `https://mainnet.base.org` and `https://rpc.pulsechain.com`, and only `eth_chainId`, `eth_call`, `eth_getBalance`, `eth_getCode`.
 
 Source of the Robinhood values (live settings, read-only, given): sNET `0xb773ec2C326B7f98a5a83fc098825492F020a4c7`, NET `0xCA9c78Dd337A67F6e0077F65F5E9218719d30eDf`, staking contract `0xB078cc304A0B264C5F3680DC0488954ACcd02E87` (these are on Robinhood chain 4663; Task 3 needs no new verification, the existing ledger already runs against them). Live watched wallets include `collect: true` for SEAL wallet, Trading, LP Rewards (relevant to Task 2 footer).
 
-### Base (8453), public RPC https://mainnet.base.org
-| Item | Address | Check to perform | Expected | Status |
+### Base (8453), public RPC https://mainnet.base.org  (VERIFIED 2026-11-06, read-only; re-run: `node tools/verify-onchain.js base`)
+Every row was proven by `eth_call` / `eth_getCode` against the public RPC (Base head about 53.69M). `tools/verify-onchain.js base` repeats every PASS below and also checks that each address written in `settings.base.example.json` has a PASS line. All three Aerodrome managers return `name()` "Slipstream Position NFT v1": identify them by address, never by name.
+
+| Item | Address | Call | Result | Status |
 |---|---|---|---|---|
-| chain | - | eth_chainId | 0x2105 | UNVERIFIED |
-| Slipstream v1 NPM (given) | 0x827922686190790b37229fd06084350E74485b72 | `name()`, `factory()` | "Slipstream Position NFT v1"; factory = CL factory below | UNVERIFIED |
-| CL factory (memory) | 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A | equals `NPM.factory()` | true | UNVERIFIED |
-| token #79371151 | - | NPM `ownerOf(79371151)`; `positions(79371151)` | owner = Trading wallet 0xaDf94A20558E1E6d64c429F8F9f017169BF3d743 OR a gauge; token0/token1 = WETH/cbBTC; tickSpacing 100 | UNVERIFIED |
-| gauge of that pool | via `factory.getPool(t0,t1,100).gauge()` | `gauge.nft()` = NPM, `gauge.rewardToken()` = AERO, `gauge.stakedValues(Trading)` contains 79371151 (`stakedContains`) | if staked | UNVERIFIED |
-| WETH (memory) | 0x4200000000000000000000000000000000000006 | symbol()/decimals() | WETH/18 | UNVERIFIED |
-| USDC (memory) | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 | symbol()/decimals() | USDC/6 | UNVERIFIED |
-| cbBTC (memory) | 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf | symbol()/decimals() | cbBTC/8 | UNVERIFIED |
-| AERO (memory) | 0x940181a94A35A4569E4529A3CDfB74e38FD98631 | symbol(); equals gauge.rewardToken() | AERO/18 | UNVERIFIED |
-| Newer Aerodrome CL manager | NOT KNOWN | find it; then `name()`, `factory()`, `ownerOf(8905958)`, `positions(8905958)` | position = USDC/LAPTOP, tickSpacing 200 (0.8% = "CL200"), owner = a user wallet or its gauge | UNVERIFIED, address unknown (Open Q1) |
-| Aerodrome classic PoolFactory (memory, for AERO price) | 0x420DD381b31aEf6683db6B902084cB0FFECe40Da | `getPool(AERO, WETH, false)` returns non-zero pool with reserves | non-zero | UNVERIFIED |
-| WETH/USDC pricing pool | candidates: Uniswap v3 (factory memory 0x33128a8fC17869897dcE68Ed026d694621f6FDfD) fee 500; Slipstream ts 100 and 500 | `getPool(WETH,USDC,x)`, `liquidity()`, USDC `balanceOf(pool)` | pick the deepest; record address, liquidity, USDC balance | UNVERIFIED |
-| Uniswap v3 NPM (memory) | 0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1 | `name()`, `factory()` | factory = Uniswap v3 factory above | UNVERIFIED |
-| Uniswap v4 PoolManager / PositionManager / StateView (memory) | 0x498581fF718922c3f8e6A244956aF099B2652b2b / 0x7C5f5A4bBd8fD63184577525326123B519429bDc / 0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71 | `getCode` non-empty; PositionManager `name()`/`balanceOf(Trading)` | code present | UNVERIFIED (secondary) |
-| Multicall3 | 0xcA11bde05977b3631167028862bE2a173976CA11 | `getCode` non-empty | present | UNVERIFIED (optional) |
+| chain | - | eth_chainId | 0x2105 (8453) | PASS |
+| Slipstream v1 NPM | 0x827922686190790b37229fd06084350E74485b72 | name() / symbol() / factory() | "Slipstream Position NFT v1" / "AERO-CL-POS" / 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A (= CL factory) | PASS |
+| v1 deploy block | same | getCode at 13,843,718 / 13,843,719 | "0x" / code | PASS (fromBlock 13843719) |
+| token #79371151 | v1 NPM | ownerOf; positions | owner = Trading 0xaDf94A20558E1E6d64c429F8F9f017169BF3d743 (not staked); WETH/cbBTC, tickSpacing 100, ticks -265800..-265200, liquidity 6975006731118, operator = gauge | PASS |
+| v1 pool + gauge | CL factory getPool(WETH,cbBTC,100) | pool.gauge() ; factory.voter().gauges(pool) | pool 0x70aCDF2Ad0bf2402C957154f944c19Ef4e1cbAE1, gauge 0x41b2126661C673C2beDd208cC72E85DC51a5320a (both agree); gauge.nft() = v1 NPM, rewardToken() = AERO | PASS |
+| v1 gauge state | gauge 0x41b2... | stakedContains(Trading,id) / stakedLength / earned / voter.isAlive | false / 0 / reverts "NA" / false (periodFinish 2026-10-22) | NOT STAKED, GAUGE KILLED |
+| Newer manager ("Gauges V3" NPM) | 0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53 | name() / symbol() / factory() | "Slipstream Position NFT v1" / "AERO-CL-POS" / 0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef | PASS (answers Open Q1) |
+| cl2 deploy block | same | getCode at 44,394,729 / 44,394,730 | "0x" / code | PASS (fromBlock 44394730) |
+| token #8905958 | cl2 NPM | ownerOf; positions (same 12-field tuple as v1) | owner = Trading (not staked); USDC/LAPTOP, tickSpacing 200, ticks 305400..309400, liquidity 14324821211673834, owed 249320 / 10163567688833743533 | PASS |
+| cl2 pool + gauge | cl2 factory getPool(USDC,LAPTOP,200) | pool.gauge(); voter().gauges(pool) | pool 0x99cf3E8bfB02c300312c53Aac5D0B082e3D5975C, gauge 0x334C37C4133aC56961Ef428696D2D375E89cCA03; gauge.nft() = cl2 NPM, rewardToken() = AERO | PASS |
+| cl2 gauge state | gauge 0x334C... | stakedContains / stakedLength / earned / isAlive | false / 0 / reverts "NA" / false | NOT STAKED, GAUGE KILLED |
+| "Gauge Caps" NPM (not configured) | 0xa990C6a764b73BF43cee5Bb40339c3322FB9D55F | factory(); ownerOf(8905958) | 0xaDe65c38CD4849aDBA595a4323a8C7DdfE89716a; reverts (token does not exist there) | INFO: holds none of the positions; left out of the example |
+| Voter | 0x16613524e02ad97eDfeF371bC883F2F5d6C480A5 | isAlive over all 2013 gauges | 0 alive | INFO: every Aerodrome gauge is killed; reader reports AERO 0 with "gauge killed" |
+| Trading wallet | 0xaDf94A20558E1E6d64c429F8F9f017169BF3d743 | getCode | 0xef0100 + 69007702764179f14f51cdce752f4f775d74e139 (EIP-7702 delegated EOA) | PASS: "owner has code" must exclude 0xef0100 and be confirmed by gauge.nft() |
+| Wallet 11 / Wallet 12 | 0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb / 0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A | getBalance; balanceOf on v1 / cl2 / Uniswap v3 NPM | 0.000952 ETH, 1/0/39 ; 0.000302 ETH, 0/0/4 | PASS |
+| WETH | 0x4200000000000000000000000000000000000006 | symbol / decimals | WETH / 18 | PASS |
+| USDC | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 | symbol / decimals | USDC / 6 | PASS |
+| cbBTC | 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf | symbol / decimals | cbBTC / 8 | PASS |
+| LAPTOP | 0xB095274743941e953c746F9C228DA9c18Bb6ec29 | symbol / decimals | LAPTOP / 18 | PASS |
+| AERO | 0x940181a94A35A4569E4529A3CDfB74e38FD98631 | symbol / decimals; = gauge.rewardToken() | AERO / 18; yes | PASS |
+| Aerodrome classic PoolFactory | 0x420DD381b31aEf6683db6B902084cB0FFECe40Da | getPool(AERO,USDC,false) + reserves | 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d: 2.49M USDC / 4.31M AERO => AERO $0.579 | PASS |
+| Uniswap v3 factory | 0x33128a8fC17869897dcE68Ed026d694621f6FDfD | getPool(WETH,USDC,100/500/3000/10000); liquidity; USDC balance | deepest fee 3000: 0x6c561B446416E1A00E8E93E221854d6eA4171372 (41.0M USDC, liq 3.13e19); fee 500 0xd0b5...F224 (1.83M); fee 10000 0x0b1C...2d69 (0.54M); fee 100 0xb4CB...00e5 (0.10M) | PASS: usdReferenceFeeTier 3000 |
+| Uniswap v3 NPM | 0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1 | name() / factory() | "Uniswap V3 Positions NFT-V1" / 0x3312...FdfD | PASS |
+| Uniswap v4 PoolManager | 0x498581fF718922c3f8e6A244956aF099B2652b2b | getCode | 24,009 bytes | PASS |
+| Uniswap v4 PositionManager | 0x7C5f5A4bBd8fD63184577525326123B519429bDc | name(); poolManager() | "Uniswap v4 Positions NFT"; 0x4985...2b2b (not enumerable: tokenOfOwnerByIndex reverts) | PASS |
+| Uniswap v4 StateView | 0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71 | poolManager() | 0x4985...2b2b | PASS |
+| Multicall3 | 0xcA11bde05977b3631167028862bE2a173976CA11 | getCode | 3,808 bytes | PASS (not used by the dashboard) |
+| Log RPC | https://base-rpc.publicnode.com | eth_getLogs, 50,000 blocks, Transfer logs of the cl2 NPM | 112 logs; but only recent history (older ranges time out or need a token) | PASS: `chain.logsRpcUrl`, `maxLogRange` 50000 |
+| mainnet.base.org logs | https://mainnet.base.org | eth_getLogs | HTTP 429 for every range while eth_call works | FAIL for logs, hence `logsRpcUrl` |
+| Blockscout | base.blockscout.com / api.blockscout.com/8453 | GET /api/v2 | Cloudflare HTML 403 / JSON 402 without a key | UNAVAILABLE: treated as "unavailable", RPC discovery covers it |
 
 ### PulseChain (369), public RPC https://rpc.pulsechain.com
 | Item | Address | Check | Expected | Status |
@@ -253,7 +270,7 @@ Out: any transaction, farm deposit/withdraw/harvest, v3-style DEXes on Pulse (9i
 
 Flag legend: [DESIGN] would change the design if answered differently; [DATA] only fills in a value.
 
-1. [DATA] Address of the newer Aerodrome CL position manager holding #8905958 (USDC/LAPTOP, CL200) and its CL factory/gauge factory. Not known from the code or memory; must be proven with `ownerOf(8905958)`/`positions(8905958)`. If #8905958 turns out to be on a manager with an incompatible `positions()` ABI (different tuple), `slipstream.js` needs an ABI variant per spec [DESIGN].
+1. RESOLVED (0xe1f8cd9A...8b53, see the Base table; same positions() tuple, no ABI variant needed). [DATA] Address of the newer Aerodrome CL position manager holding #8905958 (USDC/LAPTOP, CL200) and its CL factory/gauge factory. Not known from the code or memory; must be proven with `ownerOf(8905958)`/`positions(8905958)`. If #8905958 turns out to be on a manager with an incompatible `positions()` ABI (different tuple), `slipstream.js` needs an ABI variant per spec [DESIGN].
 2. [DATA] Which Base wallet(s) own #8905958 and which other Base wallets to watch. Assumption: Trading `0xaDf9...3d743` is `wallets.main`; add others to `watched`.
 3. [DESIGN] Does the public Base RPC allow `eth_getLogs` ranges wide enough for the Transfer-scan fallback, and is `eth_getCode` at old blocks (archive) available to find a deploy block? Assumption: neither is needed because pinned `tokenIds` are the primary no-Blockscout path; the scan is best-effort with settings-provided `fromBlock`.
 4. [DESIGN] PulseX farm contract: none identified. If none is verifiable, farms are skipped (stated). If one exists with a non-MasterChef interface, the adapter `kind` set grows.

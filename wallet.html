@@ -570,7 +570,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     <div data-id="vault"></div>
   </div>
 </div></div>
-<div class="card">
+<div class="card" id="operator-approvals">
   <h2>Operator approvals</h2>
   <p class="note">The collector needs one <span class="mono">setApprovalForAll</span> per position manager from every wallet it collects for. Open a version to grant or revoke it with that wallet.</p>
   <details class="approve"><summary>Uniswap v3 position manager</summary><div id="approve-v3"><div class="wrap">
@@ -1010,7 +1010,8 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   const pending = new Map(); let active = null;
   window.whenTab = (id, fn) => { if (active === id) fn(); else pending.set(id, fn); };
   const show = (id) => {
-    if (!document.getElementById('sec-' + id)) id = 'arm';
+    const secEl = document.getElementById('sec-' + id);
+    if (!secEl || secEl.dataset.noTx) id = 'arm';   // Sell/Mint are unavailable on a noTx instance
     for (const s of document.querySelectorAll('section.tab')) s.hidden = s.id !== 'sec-' + id;
     for (const a of tabs) a.classList.toggle('here', a.dataset.tab === id);
     document.title = tabs.find((a) => a.dataset.tab === id).textContent + ' · Wallet';
@@ -1024,11 +1025,12 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 <script>
 
 (() => {
+  const escHtml = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const root = document.getElementById('sec-arm');
   const $ = (s) => root.querySelector(s);
   const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
   let st = null, stError = null, provider = null, signer = null, account = null;
-  const status = (el, msg, cls = '') => { $(el).innerHTML = `<span class="${cls}">${msg}</span>`; };
+  const status = (el, msg, cls = '') => { const s = document.createElement('span'); s.className = cls; s.textContent = msg; $(el).replaceChildren(s); };
   const isOwner = () => !!(account && st && st.owner && account.toLowerCase() === st.owner.toLowerCase());
 
   function local() {
@@ -1198,13 +1200,15 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 <script>
 
 (() => {
+  const escHtml = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const root = document.getElementById('audit');
   const $ = (s) => root.querySelector(s);
   const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
   const ERC20 = ['function approve(address spender, uint256 amount) returns (bool)'];
   const NFT = ['function setApprovalForAll(address operator, bool approved)'];
   let data = null, provider = null, signer = null, account = null;
-  const status = (m, cls = '') => { $('[data-id="status"]').innerHTML = `<span class="${cls}">${m}</span>`; };
+  const status = (m, cls = '') => { const s = document.createElement('span'); s.className = cls; s.textContent = m; $('[data-id="status"]').replaceChildren(s); };
+  const statusHtml = (m, cls = '') => { $('[data-id="status"]').innerHTML = `<span class="${cls}">${m}</span>`; }; // trusted markup only: escape every interpolated value
   const selected = () => $('[data-id="wallet"]').value;
   const canSign = () => !!(signer && account && account.toLowerCase() === selected().toLowerCase());
   const fmtAmt = (r) => r.unlimited ? '<span class="bad">unlimited</span>' : (r.amount == null ? '—' : r.amount.toLocaleString('en-US', { maximumFractionDigits: 4 }));
@@ -1217,7 +1221,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     if (!data.ok) { status(data.error || 'failed', 'bad'); return; }
     const sel = $('[data-id="wallet"]');
     if (!sel.options.length) {
-      sel.innerHTML = data.wallets.map((w) => `<option value="${w.address}">${w.label} (${short(w.address)})</option>`).join('');
+      sel.innerHTML = data.wallets.map((w) => `<option value="${escHtml(w.address)}">${escHtml(w.label)} (${escHtml(short(w.address))})</option>`).join('');
     }
     sel.value = data.owner;
     render();
@@ -1227,15 +1231,15 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
   function healthBadge(addr) {
     const h = data.health && data.health[addr.toLowerCase()];
     if (!h) return '';
-    return ` <span class="health" title="${(h.notes || []).join(', ')}">${h.badge}</span>`;
+    return ` <span class="health" title="${escHtml((h.notes || []).join(', '))}">${escHtml(h.badge)}</span>`;
   }
 
   function render() {
     const d = data;
     const tb = $('[data-id="allow"] tbody');
     tb.innerHTML = d.allowances.map((r, i) => `<tr>
-      <td><b>${r.symbol || '?'}</b>${healthBadge(r.token)}<div class="mono muted"><a href="${d.explorer}/token/${r.token}" target="_blank" rel="noopener">${short(r.token)}</a></div></td>
-      <td>${r.spenderLabel ? `<b>${r.spenderLabel}</b><div class="mono muted">${short(r.spender)}</div>` : `<span class="mono">${r.spender}</span>`}</td>
+      <td><b>${escHtml(r.symbol || '?')}</b>${healthBadge(r.token)}<div class="mono muted"><a href="${escHtml(d.explorer)}/token/${escHtml(r.token)}" target="_blank" rel="noopener">${short(r.token)}</a></div></td>
+      <td>${r.spenderLabel ? `<b>${escHtml(r.spenderLabel)}</b><div class="mono muted">${short(r.spender)}</div>` : `<span class="mono">${escHtml(r.spender)}</span>`}</td>
       <td>${fmtAmt(r)}</td>
       <td>${when(r.grantedAt)}</td>
       <td>${r.unlimited ? '<span class="pill bad">unlimited</span> ' : ''}${r.old ? '<span class="pill warn">older than 90 days</span>' : ''}${!r.spenderLabel ? ' <span class="pill warn" title="Not a known Uniswap / vault contract">unknown spender</span>' : ''}</td>
@@ -1245,7 +1249,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     if (d.allowancesOk) alc.textContent = `${d.allowances.length} standing · ${d.allowances.filter((r) => r.unlimited).length} unlimited`;
     else {
       // A failed scan is a status, not a heading: the count is unknown, not zero.
-      alc.innerHTML = `<span class="pill bad" title="${String(d.allowancesError || 'unknown error').replace(/"/g, '&quot;')}">scan failed</span> <a href="#" data-id="alretry">Retry</a>`;
+      alc.innerHTML = `<span class="pill bad" title="${escHtml(d.allowancesError || 'unknown error')}">scan failed</span> <a href="#" data-id="alretry">Retry</a>`;
       alc.querySelector('[data-id="alretry"]').addEventListener('click', (e) => { e.preventDefault(); load(data && data.owner); });
     }
     // Say what the scan actually covered. This chain caps getLogs, so "every Approval
@@ -1274,7 +1278,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
       <td><button class="danger revoke-op" data-i="${i}" ${canSign() ? '' : 'disabled'}>Revoke</button></td>
     </tr>`).join('') || '<tr><td colspan="4" class="muted">No operator approvals.</td></tr>';
     const v = d.vault;
-    $('[data-id="vault"]').innerHTML = !v ? '<span class="muted">No vault configured.</span>' : v.error ? `<span class="bad">${v.error}</span>` : `
+    $('[data-id="vault"]').innerHTML = !v ? '<span class="muted">No vault configured.</span>' : v.error ? `<span class="bad">${escHtml(v.error)}</span>` : `
       <div class="row"><span class="k">NFT #1 holder (controls the vault)</span><span class="mono">${v.holder} ${v.holder.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
       <div class="row"><span class="k">NFT contract admin (fee split, pause)</span><span class="mono">${v.admin} ${v.admin.toLowerCase() === d.wallets[0].address.toLowerCase() ? '<span class="pill ok">main wallet</span>' : '<span class="pill warn">not the main wallet</span>'}</span></div>
       <div class="row"><span class="k">Collector operator power over the vault NFT</span><span>${v.operatorHasVaultPower ? '<span class="pill bad">approved — revoke this</span>' : '<span class="pill ok">none</span>'}</span></div>
@@ -1306,9 +1310,9 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
     try {
       status(`Confirm in your wallet: ${label}…`, 'warn');
       const tx = await fn();
-      status(`Sent <a href="${data.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+      statusHtml(`Sent <a href="${escHtml(data.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>, waiting…`, 'warn');
       const rc = await tx.wait();
-      status(`Done in block ${rc.blockNumber}. <a href="${data.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      statusHtml(`Done in block ${rc.blockNumber}. <a href="${escHtml(data.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
       setTimeout(() => load(selected()), 4000);
     } catch (e) {
       const m = e.shortMessage || e.message || String(e);
@@ -1331,6 +1335,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 </script>
 <script>
 const initApprove = ((root, VERSION) => {
+  const escHtml = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const $ = (s) => root.querySelector(s);
   const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
   const ABI = [
@@ -1340,7 +1345,8 @@ const initApprove = ((root, VERSION) => {
   let cfg = null;           // from /api/approval?v=N: owner, operator, posm, chainId, rpc, explorer, approved
   let provider = null, signer = null, account = null, chainOk = false, approved = null;
 
-  const status = (msg, cls = '') => { $('[data-id="status"]').innerHTML = `<span class="${cls}">${msg}</span>`; };
+  const status = (msg, cls = '') => { const s = document.createElement('span'); s.className = cls; s.textContent = msg; $('[data-id="status"]').replaceChildren(s); };
+  const statusHtml = (msg, cls = '') => { $('[data-id="status"]').innerHTML = `<span class="${cls}">${msg}</span>`; }; // trusted markup only: escape every interpolated value
 
   function render() {
     $('[data-id="title"]').textContent = `Approve the V${VERSION} fee collector`;
@@ -1378,9 +1384,9 @@ const initApprove = ((root, VERSION) => {
       const c = new ethers.Contract(cfg.posm, ABI, signer);
       status(`Confirm in your wallet: setApprovalForAll(${short(op)}, false)…`, 'warn');
       const tx = await c.setApprovalForAll(op, false);
-      status(`Sent <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting for confirmation…`, 'warn');
+      statusHtml(`Sent <a href="${escHtml(cfg.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>, waiting for confirmation…`, 'warn');
       const rc = await tx.wait();
-      status(`Revoked ${short(op)} in block ${rc.blockNumber}. <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      statusHtml(`Revoked ${short(op)} in block ${rc.blockNumber}. <a href="${escHtml(cfg.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
       await loadConfig();
       await refreshApproval();
     } catch (e) {
@@ -1475,9 +1481,9 @@ const initApprove = ((root, VERSION) => {
       const c = new ethers.Contract(cfg.posm, ABI, signer);
       status(`Confirm in your wallet: setApprovalForAll(${short(cfg.operator)}, ${flag})…`, 'warn');
       const tx = await c.setApprovalForAll(cfg.operator, flag);
-      status(`Sent <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting for confirmation…`, 'warn');
+      statusHtml(`Sent <a href="${escHtml(cfg.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>, waiting for confirmation…`, 'warn');
       const rc = await tx.wait();
-      status(`${flag ? 'Approved' : 'Revoked'} in block ${rc.blockNumber}. <a href="${cfg.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
+      statusHtml(`${flag ? 'Approved' : 'Revoked'} in block ${rc.blockNumber}. <a href="${escHtml(cfg.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">View on Blockscout</a>`, 'ok');
       await refreshApproval();
     } catch (e) {
       const m = e.shortMessage || e.message || String(e);
@@ -1511,6 +1517,14 @@ let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = '', RPC_URL = '', NATIVE_CURRENCY 
 const chainReady = fetch('/api/chain', { cache: 'no-store' }).then(r => r.json()).then(c => {
   if (!c || !c.ok) throw new Error('the server did not state its chain');
   EXPLORER = c.explorer || ''; CHAIN_ID = Number(c.chainId); CHAIN_NAME = c.chainName || '';
+  // An instance flagged noTransactionData has no operator keystore and refuses approval/quote data: hide that UI.
+  // noTx (not readOnly): the Arc viewer and Robinhood VM are read-only but serve calldata.
+  if (c.noTx) {
+    const oa = document.getElementById('operator-approvals'); if (oa) oa.hidden = true;
+    // Sell and Mint need unsigned calldata, which this instance does not serve.
+    for (const t of ['sell', 'mint']) { const a = document.querySelector(`#tabs [data-tab="${t}"]`); if (a) a.hidden = true; const p = document.getElementById('sec-' + t); if (p) p.dataset.noTx = '1'; }
+    window.dispatchEvent(new Event('hashchange'));   // leave a Sell/Mint tab opened before the chain was known
+  }
   RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency; UNIT_SYMBOL = (c.nativeCurrency && c.nativeCurrency.symbol) || '';
   paintChainIdentity();
   return c;
@@ -1990,7 +2004,7 @@ async function doWithdraw() {
 
     showStatus(status, 'Transaction submitted...', 'pending');
     await tx.wait();
-    showStatus(status, `✓ Withdrawn! TX: <a href="${EXPLORER}/tx/${tx.hash}" target="_blank">${short(tx.hash)}</a>`, 'success');
+    showStatusHtml(status, `✓ Withdrawn! TX: <a href="${escHtml(EXPLORER)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>`, 'success');
     await loadBalances();
   } catch(e) {
     showStatus(status, '✗ ' + (e.reason || e.message), 'error');
@@ -2124,6 +2138,13 @@ function copyAddr(id) {
 }
 
 function showStatus(el, msg, type) {
+  el.textContent = msg;
+  el.className = `status-msg status-${type}`;
+  el.style.display = 'block';
+}
+
+// Trusted markup only (escape every interpolated value).
+function showStatusHtml(el, msg, type) {
   el.innerHTML = msg;
   el.className = `status-msg status-${type}`;
   el.style.display = 'block';
@@ -2264,11 +2285,13 @@ loadConfig().then(async () => {
 </script>
 <script>
 (() => {
+  const escHtml = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const root = document.getElementById('sec-sell');
   const $ = (s) => root.querySelector(s);
   const q = (id) => $(`[data-id="${id}"]`);
   const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
-  const status = (el, msg, cls = '') => { q(el).innerHTML = `<span class="${cls}">${msg}</span>`; };
+  const status = (el, msg, cls = '') => { const s = document.createElement('span'); s.className = cls; s.textContent = msg; q(el).replaceChildren(s); };
+  const statusHtml = (el, msg, cls = '') => { q(el).innerHTML = `<span class="${cls}">${msg}</span>`; }; // trusted markup only: escape every interpolated value
   const fmt = (raw, dec, max = 4) => Number(ethers.formatUnits(BigInt(raw), dec)).toLocaleString('en-US', { maximumFractionDigits: max });
   const usdF = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pctF = (n) => n == null ? '—' : `<span class="${n >= 0 ? 'ok' : 'bad'}">${n >= 0 ? '+' : ''}${n.toFixed(1)}%</span>`;
@@ -2282,7 +2305,7 @@ loadConfig().then(async () => {
     data = await r.json();
     if (!data.ok) { status('sl-status', data.error || 'failed', 'bad'); return; }
     const ws = q('sl-wallet');
-    if (!ws.options.length) ws.innerHTML = data.wallets.map((w) => `<option value="${w.address}">${w.label} (${short(w.address)})</option>`).join('');
+    if (!ws.options.length) ws.innerHTML = data.wallets.map((w) => `<option value="${escHtml(w.address)}">${escHtml(w.label)} (${escHtml(short(w.address))})</option>`).join('');
     ws.value = data.wallet.address;
     q('sl-token').innerHTML = data.rows.length ? data.rows.map((t) => `<option value="${t.address}">${t.symbol} — ${t.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })}${t.usd != null ? ' (≈ ' + usdF(t.usd) + ')' : ''}</option>`).join('') : '<option value="">nothing to sell in this wallet</option>';
     hideQuote();
@@ -2383,10 +2406,10 @@ loadConfig().then(async () => {
       setStep('permit', 'done'); setStep('swap', 'active');
       status('sl-txstatus', `Confirm in your wallet: swap ${fmt(amt, t.decimals)} ${t.symbol} → ${qt.outSymbol}…`, 'warn');
       const tx = await signer.sendTransaction({ to: qt.router, data: qt.calldata, value: BigInt(qt.value) });
-      status('sl-txstatus', `Sent <a href="${qt.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+      statusHtml('sl-txstatus', `Sent <a href="${escHtml(qt.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>, waiting…`, 'warn');
       const rc = await tx.wait();
       setStep('swap', 'done');
-      status('sl-txstatus', `Sold in block ${rc.blockNumber}. <a href="${qt.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a>${qt.partial ? ' — the amount is refreshed below; quote again for the next slice.' : ''}`, 'ok');
+      statusHtml('sl-txstatus', `Sold in block ${rc.blockNumber}. <a href="${escHtml(qt.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">View on Blockscout</a>${qt.partial ? ' — the amount is refreshed below; quote again for the next slice.' : ''}`, 'ok');
       // Record it like the collector's own sales (lots table, daily summary).
       try { await fetch('/api/sell/record', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tx: tx.hash, wallet: account, walletLabel: q('sl-wallet').selectedOptions[0].textContent.replace(/ \(.*\)$/, ''), token: t.address, symbol: t.symbol, amount: Number(ethers.formatUnits(amt, t.decimals)), amountOut: Number(ethers.formatUnits(BigInt(qt.quotedOut), qt.outDecimals)), outSymbol: qt.outSymbol, usd: qt.usd, impactPct: qt.impactPct }) }); } catch {}
       history.unshift({ at: Date.now(), symbol: t.symbol, amount: Number(ethers.formatUnits(amt, t.decimals)), out: `${fmt(qt.quotedOut, qt.outDecimals, 4)} ${qt.outSymbol}`, usd: qt.usd, tx: tx.hash, explorer: qt.explorer });
@@ -2418,11 +2441,13 @@ loadConfig().then(async () => {
 </script>
 <script>
 (() => {
+  const escHtml = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const root = document.getElementById('sec-mint');
   const $ = (s) => root.querySelector(s);
   const q = (id) => $(`[data-id="${id}"]`);
   const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
-  const status = (el, msg, cls = '') => { q(el).innerHTML = `<span class="${cls}">${msg}</span>`; };
+  const status = (el, msg, cls = '') => { const s = document.createElement('span'); s.className = cls; s.textContent = msg; q(el).replaceChildren(s); };
+  const statusHtml = (el, msg, cls = '') => { q(el).innerHTML = `<span class="${cls}">${msg}</span>`; }; // trusted markup only: escape every interpolated value
   const fmt = (raw, dec, max = 6) => Number(ethers.formatUnits(BigInt(raw), dec)).toLocaleString('en-US', { maximumFractionDigits: max });
   const num = (n, sig = 6) => n == null || !isFinite(n) ? '—' : Number(n).toLocaleString('en-US', { maximumSignificantDigits: sig });
   const usdF = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2442,7 +2467,7 @@ loadConfig().then(async () => {
     ctx = await r.json();
     if (!ctx.ok) { status('mt-status', ctx.error || 'failed', 'bad'); return; }
     const ws = q('mt-wallet');
-    if (!ws.options.length) ws.innerHTML = ctx.wallets.map((w) => `<option value="${w.address}">${w.label} (${short(w.address)})</option>`).join('');
+    if (!ws.options.length) ws.innerHTML = ctx.wallets.map((w) => `<option value="${escHtml(w.address)}">${escHtml(w.label)} (${escHtml(short(w.address))})</option>`).join('');
     ws.value = ctx.wallet.address;
     const a = q('mt-tokenA'), b = q('mt-tokenB');
     const prevA = a.value, prevB = b.value;
@@ -2472,7 +2497,7 @@ loadConfig().then(async () => {
       if (idx < 0) idx = 0;
       q('mt-pool').value = String(idx);
       await pickPool();
-    } catch (e) { q('mt-pool').innerHTML = `<option value="">${e.message}</option>`; }
+    } catch (e) { q('mt-pool').innerHTML = `<option value="">${escHtml(e.message)}</option>`; }
   }
   async function pickPool() {
     pool = pools[Number(q('mt-pool').value)] || null;
@@ -2557,7 +2582,7 @@ loadConfig().then(async () => {
       q('mq-price').innerHTML = `${num(j.human.price)} ${t1.symbol} per ${t0.symbol} ${j.inRange ? '<span class="ok">in range</span>' : '<span class="warn">out of range: one-sided deposit</span>'}`;
       q('mq-share').textContent = j.shareInRangePct != null ? `${j.shareInRangePct.toFixed(3)}%` : '—';
       q('mq-owner').textContent = q('mt-wallet').selectedOptions[0].textContent;
-      q('mq-warn').innerHTML = (j.blocked ? `<div class="bad">✖ ${j.blocked}</div>` : '') + (j.capped ? `<div class="muted">ⓘ ${j.capped}</div>` : '') + (j.warnings.length ? j.warnings.map((w) => `<div class="warn">⚠ ${w}</div>`).join('') : '');
+      q('mq-warn').innerHTML = (j.blocked ? `<div class="bad">✖ ${escHtml(j.blocked)}</div>` : '') + (j.capped ? `<div class="muted">ⓘ ${escHtml(j.capped)}</div>` : '') + (j.warnings.length ? j.warnings.map((w) => `<div class="warn">⚠ ${escHtml(w)}</div>`).join('') : '');
       q('mq-calldata').textContent = `${j.version === 4 ? 'modifyLiquidities' : 'mint'} on ${j.tx.to}\nvalue ${j.tx.value} wei · deadline ${new Date(Number(j.deadline) * 1000).toLocaleTimeString()}\n${j.tx.data}`;
       renderSteps();
       q('mt-quotecard').hidden = false;
@@ -2569,7 +2594,7 @@ loadConfig().then(async () => {
   function renderSteps() {
     const li = [];
     const from = q('mt-mode').value === 'move' ? selPos() : null;
-    if (from) li.push(`<li data-step="close" class="${closed ? 'done' : ''}">Close ${from.pair} #${from.tokenId}${closeQ ? ` <span class="muted">(returns ${fmt(closeQ.expect.amount0, closeQ.token0.decimals)} ${closeQ.token0.symbol} + ${fmt(closeQ.expect.amount1, closeQ.token1.decimals)} ${closeQ.token1.symbol}${closeQ.dryRun && !closeQ.dryRun.ok ? '; dry run failed: ' + closeQ.dryRun.error : ''})</span>` : ''}</li>`);
+    if (from) li.push(`<li data-step="close" class="${closed ? 'done' : ''}">Close ${from.pair} #${from.tokenId}${closeQ ? ` <span class="muted">(returns ${fmt(closeQ.expect.amount0, closeQ.token0.decimals)} ${closeQ.token0.symbol} + ${fmt(closeQ.expect.amount1, closeQ.token1.decimals)} ${closeQ.token1.symbol}${closeQ.dryRun && !closeQ.dryRun.ok ? '; dry run failed: ' + escHtml(closeQ.dryRun.error) : ''})</span>` : ''}</li>`);
     for (const a of quote.approvals) {
       if (a.via === 'permit2') { li.push(`<li data-step="approve:${a.token}">Approve ${a.symbol} for Permit2 <span class="muted">(once per token)</span></li>`); li.push(`<li data-step="permit:${a.token}">Allow the PositionManager to take ${fmt(a.amount, (a.token.toLowerCase() === pool.token0.address.toLowerCase() ? pool.token0 : pool.token1).decimals)} ${a.symbol} <span class="muted">(1 hour)</span></li>`); }
       else li.push(`<li data-step="approve:${a.token}">Approve ${a.symbol} for the position manager <span class="muted">(this amount)</span></li>`);
@@ -2633,7 +2658,7 @@ loadConfig().then(async () => {
         if (!closeQ) throw new Error('no close quote for the position to move');
         setStep('close', 'active'); status('mt-txstatus', `Confirm in your wallet: close ${from.pair} #${from.tokenId}…`, 'warn');
         const tx = await signer.sendTransaction({ to: closeQ.tx.to, data: closeQ.tx.data, value: 0n });
-        status('mt-txstatus', `Sent <a href="${ctx.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+        statusHtml('mt-txstatus', `Sent <a href="${escHtml(ctx.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>, waiting…`, 'warn');
         const rc = await tx.wait();
         closed = { tx: tx.hash, block: rc.blockNumber };
         setStep('close', 'done');
@@ -2677,10 +2702,10 @@ loadConfig().then(async () => {
       } catch (e) { setStep('mint', ''); status('mt-txstatus', `Not sent — ${e.message}`, 'bad'); updateButtons(); scheduleQuote(0); return; }
       status('mt-txstatus', `Confirm in your wallet: mint ${qt.label}…`, 'warn');
       const tx = await signer.sendTransaction({ to: qt.tx.to, data: qt.tx.data, value: BigInt(qt.tx.value) });
-      status('mt-txstatus', `Sent <a href="${ctx.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">${short(tx.hash)}</a>, waiting…`, 'warn');
+      statusHtml('mt-txstatus', `Sent <a href="${escHtml(ctx.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">${escHtml(short(tx.hash))}</a>, waiting…`, 'warn');
       const rc = await tx.wait();
       setStep('mint', 'done');
-      status('mt-txstatus', `Minted in block ${rc.blockNumber}. <a href="${ctx.explorer}/tx/${tx.hash}" target="_blank" rel="noopener">View on Blockscout</a> — the dashboard picks the position up on its next refresh.`, 'ok');
+      statusHtml('mt-txstatus', `Minted in block ${rc.blockNumber}. <a href="${escHtml(ctx.explorer)}/tx/${escHtml(tx.hash)}" target="_blank" rel="noopener">View on Blockscout</a> — the dashboard picks the position up on its next refresh.`, 'ok');
       history.unshift({ at: Date.now(), label: qt.label, text: q('mq-big').textContent, usd: qt.human.usd, tx: tx.hash });
       renderHistory();
       hideQuote(); closed = null; closeQ = null;

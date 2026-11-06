@@ -9,6 +9,7 @@
  */
 "use strict";
 const { ethers } = require("ethers");
+const { redactUrl, redactText, scrubError } = require("./endpoint");
 
 const RETRY_MS = [400, 1500]; // pause before retry 1 and retry 2
 // Transport codes only. A revert arrives as CALL_EXCEPTION and must never look
@@ -77,7 +78,8 @@ class RetryingProvider extends ethers.JsonRpcProvider {
       }
     }
     this.rpcStats.failed++;
-    throw last;
+    // ethers puts the request URL (and so any provider key in it) in the error text.
+    throw scrubError(last);
   }
 }
 
@@ -130,7 +132,7 @@ class FailoverProvider extends RetryingProvider {
     this._rejected = new Set();
     this._log = log;
     this._wantChainId = Number(chainId) || null;
-    this.rpcStats.endpoint = urls[0];
+    this.rpcStats.endpoint = redactUrl(urls[0]);
     this.rpcStats.failovers = 0;
   }
 
@@ -149,14 +151,14 @@ class FailoverProvider extends RetryingProvider {
       const seen = this._wantChainId == null ? this._wantChainId : await chainIdOf(url);
       if (this._wantChainId != null && seen !== this._wantChainId) {
         this._rejected.add(url);
-        this._log(`rpc: refusing ${url} — reports chain ${seen == null ? "no answer" : seen}, expected ${this._wantChainId}`);
+        this._log(`rpc: refusing ${redactUrl(url)} — reports chain ${seen == null ? "no answer" : seen}, expected ${this._wantChainId}`);
         continue;
       }
       const from = this._urls[this._active];
       this._active = i;
       this.rpcStats.failovers++;
-      this.rpcStats.endpoint = url;
-      this._log(`rpc: ${from} failed (${reason}); failing over to ${url}`);
+      this.rpcStats.endpoint = redactUrl(url);
+      this._log(`rpc: ${redactUrl(from)} failed (${redactText(reason)}); failing over to ${redactUrl(url)}`);
       return true;
     }
     return false;
@@ -204,4 +206,47 @@ function createProvider(cfg, options = {}) {
   return new FailoverProvider(urls, chainId, opts);
 }
 
-module.exports = { createProvider, RetryingProvider, FailoverProvider, chainIdOf, isTransient, RETRY_MS, SENDS, carriesSend };
+/**
+ * A provider used only for eth_getLogs, when the chain's main RPC will not answer
+ * them (Base's public one refuses every getLogs). Null when settings name none.
+ */
+function createLogsProvider(cfg, options = {}) {
+  if (!cfg || !cfg.logsRpcUrl) return null;
+  // A bounded request: a public log RPC that cannot serve an old range can hold a call for its
+  // whole server-side timeout, and ethers' own default is five minutes.
+  const req = new ethers.FetchRequest(cfg.logsRpcUrl);
+  req.timeout = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 20000;
+  const { timeoutMs, ...rest } = options;
+  return new LogsProvider(req, Number(cfg.chainId) || undefined, { staticNetwork: true, ...rest });
+}
+
+/**
+ * The log RPC's provider: no retry ladder. A scan that waits 0.4 s + 1.5 s and then a
+ * method-level retry on each of hundreds of calls stalls a refresh; the scan has its own
+ * budget, deadline and backoff. At most one retry, and only on a 429.
+ */
+class LogsProvider extends ethers.JsonRpcProvider {
+  constructor(url, chainId, options) {
+    super(url, chainId, options);
+    this.rpcStats = { calls: 0, retries: 0, throttled: 0, failed: 0, lastThrottleAt: null };
+  }
+  async _send(payload) {
+    this.rpcStats.calls++;
+    const attempts = carriesSend(payload) ? 0 : 1;
+    let last = null;
+    for (let attempt = 0; attempt <= attempts; attempt++) {
+      try {
+        return await super._send(payload);
+      } catch (err) {
+        last = err;
+        if (attempt === attempts || !/429|Too Many/i.test(String(err.shortMessage || err.message))) break;
+        this.rpcStats.retries++; this.rpcStats.throttled++; this.rpcStats.lastThrottleAt = Date.now();
+        await new Promise((r) => setTimeout(r, 400 + Math.floor(Math.random() * 200)));
+      }
+    }
+    this.rpcStats.failed++;
+    throw scrubError(last);
+  }
+}
+
+module.exports = { createProvider, createLogsProvider, LogsProvider, RetryingProvider, FailoverProvider, chainIdOf, isTransient, RETRY_MS, SENDS, carriesSend };

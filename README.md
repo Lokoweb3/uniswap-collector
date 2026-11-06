@@ -1045,6 +1045,17 @@ switch) is the income and history page:
   `unstake()` returns NET 1:1, so principal is the net of the wallet's sNET transfers (two stakes on
   2026-09-04, 3.717 sNET) and everything above it is reward. A balance change matching the index change is a reward, anything else is a
   stake/unstake and is skipped. `/api/staking` serves the view.
+  **Every watched wallet** (`wallets.watched`, as `watch.js` reads them) is tracked the same way, in the
+  same `snet-staking.json`: the main wallet stays at `tokens[token]` (no migration; an older build still
+  reads the file), the others at `wallets[address][token]`. A wallet with no sNET and no earlier entry
+  creates no ledger and costs no backfill; a failure for one wallet is logged and the rest go on.
+  `/api/staking` keeps `ok, at, tokens` (main) and adds `wallets: [{address, label, tokens}]`;
+  `/api/staking?wallet=<address|label>` returns one configured wallet, anything else is a 400 and makes
+  no RPC call. The Dashboard shows each wallet's staking in its Wallet detail, and Analytics > Staking
+  follows the wallet picker (All wallets: one row per wallet, a USD subtotal, no merged APR); tax rows
+  carry the wallet that earned them. The MCP `staking` tool takes an optional `wallet`. Known limit:
+  sNET sent between two watched wallets counts as an out for one and an in for the other. Attribution,
+  the digest and alerts still read the main wallet's staking only.
 
 All of it is the collector wallet's own history, so the wallet picker is hidden there. Each page fetches
 only what it shows. The public gate serves the page at the same path.

@@ -199,6 +199,21 @@ const lp = (out) => out.rows.filter((r) => r.type === "LP fees");
   assert.strictEqual(row[INCOME_CSV_COLUMNS.indexOf("position_manager")], PM4);
 }
 
+// ---- 6b. formula-injection guard: text cells starting = + - @ are prefixed; numbers are not ----
+{
+  const out = run([ledgerRow({ t: T(10), tx: "0xaa", usd: -5 })], chainOf([]));
+  out.rows[0].description = "=HYPERLINK(\"http://x\")";
+  out.rows[0].note = "-cmd";
+  out.rows[0].wallet = "@sum";
+  out.rows[0].amounts = "+1 WETH";
+  const text = incomeCsv(out);
+  const head = text.split("\n").find((l) => l.startsWith("date_utc"));
+  const line = text.split("\n")[text.split("\n").indexOf(head) + 1];
+  assert.ok(line.includes('"\'=HYPERLINK(""http://x"")"'), "= is neutralised");
+  assert.ok(line.includes('"\'-cmd"') && line.includes('"\'@sum"') && line.includes('"\'+1 WETH"'), "- @ + are neutralised");
+  assert.ok(line.includes('"-5.00"'), "a negative number is left alone");
+}
+
 // ---- 7. a failed claims read never downloads a normal-looking file --------------
 (async () => {
   const START = "$('#taxcsv').addEventListener('click', async e => {";

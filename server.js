@@ -2810,8 +2810,19 @@ async function handleRequest(req, res) {
 
   if (url.pathname === "/api/staking") {
     res.setHeader("Content-Type", "application/json");
+    // Read-only. `?wallet=` takes an address or label of a CONFIGURED wallet only; anything else is a 400 and no RPC is ever made for it.
+    const q = url.searchParams.get("wallet");
+    if (q != null) {
+      const v = staking.enabled ? staking.view({ wallet: q }) : null;
+      if (!v) {
+        res.writeHead(400);
+        return res.end(JSON.stringify({ ok: false, error: "unknown wallet: use the address or label of a configured wallet" }));
+      }
+      res.writeHead(200);
+      return res.end(JSON.stringify(v));
+    }
     res.writeHead(200);
-    return res.end(JSON.stringify(staking.enabled ? staking.view() : { ok: true, at: Date.now(), tokens: [] }));
+    return res.end(JSON.stringify(staking.enabled ? { ...staking.view(), wallets: staking.viewAll() } : { ok: true, at: Date.now(), tokens: [], wallets: [] }));
   }
 
   if (url.pathname === "/api/watch") {
@@ -3326,6 +3337,8 @@ async function handleRequest(req, res) {
 const staking = require("./staking").create({
   provider,
   cfg,
+  getWallets: () => watch.readWallets(), // every watched wallet (main excluded), re-read from settings
+  getOwnerLabel: () => watch.ownerLabel(),
   getPrice: (addr) => {
     const row = portfolio.latest && portfolio.latest.rows.find((r) => r.address && r.address.toLowerCase() === addr);
     return row && row.price != null ? row.price : lastPrices[addr] ?? null;

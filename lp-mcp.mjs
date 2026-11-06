@@ -450,13 +450,26 @@ server.registerTool(
   "staking",
   {
     title: "Staking rewards (sNET)",
-    description: "The rebasing staking position: balance, principal (from the 1:1 stake transfers), price, USD value, rewards today / 7d / 30d / all time in tokens and USD, realised APR, and rewards per day.",
-    inputSchema: {},
+    description: "The rebasing staking position: balance, principal (from the 1:1 stake transfers), price, USD value, rewards today / 7d / 30d / all time in tokens and USD, realised APR, and rewards per day. Without a wallet: the main wallet plus a `wallets` list for the other watched wallets. With `wallet` (address or label of a configured wallet): that wallet only.",
+    inputSchema: { wallet: z.string().max(64).optional().describe("Address or label of a configured wallet; omit for the main wallet (and the others listed under `wallets`)") },
   },
-  async () => {
+  async ({ wallet } = {}) => {
+    const shape = (t) => ({ symbol: t.symbol, label: t.label, balance: round(t.balance, 6), principal: round(t.principal, 6), price: round(t.price), usd: round(t.usd), aprPct: round(t.aprPct, 1), rewards: t.rewards, daily: (t.daily || []).slice(-14) });
     try {
+      if (wallet != null && String(wallet).trim() !== "") {
+        let d;
+        try {
+          d = await get(`/api/staking?wallet=${encodeURIComponent(String(wallet).trim())}`);
+        } catch (err) {
+          if (/HTTP 400/.test(err.message)) return { isError: true, content: [{ type: "text", text: `Unknown wallet "${wallet}": give the address or label of a configured wallet.` }] };
+          throw err;
+        }
+        return text({ wallet: d.wallet, tokens: (d.tokens || []).map(shape) });
+      }
       const d = await get("/api/staking");
-      return text({ tokens: (d.tokens || []).map((t) => ({ symbol: t.symbol, label: t.label, balance: round(t.balance, 6), principal: round(t.principal, 6), price: round(t.price), usd: round(t.usd), aprPct: round(t.aprPct, 1), rewards: t.rewards, daily: (t.daily || []).slice(-14) })) });
+      const out = { tokens: (d.tokens || []).map(shape) };
+      if (Array.isArray(d.wallets) && d.wallets.length) out.wallets = d.wallets.map((w) => ({ label: w.label, address: w.address, tokens: (w.tokens || []).map(shape) }));
+      return text(out);
     } catch (err) {
       return fail(err);
     }

@@ -41,6 +41,7 @@ strategy-proposals.json
 portfolio.json
 range-log.json
 snet-staking.json
+snet-staking.json.*
 price-log.json
 portfolio-all.json
 pool-samples.json

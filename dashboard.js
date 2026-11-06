@@ -522,6 +522,7 @@ function renderHeadline(){
       `<span class="wtotal">total <b>${usd(ownTotal)}</b>${partialNote}</span>` +
       (pf ? `<span>tokens <b>${usd(pf.totals.walletUsd)}</b>${pf.totals.unpricedCount ? ` <span class="muted">+${pf.totals.unpricedCount} unpriced</span>` : ''}</span>` : '') +
       `<span>uncollected <b>${usd(m.totals.feesUsd)}</b></span>` +
+      stakingPart(stakingTokensFor('owner')) +
       `</div></details>`;
     applyWalletOpen('owner', 'list');
     // Section header: this wallet alone, or everything, depending on the picker.
@@ -687,7 +688,9 @@ function renderChange(series){
   tile.title = 'Between two recorded readings of the total shown in the Portfolio chart, at current prices at each time. Claimed fees are already in the wallet, so they are not counted twice.';
 }
 const pfScopeEl = $('#pfscope');
-if (pfScopeEl) pfScopeEl.addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); });
+const stakeScopeEl = $('#stakescope');
+if (stakeScopeEl) stakeScopeEl.addEventListener('change', e => { setPref('staking:scope', e.target.value); renderStaking(); });
+if (pfScopeEl) pfScopeEl.addEventListener('change', e => { setPref('portfolio:scope', e.target.value); renderPortfolio(); if (lastWatchForPf) renderWatch(lastWatchForPf); renderSidebar(); if (stakingD && $('#stakesec')) { renderStaking(); renderAnalytics(); } });
 
 /* ---- sidebar panels -------------------------------------------------------
  * Wallet overview, collection activity and data coverage are drawn from the
@@ -1419,26 +1422,104 @@ async function loadStaking(){
   } catch(e){ loadFailed('Staking', e); }
 }
 
+/** The sNET position of one wallet as a short wallet-detail line: balance, principal, rewards, APR. */
+function stakingPart(tokens){
+  return (tokens || []).filter(t => t && t.rewards).map(t => {
+    const rw = t.rewards;
+    return `<span title="${esc(t.label || 'staking')}: balance, principal and rebase rewards">staked <b>${amount(t.balance)} ${esc(t.symbol)}</b>` +
+      `${t.principal != null ? ` <span class="muted">(${amount(t.principal)} principal)</span>` : ''} · earned today <b>${amount(rw.today)}</b> · 7d <b>${amount(rw.d7)}</b> · 30d <b>${amount(rw.d30)}</b> · all <b>${amount(rw.total)}</b>` +
+      `${t.aprPct != null ? ` · ~<b>${t.aprPct.toFixed(0)}% APR</b>` : ''}</span>`;
+  }).join('');
+}
+/** Staking of the main wallet ('owner') or of a watched wallet by lower-case address. */
+function stakingTokensFor(addr){
+  const d = stakingD;
+  if (!d) return [];
+  if (addr === 'owner') return d.tokens || [];
+  const w = (d.wallets || []).find(x => String(x.address).toLowerCase() === addr);
+  return (w && w.tokens) || [];
+}
+/** Staking groups for the wallet picker: 'owner', 'all', or one watched address. Wallets with nothing staked are left out. */
+/** The scope the staking panel shows. On Analytics the page picker is never filled, so the panel has its own visible control (#stakescope); elsewhere the page picker rules. */
+const stakingScope = () => {
+  if (PAGE !== 'analytics') return pfScope();
+  // A stale pref (a wallet since removed, or main with nothing staked) must never hide the panel: it falls back to 'all'.
+  const p = pref('staking:scope');
+  const d = stakingD;
+  if (p === 'all') return 'all';
+  if (!d) return 'all';
+  if (p === 'owner') return (d.tokens || []).length ? 'owner' : 'all';
+  const w = (d.wallets || []).find(x => String(x.address).toLowerCase() === p);
+  return w && (w.tokens || []).length ? p : 'all';
+};
+function fillStakeScope(){
+  const sel = $('#stakescope');
+  if (!sel) return;
+  if (PAGE !== 'analytics') { sel.hidden = true; return; }
+  const d = stakingD;
+  const ws = (d.wallets || []).filter(w => (w.tokens || []).length);
+  const opts = [['all', 'All wallets']].concat((d.tokens || []).length ? [['owner', ownerLabel()]] : [], ws.map(w => [String(w.address).toLowerCase(), w.label || w.address]));
+  const cur = stakingScope();
+  sel.innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('');
+  sel.value = opts.some(o => o[0] === cur) ? cur : 'all';
+  sel.hidden = false;
+}
+function stakingGroups(scope = stakingScope()){
+  const d = stakingD;
+  if (!d) return [];
+  const main = { label: ownerLabel(), address: null, tokens: d.tokens || [] };
+  const ws = (d.wallets || []).map(w => ({ label: w.label || w.address, address: w.address, tokens: w.tokens || [] }));
+  let g;
+  if (scope === 'owner') g = [main];
+  else if (scope === 'all') g = [main, ...ws];
+  else g = ws.filter(w => String(w.address).toLowerCase() === scope);
+  return g.filter(x => x.tokens.length);
+}
+
 function renderStaking(){
   const d = stakingD;
-  if (!d || !d.tokens.length) return;
+  if (!d) return;
+  fillStakeScope();
+  const groups = stakingGroups();
+  if (!groups.length) { $('#stakesec').hidden = true; return; }
   $('#stakesec').hidden = false;
-  const t = d.tokens[0];
+  if (groups.length > 1) {
+    // Every wallet on its own row; a subtotal of money only. APR is a per-wallet figure and is never merged.
+    const rows = [];
+    let bal = 0, d7u = 0, d30u = 0, totu = 0, anyUsd = false;
+    for (const g of groups) for (const t of g.tokens) {
+      const rw = t.rewards;
+      if (t.usd != null) { bal += t.usd; anyUsd = true; }
+      d7u += rw.d7Usd || 0; d30u += rw.d30Usd || 0; totu += rw.totalUsd || 0;
+      rows.push(`<tr><td class="l">${esc(g.label)}</td><td>${amount(t.balance)} ${esc(t.symbol)}</td><td>${t.principal != null ? amount(t.principal) : '—'}</td><td>${amount(rw.today)}</td><td>${amount(rw.d7)}</td><td>${amount(rw.d30)}</td><td>${amount(rw.total)}</td><td class="u">${usd(t.usd)}</td><td>${t.aprPct != null ? t.aprPct.toFixed(0) + '%' : '—'}</td></tr>`);
+    }
+    $('#staketotal').textContent = anyUsd ? usd(bal) : '';
+    $('#stakestats').innerHTML = `<span>${groups.length} wallets staking</span>`;
+    $('#staketable').innerHTML = `<table class="etable">
+    <tr><th class="l">Wallet</th><th>Staked</th><th>Principal</th><th>Today</th><th>7d</th><th>30d</th><th>All time</th><th>≈ USD</th><th>APR</th></tr>
+    ${rows.join('')}
+    <tr class="subtotal"><td class="l"><b>Subtotal</b></td><td></td><td></td><td></td><td class="u">${usd(d7u)}</td><td class="u">${usd(d30u)}</td><td class="u">${usd(totu)}</td><td class="u">${anyUsd ? usd(bal) : '—'}</td><td></td></tr>
+  </table>`;
+    $('#stakenote').textContent = 'One row per wallet, each with its own principal and APR (no combined APR). Subtotals are USD only. sNET moved between two watched wallets counts as a stake out of one and a stake into the other, not as a reward.';
+    return;
+  }
+  const g = groups[0];
+  const t = g.tokens[0];
   const rw = t.rewards;
   $('#staketotal').textContent = usd(t.usd);
   $('#stakestats').innerHTML =
-    `<span>${t.label}</span>` +
-    `<span>staked <b>${amount(t.balance)} ${t.symbol}</b>${t.principal != null ? ` <span class="muted">(${amount(t.principal)} principal)</span>` : ''}</span>` +
+    `<span>${esc(t.label)}${groups[0].address ? ` · ${esc(g.label)}` : ''}</span>` +
+    `<span>staked <b>${amount(t.balance)} ${esc(t.symbol)}</b>${t.principal != null ? ` <span class="muted">(${amount(t.principal)} principal)</span>` : ''}</span>` +
     `<span>price <b>${t.price == null ? '—' : '$' + price(t.price)}</b></span>` +
     `<span>earned today <b>${amount(rw.today)}</b></span>` +
     `<span>7d <b>${amount(rw.d7)}</b> ${usd(rw.d7Usd)}</span>` +
     `<span>30d <b>${amount(rw.d30)}</b> ${usd(rw.d30Usd)}</span>` +
-    `<span>all time <b>${amount(rw.total)} ${t.symbol}</b> ${usd(rw.totalUsd)}</span>` +
+    `<span>all time <b>${amount(rw.total)} ${esc(t.symbol)}</b> ${usd(rw.totalUsd)}</span>` +
     (t.aprPct != null ? `<span>~<b>${t.aprPct.toFixed(0)}% APR</b> realised</span>` : '');
   const days = [...t.daily].reverse().slice(0, 14);
   $('#staketable').innerHTML = `<table class="etable">
     <tr><th class="l">Day</th><th>Reward</th><th>≈ USD</th></tr>
-    ${days.map(x => `<tr><td class="l">${dayLabel(x.day)}</td><td>${amount(x.amount)} ${t.symbol}</td><td class="u">${x.approx ? '<span class="approx" title="No price record from the time of this rebase; valued at today\'s price">≈</span>' : ''}${usd(x.usd)}</td></tr>`).join('')}
+    ${days.map(x => `<tr><td class="l">${dayLabel(x.day)}</td><td>${amount(x.amount)} ${esc(t.symbol)}</td><td class="u">${x.approx ? '<span class="approx" title="No price record from the time of this rebase; valued at today\'s price">≈</span>' : ''}${usd(x.usd)}</td></tr>`).join('')}
   </table>`;
   $('#stakenote').textContent = `Rebasing receipt sampled hourly since ${new Date(t.since).toLocaleDateString(undefined,{month:'short',day:'numeric'})}; a balance change that matches the index change is a reward, anything else (a stake or unstake) is not counted. Rewards are valued at the price recorded at the sample.`;
 }
@@ -1454,8 +1535,9 @@ function incomeEvents(){
     ev.push({ t: r.t, type: 'LP fees', wallet: r.wallet || 'Main', what: r.pair + (r.principal ? ' (on close)' : ''), amounts: `${amount(r.f0)} ${r.sym0} + ${amount(r.f1)} ${r.sym1}`, usd: r.usd, approx: r.usd != null && !r.locked, tx: r.tx || '',
       tokenId: r.nftId != null ? String(r.nftId) : String(r.tokenId ?? '').replace(/^v\d+-/, ''), version: r.version ?? null, block: r.block ?? null });
   }
-  for (const t of (stakingD && stakingD.tokens) || []){
-    for (const e of t.events || []) ev.push({ t: e.t, type: 'Staking reward', wallet: ownerLabel(), what: t.label, amounts: `${amount(e.amount)} ${t.symbol}`, usd: e.usd, approx: !!e.approx, tx: '' });
+  // Every wallet's rewards, whatever any picker says: an export must never drop a wallet. Each carries its own label.
+  for (const g of stakingGroups('all')) for (const t of g.tokens){
+    for (const e of t.events || []) ev.push({ t: e.t, type: 'Staking reward', wallet: g.label, what: t.label, amounts: `${amount(e.amount)} ${t.symbol}`, usd: e.usd, approx: !!e.approx, tx: '' });
   }
   return ev.sort((a, b) => a.t - b.t);
 }
@@ -1575,7 +1657,7 @@ function renderAnalytics(){
   let rows = '';
   for (const y of [...years.values()].sort((a, b) => b.y.localeCompare(a.y))){
     const yw = {}; for (const m of months.filter(m => m.key.startsWith(y.y))) for (const [w, v] of Object.entries(m.wallets)) yw[w] = (yw[w] || 0) + v;
-    const wtext = o => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([w, v]) => `${w} <b>${usd(v)}</b>`).join(' · ') || '—';
+    const wtext = o => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([w, v]) => `${esc(w)} <b>${usd(v)}</b>`).join(' · ') || '—';
     rows += `<tr class="year"><td class="l">${y.y}</td><td>${y.lpN}</td><td class="u">${usd(y.lp)}</td><td class="l wrap">${wtext(yw)}</td><td>${y.stakeN}</td><td class="u">${usd(y.stake)}</td><td class="u">${usd(y.lp + y.stake)}</td><td>${y.vault ? usd(y.vault) : '—'}</td></tr>`;
     for (const m of months.filter(m => m.key.startsWith(y.y))){
       rows += `<tr><td class="l">&nbsp;&nbsp;${mlabel(m.key)}</td><td>${m.lpN}</td><td class="u">${m.approx ? '<span class="approx" title="Some collects valued at today\'s prices">≈</span>' : ''}${usd(m.lp)}${m.unpriced ? ` <span class="unpriced">${m.unpriced} unpriced</span>` : ''}</td><td class="l wrap">${wtext(m.wallets)}</td><td>${m.stakeN || ''}</td><td class="u">${m.stakeN ? usd(m.stake) : '—'}</td><td class="u">${usd(m.lp + m.stake)}</td><td>${m.vault ? usd(m.vault) : '—'}</td></tr>`;
@@ -1768,7 +1850,12 @@ const INCOME_CSV_COLUMNS = ['date_utc','match_status','source','chain_id','posit
 
 /** The CSV text for an export: the header notes, the column row, then the rows. */
 function incomeCsv({ rows, totals }, { partial = null } = {}){
-  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  // Text cells that start with = + - @ would run as a formula in a spreadsheet: prefix them with '. Plain numbers (negative ones too) are left alone.
+  const q = v => {
+    let t = String(v == null ? '' : v);
+    if (/^[=+\-@]/.test(t) && !(typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(t))) t = "'" + t;
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
   const n2 = v => v == null ? '' : Number(v).toFixed(2);
   const lines = [];
   // The notes ride in the file itself: a spreadsheet outlives the page it came from.
@@ -3613,7 +3700,7 @@ function renderWatch(d){
     const head = `<div class="wh">
       <div class="wh-main">${link}<span class="wcount"><b>${t.count}</b> open${t.idle ? ` · <span class="idle">${t.idle} idle</span>` : ''}${w.closed ? ` · <span class="muted">${w.closed} closed</span>` : ''}${w.truncated ? ` · <span class="muted" title="This wallet owns ${w.known} position NFTs; only the newest ${w.known - w.truncated} were read">newest ${w.known - w.truncated} of ${w.known}</span>` : ''}</span></div>
       <div class="wh-side">${ratePart}<span class="lpsub" title="The open positions alone, without this wallet's loose tokens or its uncollected fees">LP value <b>${usd(t.liquidityUsd)}</b></span>${w.positions.length || (w.external || []).length ? walletToggle(w.address.toLowerCase(), cardsId, t.count) : ''}</div>
-      <details class="whmore"><summary>Wallet detail</summary><div class="whmore-body"><span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${collectorPart}</div></details>
+      <details class="whmore"><summary>Wallet detail</summary><div class="whmore-body"><span class="wtotal">total <b>${usd(t.totalUsd)}</b></span>${walletPart}<span>uncollected <b>${usd(t.feesUsd)}</b></span>${earnedPart}${stakingPart(stakingTokensFor(w.address.toLowerCase()))}${collectorPart}</div></details>
     </div>`;
     // Top tokens sitting in the wallet, compact.
     const toks = h && h.tokens.length
@@ -3622,7 +3709,7 @@ function renderWatch(d){
     const open = [...w.positions, ...(w.external || [])];
     if (!open.length) {
       quiet.push(`<div class="wqrow"><div class="wqline">${link}<span class="muted">${w.closed ? `${w.closed} closed` : 'none opened'}</span><span class="wqval">${usd(t.totalUsd)}</span></div>`
-        + `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">${walletPart}${earnedPart}${collectorPart}</div>${toks}</details></div>`);
+        + `<details class="whmore"><summary>Wallet detail</summary><div class="whmore-body">${walletPart}${earnedPart}${stakingPart(stakingTokensFor(w.address.toLowerCase()))}${collectorPart}</div>${toks}</details></div>`);
       return '';
     }
     const cards = sortLT(open).map(p =>
@@ -3680,10 +3767,21 @@ fetch('/api/collect').then(r => r.json()).then(d => {
 // header (block, owner, ETH price); the dashboard skips the fee-history and
 // daily-revenue fetches, which only feed the analytics panels.
 const ANALYTICS = PAGE === 'analytics';
+// The Dashboard has no staking panel; it only needs the numbers for the wallet-detail lines.
+async function loadStakingForHeaders(){
+  try {
+    const r = await fetch('/api/staking');
+    const d = await r.json();
+    if (!d.ok) return;
+    stakingD = d;
+    if (lastMain) renderHeadline();
+    if (lastWatchForPf) renderWatch(lastWatchForPf);
+  } catch(e){ /* the wallet-detail line is optional; the rest of the page is unaffected */ }
+}
 function tick(fresh){
   load(fresh);
   if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); loadTreasury(); loadLots(); loadTrack(); }
-  else { loadRewards(); loadBalances(); loadAllSeries(); }
+  else { loadRewards(); loadBalances(); loadAllSeries(); loadStakingForHeaders(); }
 }
 $('#reload').addEventListener('click', () => tick(true));
 tick(false);

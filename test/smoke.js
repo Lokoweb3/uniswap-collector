@@ -44,23 +44,35 @@ async function waitFor(url, ms, perRequestMs = 3000, exitP = new Promise(() => {
   return false;
 }
 
-// Mask likely secrets (credentialed/key-bearing URLs, private keys, bot tokens) before echoing log text.
+// Mask likely secrets before echoing log text. URLs keep scheme+host only: RPC
+// keys ride in paths (Alchemy, Infura, QuickNode) as well as userinfo and query.
 function redact(text) {
   return text
-    .replace(/https?:\/\/\S*(key|token|apikey|secret)\S*/gi, "<redacted-url>")
-    .replace(/\/\/[^\s/:@]+:[^\s/@]+@/g, "//<redacted>@")
+    .replace(/(https?:\/\/)(?:[^\s/@]*@)?([^\s/?#]+)[^\s]*/gi, "$1$2/<redacted>")
     .replace(/\b(0x)?[0-9a-fA-F]{64}\b/g, "<redacted-hex>")
-    .replace(/\d+:[A-Za-z0-9_-]{30,}/g, "<redacted-token>");
+    .replace(/\d+:[A-Za-z0-9_-]{30,}/g, "<redacted-token>")
+    .replace(/\b(?:proapi_|sk-(?:ant-)?)[A-Za-z0-9_-]{16,}/g, "<redacted-key>")
+    .replace(/Bearer\s+\S+/gi, "Bearer <redacted>");
 }
 
 // Build the failure message for a server that died before the run finished.
 function earlyExitMessage(info) {
   let text = "";
-  try { text = fs.readFileSync(LOG_PATH, "utf8"); } catch {}
+  try {
+    // Only the last 64 KB is ever needed; redact it before truncating so a secret cut by the slice cannot leak.
+    const fd = fs.openSync(LOG_PATH, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, 65536);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      text = buf.toString("utf8");
+    } finally { fs.closeSync(fd); }
+  } catch {}
   if (/settings\.json is missing/.test(text)) {
     return `settings.json missing: copy settings.example.json to settings.json and fill it in (or pass --data-dir); server log: ${LOG_PATH}`;
   }
-  const tail = redact(text.split("\n").slice(-20).join("\n").slice(-2048));
+  const tail = redact(text).split("\n").slice(-20).join("\n").slice(-2048);
   const what = info.error ? `error=${info.error.message}` : `code=${info.code} signal=${info.signal}`;
   return `server exited before answering (${what})\n--- tail of ${LOG_PATH} ---\n${tail}`;
 }

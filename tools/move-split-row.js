@@ -18,7 +18,7 @@
  * destination's and not the source's.
  *
  * DRY RUN BY DEFAULT.
- *   node tools/move-split-row.js --from=fee-split-ledger.json --to=/home/steven/arc-data/fee-split-ledger.json --tba=0x56dfE4aB…
+ *   node tools/move-split-row.js --from=fee-split-ledger.json --to=$HOME/arc-data/fee-split-ledger.json --tba=0x56dfE4aB…
  *   node tools/move-split-row.js --from=… --to=… --tba=… --apply
  */
 "use strict";

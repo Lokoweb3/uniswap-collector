@@ -18,7 +18,7 @@ const { ethers } = require("ethers");
 
 const ROOT = path.join(__dirname, "..");
 const RPC = "http://127.0.0.1:8545";
-const SETTINGS = process.env.LP_ARC_SETTINGS || "/home/steven/arc-data/settings.json";
+const SETTINGS = require("./_paths").arcSettingsPath();
 const USDC = "0x3600000000000000000000000000000000000000";  // Arc's unit of account, native-backed
 const ok = (c, m) => { if (!c) { console.error("  FAIL:", m); process.exitCode = 1; } else console.log("  ok:", m); };
 

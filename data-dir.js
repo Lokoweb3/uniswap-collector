@@ -6,8 +6,8 @@
  * pages and shell scripts always stay next to the source.
  *
  *   node server.js                                   -> data next to the code (default)
- *   node server.js --data-dir=/home/steven/arc-data  -> data over there
- *   LP_DATA_DIR=/home/steven/arc-data node server.js -> same, from the environment
+ *   node server.js --data-dir=$HOME/arc-data  -> data over there
+ *   LP_DATA_DIR=$HOME/arc-data node server.js -> same, from the environment
  *
  * Resolved once, at require time, from the process's own arguments, so every
  * module in the process agrees. Only ever use this for files the instance

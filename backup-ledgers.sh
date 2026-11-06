@@ -37,17 +37,18 @@ NAMES=(fee-events.json v4-collects.json memecoin-discovered.json fee-snapshots.j
 # name inside the archive, so two settings.json files cannot overwrite each other on
 # restore. LP_BACKUP_DATA_DIRS overrides the list; missing directories are skipped
 # with a line in the log rather than silently.
-DATA_DIRS="${LP_BACKUP_DATA_DIRS:-$PWD /home/steven/arc-data}"
+DATA_DIRS="${LP_BACKUP_DATA_DIRS:-$PWD ${LP_ARC_DATA_DIR:-$HOME/arc-data}}"
 ARGS=()
 COUNT=0
-for d in $DATA_DIRS; do
+set -f; read -r -a DIRS <<< "$DATA_DIRS"; set +f   # no globbing of paths
+for d in "${DIRS[@]}"; do
   if [ ! -d "$d" ]; then log "skipping $d (not a directory)"; continue; fi
   parent=$(dirname "$d"); base=$(basename "$d")
   found=0
   for pattern in "${NAMES[@]}"; do
     for f in "$d"/$pattern; do
       [ -f "$f" ] || continue
-      ARGS+=(-C "$parent" "$base/${f#$d/}")
+      ARGS+=(-C "$parent" "$base/${f#"$d"/}")
       found=$((found + 1))
     done
   done

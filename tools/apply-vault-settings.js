@@ -26,7 +26,8 @@ const arg = (n, d = null) => {
   return hit ? hit.split("=").slice(1).join("=") : d;
 };
 const APPLY = process.argv.includes("--apply");
-const SETTINGS = arg("settings", "/home/steven/arc-data/settings.json");
+const SETTINGS = arg("settings", require("./_paths").arcSettingsPath());
+require("./_paths").requireExplicitArcSettings(APPLY);
 
 // A diff a person can read: only the lines that change, with their path.
 function diff(before, after, path = "") {

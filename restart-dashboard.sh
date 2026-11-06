@@ -2,7 +2,12 @@
 # Restart a dashboard instance, one instance only.
 #
 #   ./restart-dashboard.sh                                  # Arc, :8797
-#   PORT=8787 DATA=/home/steven/uniswap-collector FLAGS="" ./restart-dashboard.sh
+#   PORT=8787 DATA="$PWD" FLAGS="" ./restart-dashboard.sh
+#
+# Guard: when neither DATA nor LP_ARC_DATA_DIR is set, the default $HOME/arc-data is used,
+# and this refuses (before killing anything) unless this script lives in
+# $HOME/uniswap-collector (the live install) or LP_RESTART_ALLOW_DEFAULT=1. A dev copy
+# therefore cannot replace the live :8797 viewer by accident.
 #
 # FLAGS matters: the Arc instance runs --no-loops --no-services, the Robinhood one
 # runs its background work. Restarting the latter with Arc's flags would silently
@@ -15,7 +20,16 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-8797}"
-DATA="${DATA:-/home/steven/arc-data}"
+# GUARD-BEGIN (before any kill; test/hygiene-paths.test.js evaluates this block alone)
+if [ -z "${DATA:-}" ] && [ -z "${LP_ARC_DATA_DIR:-}" ] && [ "${LP_RESTART_ALLOW_DEFAULT:-}" != "1" ]; then
+  LIVE="$(cd "$HOME/uniswap-collector" 2>/dev/null && pwd -P || true)"
+  if [ -z "$LIVE" ] || [ "$(cd "$HERE" && pwd -P)" != "$LIVE" ]; then
+    echo "refusing: DATA and LP_ARC_DATA_DIR are unset, so the default $HOME/arc-data would be used, and this copy ($HERE) is not $HOME/uniswap-collector. Set DATA= or LP_ARC_DATA_DIR=, or LP_RESTART_ALLOW_DEFAULT=1." >&2
+    exit 3
+  fi
+fi
+# GUARD-END
+DATA="${DATA:-${LP_ARC_DATA_DIR:-$HOME/arc-data}}"
 FLAGS="${FLAGS---no-loops --no-services --claim-scan}"   # unset -> Arc's viewer flags; FLAGS="" -> none
 LOG="${LOG:-$HERE/dashboard-$PORT.log}"
 

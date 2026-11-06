@@ -57,10 +57,11 @@ const arg = (name, dflt = null) => {
   return hit ? hit.split("=").slice(1).join("=") : dflt;
 };
 const EXECUTE = process.argv.includes("--execute");
+require("./_paths").requireExplicitArcSettings(EXECUTE);
 const log = (...m) => console.log(...m);
 
 function settingsPath() {
-  return arg("settings", "/home/steven/arc-data/settings.json");
+  return arg("settings", require("./_paths").arcSettingsPath());
 }
 
 /**

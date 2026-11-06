@@ -1327,3 +1327,16 @@ browser's private last-visit timestamp. No Telegram message is sent automaticall
 
 Verification: `LP_TZ=America/New_York node test/insights.test.js`. This test is also part of
 `npm test`; the existing live-config browser smoke remains a separate environment requirement.
+
+### Explicit settings for write tools, and the restart guard
+
+The Arc tools default to `$HOME/arc-data/settings.json` (or `LP_ARC_DATA_DIR`). That default can be
+a live instance's data, so the write-capable tools (`tools/apply-vault-settings.js --apply`,
+`tools/propose-collector-settings.js --apply`, `tools/recover-stranded.js --execute`,
+`tools/deploy-vault-arc.js --execute`) refuse to run when none of `--settings=`, `LP_ARC_SETTINGS`
+or `LP_ARC_DATA_DIR` was given, and print the path the default would have used. Dry runs keep
+the default.
+
+`restart-dashboard.sh` applies the same idea: with `DATA` and `LP_ARC_DATA_DIR` both unset it
+refuses (before stopping anything) unless the script sits in `$HOME/uniswap-collector`, or
+`LP_RESTART_ALLOW_DEFAULT=1`. A dev copy cannot replace the live :8797 viewer by accident.

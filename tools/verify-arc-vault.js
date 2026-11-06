@@ -12,8 +12,8 @@ let bad = 0;
 const check = (ok, what) => { if (!ok) bad++; console.log(`  ${ok ? "ok  " : "FAIL"}  ${what}`); };
 const strip = (hex) => { const b = Buffer.from(hex.slice(2), "hex"); const n = b.readUInt16BE(b.length - 2); return b.subarray(0, b.length - n - 2).toString("hex"); };
 (async () => {
-  const cfg = JSON.parse(fs.readFileSync("/home/steven/arc-data/settings.json", "utf8"));
-  const rh  = JSON.parse(fs.readFileSync("/home/steven/uniswap-collector/settings.json", "utf8"));
+  const cfg = JSON.parse(fs.readFileSync(require("./_paths").arcSettingsPath(), "utf8"));
+  const rh  = JSON.parse(fs.readFileSync(require("./_paths").rhSettingsPath(), "utf8"));
   const arc = new ethers.JsonRpcProvider(cfg.chain.rpcUrl, 5042, { staticNetwork: true });
   const rob = new ethers.JsonRpcProvider(rh.chain.rpcUrl, Number(rh.chain.chainId), { staticNetwork: true });
   console.log(`Arc ${(await arc.getNetwork()).chainId} at block ${await arc.getBlockNumber()}\n`);

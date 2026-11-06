@@ -10,7 +10,7 @@
  * quotes rather than on where the fees happened to come from.
  *
  *   node tools/swap-routes.js
- *   node tools/swap-routes.js --amount=1 --settings=/home/steven/arc-data/settings.json
+ *   node tools/swap-routes.js --amount=1 --settings=$HOME/arc-data/settings.json
  */
 "use strict";
 
@@ -21,7 +21,7 @@ const arg = (n, d = null) => {
   const hit = process.argv.find((a) => a.startsWith(`--${n}=`));
   return hit ? hit.split("=").slice(1).join("=") : d;
 };
-const SETTINGS = arg("settings", "/home/steven/arc-data/settings.json");
+const SETTINGS = arg("settings", require("./_paths").arcSettingsPath());
 const V3_TIERS = [100, 500, 3000, 10000];
 
 async function main() {

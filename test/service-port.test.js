@@ -44,7 +44,7 @@ const block = src.slice(at - 400, at + 300);
     if (svc.port) env.PORT = String(svc.port); else delete env.PORT;
     return env;
   };
-  const parent = { PORT: "8787", ANTHROPIC_API_KEY: "secret", HOME: "/home/steven" };
+  const parent = { PORT: "8787", ANTHROPIC_API_KEY: "secret", HOME: "/home/example" };
 
   assert.strictEqual(envFor({ name: "scanner", port: 3847 }, parent).PORT, "3847",
     "the scanner is told 3847, which is what it would have defaulted to unaided");

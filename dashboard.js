@@ -3558,11 +3558,22 @@ $('#lockbtn').addEventListener('click', async () => {
 // If a run is already going (page reload mid-collect), pick it back up.
 // ---- watched wallets: read-only views of extra addresses (config.watchWallets) ----
 const shortA = a => a ? a.slice(0,6) + '…' + a.slice(-4) : '—';
+// Footer sentence: which watched wallets are collected from (settings `collect: true`) and which are read-only. Returns escaped HTML.
+function watchCollectNote(wallets){
+  const label = w => w.label || shortA(w.address);
+  const on = (wallets || []).filter(w => w.collect).map(label);
+  const off = (wallets || []).filter(w => !w.collect).map(label);
+  if (!on.length) return esc('Watched wallets are read-only and never collected from.');
+  const parts = [];
+  if (off.length) parts.push('Read-only: ' + off.map(esc).join(', ') + '.');
+  parts.push('Collect-enabled (fees collected and swept back to the wallet): ' + on.map(esc).join(', ') + '.');
+  return parts.join(' ');
+}
 function renderWatch(d){
   if (!d || !d.ok || !d.wallets || !d.wallets.length) { $('#watchlist').innerHTML = ''; $('#watchnote').textContent = ''; return; }
   $('#watchsec').hidden = false;
   notePricing(d);
-  $('#watchnote').innerHTML = esc('Watched wallets are read-only and never collected from. Value = tokens in the wallet + open positions + uncollected fees, at current prices. ' + freshText(d)) + ' ' + pricingRef();
+  $('#watchnote').innerHTML = watchCollectNote(d.wallets) + esc(' Value = tokens in the wallet + open positions + uncollected fees, at current prices. ' + freshText(d)) + ' ' + pricingRef();
   const scopeW = pfScope();
   const shown = scopeW === 'owner' || scopeW === 'all' ? d.wallets : d.wallets.filter(w => w.address.toLowerCase() === scopeW);
   if (scopeW !== 'all' && scopeW !== 'owner') {

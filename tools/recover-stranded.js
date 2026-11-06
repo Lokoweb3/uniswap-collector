@@ -46,7 +46,8 @@ const arg = (n, d = null) => {
   return hit ? hit.split("=").slice(1).join("=") : d;
 };
 const EXECUTE = process.argv.includes("--execute");
-const SETTINGS = arg("settings", "/home/steven/arc-data/settings.json");
+const SETTINGS = arg("settings", require("./_paths").arcSettingsPath());
+require("./_paths").requireExplicitArcSettings(EXECUTE);
 // The split ledger belongs beside the settings this run was told to use.
 const LEDGER_FOR_SETTINGS = path.join(path.dirname(SETTINGS), "fee-split-ledger.json");
 const ERC20 = [

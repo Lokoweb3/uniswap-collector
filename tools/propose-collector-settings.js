@@ -35,7 +35,8 @@ const arg = (n, d = null) => {
   return hit ? hit.split("=").slice(1).join("=") : d;
 };
 const APPLY = process.argv.includes("--apply");
-const SETTINGS = arg("settings", "/home/steven/arc-data/settings.json");
+const SETTINGS = arg("settings", require("./_paths").arcSettingsPath());
+require("./_paths").requireExplicitArcSettings(APPLY);
 
 async function main() {
   const cfg = JSON.parse(fs.readFileSync(SETTINGS, "utf8"));

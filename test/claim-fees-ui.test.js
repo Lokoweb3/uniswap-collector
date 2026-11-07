@@ -62,13 +62,13 @@ const text = (h) => String(h);
     await u.ctl.send();
     assert.strictEqual(wal.sent().length, 1);
     const tx = wal.sent()[0].params[0];
-    assert.deepStrictEqual(Object.keys(tx).sort(), ["data", "from", "to", "value"], "no gas or fee fields");
-    assert.strictEqual(tx.to, MGR); assert.strictEqual(tx.from, OWNER); assert.strictEqual(tx.value, "0x0");
+    assert.deepStrictEqual(Object.keys(tx).sort(), ["chainId", "data", "from", "to", "value"], "no gas or fee fields");
+    assert.strictEqual(tx.chainId, "0x2105"); assert.strictEqual(tx.to, MGR); assert.strictEqual(tx.from, OWNER); assert.strictEqual(tx.value, "0x0");
     const iface = new ethers.Interface(["function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)) payable returns (uint256, uint256)"]);
     assert.strictEqual(tx.data, iface.encodeFunctionData("collect", [{ tokenId: 79371151n, recipient: OWNER, amount0Max: 2n ** 128n - 1n, amount1Max: 2n ** 128n - 1n }]));
     h = u.last();
     assert.ok(h.includes(HASH) && h.includes(`href="https://basescan.org/tx/${HASH}"`) && h.includes('rel="noopener"'), h);
-    assert.deepStrictEqual(wal.calls.map((c) => c.method), ["eth_requestAccounts", "eth_chainId", "eth_call", "eth_sendTransaction"]);
+    assert.deepStrictEqual(wal.calls.map((c) => c.method), ["eth_requestAccounts", "eth_chainId", "eth_call", "eth_chainId", "eth_sendTransaction"]);
     const call = wal.calls[2].params[0];
     assert.strictEqual(call.to, MGR); assert.strictEqual(call.data, core.ownerOfCalldata(79371151n));
     // a second send on the finished panel does nothing
@@ -163,6 +163,43 @@ const text = (h) => String(h);
     const origReq = w2.request; w2.request = async (r) => { const out = await origReq(r); if (r.method === "wallet_switchEthereumChain") (w2.listeners.chainChanged || []).forEach((f) => f()); return out; };
     const u2 = ui(w2, target()); await u2.ctl.open("aerodrome-v1", "79371151"); await u2.ctl.send();
     assert.strictEqual(w2.sent().length, 1);
+  }
+
+  // chain changes between the ownerOf check and the send: nothing is sent
+  {
+    const wal = wallet(); const u = ui(wal, target());
+    const orig = wal.request;
+    wal.request = async (r) => { const out = await orig(r); if (r.method === "eth_call") wal.chain = "0x1"; return out; };
+    await u.ctl.open("aerodrome-v1", "79371151"); await u.ctl.send();
+    assert.strictEqual(wal.sent().length, 0, "nothing sent off Base");
+    assert.ok(/no longer on Base/.test(u.last()), u.last());
+  }
+
+  // a hostile server answer naming another manager: no panel action, nothing sent, message escaped
+  {
+    const wal = wallet(); const other = "0x00000000000000000000000000000000000000ee";
+    const u = ui(wal, target({ manager: other, symbol0: EVIL }));
+    await u.ctl.open("aerodrome-v1", "79371151");
+    assert.ok(/Cannot claim/.test(u.last()) && !/<img/.test(u.last()), u.last());
+    await u.ctl.send();
+    assert.strictEqual(wal.calls.length, 0); assert.strictEqual(wal.sent().length, 0);
+    // a manager swapped after the panel opened is refused at send time too
+    const u2 = ui(wallet(), target()); await u2.ctl.open("aerodrome-v1", "79371151");
+    u2.ctl.state.target.manager = other; await u2.ctl.send();
+    assert.strictEqual(u2.ctl.state.phase, "error");
+    // the allowlist compares case-insensitively
+    const w3 = wallet(); const u3 = ui(w3, target({ manager: MGR.toLowerCase() }));
+    await u3.ctl.open("aerodrome-v1", "79371151"); await u3.ctl.send();
+    assert.strictEqual(w3.sent().length, 1);
+  }
+
+  // accountsChanged / chainChanged after the tx was sent keep the panel and the hash
+  {
+    const wal = wallet(); const u = ui(wal, target());
+    await u.ctl.open("aerodrome-v1", "79371151"); await u.ctl.send();
+    assert.strictEqual(u.ctl.state.phase, "sent");
+    for (const ev of ["accountsChanged", "chainChanged"]) (wal.listeners[ev] || []).forEach((f) => f());
+    assert.ok(u.last() && u.last().includes(HASH), "hash still visible");
   }
 
   // 13. hostile data

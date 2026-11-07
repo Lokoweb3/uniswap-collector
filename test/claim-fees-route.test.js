@@ -93,6 +93,8 @@ const EVIL = "0x00000000000000000000000000000000000000ee";
       assert.strictEqual(r.body, fs.readFileSync(path.join(ROOT, f.slice(1)), "utf8"), `${f} is served unchanged`);
     }
     const page = await get("/");
+    assert.strictEqual(page.headers["content-security-policy"], "frame-ancestors 'self'");
+    assert.strictEqual(page.headers["x-frame-options"], "DENY");
     assert.ok(/\/claim-fees\.js/.test(page.body), "dashboard.html loads claim-fees.js");
 
     // the mocked chain was all that was reached

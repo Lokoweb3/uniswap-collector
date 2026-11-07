@@ -3348,7 +3348,7 @@ function positionCard(p, d, opts) {
   <article class="${cls}">
     <header class="pchead">
       <div class="pcid">
-        <h3>${p.pair}</h3>
+        <h3>${esc(p.pair)}</h3>
         ${o.wallet ? `<span class="pcwallet" title="Held by ${esc(o.wallet)}">${esc(o.wallet)}</span>` : ''}
         <span class="nft mono">${nftLink(d, p, '#' + (p.nftId || p.tokenId))}</span>
         <span class="tier"${p.protocol ? ` title="${claimFeesChain(d) ? `A position on ${esc(p.protocol)}, not Uniswap: fees are claimed with your browser wallet (Claim fees); this dashboard never closes or sells it` : `A position on ${esc(p.protocol)}, not Uniswap: shown here, never collected, closed or sold by this dashboard`}"` : ''}>${p.protocol ? esc(p.protocol) : p.version === 4 ? 'v4' : 'v3'}</span>
@@ -3364,7 +3364,7 @@ function positionCard(p, d, opts) {
 
     <div class="metrics">
       <div class="metric"><span class="ml">Position value</span><span class="mv">${usd(p.valueUsd)}</span>
-        <span class="msub">${p.symbol0} + ${p.symbol1}</span></div>
+        <span class="msub">${esc(p.symbol0)} + ${esc(p.symbol1)}</span></div>
       <div class="metric"><span class="ml">${p.staked ? 'Staking rewards' : 'Uncollected fees'}</span>${feeMetric(p)}</div>
       ${p.protocol ? platformMetric(p, d) : claimedMetric(p, uid, o.walletAddr)}
       <div class="metric"><span class="ml">Range status</span><span class="mv ${st.cls}">${st.text}</span>

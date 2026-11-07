@@ -15,7 +15,7 @@ const u = require("../univ3");
 const slip = require("../slipstream");
 const pricing = require("../pricing");
 const settings = require("../settings");
-const { resolveTarget } = require("../claim-fees-target");
+const { resolveTarget, cached } = require("../claim-fees-target");
 const { world, revert } = require("./fixtures/mock-chain");
 
 const WALLET = "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743";
@@ -141,6 +141,21 @@ const FORBIDDEN = ["data", "calldata", "to", "tx"];
     w.on(MGR_A, "ownerOf", () => { throw revert("gone"); });
     const r2 = await ask(w, positions, "aerodrome-v1", "79371151");
     assert.strictEqual(r2.status, 502); assert.strictEqual(r2.body.ok, false);
+  }
+  // cache and in-flight dedupe: a burst costs one ownerOf plus one collect.staticCall
+  {
+    const w = scene();
+    const positions = await positionsOf(w);
+    let t = 1000; const fast = cached(resolveTarget, { ttlMs: 12000, now: () => t });
+    const go = () => fast({ cfg: C, provider: w.runner, positions, protocol: "aerodrome-v1", id: "79371151" });
+    const before = w.callsTo(MGR_A, "ownerOf").length, beforeC = w.callsTo(MGR_A, "collect").length;
+    const rs = await Promise.all([go(), go(), go()]);
+    await go();
+    assert.ok(rs.every((r) => r.status === 200 && r.body.owner === WALLET));
+    assert.strictEqual(w.callsTo(MGR_A, "ownerOf").length - before, 1, "one ownerOf");
+    assert.strictEqual(w.callsTo(MGR_A, "collect").length - beforeC, 1, "one collect.staticCall");
+    t += 13000; await go();
+    assert.strictEqual(w.callsTo(MGR_A, "ownerOf").length - before, 2, "expires after the ttl");
   }
   console.log("claim-fees-target tests passed");
 })().catch((e) => { console.error(e); process.exit(1); });

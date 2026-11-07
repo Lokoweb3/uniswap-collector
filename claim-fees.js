@@ -79,7 +79,8 @@
       const eth = env.getEthereum();
       if (!eth || !eth.on) return;
       // our own account request / chain switch fire these too: only an idle panel is closed by them
-      const fn = () => { if (!st.busy && st.phase !== "idle") close(); };
+      // after the tx was sent (phase "sent") the panel stays open so the hash remains visible
+      const fn = () => { if (!st.busy && st.phase !== "idle" && st.phase !== "sent") close(); };
       eth.on("accountsChanged", fn); eth.on("chainChanged", fn);
       subscribed = { eth, fn };
     }
@@ -95,6 +96,7 @@
         const res = await env.fetch(`/api/claim-fees/target?protocol=${encodeURIComponent(st.protocol)}&id=${encodeURIComponent(st.id)}`);
         t = await res.json();
         if (!t || t.ok !== true) throw new Error((t && t.error) || "the dashboard could not describe this position");
+        if (!core.isAllowedManager(t.manager)) throw new Error("the dashboard named a manager that is not a known Base position manager");
         if (!core.isAddress(t.manager) || !core.isAddress(t.owner) || String(t.tokenId) !== st.id || Number(t.chainId) !== core.BASE_CHAIN_ID) throw new Error("the dashboard's answer does not describe a Base position");
       } catch (e) {
         st.target = null;
@@ -112,6 +114,7 @@
     async function send() {
       const t = st.target;
       if (st.busy || st.phase !== "ready" || !t) return st;
+      if (!core.isAllowedManager(t.manager)) { say("Refused: the manager is not a known Base position manager. Nothing was sent.", "error"); return st; }
       st.busy = true; st.phase = "pending"; st.hash = null;
       try {
         const eth = env.getEthereum();
@@ -145,8 +148,11 @@
           return st;
         }
 
+        // The user may have switched networks while earlier prompts were open: pin Base again right before sending.
+        const nowChain = await eth.request({ method: "eth_chainId", params: [] });
+        if (String(nowChain).toLowerCase() !== core.BASE_CHAIN_HEX) { say("The wallet is no longer on Base (chain 8453). Nothing was sent.", "ready"); return st; }
         say("Confirm the transaction in your wallet...");
-        const hash = await eth.request({ method: "eth_sendTransaction", params: [{ from: account, to: t.manager, data: core.collectCalldata({ tokenId: BigInt(t.tokenId), owner: t.owner }), value: "0x0" }] });
+        const hash = await eth.request({ method: "eth_sendTransaction", params: [{ chainId: core.BASE_CHAIN_HEX, from: account, to: t.manager, data: core.collectCalldata({ tokenId: BigInt(t.tokenId), owner: t.owner }), value: "0x0" }] });
         if (!core.isTxHash(hash)) { say("The wallet returned something that is not a transaction hash. Check the wallet's activity before retrying.", "ready"); return st; }
         st.hash = hash;
         st.busy = false;

@@ -68,4 +68,26 @@ async function resolveTarget({ cfg, provider, positions, protocol, id, chainName
   return { status: 200, body: out };
 }
 
-module.exports = { resolveTarget };
+/**
+ * Wraps resolveTarget with a short per-(protocol,id) cache of successful answers and in-flight dedupe, so a
+ * burst of requests costs at most one ownerOf plus one collect.staticCall pair. Failures are never cached.
+ */
+function cached(resolve, { ttlMs = 12000, now = Date.now, max = 200 } = {}) {
+  const done = new Map(), flying = new Map();
+  return async function (args) {
+    const { protocol, id } = args;
+    if (typeof protocol !== "string" || typeof id !== "string" || protocol.length > 40 || id.length > 78) return resolve(args);
+    const key = `${protocol}\n${id}`;
+    const hit = done.get(key);
+    if (hit && now() - hit.at < ttlMs) return hit.r;
+    if (flying.has(key)) return flying.get(key);
+    const p = resolve(args).then((r) => {
+      if (r && r.status === 200) { if (done.size >= max) done.delete(done.keys().next().value); done.set(key, { at: now(), r }); }
+      return r;
+    }).finally(() => { flying.delete(key); });
+    flying.set(key, p);
+    return p;
+  };
+}
+
+module.exports = { resolveTarget, cached };

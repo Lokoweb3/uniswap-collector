@@ -20,8 +20,13 @@
   const BASE_CHAIN_ID = 8453;
   const BASE_CHAIN_HEX = "0x2105";
 
+  // The only managers this button will ever send to (Aerodrome Slipstream on Base). Hard-coded on purpose:
+  // a hostile or mistaken server answer cannot widen it.
+  const BASE_MANAGERS = ["0x827922686190790b37229fd06084350E74485b72", "0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53"];
+
   const isAddress = (a) => typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a);
   const sameAddress = (a, b) => isAddress(a) && isAddress(b) && a.toLowerCase() === b.toLowerCase();
+  const isAllowedManager = (a) => isAddress(a) && BASE_MANAGERS.some((m) => m.toLowerCase() === a.toLowerCase());
   const isTxHash = (h) => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h);
   const shortAddr = (a) => (isAddress(a) ? `${a.slice(0, 6)}...${a.slice(-4)}` : "an unknown address");
   const word = (n) => n.toString(16).padStart(64, "0");
@@ -59,5 +64,5 @@
     return m ? m[1].replace(/\/+$/, "") : null;
   }
 
-  return { collectCalldata, ownerOfCalldata, addressFromWord, toTokenId, isAddress, sameAddress, isTxHash, shortAddr, safeExplorer, COLLECT_SELECTOR, OWNER_OF_SELECTOR, MAX_UINT128, BASE_CHAIN_ID, BASE_CHAIN_HEX };
+  return { collectCalldata, ownerOfCalldata, addressFromWord, toTokenId, isAddress, sameAddress, isAllowedManager, BASE_MANAGERS, isTxHash, shortAddr, safeExplorer, COLLECT_SELECTOR, OWNER_OF_SELECTOR, MAX_UINT128, BASE_CHAIN_ID, BASE_CHAIN_HEX };
 });

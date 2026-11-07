@@ -101,6 +101,7 @@ let guardian = null, autoCollect = null, telegramAgent = null, launchScanner = n
 
 const CACHE_MS = 60_000;
 let cache = { at: 0, payload: null };
+let claimTargetCached = null;
 let buildInFlight = null;
 
 const endpoint = require("./endpoint");
@@ -2330,6 +2331,7 @@ async function handleRequest(req, res) {
   // settings allowlist, the NFT's on-chain owner and a fee estimate. No calldata, no `to`: the wallet
   // builds and signs the collect; this server never does. Allowed under LP_READONLY / noTransactionData.
   if (url.pathname === "/api/claim-fees/target") {
+    if (!claimTargetCached) claimTargetCached = require("./claim-fees-target").cached(require("./claim-fees-target").resolveTarget, { ttlMs: 12000 });
     res.setHeader("Content-Type", "application/json");
     if (req.method !== "GET") { res.writeHead(405, { Allow: "GET" }); return res.end(JSON.stringify({ ok: false, error: "GET only" })); }
     try {
@@ -2345,7 +2347,7 @@ async function handleRequest(req, res) {
       }
       const positions = [...((payload && payload.external) || [])];
       for (const w of (watch.latest && watch.latest.wallets) || []) for (const p of w.positions || []) if (p && p.protocol) positions.push(p);
-      const r = await require("./claim-fees-target").resolveTarget({ cfg, provider, positions, protocol, id, chainName: chainDisplayName() });
+      const r = await claimTargetCached({ cfg, provider, positions, protocol, id, chainName: chainDisplayName() });
       res.writeHead(r.status);
       return res.end(JSON.stringify(r.body));
     } catch (err) {
@@ -3381,7 +3383,8 @@ async function handleRequest(req, res) {
     // older copy shows a page whose controls simply do not exist. The scripts are
     // already no-cache; the shell must be too.
     res.staticAsset = true;
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+    // Nothing in this repo frames the dashboard; refuse framing by other origins (clickjacking over the Claim fees button).
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache", "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "DENY" });
     return res.end(html);
   }
 

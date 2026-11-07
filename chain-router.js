@@ -223,6 +223,23 @@ const AGG_ROUTES = new Set(["/portfolio", "/portfolio/", "/api/aggregate", "/agg
 const AGG_EXTRA_HOSTS = String(process.env.LP_ALLOWED_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 const AGG_THEME_DIR = process.env.LP_AGG_THEME_DIR || __dirname;
 const AGG_NOSNIFF = { "X-Content-Type-Options": "nosniff" };
+// Portfolio page only (not the proxy path). dashboard.css/aggregate.css use no url(), @import, fonts or
+// data: images, and the page has no inline script; the chain tabs and chips carry inline style="--accent"
+// attributes, which is the one reason style-src keeps 'unsafe-inline'.
+const AGG_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/** Static files read again only when their mtime changes (the theme can be edited under a running router). */
+const fileCache = new Map();
+function cachedFile(file) {
+  let st;
+  try { st = fs.statSync(file); } catch { fileCache.delete(file); return null; }
+  const hit = fileCache.get(file);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.body;
+  let body;
+  try { body = fs.readFileSync(file); } catch { fileCache.delete(file); return null; }
+  fileCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, body });
+  return body;
+}
 
 /** Loopback names only on the router's own port (or none), plus names in LP_ALLOWED_HOSTS. */
 function aggHostAllowed(raw, localPort) {
@@ -235,10 +252,8 @@ function aggHostAllowed(raw, localPort) {
 
 /** dashboard.css (the theme, read at request time) followed by the aggregate rules. */
 function aggregateCss(themeDir = AGG_THEME_DIR) {
-  let theme = Buffer.alloc(0);
-  try { theme = fs.readFileSync(path.join(themeDir, "dashboard.css")); } catch { /* the aggregate rules carry fallbacks */ }
-  let rules = Buffer.alloc(0);
-  try { rules = fs.readFileSync(path.join(__dirname, "aggregate.css")); } catch { /* served without */ }
+  const theme = cachedFile(path.join(themeDir, "dashboard.css")) || Buffer.alloc(0);   // the aggregate rules carry fallbacks
+  const rules = cachedFile(path.join(__dirname, "aggregate.css")) || Buffer.alloc(0);
   return Buffer.concat([theme, theme.length ? Buffer.from("\n") : Buffer.alloc(0), rules]);
 }
 
@@ -286,7 +301,7 @@ function handleAggregate(req, res, url) {
   }
   const htmlHeaders = {
     "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache",
-    "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "DENY",
+    "Content-Security-Policy": AGG_CSP, "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer", ...AGG_NOSNIFF,
   };
   if (url.pathname === "/portfolio" || url.pathname === "/portfolio/") {
@@ -294,22 +309,25 @@ function handleAggregate(req, res, url) {
   } else if (url.pathname === "/aggregate.css") {
     send(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache", ...AGG_NOSNIFF }, aggregateCss());
   } else if (url.pathname === "/aggregate-view.js") {
-    let body = "";
-    try { body = fs.readFileSync(path.join(__dirname, "aggregate-view.js")); } catch { /* handled below */ }
-    if (!body.length) send(404, { "Content-Type": "application/json", ...AGG_NOSNIFF }, JSON.stringify({ ok: false }));
+    const body = cachedFile(path.join(__dirname, "aggregate-view.js"));
+    if (!body || !body.length) send(404, { "Content-Type": "application/json", ...AGG_NOSNIFF }, JSON.stringify({ ok: false }));
     else send(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache", ...AGG_NOSNIFF }, body);
   } else {
     const json = { "Content-Type": "application/json", "Cache-Control": "no-store", ...AGG_NOSNIFF };
     if (req.method === "HEAD") { send(200, json); return true; }
-    aggregator.get({ refresh: url.searchParams.get("refresh") === "1" })
-      .then((payload) => send(200, json, JSON.stringify(payload)))
+    aggregator.getJson({ refresh: url.searchParams.get("refresh") === "1" })
+      .then((body) => send(200, json, body))
       .catch(() => send(500, json, JSON.stringify({ ok: false, error: "aggregate failed" })));
   }
   return true;
 }
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  let url;
+  try { url = new URL(req.url, `http://${req.headers.host || "localhost"}`); } catch {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", "Content-Length": 12, "Connection": "close" });
+    return res.end("bad request\n");
+  }
 
   // Before the ?chain= redirect: these routes ignore the chain cookie and query.
   if (handleAggregate(req, res, url)) return;

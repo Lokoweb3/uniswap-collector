@@ -181,13 +181,20 @@ function bannersHtml(payload, sel) {
   return out.join('');
 }
 
-function tileHtml(payload, t, items, filtered) {
+function tileHtml(payload, t, items, filtered, sel) {
+  // A wallet the chains could not read at all has no figure, not a zero one.
+  const selWallet = sel && sel.wallet ? (payload.wallets || []).find(w => w.key === sel.wallet && w.unavailable === true) : null;
   const notesHtml = [];
   if (payload.incomplete) notesHtml.push('<span class="badge warn">incomplete: some chains or parts are missing</span>');
   if (isNum(t.staleUsd) && t.staleUsd > 0) notesHtml.push(`<span class="badge bad">stale ${esc(usd(t.staleUsd))} included (last good data)</span>`);
   if (payload.truncated) notesHtml.push(filtered
     ? '<span class="badge warn">list truncated: the totals shown cover only the listed items</span>'
     : '<span class="badge warn">list truncated, totals cover everything</span>');
+  if (selWallet) {
+    return `<div class="tile"><div class="label">Total, counted</div><div class="grand">unavailable</div>`
+      + `<div class="sub">${esc(selWallet.label || shortAddr(selWallet.address))} could not be read on any chain: no figure, not zero</div>`
+      + `<div class="notes">${notesHtml.join(' ')}</div><div class="muted">${esc(items.length)} items shown</div></div>`;
+  }
   return `<div class="tile"><div class="label">Total, counted</div><div class="grand">${esc(usd(t.grandUsd))}</div>`
     + `<div class="sub">LP ${esc(usd(t.lpUsd))} + fees ${esc(usd(t.feesUsd))} + pending rewards ${esc(usd(t.rewardsUsd))} + tokens ${esc(usd(t.tokensUsd))}</div>`
     + `<div class="sub">uncounted ${esc(usd(t.uncountedUsd))} (${esc(t.uncountedCount)} items)</div>`
@@ -247,7 +254,7 @@ function renderPage(payload, sel) {
   const [lpOk, lpNo] = split(lp);
   const [tkOk, tkNo] = split(tokens);
   const [stOk, stNo] = split(staking);
-  return bannersHtml(payload, sel) + tileHtml(payload, t, items, isFiltered(payload, sel)) + controlsHtml(payload, sel)
+  return bannersHtml(payload, sel) + tileHtml(payload, t, items, isFiltered(payload, sel), sel) + controlsHtml(payload, sel)
     + tableHtml('LP positions', HEADS.lp, lpOk, lpNo, lpRowHtml, payload, 7)
     + tableHtml('Tokens', HEADS.token, tkOk, tkNo, tokenRowHtml, payload, 7)
     + tableHtml('Staking', HEADS.staking, stOk, stNo, stakingRowHtml, payload, 7)

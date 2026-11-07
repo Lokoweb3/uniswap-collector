@@ -269,9 +269,10 @@ function compose(state, now) {
   const pos = usable.positions, wat = usable.watch, pf = usable.portfolio, stk = usable.staking;
   const mainAddr = (pos && pos.data.owner) || (pf && pf.data.owner) || null;
   const mainKey = lc(mainAddr);
+  const walletKeys = new Set();
   const walletOf = (address, label) => {
     const w = { address: address.slice(0, STR_MAX), key: address.toLowerCase(), label: label || "" };
-    if (!wallets.some((x) => x.key === w.key)) wallets.push(w);
+    if (!walletKeys.has(w.key)) { walletKeys.add(w.key); wallets.push(w); }
     return w;
   };
   const mainWallet = mainAddr ? walletOf(mainAddr, (pos && pos.data.ownerLabel) || "Main") : null;
@@ -331,10 +332,16 @@ function compose(state, now) {
 
   // ---- tokens ----
   const tokenItems = [];
+  const tokenByAddr = new Map();            // wallet|address -> first non-native row (staking tags it)
+  const pushToken = (row) => {
+    tokenItems.push(row);
+    if (!row._native) { const k = `${row.wallet.key}|${row._addr}`; if (!tokenByAddr.has(k)) tokenByAddr.set(k, row); }
+  };
   const seenTok = new Set();
   const tokenKeyOf = (walletKey, t) => `${chain.key}|${walletKey}|${t.native ? "native" : t.address}`;
   const addTokens = (wallet, tokens, source, asOf, stale, unscaled = []) => {
     const mine = [];
+    const mineAddrs = new Set();           // _addr of rows added from tokens (the unscaled pass skips these)
     const pairSet = lpPairs.get(wallet.key) || new Set();
     for (const t of tokens) {
       let reason = null, counted = false, valueUsd = null;
@@ -346,6 +353,7 @@ function compose(state, now) {
       const key = tokenKeyOf(wallet.key, t);
       if (seenTok.has(key)) continue;
       seenTok.add(key);
+      if (t.address) mineAddrs.add(t.address);
       mine.push({
         id: `${chain.key}-${hash(key)}`, kind: "token", chain: chain.key, wallet: { ...wallet },
         protocol: "token", name: t.symbol || (t.native ? "native" : "token"),
@@ -357,10 +365,11 @@ function compose(state, now) {
       });
     }
     for (const u of unscaled) {
-      if (!u.address || mine.some((m) => m._addr === u.address)) continue;
+      if (!u.address || mineAddrs.has(u.address)) continue;
       const key = `${chain.key}|${wallet.key}|${u.address}`;
       if (seenTok.has(key)) continue;
       seenTok.add(key);
+      mineAddrs.add(u.address);
       mine.push({
         id: `${chain.key}-${hash(key)}`, kind: "token", chain: chain.key, wallet: { ...wallet },
         protocol: "token", name: u.symbol || "token", valueUsd: null, feesUsd: null, rewardsUsd: null, rewardsCounted: false, rewardsReason: null,
@@ -370,13 +379,14 @@ function compose(state, now) {
       });
     }
     // The native coin and its ERC-20 twin (Arc's USDC) are one asset: keep the native row.
+    const nativesByName = new Map();
+    for (const n of mine) if (n._native) { const k = n.name.toLowerCase(); if (!nativesByName.has(k)) nativesByName.set(k, []); nativesByName.get(k).push(n); }
     for (const m of mine) {
       if (m._native) continue;
-      const twin = mine.find((n) => n._native && n.name.toLowerCase() === m.name.toLowerCase()
-        && n.amount !== null && m.amount !== null && Math.abs(n.amount - m.amount) <= 1e-6 * Math.max(1, n.amount));
-      if (!twin) tokenItems.push(m);
+      const twin = (nativesByName.get(m.name.toLowerCase()) || []).find((n) => n.amount !== null && m.amount !== null && Math.abs(n.amount - m.amount) <= 1e-6 * Math.max(1, n.amount));
+      if (!twin) pushToken(m);
     }
-    for (const m of mine) if (m._native) tokenItems.push(m);
+    for (const m of mine) if (m._native) pushToken(m);
   };
 
   if (pf && mainWallet) addTokens(mainWallet, pf.data.tokens, "portfolio", pf.asOf, pf.stale);
@@ -398,7 +408,7 @@ function compose(state, now) {
   if (stk) {
     const applyStaking = (wallet, tokens) => {
       for (const s of tokens) {
-        const row = tokenItems.find((t) => t.wallet.key === wallet.key && !t._native && t._addr === s.token);
+        const row = tokenByAddr.get(`${wallet.key}|${s.token}`);
         if (row) {
           row.flags.staking = true;
           row.stakingRewards = { d7Usd: s.rewards.d7Usd, d30Usd: s.rewards.d30Usd, totalUsd: s.rewards.totalUsd };
@@ -409,7 +419,7 @@ function compose(state, now) {
         const key = `${chain.key}|${wallet.key}|staking|${s.token}`;
         if (seenTok.has(key)) continue;
         seenTok.add(key);
-        tokenItems.push({
+        pushToken({
           id: `${chain.key}-${hash(key)}`, kind: "staking", chain: chain.key, wallet: { ...wallet },
           protocol: "staking", name: s.symbol || "staking",
           valueUsd: s.usd, feesUsd: null, rewardsUsd: null, rewardsCounted: false, rewardsReason: null,
@@ -580,6 +590,7 @@ function createAggregator(opts = {}) {
         else state.parts[n] = { data: prev ? prev.data : null, at: prev ? prev.at : null, fetchedAt: prev && prev.data ? prev.fetchedAt : t, code: r.code };
       });
       state.roundAt = t;
+      state.seq = (state.seq || 0) + 1;     // a finished round, even when the clock did not move
     }).catch(() => { /* a bug in a round must not leave the chain locked */ }).then(() => { state.inflight = null; });
   }
 
@@ -604,13 +615,27 @@ function createAggregator(opts = {}) {
     return snapshot();
   }
 
-  function snapshot() {
+  // The payload is rebuilt (compose + build + JSON.stringify) only when a round has finished on some
+  // chain; every request in between reuses it. Its `at` and ages are those of the build.
+  let cache = null;
+  const stats = { builds: 0 };
+  const versionOf = () => [...states.values()].map((s) => `${s.roundAt || 0}.${s.seq || 0}`).join("|");
+
+  function cached() {
+    const v = versionOf();
+    if (cache && cache.v === v) return cache;
     const now = clock();
     const composed = [...states.values()].map((s) => compose(s, now));
-    return build(composed, { now, ttlMs });
+    const payload = build(composed, { now, ttlMs });
+    stats.builds++;
+    cache = { v, payload, json: JSON.stringify(payload) };
+    return cache;
   }
 
-  return { get, snapshot, states };
+  function snapshot() { return cached().payload; }
+  async function getJson(opts) { await get(opts); return cached().json; }
+
+  return { get, getJson, snapshot, states, stats };
 }
 
 module.exports = {

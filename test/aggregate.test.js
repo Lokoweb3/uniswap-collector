@@ -452,6 +452,28 @@ function scenario() {
     assert.ok(ms < 250, `aggregated in ${ms.toFixed(1)} ms`);
   }
 
+  // ---- 34. the serialised payload is built once per round -----------------------------------------------------
+  {
+    const data = { a: { positions: F.positions(addr(1), { positions: [lp(1, { valueUsd: 10, feesUsd: 1 })] }), watch: F.watch(), portfolio: F.portfolio(addr(1)), staking: F.staking() } };
+    const ag = agg.createAggregator({
+      chains: [CH[0]], now: () => clock.t, waitMs: 1000, ttlMs: 30000,
+      fetchJson: async (chain, p) => ({ status: 200, data: data[chain.key][p.split("/").pop()] }),
+    });
+    const j1 = await ag.getJson();
+    const b1 = ag.stats.builds;
+    const j2 = await ag.getJson();
+    const p3 = await ag.get();
+    assert.strictEqual(ag.stats.builds, b1, "two more requests inside one round: no rebuild");
+    assert.strictEqual(j1, j2, "the same serialised payload");
+    assert.strictEqual(JSON.stringify(p3), j1);
+    await ag.get({ refresh: true });     // a forced round (the clock has not moved)
+    await ag.getJson();
+    assert.ok(ag.stats.builds > b1, "a new round rebuilds");
+    const b2 = ag.stats.builds;
+    await ag.getJson();
+    assert.strictEqual(ag.stats.builds, b2, "and is then reused");
+  }
+
   // ---- 35. static scope ------------------------------------------------------------------------------------------
   {
     const src = fs.readFileSync(path.join(__dirname, "..", "aggregate.js"), "utf8");

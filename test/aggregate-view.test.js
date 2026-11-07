@@ -91,6 +91,19 @@ const healthy = () => ({
     assert.strictEqual(V.initialSelection(p, "?wallet=treasury").wallet, M.toLowerCase());
   }
 
+  // ---- an unreadable wallet selected in the Wallet filter: "unavailable", never $0.00
+  {
+    const d = healthy();
+    d.a.watch = F.watch([F.walletRow(addr(2), "Wallet 1", { ok: false })]);
+    const u = await payloadFor(d);
+    const w = u.wallets.find((x) => x.key === addr(2).toLowerCase());
+    assert.ok(w && w.unavailable === true, "the wallet is marked unavailable");
+    const html = V.renderPage(u, { chains: new Set(["a", "b"]), wallet: w.key, sort: "value" });
+    const tile = html.slice(html.indexOf('<div class="tile">'), html.indexOf("items shown"));
+    assert.ok(tile.includes("unavailable") && !tile.includes("$0.00"), "tile: " + tile);
+    assert.ok(V.renderPage(u, all).includes("$"), "unfiltered tile still shows figures");
+  }
+
   // ---- 19. chain down: the banner names it, no figure
   {
     const d = healthy(); d.b = { positions: { __code: "unreachable" }, watch: { __code: "unreachable" }, portfolio: { __code: "unreachable" }, staking: { __code: "unreachable" } };

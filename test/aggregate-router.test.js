@@ -80,7 +80,8 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     const r = await call(rport, "/portfolio");
     assert.strictEqual(r.status, 200);
     assert.ok(/^text\/html; charset=utf-8$/.test(r.headers["content-type"]));
-    assert.strictEqual(r.headers["content-security-policy"], "frame-ancestors 'self'");
+    assert.strictEqual(r.headers["content-security-policy"], "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    assert.ok(!/url\(|@import|@font-face|data:/.test(fs.readFileSync(path.join(ROOT, "aggregate.css"), "utf8") + fs.readFileSync(path.join(ROOT, "dashboard.css"), "utf8")), "the CSP allows no fonts or data: images because the css uses none");
     assert.strictEqual(r.headers["x-frame-options"], "DENY"); assert.strictEqual(r.headers["cache-control"], "no-cache");
     assert.strictEqual(r.headers["x-content-type-options"], "nosniff"); assert.strictEqual(r.headers["referrer-policy"], "no-referrer");
     assert.ok(r.body.includes('<nav class="pages"') && r.body.includes('href="/portfolio"'));
@@ -245,6 +246,43 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
       const naked = rules.replace(/var\([^)]*\)/g, "");
       assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(naked) && !/rgba?\(/.test(naked), "every aggregate-specific colour is var(--x, fallback)");
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // ---- 32b. static files are cached until their mtime changes
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agg-cache-"));
+    try {
+      const f = path.join(dir, "dashboard.css");
+      fs.writeFileSync(f, "/* one */\n");
+      assert.ok(mod.aggregateCss(dir).toString().startsWith("/* one */"));
+      const orig = fs.readFileSync;
+      let reads = 0;
+      fs.readFileSync = function (...a) { if (String(a[0]) === f) reads++; return orig.apply(this, a); };
+      try {
+        mod.aggregateCss(dir); mod.aggregateCss(dir);
+        assert.strictEqual(reads, 0, "unchanged mtime: no re-read");
+        fs.writeFileSync(f, "/* two!! */\n");
+        const t = new Date(Date.now() + 5000); fs.utimesSync(f, t, t);
+        assert.ok(mod.aggregateCss(dir).toString().startsWith("/* two!! */"));
+        assert.strictEqual(reads, 1, "changed mtime: one re-read");
+      } finally { fs.readFileSync = orig; }
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // ---- 32c. a malformed Host is a 400, not a crash
+  {
+    const net = require("net");
+    const raw = (head) => new Promise((res) => {
+      const c = net.connect(rport, "127.0.0.1", () => c.write(head));
+      let out = ""; c.setEncoding("utf8"); c.on("data", (d) => (out += d)); c.on("close", () => res(out)); c.on("error", () => res(out));
+      setTimeout(() => c.destroy(), 1500);
+    });
+    const out = await raw("GET /portfolio HTTP/1.1\r\nHost: a b\r\nConnection: close\r\n\r\n");
+    assert.ok(/^HTTP\/1\.1 400 /.test(out), out.slice(0, 80));
+    assert.ok(out.endsWith("bad request\n"), "fixed body");
+    const out2 = await raw("GET /anything HTTP/1.1\r\nHost: [x\r\nConnection: close\r\n\r\n");
+    assert.ok(/^HTTP\/1\.1 400 /.test(out2));
+    assert.strictEqual((await call(rport, "/portfolio")).status, 200, "still serving");
   }
 
   // ---- 34. a disabled chain is not asked about; a listed one that is down still shows

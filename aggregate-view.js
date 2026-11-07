@@ -57,9 +57,14 @@ function filterItems(payload, sel) {
 }
 
 /** Same rules as the server, applied to what is shown. Unfiltered, the server's own totals are used. */
+function isUnfiltered(payload, sel) {
+  return !!(!sel.wallet && sel.chains && (payload.chains || []).every(c => sel.chains.has(c.key)));
+}
+function isFiltered(payload, sel) { return !isUnfiltered(payload, sel); }
+
 function totalsFor(payload, items, sel) {
-  const all = !sel.wallet && sel.chains && (payload.chains || []).every(c => sel.chains.has(c.key));
-  if (all && !payload.truncated) return payload.totals;
+  const all = isUnfiltered(payload, sel);
+  if (all) return payload.totals;
   const t = { lpUsd: 0, feesUsd: 0, rewardsUsd: 0, tokensUsd: 0, uncountedUsd: 0, uncountedCount: 0, rewardsUncountedUsd: 0, rewardsUncountedCount: 0, assumedUsd: 0, staleUsd: 0 };
   for (const it of items) {
     let c = 0;
@@ -176,11 +181,13 @@ function bannersHtml(payload, sel) {
   return out.join('');
 }
 
-function tileHtml(payload, t, items) {
+function tileHtml(payload, t, items, filtered) {
   const notesHtml = [];
   if (payload.incomplete) notesHtml.push('<span class="badge warn">incomplete: some chains or parts are missing</span>');
   if (isNum(t.staleUsd) && t.staleUsd > 0) notesHtml.push(`<span class="badge bad">stale ${esc(usd(t.staleUsd))} included (last good data)</span>`);
-  if (payload.truncated) notesHtml.push('<span class="badge warn">list truncated, totals cover everything</span>');
+  if (payload.truncated) notesHtml.push(filtered
+    ? '<span class="badge warn">list truncated: the totals shown cover only the listed items</span>'
+    : '<span class="badge warn">list truncated, totals cover everything</span>');
   return `<div class="tile"><div class="label">Total, counted</div><div class="grand">${esc(usd(t.grandUsd))}</div>`
     + `<div class="sub">LP ${esc(usd(t.lpUsd))} + fees ${esc(usd(t.feesUsd))} + pending rewards ${esc(usd(t.rewardsUsd))} + tokens ${esc(usd(t.tokensUsd))}</div>`
     + `<div class="sub">uncounted ${esc(usd(t.uncountedUsd))} (${esc(t.uncountedCount)} items)</div>`
@@ -201,8 +208,12 @@ function controlsHtml(payload, sel) {
     + `<label>Sort <select data-sortsel>${sortOptsHtml}</select></label><button type="button" data-refresh>Refresh</button></div>`;
 }
 
-function breakdownHtml(payload, items) {
-  const by = breakdownFor(items);
+function breakdownHtml(payload, items, sel) {
+  let by;
+  if (isUnfiltered(payload, sel) && payload.breakdown) {
+    const clean = o => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => isNum(v)));
+    by = { chain: clean(payload.breakdown.byChain), wallet: clean(payload.breakdown.byWallet), protocol: clean(payload.breakdown.byProtocol) };
+  } else by = breakdownFor(items);
   const total = Object.values(by.chain).reduce((a, b) => a + b, 0);
   const sectionHtml = (title, map, label, extraRowsHtml) => {
     const rowsHtml = Object.entries(map).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(label(k))}</td><td class="num">${esc(usd(v))}</td><td class="num">${esc(pct(v, total))}</td></tr>`).join('');
@@ -236,11 +247,11 @@ function renderPage(payload, sel) {
   const [lpOk, lpNo] = split(lp);
   const [tkOk, tkNo] = split(tokens);
   const [stOk, stNo] = split(staking);
-  return bannersHtml(payload, sel) + tileHtml(payload, t, items) + controlsHtml(payload, sel)
+  return bannersHtml(payload, sel) + tileHtml(payload, t, items, isFiltered(payload, sel)) + controlsHtml(payload, sel)
     + tableHtml('LP positions', HEADS.lp, lpOk, lpNo, lpRowHtml, payload, 7)
     + tableHtml('Tokens', HEADS.token, tkOk, tkNo, tokenRowHtml, payload, 7)
     + tableHtml('Staking', HEADS.staking, stOk, stNo, stakingRowHtml, payload, 7)
-    + breakdownHtml(payload, items)
+    + breakdownHtml(payload, items, sel)
     + `<p class="muted foot">As of ${esc(stamp(payload.at))}. ${(payload.chains || []).map(c => `${esc(c.label)} ${esc(stamp(c.dataAt || c.lastGoodAt))}`).join('; ')}</p>`;
 }
 

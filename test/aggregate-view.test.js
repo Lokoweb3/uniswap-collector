@@ -46,6 +46,19 @@ const healthy = () => ({
     assert.strictEqual(V.usd(1234567.891), "$1,234,567.89"); assert.strictEqual(V.usd(NaN), "unpriced");
   }
 
+  // ---- a truncated payload: unfiltered shows the server's totals, filtered says they cover only the list
+  {
+    const tp = JSON.parse(JSON.stringify(await payloadFor(healthy())));
+    tp.truncated = true; tp.totals.grandUsd = 987654.32; tp.items = tp.items.slice(0, 2);
+    const uf = { chains: new Set(["a", "b"]), wallet: "", sort: "value" };
+    assert.strictEqual(V.totalsFor(tp, V.filterItems(tp, uf), uf), tp.totals, "unfiltered + truncated: the server's totals, not a recompute");
+    const html = V.renderPage(tp, uf);
+    assert.ok(html.includes(V.usd(987654.32)) && html.includes("totals cover everything"));
+    const fl = { ...uf, chains: new Set(["a"]) };
+    const fh = V.renderPage(tp, fl);
+    assert.ok(fh.includes("cover only the listed items"), "filtered + truncated: the note says so");
+  }
+
   // ---- rendering a healthy payload, filters recompute the totals
   const p = await payloadFor(healthy());
   const all = { chains: new Set(["a", "b"]), wallet: "", sort: "value" };
@@ -54,7 +67,6 @@ const healthy = () => ({
     for (const s of ["LP positions", "Tokens", "Staking", "By chain", "By wallet", "By protocol", "pending rewards (included)", "rewards not counted: 0", "uncounted", "priced by assumption", "Not counted (1)", "unpriced"]) {
       assert.ok(html.includes(s), `page shows "${s}"`);
     }
-    assert.ok(!html.includes("$0.00</div><div class=\"sub\">LP") || true);
     assert.ok(html.includes(V.usd(p.totals.grandUsd)), "the unfiltered tile is the server's total");
     // 10. filter to wallet M: items from both chains, totals recomputed
     const m = { ...all, wallet: M.toLowerCase() };

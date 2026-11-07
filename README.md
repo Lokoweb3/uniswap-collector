@@ -181,6 +181,7 @@ Counting rules.
   rule the instance uses; the PulseChain price-gap rule is kept). Others are listed under "Not counted"
   with a reason (`thin-pool`, `price-gap`, `unanchored`, `unpriced`). An unpriced value is shown as
   "unpriced", never as `$0.00`.
+- LP-pair tokens in holdings are listed as uncounted with reason `duplicate-of-holdings` and add to the uncounted count.
 - **Fees** are counted only for counted pools whose fees were read. Difference from the instance:
   its own `feesUsd` total also adds the fees of uncounted pools; the aggregate does not.
 - **Pending gauge / farm rewards** (for example AERO on a staked Aerodrome NFT, UP, a PulseX farm) are

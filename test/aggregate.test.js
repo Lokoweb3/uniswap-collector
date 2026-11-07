@@ -107,7 +107,6 @@ function scenario() {
     near(t.assumedUsd, 50, "priced by assumption");
 
     // ---- 9. protocol mapping
-    const proto = (id) => r.items.find((i) => i.id && i.name && i.kind === "lp" && i.chain === id.chain && i.name === id.name);
     const byProto = {};
     for (const i of r.items) byProto[i.protocol] = (byProto[i.protocol] || 0) + 1;
     assert.strictEqual(byProto["uniswap-v3"], 3); assert.strictEqual(byProto["uniswap-v4"], 1);
@@ -116,7 +115,6 @@ function scenario() {
     near(r.breakdown.byProtocol["uniswap-v3"], 1315, "v3"); near(r.breakdown.byProtocol["uniswap-v4"], 505, "v4");
     near(r.breakdown.byProtocol.aerodrome, 312.5, "aerodrome includes its reward"); near(r.breakdown.byProtocol["pulsex-v2"], 418, "pulsex");
     near(r.breakdown.byProtocol.token, 2250, "tokens");
-    void proto;
     const odd = await make({ a: { positions: F.positions(M, { external: [ext("MegaSwap", 1), ext("slipstream", 2)] }), watch: F.watch(), portfolio: F.portfolio(M), staking: F.staking() } }, { chains: [CH[0]] }).get();
     assert.deepStrictEqual(odd.items.map((i) => i.protocol).sort(), ["aerodrome", "other:megaswap"]);
 
@@ -192,8 +190,6 @@ function scenario() {
 
     // ---- 16. uncounted rules
     const c = r.items.filter((i) => i.chain === "c" && i.kind === "lp");
-    const reasonOf = (suffix) => c.find((i) => i.name === "AERO / USDC" && i.id && false) || null;
-    void reasonOf;
     const reasons = c.map((i) => i.reason).sort((x, y) => String(x).localeCompare(String(y)));
     assert.deepStrictEqual(reasons, [null, null, "price-gap", "thin-pool", "unanchored", "unpriced"].sort((x, y) => String(x).localeCompare(String(y))));
     near(t.uncountedUsd, 99 + 77 + 11, "uncounted USD = price-gap + thin + unanchored (unpriced adds 0)");
@@ -304,6 +300,13 @@ function scenario() {
     const w1 = rw.items.find((i) => i.wallet.key === W1.toLowerCase());
     assert.strictEqual(w1.flags.stale, true); assert.strictEqual(w1.asOf, F.AT - 600000);
     assert.ok(!rw.items.some((i) => i.chain === "a" && i.wallet.key === W3.toLowerCase()), "a failed wallet contributes nothing, not 0");
+    const w3 = rw.wallets.find((x) => x.key === W3.toLowerCase());
+    assert.ok(w3 && typeof w3.countedUsd === "number" && !w3.unavailable, "readable on other chains: keeps its figure");
+    const ra = await make(w, { chains: [CH[0]] }).get();
+    const w3a = ra.wallets.find((x) => x.key === W3.toLowerCase());
+    assert.ok(w3a && w3a.countedUsd === null && w3a.unavailable === true, "a wallet with no readable data is unavailable, not $0");
+    const w1o = rw.wallets.find((x) => x.key === W1.toLowerCase());
+    assert.ok(w1o && typeof w1o.countedUsd === "number" && !w1o.unavailable, "a readable wallet keeps its figure");
     assert.ok(!JSON.stringify(rw).includes("KEY-secret"), "raw upstream error text never reaches the output");
     // 23 loading
     const l = scenario(); l.a.watch = { __http: 202, body: { ok: false, refreshing: true, error: "watched wallets still loading", wallets: [] } };
@@ -401,6 +404,35 @@ function scenario() {
     const walk = (v) => { if (typeof v === "string") assert.ok(v.length <= 80, `string too long: ${v.length}`); else if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === "object") Object.values(v).forEach(walk); };
     walk(r);
     assert.ok(JSON.stringify((await make(scenario()).get())).length < 1024 * 1024);
+
+    // the cap keeps the most valuable items; unpriced ones go last
+    const mixed = [
+      ...Array.from({ length: 5500 }, (_, i) => ext("aerodrome-cl2", i + 1, { staked: true, valueUsd: null, feesUsd: 0 })),
+      ...Array.from({ length: 600 }, (_, i) => ext("aerodrome-cl2", 10000 + i, { staked: true, valueUsd: 1 + i, feesUsd: 0 })),
+      ext("aerodrome-cl2", 99999, { staked: true, valueUsd: 777777, feesUsd: 0 }),
+    ];
+    const m = await make({ a: { positions: F.positions(M, { external: mixed }), watch: F.watch(), portfolio: F.portfolio(M), staking: F.staking() } }, { chains: [CH[0]] }).get();
+    assert.strictEqual(m.truncated, true); assert.strictEqual(m.items.length, 5000);
+    assert.strictEqual(m.items[0].valueUsd, 777777, "the highest-value item survives the cap");
+    assert.ok(m.items.filter((i) => i.valueUsd !== null).length === 601, "every priced item is kept");
+    assert.ok(m.items[601].valueUsd === null && m.items[4999].valueUsd === null, "unpriced items fill the rest");
+  }
+
+  // ---- 27b. live-shape fixtures go through ingest/compose/build ------------------------------------------
+  {
+    const dir = path.join(__dirname, "fixtures", "aggregate");
+    const keys = ["robinhood", "arc", "base"];
+    const data = {};
+    for (const k of keys) data[k] = JSON.parse(fs.readFileSync(path.join(dir, `live-shape-${k}.json`), "utf8"));
+    const chains = keys.map((k, i) => ({ key: k, label: k, accent: "#123456", port: 10 + i }));
+    let r;
+    r = await make(data, { chains }).get();
+    assert.strictEqual(r.ok, true);
+    near(r.totals.grandUsd, r.totals.lpUsd + r.totals.feesUsd + r.totals.rewardsUsd + r.totals.tokensUsd, "live shape: grand = lp + fees + rewards + tokens");
+    for (const k of ["byChain", "byWallet", "byProtocol"]) near(sum(r.breakdown[k]), r.totals.grandUsd, `live shape: ${k} sums to grand`);
+    const protos = (chain) => new Set(r.items.filter((i) => i.chain === chain).map((i) => i.protocol));
+    assert.ok(protos("robinhood").has("other:up"), "robinhood has other:up");
+    assert.ok(protos("base").has("aerodrome"), "base has aerodrome");
   }
 
   // ---- 33. performance ----------------------------------------------------------------------------------------

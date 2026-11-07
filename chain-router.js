@@ -111,7 +111,7 @@ const PICKER_ID = "lp-chain-picker";
 // Methods a browser may send cross-site without the guard mattering; everything else
 // is checked before it is forwarded.
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-function pickerHtml(current, opts = {}) {
+function pickerHtml(current) {
   // A dropdown was easy to miss: it read as page furniture, and the chain a figure
   // belongs to is the one thing here that must never be misread. So: every chain
   // visible at once, the current one filled in its own colour and marked as current,
@@ -133,11 +133,10 @@ function pickerHtml(current, opts = {}) {
   }).join("");
   // The cross-chain page is not a chain, so it has no data-chain: the click handler below
   // only reacts to a[data-chain] and leaves this a plain link.
-  const onPortfolio = !!opts.portfolio;
-  const portfolioTab = `<a href="/portfolio"${onPortfolio ? ' aria-current="page"' : ""} title="All chains, one page"
+  const portfolioTab = `<a href="/portfolio" title="All chains, one page"
       style="display:flex;align-items:center;text-decoration:none;border-radius:7px;padding:6px 11px;margin-left:4px;
-      font-weight:${onPortfolio ? 700 : 500};white-space:nowrap;color:${onPortfolio ? "#0b1220" : "#e2e8f0"};
-      background:${onPortfolio ? "#e2e8f0" : "transparent"};border:1px dashed rgba(226,232,240,.55)">Portfolio</a>`;
+      font-weight:500;white-space:nowrap;color:#e2e8f0;
+      background:transparent;border:1px dashed rgba(226,232,240,.55)">Portfolio</a>`;
   // Fixed, always visible, and it names the chain in the page's own words: a picker
   // you cannot see is how someone reads Arc's numbers believing they are Robinhood's.
   return `

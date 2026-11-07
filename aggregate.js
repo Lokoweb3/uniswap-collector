@@ -459,8 +459,12 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
     const cTotals = { countedUsd: 0, uncountedUsd: 0, staleUsd: 0 };
     for (const w of c.wallets) {
       let m = walletMap.get(w.key);
-      if (!m) { m = { key: w.key, address: w.address, label: "", labels: {}, aliases: [], chains: [], countedUsd: 0 }; walletMap.set(w.key, m); }
-      if (!m.chains.includes(c.chain.key)) m.chains.push(c.chain.key);
+      if (!m) { m = { key: w.key, address: w.address, label: "", labels: {}, aliases: [], chains: [], countedUsd: 0, unreadable: 0 }; walletMap.set(w.key, m); }
+      if (!m.chains.includes(c.chain.key)) {
+        m.chains.push(c.chain.key);
+        // a watched wallet the chain could not read at all has no figure there, not a zero one
+        if (c.problems.some((p) => p.wallet === w.key && p.code === "unavailable")) m.unreadable++;
+      }
       if (w.label) m.labels[c.chain.key] = w.label;
     }
     for (const it of c.items) {
@@ -517,14 +521,15 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
     const label = labs[0] || "";
     return {
       key: m.key, address: m.address, label, aliases: [...new Set(labs.filter((l) => l !== label))],
-      labels: m.labels, chains: m.chains, countedUsd: round(m.countedUsd),
+      labels: m.labels, chains: m.chains,
+      ...(m.unreadable >= m.chains.length ? { countedUsd: null, unavailable: true } : { countedUsd: round(m.countedUsd) }),
     };
   });
   const labelOf = new Map(walletsOut.map((w) => [w.key, w.label]));
   for (const it of all) it.wallet.label = labelOf.get(it.wallet.key) || it.wallet.label;
 
   // output: sorted, capped per kind; totals above were computed on the full set
-  all.sort((a, b) => (b.valueUsd === null) - (a.valueUsd === null) || (b.valueUsd || 0) - (a.valueUsd || 0));
+  all.sort((a, b) => (a.valueUsd === null) - (b.valueUsd === null) || (b.valueUsd || 0) - (a.valueUsd || 0));
   const perKind = {};
   let truncated = false;
   const items = [];

@@ -323,7 +323,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const v4Ids = disc ? await disc.discover(20) : [];
     // Whether the v4 history has actually been read. An unfinished or refused
     // scan must not render as "no positions": unavailable is not zero.
-    const discovery = disc ? disc.status : null;
+    const discovery = disc ? { ...disc.status } : null;
+    if (discovery) discovery.error = discovery.error ? redactText(String(discovery.error)).slice(0, 200) : null; // redact, then cut
     let work = [...ids.map((id) => ({ id, version: 3 })), ...v4Ids.map((id) => ({ id: BigInt(id), version: 4 }))];
     const known = work.length;
     const ownedV4 = new Set(); // v4 ids verified ownerOf == this wallet (open or closed)
@@ -347,9 +348,10 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
         // Only a verified gone reaches here; an unverified read throws and is
         // reported as an error, keeping the id in discovery.
         if (p.gone) {
-          // A pin that is not ours is reported, never tombstoned: the pin is the operator's, not discovery's.
+          // A pin that is not ours is reported; forget() writes nothing for a pin-only id, so a
+          // discovered id that left is tombstoned whether or not it is also pinned.
           if (version === 4 && disc && disc.isPinned(id)) pinnedNotOwned.push(String(id));
-          else if (disc) disc.forget(id, p.goneReason);
+          if (version === 4 && disc) disc.forget(id, p.goneReason);
           return;
         }
         if (version === 4) ownedV4.add(String(id));
@@ -422,7 +424,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
 
     const warnings = disc
       ? v4.discoveryWarnings({
-          wallet: w.address, label: w.label, chainId: cfg.chainId, status: { ...discovery, error: discovery.error ? redactText(discovery.error) : null },
+          wallet: w.address, label: w.label, chainId: cfg.chainId, status: discovery,
           balanceOf: await disc.balance(), knownOwned: ownedV4.size,
           pinnedInvalid: disc.pinnedInvalid, pinnedInvalidMore: disc.pinnedInvalidMore, pinnedNotOwned,
           pinHint: "wallets.watched[].v4Ids",

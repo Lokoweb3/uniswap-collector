@@ -39,9 +39,9 @@ w.contract(GAUGE);
 w.contract("0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1").on("0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1", "balanceOf", () => [0n]);
 
 // Optional Uniswap v4 on the Base example (the wallet's NFTs), switched on by $STUB_V4 = JSON
-//   { "balance": 6, "owned": [1, 2], "foreign": { "22": "0x..." }, "balances": { "0xlowercase": 3 } }
+//   { "balance": 6, "owned": [1, 2], "foreign": { "22": "0x..." }, "ownedBy": { "0xlowercase": [3] }, "balances": { "0xlowercase": 3 } }
 // balance = what balanceOf(wallet) answers on the v4 PositionManager (balances: other owners, default 0); owned = ids whose ownerOf is the wallet (each an open
-// ETH/USDC position with liquidity); foreign = ids owned by another address; any other id reverts NOT_MINTED.
+// ETH/USDC position with liquidity); foreign = ids owned by another address; ownedBy = ids owned by the given other wallets; any other id reverts NOT_MINTED.
 // Without $STUB_V4 the manager is unknown and nothing here is reachable.
 const V4_CFG = process.env.STUB_V4 ? JSON.parse(process.env.STUB_V4) : null;
 const V4_POSM = "0x7C5f5A4bBd8fD63184577525326123B519429bDc", V4_VIEW = "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71";
@@ -60,6 +60,7 @@ function v4Call(to, data) {
   const d = v4iface.parseTransaction({ data });
   const A = (...r) => v4iface.encodeFunctionResult(d.fragment, r);
   const id = d.args[0];
+  note({ kind: "v4", name: d.name, id: String(id) });
   if (String(to).toLowerCase() === V4_VIEW.toLowerCase()) {
     if (d.name === "getSlot0") return A(u.getSqrtRatioAtTick(TICK), BigInt(TICK), 0n, 500n);
     if (d.name === "getFeeGrowthInside") return A(0n, 0n);
@@ -72,6 +73,7 @@ function v4Call(to, data) {
       if ((V4_CFG.owned || []).map(Number).includes(Number(id))) return A(WALLET);
       const f = (V4_CFG.foreign || {})[String(id)];
       if (f) return A(f);
+      for (const [who, list] of Object.entries(V4_CFG.ownedBy || {})) if (list.map(Number).includes(Number(id))) return A(ethers.getAddress(who));
       const err = new Error("execution reverted"); err.data = ethers.concat(["0x08c379a0", ethers.AbiCoder.defaultAbiCoder().encode(["string"], ["NOT_MINTED"])]); err.rpc = true; throw err;
     }
     case "getPositionLiquidity": return A(10n ** 12n);
@@ -114,4 +116,7 @@ ethers.FetchRequest.registerGetUrl(async (req) => {
   const out = Array.isArray(body) ? await Promise.all(body.map(dispatch)) : await dispatch(body);
   return { statusCode: 200, statusMessage: "OK", headers: { "content-type": "application/json" }, body: Uint8Array.from(Buffer.from(JSON.stringify(out))) };
 });
+// $STUB_LOGS_ERR = text: every getLogs on any provider throws a plain Error with exactly that text (a secret-bearing
+// message that discovery records as lastError).
+if (process.env.STUB_LOGS_ERR) ethers.AbstractProvider.prototype.getLogs = async function () { throw new Error(process.env.STUB_LOGS_ERR); };
 global.fetch = async (url) => { note({ kind: "fetch", host: new URL(String(url)).host }); throw new Error("fetch failed"); };

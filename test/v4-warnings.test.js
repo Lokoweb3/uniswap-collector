@@ -144,6 +144,131 @@ const codes = (a) => a.map((x) => `${x.code}:${x.severity}`);
     } finally { await srv.stop(); }
   }
 
+  // ---- L2-3: discovery.error is redacted everywhere, and redaction comes BEFORE the 200-character cut --------------
+  {
+    const endpoint = require("../endpoint");
+    const registry = require("../position-registry");
+    const KEY = "Zk9xQ7mT4vB2nL8cR5wY3hJ6";
+    const SECRET_URL = `https://logs.example.org/v2/${KEY}`;
+    const RAW = "y".repeat(150) + " GET " + SECRET_URL + " failed";   // the URL starts before character 200 and ends after it
+    assert.ok(RAW.indexOf(KEY) < 200 && RAW.indexOf(KEY) + KEY.length > 200 && RAW.indexOf("https://") < 200);
+    endpoint.registerEndpoint(SECRET_URL);
+    const FIRST8 = KEY.slice(0, 8);
+    const MARK = endpoint.redactUrl(SECRET_URL);   // what redactText leaves of a protected URL: its origin
+    assert.strictEqual(MARK, "https://logs.example.org");
+    assert.strictEqual(endpoint.redactText(RAW), RAW.replace(SECRET_URL, MARK));
+
+    // control: cutting first and redacting after leaks (the direct, non-redacting slice); redacting first does not
+    const wrong = endpoint.redactText(RAW.slice(0, 200));
+    assert.ok(wrong.includes(FIRST8), "the control must leak, or the test proves nothing: " + wrong.slice(150));
+    const right = endpoint.redactText(RAW).slice(0, 200);
+    assert.ok(!right.includes(FIRST8) && right.length <= 200);
+
+    // pure: discoveryWarnings redacts before it cuts even when the caller did not
+    for (const x of warn({ status: st({ complete: false, error: RAW }), balanceOf: 3, knownOwned: 0 })) {
+      assert.ok(x.error.length <= 200 && !x.error.includes(FIRST8), x.error);
+    }
+
+    // the history registry's discovery status
+    const fakeDisc = { status: { complete: false, scannedFrom: null, lastScanned: 0, window: null, error: RAW, known: 0, pinned: 0 } };
+    const reg = registry.create({ provider: {}, cfg: { chainId: 8453, contracts: { v4: { positionManager: "0x" + "11".repeat(20) } } }, posm: {}, v4: {}, getToken: () => null, wallets: () => [], discoveryFor: () => fakeDisc, file: path.join(require("os").tmpdir(), `reg-${process.pid}-nonexistent.json`) });
+    const ds = reg.discoveryStatus(W);
+    assert.ok(ds.error && ds.error.length <= 200 && !ds.error.includes(FIRST8), ds.error);
+
+    // HTTP: an UNREDACTED discovery error (a state file's lastError is loaded back as written) reaches watch.js and
+    // server.js. A real scan clears lastError before anything reads it, so a preload substitutes it. The assertions
+    // fail if watch.js stops redacting discovery.error (checked against bc52cba).
+    {
+      // longer than RAW: even after the URL shrinks to its origin it is past 200 characters, so only an explicit cut keeps it short
+      // (the server's global response redactor alone would leave ~337)
+      const RAW2 = "y".repeat(150) + " GET " + SECRET_URL + " failed " + "z".repeat(150);
+      assert.ok(endpoint.redactText(RAW2).length > 250);
+      const raw = await base.start({
+        mutate: (c) => { c.chain.logsRpcUrl = SECRET_URL; },
+        stubV4: { balance: 1, owned: [], balances: { [W11.toLowerCase()]: 3 } },
+        rawDiscoveryError: RAW2, logsFail: true,
+      });
+      try {
+        const want = endpoint.redactText(RAW2).slice(0, 200);
+        const pr = await raw.get("/api/positions");
+        assert.ok(!pr.body.includes(FIRST8) && !pr.body.includes(KEY), "no secret in /api/positions");
+        const pw = JSON.parse(pr.body).warnings;
+        assert.ok(pw.length > 0);
+        for (const x of pw) assert.ok(x.error === want && x.error.length <= 200 && x.error.includes(MARK) && !x.error.includes(FIRST8), x.error);
+
+        await raw.get("/api/watch?fresh=1");
+        let wd = null;
+        for (let i = 0; i < 150; i++) {
+          const r = await raw.get("/api/watch");
+          if (r.status === 200) { wd = r; if (!JSON.parse(r.body).refreshing) break; }
+          await new Promise((res) => setTimeout(res, 250));
+        }
+        assert.ok(wd, "watch answered");
+        assert.ok(!wd.body.includes(FIRST8) && !wd.body.includes(KEY), "no secret anywhere in /api/watch");
+        const w = JSON.parse(wd.body).wallets.find((x) => x.address === W11);
+        assert.strictEqual(w.discovery.error, want, w.discovery.error);
+        assert.ok(w.discovery.error.length <= 200 && w.discovery.error.includes(MARK) && !w.discovery.error.includes(FIRST8));
+        for (const x of w.warnings) assert.ok(x.error === want, x.error);
+      } finally { await raw.stop(); }
+    }
+
+    // the registry's unavailable-owner status line and the claim scanner's lastError redact, then cut
+    {
+      const posmAddr = "0x" + "11".repeat(20);
+      const leaky = Object.assign(new Error(RAW), { shortMessage: RAW });
+      const reg2 = registry.create({ provider: { getBlockNumber: async () => { throw new Error("x"); } }, cfg: { chainId: 8453, contracts: { v4: { positionManager: posmAddr } } },
+        posm: { ownerOf: async () => { throw leaky; } }, v4: { verifyGone: async () => ({ gone: false }) }, getToken: () => null,
+        wallets: () => [{ address: W, label: "t" }], discoveryFor: () => ({ ids: ["5"], tombstones: {}, status: {} }),
+        log: { log() {}, error() {} }, file: path.join(require("os").tmpdir(), `reg2-${process.pid}-nonexistent.json`) });
+      await reg2.refresh();
+      const e = reg2.entries(null).find((x) => x.tokenId === "5");
+      assert.ok(e && e.status === "unavailable", JSON.stringify(e));
+      assert.ok(e.statusReason.includes(MARK) && !e.statusReason.includes(FIRST8) && !e.statusReason.includes("v2/"), e.statusReason);
+      assert.ok(e.statusReason.length <= "the owner could not be read: ".length + 200);
+
+      const scanner = require("../claims-scanner");
+      const sc = scanner.create({ store: { scan: async () => { throw leaky; } }, meta: () => ({}), ids: () => ["1"], log: { log() {}, error() {} },
+        pauseMs: 5, sleep: () => new Promise((res) => setImmediate(res)) });
+      sc.start();
+      for (let i = 0; i < 200 && !sc.status().lastError; i++) await new Promise((res) => setImmediate(res));
+      sc.stop();
+      const le = sc.status().lastError;
+      assert.ok(le && le.length <= 200 && le.includes(MARK) && !le.includes(FIRST8) && !le.includes("v2/"), le);
+    }
+
+    // HTTP: the live paths, with a recorded error that straddles character 200
+    const srv = await base.start({
+      mutate: (c) => { c.chain.logsRpcUrl = SECRET_URL; },
+      stubV4: { balance: 1, owned: [], balances: { [W11.toLowerCase()]: 3 } },
+      logsError: RAW,
+    });
+    try {
+      const pr = await srv.get("/api/positions");
+      assert.strictEqual(pr.status, 200);
+      assert.ok(!pr.body.includes(FIRST8) && !pr.body.includes(KEY) && !pr.body.includes("logs.example.org/v2/Zk"), "no secret in /api/positions");
+      const pd = JSON.parse(pr.body);
+      assert.ok(pd.warnings.length > 0);
+      for (const x of pd.warnings) assert.ok(x.error && x.error.length <= 200 && !x.error.includes(FIRST8) && !x.error.includes("v2/"), x.error);
+
+      await srv.get("/api/watch?fresh=1");
+      let wd = null;
+      for (let i = 0; i < 150; i++) {
+        const r = await srv.get("/api/watch");
+        if (r.status === 200) { wd = r; if (!JSON.parse(r.body).refreshing) break; }
+        await new Promise((res) => setTimeout(res, 250));
+      }
+      assert.ok(wd, "watch answered");
+      assert.ok(!wd.body.includes(FIRST8) && !wd.body.includes(KEY), "no secret anywhere in /api/watch");
+      const w = JSON.parse(wd.body).wallets.find((x) => x.address === W11);
+      assert.ok(w.discovery.error && w.discovery.error.length <= 200 && !w.discovery.error.includes(FIRST8) && !w.discovery.error.includes("v2/"), w.discovery.error);
+      assert.ok(w.discovery.error.includes(MARK), "the redaction marker (" + MARK + ") is present: " + w.discovery.error);
+      assert.ok(w.warnings.length > 0);
+      for (const x of w.warnings) assert.ok(x.error && x.error.length <= 200 && !x.error.includes(FIRST8) && !String(x.message).includes(FIRST8));
+      // the raw error really was recorded unredacted-looking at some point: the log never printed the key either
+      assert.ok(!srv.log().includes(KEY), "no secret in the server log");
+    } finally { await srv.stop(); }
+  }
+
   // ---- 12. the page (function injection from dashboard.js) -----------------------------------
   {
     const src = fs.readFileSync(path.join(ROOT, "dashboard.js"), "utf8");

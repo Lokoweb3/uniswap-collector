@@ -36,7 +36,8 @@ const STATE_VIEW_ABI = [
   "function getPositionInfo(bytes32 poolId, address owner, int24 tickLower, int24 tickUpper, bytes32 salt) view returns (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128)",
 ];
 
-const msgOf = (e) => String((e && (e.shortMessage || e.message)) || e || "unknown").slice(0, 200);
+// redact first, then cut: a cut can leave half a secret-bearing URL that redactText no longer recognises
+const msgOf = (e) => redactText(String((e && (e.shortMessage || e.message)) || e || "unknown")).slice(0, 200);
 const DYNAMIC_FEE_FLAG = 0x800000;
 const MASK256 = (1n << 256n) - 1n;
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
@@ -288,7 +289,19 @@ async function loadPosition(ctx, tokenId) {
   }
 
   // An owner that is not ours is the one case the chain answers directly.
+  // The caller tombstones on this answer, so one read from one endpoint is not enough: read it once
+  // more, and tombstone only when both reads name the same other owner. An error or a disagreement
+  // is an unverified read and the id stays.
   if (owner.toLowerCase() !== cfg.ownerAddress.toLowerCase()) {
+    let again = null, againErr = null;
+    try { again = await posm.ownerOf(id); } catch (err) { againErr = err; }
+    if (againErr || !again || String(again).toLowerCase() !== owner.toLowerCase()) {
+      const e = new Error(`#${id} ownerOf named ${owner}, but a second read ${againErr ? "failed" : `named ${again}`}, so it is not confirmed transferred`);
+      e.unverified = true;
+      e.cause = againErr || undefined;
+      e.shortMessage = e.message;
+      throw e;
+    }
     return { tokenId: id.toString(), gone: true, verified: true, goneReason: `owned by ${owner}` };
   }
 
@@ -457,7 +470,7 @@ function discoveryWarnings({ wallet, label = null, chainId = null, status = {}, 
     wallet: addr,
     label: label ? oneLine(label) : null,
     complete,
-    error: st.error ? oneLine(st.error).slice(0, 200) : null,
+    error: st.error ? oneLine(redactText(String(st.error))).slice(0, 200) : null, // redact first: a cut can hide a secret from the pattern
     scannedFrom: st.scannedFrom == null ? null : st.scannedFrom,
     known,
     pinned: Number(st.pinned) || 0,
@@ -695,7 +708,7 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile,
       const k = String(id);
       if (!ids.delete(k)) return false;
       state.gone = state.gone || {};
-      state.gone[k] = { at: Date.now(), reason: String(reason || "verified gone").slice(0, 200) };
+      state.gone[k] = { at: Date.now(), reason: redactText(String(reason || "verified gone")).slice(0, 200) };
       save();
       return true;
     },

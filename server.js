@@ -1638,7 +1638,7 @@ async function build() {
   }
   const v4All = V4 ? await V4.discovery.discover(20) : [];
   const v4Ids = v4All.filter((id) => !deny.has(v4Key(id)));
-  const v4Denied = v4All.length - v4Ids.length; // denylisted ids are owned but never loaded
+  const v4DeniedIds = v4All.filter((id) => deny.has(v4Key(id))); // denylisted ids are never loaded
   const work = [...ids.map((id) => ({ id, version: 3 })), ...v4Ids.map((id) => ({ id: BigInt(id), version: 4 }))];
 
   const positions = [];
@@ -1659,9 +1659,10 @@ async function build() {
           ? await v4.loadPosition({ provider, posm: V4.posm, stateView: V4.stateView, cfg }, id)
           : await u.loadPosition({ provider, npm, factory, cfg }, id);
       if (p.gone) {
-        // A pin is the operator's claim, not discovery's: report it, never tombstone it.
+        // A pin is the operator's claim: report it. forget() only touches ids discovery itself holds
+        // (false and no write for a pin-only id), so a discovered id that left is tombstoned either way.
         if (version === 4 && V4.discovery.isPinned(id)) pinnedNotOwned.push(String(id));
-        else V4.discovery.forget(id, p.goneReason || "transferred away"); // stop asking, but keep the record
+        if (version === 4) V4.discovery.forget(id, p.goneReason || "transferred away"); // stop asking, but keep the record
         return;
       }
       if (version === 4) {
@@ -1844,6 +1845,17 @@ async function build() {
   const dst = V4 ? V4.discovery.status : null;
   // Denylisted ids are skipped on purpose, so they are not "missing": take them off the on-chain count.
   const bal0 = V4 ? await V4.discovery.balance() : null;
+  // Only denylisted ids CONFIRMED owned by this wallet (ownerOf) are subtracted; at most 50 are checked.
+  let v4Denied = 0;
+  if (bal0 != null && V4) {
+    const mine = String(cfg.ownerAddress).toLowerCase();
+    for (const id of v4DeniedIds.slice(0, 50)) {
+      try {
+        const o = await V4.posm.ownerOf(BigInt(id));
+        if (o && String(o).toLowerCase() === mine) v4Denied++;
+      } catch { /* unconfirmed: not subtracted */ }
+    }
+  }
   const bal = bal0 == null ? null : Math.max(0, Number(bal0) - Math.min(Number(bal0), v4Denied));
   const warnings = V4
     ? v4.discoveryWarnings({
@@ -2813,7 +2825,7 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify(out));
     } catch (err) {
       const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
-      const msg = err.status ? (err.message || "chat failed") : `chat failed: ${(err.message || String(err)).slice(0, 200)}`;
+      const msg = err.status ? (err.message || "chat failed") : `chat failed: ${endpoint.redactText(String(err.message || err)).slice(0, 200)}`;
       res.writeHead(status);
       return res.end(JSON.stringify({ ok: false, error: msg }));
     }
@@ -3260,7 +3272,7 @@ async function handleRequest(req, res) {
         counts, positions }));
     } catch (err) {
       res.writeHead(500);
-      return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+      return res.end(JSON.stringify({ ok: false, error: endpoint.redactText(String(err.shortMessage || err.message)).slice(0, 200) }));
     }
   }
 

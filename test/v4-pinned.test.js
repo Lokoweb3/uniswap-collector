@@ -196,5 +196,180 @@ function settingsLoad() {
     } finally { await srv.stop(); }
   }
 
+  // ---- L2-1/L2-2/L2-8: denylist confirmed by ownerOf, tombstone a departed pinned id, pins change between refreshes ----
+  const W11 = "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb";
+  const FULL = { complete: true, lastScanned: 30_000_000, scannedFrom: 0 };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const posOf = async (srv, fresh) => JSON.parse((await srv.get("/api/positions" + (fresh ? "?fresh=1" : ""))).body);
+  const exceeds = (d) => d.warnings.find((x) => x.code === "v4-balance-exceeds-known");
+  const watchFresh = async (srv, prevAt) => {
+    await srv.get("/api/watch?fresh=1"); // kicks one refresh; polling with fresh=1 would start another each time
+    for (let i = 0; i < 150; i++) {
+      const r = await srv.get("/api/watch");
+      if (r.status === 200) { const d = JSON.parse(r.body); if (!d.refreshing && d.at > prevAt) return d; }
+      await sleep(250);
+    }
+    throw new Error("watch did not finish");
+  };
+  const deny = (...ids) => (s) => { s.collector = { ...(s.collector || {}), denylist: ids.map((i) => "v4-" + i) }; };
+  const five = ["1", "2", "3", "4", "5"];
+  {
+    // 1. confirmed: wallet holds 6, 5 known, the 6th denylisted and owned: nothing missing
+    const a = await base.start({ mutate: deny(6), state: { ids: [...five, "6"], ...FULL }, stubV4: { balance: 6, owned: [1, 2, 3, 4, 5, 6] } });
+    try {
+      const d = await posOf(a);
+      assert.strictEqual(d.positions.filter((p) => p.version === 4).length, 5);
+      assert.deepStrictEqual(d.warnings, [], JSON.stringify(d.warnings));
+    } finally { await a.stop(); }
+
+    // 2. unconfirmed: another owner / ownerOf reverts / denied id not discovered at all: 1 missing
+    for (const [name, stub, ids] of [
+      ["other owner", { balance: 6, owned: [1, 2, 3, 4, 5], foreign: { 6: OTHER } }, [...five, "6"]],
+      ["ownerOf reverts", { balance: 6, owned: [1, 2, 3, 4, 5] }, [...five, "6"]],
+      ["not discovered", { balance: 6, owned: [1, 2, 3, 4, 5, 6] }, five],
+    ]) {
+      const b = await base.start({ mutate: deny(6), state: { ids, ...FULL }, stubV4: stub });
+      try {
+        const d = await posOf(b);
+        const w = exceeds(d);
+        assert.ok(w && w.missing === 1, name + ": " + JSON.stringify(d.warnings));
+        assert.strictEqual(d.positions.filter((p) => p.version === 4).length, 5, name);
+      } finally { await b.stop(); }
+    }
+
+    // 3. mixed: two denied, one confirmed, one not: exactly one subtracted (7 held - 1 = 6, 5 known)
+    const c = await base.start({ mutate: deny(6, 7), state: { ids: [...five, "6", "7"], ...FULL }, stubV4: { balance: 7, owned: [1, 2, 3, 4, 5, 6], foreign: { 7: OTHER } } });
+    try {
+      const w = exceeds(await posOf(c));
+      assert.ok(w && w.missing === 1 && w.balanceOf === 6, JSON.stringify(w));
+    } finally { await c.stop(); }
+
+    // 3b. more than 50 denied: at most 50 ownerOf calls for them, nothing throws, the rest is not subtracted
+    const denied = Array.from({ length: 60 }, (_, i) => 100 + i);
+    const e = await base.start({ mutate: deny(...denied), callLog: true, state: { ids: [...five, ...denied.map(String)], ...FULL }, stubV4: { balance: 65, owned: [1, 2, 3, 4, 5, ...denied] } });
+    try {
+      const d = await posOf(e);
+      assert.strictEqual(d.ok, true);
+      const calls = e.calls().filter((x) => x.name === "ownerOf" && Number(x.id) >= 100);
+      assert.strictEqual(calls.length, 50, "ownerOf calls for denied ids");
+      const w = exceeds(d);
+      assert.ok(w && w.missing === 10 && w.balanceOf === 15, JSON.stringify(w));
+    } finally { await e.stop(); }
+  }
+
+  {
+    // 4. a pinned AND discovered id that left the wallet is tombstoned and still reported (main wallet)
+    const a = await base.start({ mutate: (s) => { s.wallets.main.v4Ids = [11]; }, state: { ids: ["11"], ...FULL }, stubV4: { balance: 0, owned: [], foreign: { 11: OTHER } } });
+    try {
+      const d = await posOf(a);
+      const st = JSON.parse(fs.readFileSync(a.dataFile("v4-positions.json"), "utf8"));
+      assert.ok(st.gone && st.gone["11"] && st.gone["11"].reason, JSON.stringify(st));
+      assert.ok(!st.ids.includes("11"), "no longer in the persisted ids");
+      const no = d.warnings.find((x) => x.code === "v4-pinned-not-owned");
+      assert.ok(no && JSON.stringify(no.ids) === '["11"]', JSON.stringify(d.warnings));
+      assert.strictEqual(d.positions.filter((p) => p.version === 4).length, 0);
+    } finally { await a.stop(); }
+
+    // 4b. the same for a watched wallet (/api/watch)
+    const f = `v4-positions-${W11.toLowerCase()}.json`;
+    const b = await base.start({
+      mutate: (s) => { s.wallets.watched.find((w) => w.address.toLowerCase() === W11.toLowerCase()).v4Ids = [11]; },
+      files: { [f]: { ids: ["11"], ...FULL } }, stubV4: { balance: 0, owned: [], foreign: { 11: OTHER } },
+    });
+    try {
+      const d = await watchFresh(b, 0);
+      const w = d.wallets.find((x) => x.address === W11);
+      const st = JSON.parse(fs.readFileSync(b.dataFile(f), "utf8"));
+      assert.ok(st.gone && st.gone["11"] && st.gone["11"].reason, JSON.stringify(st));
+      assert.ok(!st.ids.includes("11"));
+      const no = w.warnings.find((x) => x.code === "v4-pinned-not-owned");
+      assert.ok(no && JSON.stringify(no.ids) === '["11"]', JSON.stringify(w.warnings));
+      assert.strictEqual(w.positions.filter((p) => p.version === 4).length, 0);
+    } finally { await b.stop(); }
+
+    // 5. a pin-only id that is not ours: reported, never tombstoned, the state file left alone (both paths)
+    const seed = { ids: ["7"], ...FULL };
+    const c = await base.start({ mutate: (s) => { s.wallets.main.v4Ids = [22]; }, state: seed, stubV4: { balance: 0, owned: [], foreign: { 22: OTHER, 7: OTHER } } });
+    try {
+      const d = await posOf(c);
+      const no = d.warnings.find((x) => x.code === "v4-pinned-not-owned");
+      assert.ok(no && JSON.stringify(no.ids) === '["22"]', JSON.stringify(d.warnings));
+      const st = JSON.parse(fs.readFileSync(c.dataFile("v4-positions.json"), "utf8"));
+      assert.ok(st.gone && st.gone["7"] && !st.gone["22"], "only the discovered id is tombstoned: " + JSON.stringify(st.gone));
+      assert.ok(!st.ids.includes("22"));
+    } finally { await c.stop(); }
+    const g = `v4-positions-${W11.toLowerCase()}.json`;
+    const dd = await base.start({
+      mutate: (s) => { s.wallets.watched.find((w) => w.address.toLowerCase() === W11.toLowerCase()).v4Ids = [22]; },
+      files: { [g]: { ids: [], ...FULL } }, stubV4: { balance: 0, owned: [], foreign: { 22: OTHER } },
+    });
+    try {
+      const w = (await watchFresh(dd, 0)).wallets.find((x) => x.address === W11);
+      assert.deepStrictEqual(w.warnings.find((x) => x.code === "v4-pinned-not-owned").ids, ["22"]);
+      const st = JSON.parse(fs.readFileSync(dd.dataFile(g), "utf8"));
+      assert.strictEqual(st.complete, true); assert.strictEqual(st.lastScanned, FULL.lastScanned); assert.ok(!("22" in (st.gone || {})), "the pin is not written");
+      assert.deepStrictEqual(st.ids, []); assert.ok(!st.gone || Object.keys(st.gone).length === 0, "no tombstone");
+    } finally { await dd.stop(); }
+  }
+
+  {
+    // 7. a foreign ownerOf is read twice before the id may be tombstoned (univ4.loadPosition)
+    const mk = (...answers) => {
+      let n = 0;
+      return { calls: () => n, ctx: { provider: {}, stateView: {}, cfg: { ownerAddress: WALLET }, posm: { ownerOf: async () => { const a = answers[Math.min(n++, answers.length - 1)]; if (a instanceof Error) throw a; return a; } } } };
+    };
+    const both = mk(OTHER, OTHER);
+    const r = await v4.loadPosition(both.ctx, 9);
+    assert.ok(r.gone && r.verified && /owned by/.test(r.goneReason) && both.calls() === 2, JSON.stringify(r));
+    for (const answers of [[OTHER, WALLET], [OTHER, "0x00000000000000000000000000000000000000ff"], [OTHER, new Error("timeout")]]) {
+      const m = mk(...answers);
+      await assert.rejects(() => v4.loadPosition(m.ctx, 9), (e) => e.unverified === true && /not confirmed transferred/.test(e.message), JSON.stringify(answers));
+      assert.strictEqual(m.calls(), 2);
+    }
+  }
+
+  {
+    // 8. pins change between refreshes on one discovery object: 11 pinned (not ours) then unpinned, 33 added
+    const stub = { balance: 2, owned: [22, 33], foreign: { 11: OTHER } };
+    const a = await base.start({ mutate: (s) => { s.wallets.main.v4Ids = [11, 22]; }, stubV4: stub, logsFail: true });
+    try {
+      const d1 = await posOf(a, true);
+      assert.deepStrictEqual(d1.positions.filter((p) => p.version === 4).map((p) => p.nftId), ["22"]);
+      assert.deepStrictEqual(d1.warnings.find((x) => x.code === "v4-pinned-not-owned").ids, ["11"]);
+      assert.ok(d1.warnings.every((x) => x.pinned === 2 && x.known === 1));
+      a.editSettings((s) => { s.wallets.main.v4Ids = [22, 33]; });
+      const d2 = await posOf(a, true);
+      assert.deepStrictEqual(d2.positions.filter((p) => p.version === 4).map((p) => p.nftId).sort(), ["22", "33"]);
+      assert.ok(!d2.warnings.some((x) => x.code === "v4-pinned-not-owned"), "11 is unpinned: " + JSON.stringify(d2.warnings));
+      assert.ok(d2.warnings.every((x) => x.pinned === 2 && x.known === 2), JSON.stringify(d2.warnings));
+      // a settings read that throws keeps the previous pins
+      a.writeRaw("{ this is not json");
+      const d3 = await posOf(a, true);
+      assert.strictEqual(d3.ok, true, JSON.stringify(d3).slice(0, 200));
+      assert.deepStrictEqual(d3.positions.filter((p) => p.version === 4).map((p) => p.nftId).sort(), ["22", "33"], "previous pins kept");
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(a.dataFile("v4-positions.json"), "utf8")).ids, [], "no pin is ever written to the state file");
+    } finally { await a.stop(); }
+
+    // the same for a watched wallet through two refresh() runs
+    const f = `v4-positions-${W11.toLowerCase()}.json`;
+    const w11 = (s) => s.wallets.watched.find((w) => w.address.toLowerCase() === W11.toLowerCase());
+    const b = await base.start({ mutate: (s) => { w11(s).v4Ids = [11, 22]; }, stubV4: { balance: 0, owned: [], ownedBy: { [W11.toLowerCase()]: [22, 33] }, foreign: { 11: OTHER } }, logsFail: true });
+    try {
+      const r1 = await watchFresh(b, 0);
+      const w1 = r1.wallets.find((x) => x.address === W11);
+      assert.deepStrictEqual(w1.positions.filter((p) => p.version === 4).map((p) => p.nftId), ["22"]);
+      assert.deepStrictEqual(w1.warnings.find((x) => x.code === "v4-pinned-not-owned").ids, ["11"]);
+      assert.deepStrictEqual(w1.v4Ids, ["11", "22"], "the parsed pin list");
+      b.editSettings((s) => { w11(s).v4Ids = [22, 33]; });
+      const r2 = await watchFresh(b, r1.at);
+      const w2 = r2.wallets.find((x) => x.address === W11);
+      assert.deepStrictEqual(w2.positions.filter((p) => p.version === 4).map((p) => p.nftId).sort(), ["22", "33"]);
+      assert.ok(!w2.warnings.some((x) => x.code === "v4-pinned-not-owned"), JSON.stringify(w2.warnings));
+      assert.ok(w2.warnings.every((x) => x.pinned === 2 && x.known === 2), JSON.stringify(w2.warnings));
+      let ids = []; try { ids = JSON.parse(fs.readFileSync(b.dataFile(f), "utf8")).ids; } catch { /* no file */ }
+      assert.deepStrictEqual(ids, [], "no pin is ever written to the state file");
+    } finally { await b.stop(); }
+  }
+
   console.log("v4-pinned tests passed");
 })().catch((e) => { console.error(e); process.exit(1); });

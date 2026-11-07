@@ -24,6 +24,8 @@
  * one starts, so a restart continues from the last folded chunk.
  */
 
+const { redactText } = require("./endpoint");
+
 function create({
   store, meta, ids, busy = () => false, onFolded = async () => {}, log = console,
   chunk = 9000, lookbackMs = 30 * 86400 * 1000,
@@ -79,7 +81,7 @@ function create({
         failures = 0;
       } catch (err) {
         failures++;
-        st.lastError = err.shortMessage || err.message || String(err);
+        st.lastError = redactText(String(err.shortMessage || err.message || err)).slice(0, 200);
         st.lastErrorAt = now();
         log.error(`claims scan: step failed (${failures} in a row): ${st.lastError}`);
       }

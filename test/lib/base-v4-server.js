@@ -24,8 +24,10 @@ const request = (port, p) => new Promise((resolve) => {
 /**
  * opts.mutate(settings)  edits the parsed Base example before it is written
  * opts.state             object written to <dir>/v4-positions.json (the main wallet's discovery state)
- * opts.stubV4            STUB_V4 (see stub-base-network.js); opts.logsFail: eth_getLogs refuses
- * returns { port, dir, get(path), stop(), dataFile(name) }
+ * opts.files            { name: object } more JSON files written to <dir> (a watched wallet's discovery state)
+ * opts.rawDiscoveryError  raw text every discovery reports as status.error (a state file's lastError that was never redacted)
+ * opts.stubV4            STUB_V4 (see stub-base-network.js); opts.logsFail: eth_getLogs refuses; opts.logsError: getLogs throws this text
+ * returns { port, dir, get(path), stop(), dataFile(name), calls(), editSettings(fn), writeRaw(text) }
  */
 async function start(opts = {}) {
   const port = await freePort();
@@ -35,11 +37,15 @@ async function start(opts = {}) {
   if (opts.mutate) opts.mutate(settings);
   fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify(settings));
   if (opts.state) fs.writeFileSync(path.join(dir, "v4-positions.json"), JSON.stringify(opts.state));
+  for (const [n, o] of Object.entries(opts.files || {})) fs.writeFileSync(path.join(dir, n), JSON.stringify(o));
   const extra = { LP_DATA_DIR: "", LP_READONLY: "1", HOME: dir, LP_BIND: "127.0.0.1" };
   if (opts.stubV4) extra.STUB_V4 = JSON.stringify(opts.stubV4);
   if (opts.logsFail) extra.STUB_LOGS_FAIL = "1";
+  if (opts.callLog) extra.STUB_LOG = path.join(dir, "stub-calls.jsonl"); // v4 calls: { kind: "v4", name, id }
+  if (opts.rawDiscoveryError) extra.STUB_RAW_DISC_ERR = opts.rawDiscoveryError; // every discovery's status.error reads as this raw text (see the fixture)
+  if (opts.logsError) extra.STUB_LOGS_ERR = opts.logsError; // getLogs throws a plain Error with this text
   const out = [];
-  const child = spawn(process.execPath, ["--require", PRELOAD, "--require", path.join(__dirname, "..", "fixtures", "stub-base-network.js"), path.join(ROOT, "server.js"), `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
+  const child = spawn(process.execPath, ["--require", PRELOAD, "--require", path.join(__dirname, "..", "fixtures", "stub-base-network.js"), ...(opts.rawDiscoveryError ? ["--require", path.join(__dirname, "..", "fixtures", "stub-raw-discovery-error.js")] : []), path.join(ROOT, "server.js"), `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
     cwd: hermeticCwd(), env: hermeticEnv(extra),
   });
   child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
@@ -57,7 +63,11 @@ async function start(opts = {}) {
     if (Date.now() - t0 > 40000) { await stop(); throw new Error("server did not start"); }
     await new Promise((r) => setTimeout(r, 100));
   }
-  return { port, dir, get: (p) => request(port, p), stop, log: () => out.join(""), dataFile: (n) => path.join(dir, n) };
+  const sfile = path.join(dir, "settings.json");
+  let tick = Date.now() / 1000;
+  const writeRaw = (text) => { fs.writeFileSync(sfile, text); tick += 5; fs.utimesSync(sfile, tick, tick); }; // a new mtime: the server's settings cache is mtime-keyed
+  const editSettings = (fn) => { const o = JSON.parse(fs.readFileSync(sfile, "utf8")); fn(o); writeRaw(JSON.stringify(o)); };
+  return { port, dir, writeRaw, editSettings, get: (p) => request(port, p), stop, log: () => out.join(""), dataFile: (n) => path.join(dir, n), calls: () => { try { return fs.readFileSync(path.join(dir, "stub-calls.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } } };
 }
 
 module.exports = { start, LIVE_PORTS };

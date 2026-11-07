@@ -26,6 +26,7 @@
  */
 const fs = require("fs");
 const { ethers } = require("ethers");
+const { redactText } = require("./endpoint");
 
 const ZERO = ethers.ZeroAddress;
 
@@ -137,7 +138,7 @@ function create({ provider, cfg, posm, v4, getToken, wallets, discoveryFor, reme
         return { ...e, status: "burned", statusReason: `the NFT no longer exists (${gone.reason})`, liquidity: "0", currentOwner: null,
           ...(e.token0 ? {} : { pairReason: "burned before this instance read it, and its pool could not be read from archive state" }) };
       }
-      return { ...e, status: "unavailable", statusReason: `the owner could not be read: ${(gone && gone.reason) || ownerErr.shortMessage || ownerErr.message}`, currentOwner: null };
+      return { ...e, status: "unavailable", statusReason: `the owner could not be read: ${(gone && gone.reason) || redactText(String(ownerErr.shortMessage || ownerErr.message)).slice(0, 200)}`, currentOwner: null };
     }
     e.currentOwner = owner;
     try {
@@ -197,7 +198,8 @@ function create({ provider, cfg, posm, v4, getToken, wallets, discoveryFor, reme
     const st = disc.status;
     const dep = state.deployBlock;
     const reachedDeploy = dep != null && st.scannedFrom != null && st.scannedFrom <= dep;
-    return { ...st, complete: !!(st.complete || reachedDeploy), deployBlock: dep, reachedDeploy };
+    const error = st.error ? redactText(String(st.error)).slice(0, 200) : null; // redact, then cut
+    return { ...st, error, complete: !!(st.complete || reachedDeploy), deployBlock: dep, reachedDeploy };
   }
 
   return {

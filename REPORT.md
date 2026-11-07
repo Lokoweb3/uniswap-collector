@@ -49,3 +49,28 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 - Open (non-blocking): optional fee floor at baseFee + tip; findByNonce replacement branch settles at original fee (unreachable today); revert without refetched receipt stays unknown (caps hold); a few optional tests; wallet.html frame headers; 12 s target cache; spawn-audit gaps.
 - Before enabling auto-collect: setApprovalForAll(operator 0x8B65…b9dF, true) from Trading on both Aerodrome managers, verify, set wallets.main.collect true.
 - Cost: about 16 subagent runs, not measured precisely.
+
+---
+
+# Round 5: cross-chain Portfolio page (e2b5ac0 → c6a709b)
+
+| Commit | What |
+|---|---|
+| 030a621 | SPEC round 5, TASK P1 (36 acceptance tests) |
+| 5c5f40e | Feature: router-served `/portfolio` + `/api/aggregate`, aggregate.js (4 parallel loopback GETs per chain, 8 s timeout, 4 s route wait, 30 s cache, 8 MiB / 5000-item caps, field whitelist), aggregate-view.js, aggregate.css, Portfolio link in the picker |
+| 3642267 | Reviewer fixes (7): cap ordering, truncated totals, unreadable wallet not $0, live-shape fixtures used, vacuous tests, dead option, restored round-4 item 10 |
+| c6a709b | Security fixes (5 Low): strict CSP on the page, per-round payload cache, mtime file cache, synthetic fixture ids, 400 on malformed Host |
+
+- User decisions: stale chains counted (flagged, `staleUsd` separate); Host check on new routes only; priced pending gauge/farm rewards INCLUDED in the total (own `rewardsUsd` line; unpriced and killed-gauge rewards not counted; sNET rewards never added).
+- Verdicts: reviewer APPROVE WITH FIXES → APPROVE WITH FIXES (optional Low, fixed). Security PASS WITH FIXES → PASS WITH FIXES (L1, L2 open, nothing above Low).
+- Tests: 126/127 pass (smoke.js needs settings.json); eslint clean. server.js, dashboards and collector untouched.
+- Deploy: fast-forward live, restart only the router on :8800 (`--chains=robinhood,arc,base`); verify `/portfolio` 200 and `/api/aggregate` ok.
+
+## Left to do
+1. holdings-unavailable flag: token discovery never succeeded for 2 Robinhood and 2 Base wallets, so those chains always show `partial` and the total `incomplete`. Reviewer recommends a per-wallet note instead (user decision).
+2. L1: after an idle gap one response can show frozen ages and miss the 15-min stale flag if a chain takes >4 s (add TTL to the cache key).
+3. L2: one real v4 pool id remains at test/fixtures/aggregate/live-shape-arc.json:51.
+4. Squash 5c5f40e/3642267 (real-looking NFT ids in old fixtures) before any push.
+5. SPEC acceptance test 1 still names the looser CSP; the shipped page and its test use the strict one.
+6. Pre-existing: /api/vaults and the router 502 page echo internal error text.
+- Cost: not measured; about 8 subagent runs.

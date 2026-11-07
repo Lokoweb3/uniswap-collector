@@ -17,11 +17,11 @@
     "nativeCurrency": { "symbol": "ETH", "decimals": 18 }
   },
   "wallets": {
-    "_comment": "main: Trading, the wallet that holds the Aerodrome positions. watched: shown read-only. collect (main and watched): false ships everywhere. true lets collector-base.js (run by run-collector.sh) collect that wallet's fees on Base, to the wallet itself, but ONLY after the wallet approved the operator with setApprovalForAll on each position manager (README: Auto-collect on Base, including the risk). Nothing else changes.",
-    "main": { "address": "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743", "label": "Trading", "collect": false },
+    "_comment": "main: Trading, the wallet that holds the Aerodrome positions. watched: shown read-only. collect (main and watched): false ships everywhere. true lets collector-base.js (run by run-collector.sh) collect that wallet's fees on Base, to the wallet itself, but ONLY after the wallet approved the operator with setApprovalForAll on each position manager (README: Auto-collect on Base, including the risk). Nothing else changes. v4Ids: Uniswap v4 token ids pinned for this wallet, verified with ownerOf on every refresh; use when position discovery is incomplete (Blockscout refused, log scan slow).",
+    "main": { "address": "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743", "label": "Trading", "collect": false, "v4Ids": [] },
     "watched": [
-      { "address": "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb", "label": "Wallet 11", "collect": false },
-      { "address": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "label": "Wallet 12", "collect": false }
+      { "address": "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb", "label": "Wallet 11", "collect": false, "v4Ids": [] },
+      { "address": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "label": "Wallet 12", "collect": false, "v4Ids": [] }
     ]
   },
   "tokens": {

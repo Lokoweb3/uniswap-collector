@@ -18,6 +18,7 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const u = require("./univ3");
+const { redactText } = require("./endpoint");
 // Ledgers belong to the instance, not the checkout (see data-dir.js).
 const { dataPath } = require("./data-dir");
 
@@ -26,6 +27,7 @@ const POSM_ABI = [
   "function getPoolAndPositionInfo(uint256 tokenId) view returns (tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks) key, uint256 info)",
   "function getPositionLiquidity(uint256 tokenId) view returns (uint128)",
   "function isApprovedForAll(address owner, address operator) view returns (bool)",
+  "function balanceOf(address owner) view returns (uint256)",
 ];
 
 const STATE_VIEW_ABI = [
@@ -375,6 +377,133 @@ async function loadPosition(ctx, tokenId) {
   };
 }
 
+const MAX_PINNED = 200;
+const MAX_INVALID_SHOWN = 20; // invalid entries named in a response; the rest are only counted
+const MAX_PINNED_SCAN = 2 * MAX_PINNED; // entries examined at all; the rest are only counted
+
+/**
+ * Normalise a settings list of pinned token ids. Each entry is a JS safe integer
+ * or a decimal string of 1..78 digits that fits a uint256; anything else (negative,
+ * fractional, exponent notation, text, an unsafe JSON number) is returned in
+ * `invalid` rather than thrown on, as is everything past the 200th entry. Only the
+ * first 400 entries are examined and only 20 invalid ones are named: `invalidMore`
+ * counts the rest, so a huge list cannot cost time or response size. Duplicates
+ * collapse; ids come back as canonical decimal strings.
+ */
+function parsePinnedIds(list) {
+  const ids = [];
+  const invalid = [];
+  let invalidMore = 0;
+  if (list == null) return { ids, invalid, invalidMore };
+  const entries = Array.isArray(list) ? list : [list];
+  const seen = new Set();
+  const short = (v) => {
+    let t;
+    try { t = typeof v === "string" ? v : JSON.stringify(v); } catch { t = String(v); }
+    return String(t === undefined ? v : t).replace(/\s+/g, " ").slice(0, 40);
+  };
+  const reject = (v) => {
+    if (invalid.length < MAX_INVALID_SHOWN) invalid.push(short(v));
+    else invalidMore++;
+  };
+  const n = Math.min(entries.length, MAX_PINNED_SCAN);
+  for (let i = 0; i < n; i++) {
+    const v = entries[i];
+    let id = null;
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) id = String(v);
+    else if (typeof v === "string" && /^[0-9]{1,78}$/.test(v)) {
+      const b = BigInt(v);
+      if (b <= ethers.MaxUint256) id = b.toString();
+    }
+    if (id === null || i >= MAX_PINNED) {
+      reject(v);
+      continue;
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  invalidMore += entries.length - n;
+  return { ids, invalid, invalidMore };
+}
+
+/**
+ * The warnings a wallet's v4 view owes the reader. Pure: no fs, no network.
+ *
+ * An unfinished scan must never read as "no positions" (see status.complete), and
+ * a wallet that holds more v4 NFTs on-chain than were found is missing some.
+ * `knownOwned` is the number of distinct ids loaded and verified ownerOf == wallet
+ * in this build, open or closed (ERC-721 balanceOf counts both).
+ * Empty array = nothing to say.
+ */
+function discoveryWarnings({ wallet, label = null, chainId = null, status = {}, balanceOf = null, knownOwned = 0, pinnedInvalid = [], pinnedInvalidMore = 0, pinnedNotOwned = [], pinHint = "wallets.main.v4Ids" }) {
+  const st = status || {};
+  const complete = !!st.complete;
+  const addr = ethers.isAddress(wallet) ? ethers.getAddress(wallet) : String(wallet);
+  const known = Number.isFinite(Number(knownOwned)) ? Number(knownOwned) : 0;
+  let B = null;
+  if (balanceOf !== null && balanceOf !== undefined) {
+    try {
+      const n = Number(balanceOf);
+      if (Number.isSafeInteger(n) && n >= 0) B = n;
+    } catch { /* unreadable */ }
+  }
+  const oneLine = (x) => String(x == null ? "" : x).replace(/\s+/g, " ").trim();
+  const name = oneLine(label) || addr;
+  const base = {
+    scope: "uniswap-v4",
+    chainId: chainId == null ? null : Number(chainId),
+    wallet: addr,
+    label: label ? oneLine(label) : null,
+    complete,
+    error: st.error ? oneLine(st.error).slice(0, 200) : null,
+    scannedFrom: st.scannedFrom == null ? null : st.scannedFrom,
+    known,
+    pinned: Number(st.pinned) || 0,
+    balanceOf: B,
+    missing: B == null ? null : Math.max(0, B - known),
+    ids: null,
+  };
+  const out = [];
+  if (!complete) {
+    if (B == null || B > known) {
+      out.push({
+        ...base, code: "v4-discovery-incomplete", severity: "warn",
+        message: `Uniswap v4 position discovery is not complete for ${name}: positions it has not reached are not listed (${known} known, ${B == null ? "unknown" : B} held on-chain)`,
+      });
+    } else {
+      out.push({
+        ...base, code: "v4-discovery-incomplete", severity: "info",
+        message: `Uniswap v4 position discovery is not complete for ${name}, but the ${known} known position${known === 1 ? "" : "s"} match the on-chain balance, so nothing is missing right now; new NFTs would only appear once discovery completes or they are pinned`,
+      });
+    }
+  }
+  if (B != null && B > known) {
+    out.push({
+      ...base, code: "v4-balance-exceeds-known", severity: "warn",
+      message: `${name} holds ${B} Uniswap v4 NFTs on-chain but only ${known} are known: ${B - known} not shown. Pin their ids in settings (${pinHint})`,
+    });
+  }
+  const idsOf = (a) => (Array.isArray(a) ? a.map((x) => oneLine(x).slice(0, 80)) : []);
+  const notOwned = idsOf(pinnedNotOwned);
+  if (notOwned.length) {
+    out.push({
+      ...base, code: "v4-pinned-not-owned", severity: "warn", ids: notOwned,
+      message: `${name} has pinned Uniswap v4 ids it does not own (or that do not exist): ${notOwned.join(", ")}. They are not shown`,
+    });
+  }
+  const bad = idsOf(pinnedInvalid);
+  const more = Math.max(0, Number(pinnedInvalidMore) || 0);
+  if (bad.length) {
+    out.push({
+      ...base, code: "v4-pinned-invalid", severity: "warn", ids: bad,
+      message: `${name} has pinned Uniswap v4 ids that are not valid token ids and were ignored: ${bad.join(", ")}${more ? ` and ${more} more` : ""}`,
+    });
+  }
+  return out;
+}
+
 /**
  * Persistent discovery of the owner's v4 token ids.
  *
@@ -384,13 +513,26 @@ async function loadPosition(ctx, tokenId) {
  * budgeted steps and persists its progress). Ids stay in the set until a load
  * finds them owned by someone else.
  */
-function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile, logsProvider = null }) {
+function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile, logsProvider = null, pinnedIds = [] }) {
   const FILE = stateFile || dataPath("v4-positions.json");
   let state = { lastScanned: 0, ids: [], blockscoutAt: 0, scannedFrom: null, complete: false, span: 0, lastError: null };
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(FILE, "utf8")) };
   } catch {}
   const ids = new Set(state.ids.map(String));
+  // Ids the operator pinned in settings. Held apart from `ids` and never written to
+  // the state file: removing a pin removes the position, and the persisted scan
+  // state stays exactly what the scan found.
+  let pinned = [];
+  let pinnedInvalid = [];
+  let pinnedInvalidMore = 0;
+  const setPinned = (list) => {
+    const r = parsePinnedIds(list);
+    pinned = r.ids;
+    pinnedInvalid = r.invalid;
+    pinnedInvalidMore = r.invalidMore;
+  };
+  setPinned(pinnedIds);
   const save = () => {
     state.ids = [...ids];
     try {
@@ -434,7 +576,8 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile,
       toBlock: hi,
     });
   }
-  const reason = (e) => String((e && (e.shortMessage || e.message)) || e || "unknown").slice(0, 200);
+  // Redact before cutting: a cut can leave half a secret-bearing URL that redactText no longer recognises.
+  const reason = (e) => redactText(String((e && (e.shortMessage || e.message)) || e || "unknown")).slice(0, 200);
 
   /**
    * Sweep [0 .. hi] backwards, adapting the window to whatever this RPC accepts.
@@ -569,6 +712,36 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile,
     get tombstones() {
       return { ...(state.gone || {}) };
     },
+    /** Replace the pinned ids (settings are re-read on every refresh). */
+    setPinned,
+    /** Valid pinned ids, as decimal strings. */
+    get pinned() {
+      return [...pinned];
+    },
+    /** Entries of the pin list that were not usable ids (as short strings). */
+    get pinnedInvalid() {
+      return [...pinnedInvalid];
+    },
+    /** How many further unusable entries were not named in pinnedInvalid. */
+    get pinnedInvalidMore() {
+      return pinnedInvalidMore;
+    },
+    isPinned(id) {
+      return pinned.includes(String(id));
+    },
+    /**
+     * balanceOf(owner) on the position manager: how many v4 NFTs the wallet holds
+     * on-chain, whether or not discovery has found them. null on any failure.
+     */
+    async balance() {
+      try {
+        const posm = new ethers.Contract(posmAddress, POSM_ABI, provider);
+        const b = await posm.balanceOf(owner);
+        return typeof b === "bigint" ? b : BigInt(b);
+      } catch {
+        return null;
+      }
+    },
     async discover(maxChunks = 20) {
       await fromBlockscout();
       try {
@@ -579,7 +752,8 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile,
         state.lastError = reason(e);
         save();
       }
-      return [...ids];
+      if (!pinned.length) return [...ids];
+      return [...new Set([...ids, ...pinned])];
     },
     /**
      * What the caller needs to tell "this wallet has no positions" from "this
@@ -593,6 +767,7 @@ function createDiscovery({ provider, posmAddress, owner, explorerApi, stateFile,
         window: state.span || null,
         error: state.lastError || null,
         known: ids.size,
+        pinned: pinned.length,
       };
     },
     get caughtUp() {
@@ -613,4 +788,6 @@ module.exports = {
   getCurrency,
   loadPosition,
   createDiscovery,
+  parsePinnedIds,
+  discoveryWarnings,
 };

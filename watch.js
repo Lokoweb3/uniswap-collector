@@ -292,7 +292,7 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
       const address = ethers.getAddress(o.address);
       if (address.toLowerCase() === String(cfg.ownerAddress).toLowerCase() || seen.has(address)) continue;
       seen.add(address);
-      out.push({ address, label: o.label ? String(o.label).slice(0, 40) : null, collect: !!o.collect });
+      out.push({ address, label: o.label ? String(o.label).slice(0, 40) : null, collect: !!o.collect, v4Ids: Array.isArray(o.v4Ids) ? o.v4Ids : [] });
     }
     return out;
   }
@@ -319,12 +319,15 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const wcfg = { ...cfg, ownerAddress: w.address, tokenIds: [], denylist: [] };
     const ids = cfg.contracts.positionManager && cfg.contracts.factory ? await u.listTokenIds(npm, w.address, []) : [];   // no v3 on this chain (PulseChain): v2lp.js reads its LPs
     const disc = discoveryFor(w.address);
+    if (disc) disc.setPinned(w.v4Ids); // pins live in settings, re-read on every refresh
     const v4Ids = disc ? await disc.discover(20) : [];
     // Whether the v4 history has actually been read. An unfinished or refused
     // scan must not render as "no positions": unavailable is not zero.
     const discovery = disc ? disc.status : null;
     let work = [...ids.map((id) => ({ id, version: 3 })), ...v4Ids.map((id) => ({ id: BigInt(id), version: 4 }))];
     const known = work.length;
+    const ownedV4 = new Set(); // v4 ids verified ownerOf == this wallet (open or closed)
+    const pinnedNotOwned = [];
     // Newest first (ids are minted in order), then cap.
     work.sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : BigInt(b.id) < BigInt(a.id) ? -1 : 0));
     const truncated = work.length > MAX_POSITIONS ? work.length - MAX_POSITIONS : 0;
@@ -343,7 +346,13 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
             : await u.loadPosition({ provider, npm, factory, cfg: wcfg }, id);
         // Only a verified gone reaches here; an unverified read throws and is
         // reported as an error, keeping the id in discovery.
-        if (p.gone) { if (disc) disc.forget(id, p.goneReason); return; }
+        if (p.gone) {
+          // A pin that is not ours is reported, never tombstoned: the pin is the operator's, not discovery's.
+          if (version === 4 && disc && disc.isPinned(id)) pinnedNotOwned.push(String(id));
+          else if (disc) disc.forget(id, p.goneReason);
+          return;
+        }
+        if (version === 4) ownedV4.add(String(id));
         if (p.closed) { closed++; return; }
         const { usd0, usd1 } = priceSides(p, wethUsd);
         // Native ETH (v4, address zero) is not an ERC-20; the wallet's ETH balance is read separately.
@@ -411,6 +420,15 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     }
     const earned = earnedFor(w.address);
 
+    const warnings = disc
+      ? v4.discoveryWarnings({
+          wallet: w.address, label: w.label, chainId: cfg.chainId, status: { ...discovery, error: discovery.error ? redactText(discovery.error) : null },
+          balanceOf: await disc.balance(), knownOwned: ownedV4.size,
+          pinnedInvalid: disc.pinnedInvalid, pinnedInvalidMore: disc.pinnedInvalidMore, pinnedNotOwned,
+          pinHint: "wallets.watched[].v4Ids",
+        })
+      : [];
+
     // Collector approval state for wallets the collector should collect for.
     let collector = null;
     const operator = getOperator ? getOperator() : null;
@@ -445,7 +463,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
     const rewardsUsd = external.reduce((s, p) => s + ((p.rewards && p.rewards.usd) || 0), 0);
     const walletUsd = holdings ? holdings.walletUsd : null;
     return {
-      ...w, ok: true, positions, external, closed, errors, notes, known, truncated, earned, collector, discovery,
+      ...w, v4Ids: disc ? disc.pinned : [], // the parsed, capped list, not the raw settings entries
+      ok: true, positions, external, closed, errors, notes, known, truncated, earned, collector, discovery, warnings,
       holdings: holdings
         ? { ok: holdings.ok, walletUsd, unpricedCount: holdings.unpricedCount, unscaled: holdings.unscaled || [], partialTotals: holdings.partialTotals, tokens: holdings.rows, tokenCount: holdings.rows.length }
         : null,
@@ -513,7 +532,8 @@ function create({ provider, npm, factory, cfg, u, v4, V4, priceSides, toFloat, g
 function keepLastGood(w, prev, rawError, now = Date.now(), prevAt = null) {
   const error = rawError == null ? rawError : redactText(String(rawError));
   if (prev && prev.ok) return { ...prev, ok: true, stale: true, staleSince: prev.staleSince || prevAt || now, staleError: error };
-  return { ...w, ok: false, error, positions: [], closed: 0, errors: [], totals: null };
+  const pins = Array.isArray(w.v4Ids) ? { v4Ids: require("./univ4").parsePinnedIds(w.v4Ids).ids } : {}; // never echo raw settings entries
+  return { ...w, ...pins, ok: false, error, positions: [], closed: 0, errors: [], totals: null };
 }
 
 module.exports = { create, keepLastGood };

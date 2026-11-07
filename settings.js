@@ -3,7 +3,7 @@
  *
  * Sections (see settings.example.json):
  *   chain      rpcUrl, chainId, explorer
- *   wallets    main { address, label, collect }, watched [ { address, label, collect } ]  (collect on main: Base only)
+ *   wallets    main { address, label, collect, v4Ids }, watched [ { address, label, collect, v4Ids } ]  (collect on main: Base only)
  *   tokens     USDG, WETH (each address written once), usdReferenceFeeTier, usdReferencePair (a v2 pair, PulseChain)
  *   contracts  Uniswap v3 / v4 / v2 addresses (weth comes from tokens.WETH)
  *   collector  sweepDestination, thresholds, sweep, tokenIds, denylist, v4Collect, swapFeeTierOverrides
@@ -146,6 +146,10 @@ function toLegacy(raw) {
     // wallets.main.collect: opt-in for the Base fee-collect pass (collector-base.js), which has no other way
     // to enable the main wallet. Carried only when the file states it.
     ...(typeof main.collect === "boolean" ? { ownerCollect: main.collect } : {}),
+    // wallets.main.v4Ids: Uniswap v4 token ids pinned for the main wallet (univ4.createDiscovery
+    // verifies each with ownerOf). Entries pass through unchanged ([] when absent): univ4.parsePinnedIds
+    // judges them, so an unusable one (an unsafe JSON number included) is reported, never altered.
+    ownerV4Ids: Array.isArray(main.v4Ids) ? main.v4Ids : [],
     // Top-level "baseCollect": thresholds and gas caps of that pass. Carried only when present.
     ...(s.baseCollect && typeof s.baseCollect === "object" ? { baseCollect: s.baseCollect } : {}),
     sweepDestination: col.sweepDestination || main.address,
@@ -219,8 +223,8 @@ function fromLegacy(c, w = null, chats = {}) {
     chain: { rpcUrl: c.rpcUrl, ...(Array.isArray(c.rpcUrls) && c.rpcUrls.length ? { rpcUrls: c.rpcUrls } : {}), ...(c.rpcBatch === false ? { rpcBatch: false } : {}), ...(c.nativeCurrency ? { nativeCurrency: c.nativeCurrency } : {}), chainId: c.chainId, ...(c.maxLogRange ? { maxLogRange: c.maxLogRange } : {}), ...(c.historyStartBlock ? { historyStartBlock: c.historyStartBlock } : {}), ...(c.blockMs ? { blockMs: c.blockMs } : {}), explorer: c.explorer || "https://robinhoodchain.blockscout.com", ...(c.blockscout !== undefined ? { blockscout: c.blockscout } : {}) },
     wallets: {
       _comment: "main: the collector's own wallet (positions read, fees swept back to it). watched: extra wallets shown read-only; collect: true makes the collector also collect that wallet's positions (after it approves the operator on the v3/v4 position managers, Wallet page > Approvals) and deliver the swept fees back to that same wallet.",
-      main: { address: c.ownerAddress, label: (w && w.owner && w.owner.label) || "Main", ...(typeof c.ownerCollect === "boolean" ? { collect: c.ownerCollect } : {}) },
-      watched: (w && Array.isArray(w.watched) ? w.watched : c.watchWallets || []).map((x) => pick(x, ["address", "label", "collect"])),
+      main: { address: c.ownerAddress, label: (w && w.owner && w.owner.label) || "Main", ...(typeof c.ownerCollect === "boolean" ? { collect: c.ownerCollect } : {}), ...(Array.isArray(c.ownerV4Ids) && c.ownerV4Ids.length ? { v4Ids: c.ownerV4Ids.map((v) => (/^[0-9]+$/.test(v) && Number.isSafeInteger(Number(v)) ? Number(v) : v)) } : {}) },
+      watched: (w && Array.isArray(w.watched) ? w.watched : c.watchWallets || []).map((x) => pick(x, ["address", "label", "collect", "v4Ids"])),
     },
     tokens: {
       _comment: "Each token address written once. USDG is the sweep target and the USD reference; WETH the wrapped native token. usdReferenceFeeTier: the v3 WETH/USDG pool tier used for USD pricing.",

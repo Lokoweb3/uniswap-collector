@@ -649,6 +649,20 @@ node tools/verify-onchain.js base      # read-only proof of every address in the
   never calldata or `to`); the browser modules are `claim-fees-core.js` (calldata) and `claim-fees.js` (the only file
   that contains `eth_sendTransaction`). Staked positions get a disabled button (fees go to the gauge's voters;
   rewards are claimed through the gauge), as do positions with nothing to collect. Fees are an estimate.
+- Uniswap v4 positions and pinned ids: the v4 PositionManager cannot list an owner's NFTs, so discovery reads
+  Blockscout and then scans `Transfer` logs backwards, which a public Base RPC (50,000 blocks, recent history only)
+  and a Blockscout that answers 402/403 cannot finish. Pin the ids instead: `wallets.main.v4Ids` (and
+  `wallets.watched[].v4Ids`) take token ids (numbers or decimal strings, at most 200 per wallet). Each pin is verified
+  with `ownerOf` on every refresh, and the pin lists are re-read from settings on every refresh too (main wallet and
+  watched wallets alike; no restart needed). Only the first 400 entries are examined, at most 20 unusable ones are named
+  in a warning ("and N more" for the rest), and an id above 2^256-1 or a JSON number above 2^53 is unusable (write
+  large ids as strings). A wrong pin never shows another wallet's NFT; it is reported instead
+  (`v4-pinned-not-owned`), and never written to `v4-positions.json`. `GET /api/positions` (and each wallet in
+  `/api/watch`) carries `warnings`: `v4-discovery-incomplete` (the scan has not read all history; `warn`, or `info` when
+  the known NFTs already equal the wallet's on-chain `balanceOf`), `v4-balance-exceeds-known` (the wallet holds more v4
+  NFTs than were found), `v4-pinned-not-owned`, `v4-pinned-invalid`. The page shows each `warn` as a banner and each
+  `info` as a quiet line. A v4 NFT with zero liquidity is a closed position: counted in `balanceOf`, listed under
+  Closed, not drawn as a card.
 - `chain.logsRpcUrl` (public) serves `eth_getLogs` when the main RPC refuses it; `mainnet.base.org` does.
 - A killed gauge (its voter says `isAlive` false) reports `rewards.amount` 0 with the note "gauge killed".
 - An EIP-7702 delegated wallet (code `0xef0100...`) is never mistaken for a gauge.

@@ -58,4 +58,15 @@ assert.throws(() => S.read(path.join(require("os").tmpdir(), "no-such-settings.j
   // the Base example still has no Robinhood-side sections
   for (const k of ["collector", "vault", "arm", "risk"]) assert.ok(!(k in base), `no ${k} section in the Base example`);
 }
+// Task B: wallets.main.v4Ids and wallets.watched[].v4Ids survive load -> toLegacy -> fromLegacy / save; absent -> []
+{
+  const base = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "settings.base.example.json"), "utf8"));
+  assert.deepStrictEqual(base.wallets.main.v4Ids, []); assert.ok(base.wallets.watched.every((w) => Array.isArray(w.v4Ids) && w.v4Ids.length === 0));
+  assert.deepStrictEqual(S.toLegacy(raw).ownerV4Ids, [], "absent: no pins");
+  const r = JSON.parse(JSON.stringify(base)); r.wallets.main.v4Ids = [3, "40"]; r.wallets.watched[0].v4Ids = [5];
+  const flat2 = S.toLegacy(r);
+  assert.deepStrictEqual(flat2.ownerV4Ids, [3, "40"], "entries pass through unchanged"); assert.deepStrictEqual(flat2.wallets.list[0].v4Ids, [5]);
+  const sec = S.fromLegacy(flat2, { owner: { label: flat2.wallets.ownerLabel }, watched: flat2.wallets.list }, {});
+  assert.deepStrictEqual(sec.wallets.main.v4Ids, [3, 40]); assert.deepStrictEqual(sec.wallets.watched[0].v4Ids, [5]);
+}
 console.log("settings: sections map to the flat configuration, round trip, save and missing-file assertions passed");

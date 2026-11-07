@@ -2180,10 +2180,10 @@ function render(d){
       </div>`
     : '';
 
-  $('#errors').innerHTML = warn + (d.errors || []).map(e =>
+  $('#errors').innerHTML = warn + v4WarningBanners(d.warnings) + (d.errors || []).map(e =>
     `<div class="err">Position ${esc(String(e.tokenId))} could not be read. ${esc(String(e.error))}</div>`).join('');
   // Informational lines (e.g. a partial staked-position scan): quiet, not an error.
-  $('#errors').innerHTML += (d.notes || []).map(n => `<div class="muted" style="font-size:12px;opacity:.7;margin:2px 0">${esc(n)}</div>`).join('');
+  $('#errors').innerHTML += v4WarningNotes(d.warnings) + (d.notes || []).map(n => `<div class="muted" style="font-size:12px;opacity:.7;margin:2px 0">${esc(n)}</div>`).join('');
 
   // Closed positions: hidden behind a toggle, remembered per browser.
   const ct = $('#closedtoggle'), cl = $('#closedlist');
@@ -3801,12 +3801,24 @@ function renderWatch(d){
   renderSidebar();
   renderPosHistory(); // its Open count includes the external positions just drawn
 }
+// Uniswap v4 discovery warnings (server: univ4.discoveryWarnings). A warn entry is a banner that is not
+// dismissible and is redrawn on every poll; an info entry is a quiet line like the notes. Nothing at all
+// (no container) when the list is empty. Every string is escaped.
+function v4WarningBanners(list) {
+  return (Array.isArray(list) ? list : []).filter(w => w && w.severity !== 'info')
+    .map(w => `<div class="warn-banner warn" role="alert"><b>Uniswap v4:</b> ${esc(String(w.message == null ? '' : w.message))}</div>`).join('');
+}
+function v4WarningNotes(list) {
+  return (Array.isArray(list) ? list : []).filter(w => w && w.severity === 'info')
+    .map(w => `<div class="muted v4note" style="font-size:12px;opacity:.7;margin:2px 0">${esc(String(w.message == null ? '' : w.message))}</div>`).join('');
+}
 // A watched wallet's per-position read errors and its informational notes (e.g. a partial
 // staked-position scan), escaped, drawn together under that wallet.
 function walletIssues(w) {
   const errs = (w.errors || []).map(e => `<div class="err">Position ${esc(String(e.tokenId))} could not be read. ${esc(String(e.error))}</div>`);
   const notes = (w.notes || []).map(n => `<div class="muted wnote" style="font-size:12px;opacity:.7;margin:2px 0">${esc(String(n))}</div>`);
-  return errs.length || notes.length ? `<div class="wissues">${errs.join('')}${notes.join('')}</div>` : '';
+  const banners = v4WarningBanners(w.warnings), infos = v4WarningNotes(w.warnings);
+  return errs.length || notes.length || banners || infos ? `<div class="wissues">${banners}${errs.join('')}${infos}${notes.join('')}</div>` : '';
 }
 // The watched-wallet cards. A failed read or an ok:false answer never replaces
 // them: the last good cards stay, marked with their age and the failure. Only a

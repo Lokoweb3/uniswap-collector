@@ -132,6 +132,7 @@ const V4 = cfg.contracts.v4 && cfg.contracts.v4.positionManager
         owner: cfg.ownerAddress,
         explorerApi: BLOCKSCOUT_API,
         logsProvider,
+        pinnedIds: cfg.ownerV4Ids || [],
       }),
     }
   : null;
@@ -1631,13 +1632,21 @@ async function build() {
 
   // v4 ids ride along with a version tag; discovery is budgeted so a build
   // never waits on a long log scan (the background tick does the catching up).
-  const v4Ids = V4 ? (await V4.discovery.discover(20)).filter((id) => !deny.has(v4Key(id))) : [];
+  // Pins live in settings: re-read them each build (a failed read keeps the previous pins).
+  if (V4) {
+    try { V4.discovery.setPinned(settings.load().ownerV4Ids); } catch { /* keep previous pins */ }
+  }
+  const v4All = V4 ? await V4.discovery.discover(20) : [];
+  const v4Ids = v4All.filter((id) => !deny.has(v4Key(id)));
+  const v4Denied = v4All.length - v4Ids.length; // denylisted ids are owned but never loaded
   const work = [...ids.map((id) => ({ id, version: 3 })), ...v4Ids.map((id) => ({ id: BigInt(id), version: 4 }))];
 
   const positions = [];
   const errors = [];
   const closedIds = [];
   const poolHoldings = new Map();
+  const ownedV4 = new Set(); // v4 ids verified ownerOf == the wallet this build (open or closed)
+  const pinnedNotOwned = [];
 
   // Positions load with limited concurrency: sequential took 1-2 minutes on
   // this RPC; four at a time keeps it well under 30s without hammering it.
@@ -1650,10 +1659,15 @@ async function build() {
           ? await v4.loadPosition({ provider, posm: V4.posm, stateView: V4.stateView, cfg }, id)
           : await u.loadPosition({ provider, npm, factory, cfg }, id);
       if (p.gone) {
-        V4.discovery.forget(id, p.goneReason || "transferred away"); // stop asking, but keep the record
+        // A pin is the operator's claim, not discovery's: report it, never tombstone it.
+        if (version === 4 && V4.discovery.isPinned(id)) pinnedNotOwned.push(String(id));
+        else V4.discovery.forget(id, p.goneReason || "transferred away"); // stop asking, but keep the record
         return;
       }
-      if (version === 4) p.tokenId = v4Key(p.tokenId);
+      if (version === 4) {
+        ownedV4.add(String(id));
+        p.tokenId = v4Key(p.tokenId);
+      }
       if (p.closed) {
         closedIds.push(p.tokenId);
         return;
@@ -1825,6 +1839,21 @@ async function build() {
   positions.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
   lastPoolHoldings = poolHoldings;
 
+  // v4 discovery warnings for the main wallet: an unfinished scan or an on-chain balance
+  // larger than what was found must be said out loud, never read as "no positions".
+  const dst = V4 ? V4.discovery.status : null;
+  // Denylisted ids are skipped on purpose, so they are not "missing": take them off the on-chain count.
+  const bal0 = V4 ? await V4.discovery.balance() : null;
+  const bal = bal0 == null ? null : Math.max(0, Number(bal0) - Math.min(Number(bal0), v4Denied));
+  const warnings = V4
+    ? v4.discoveryWarnings({
+        wallet: cfg.ownerAddress, label: watch.ownerLabel() || null, chainId: Number(cfg.chainId),
+        status: { ...dst, error: dst.error ? endpoint.redactText(dst.error) : null },
+        balanceOf: bal, knownOwned: ownedV4.size,
+        pinnedInvalid: V4.discovery.pinnedInvalid, pinnedInvalidMore: V4.discovery.pinnedInvalidMore, pinnedNotOwned,
+      })
+    : [];
+
   if (wethUsd != null) lastWethUsdSeen = wethUsd;
   latestOpenIds = positions.filter((p) => p.version !== 4).map((p) => p.tokenId);
   appendSnapshot(positions, wethUsd);
@@ -1936,6 +1965,7 @@ async function build() {
     closed,
     errors,
     notes,
+    warnings,
   };
 }
 

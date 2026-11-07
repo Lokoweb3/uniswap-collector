@@ -237,6 +237,7 @@ function blankState(chain) {
 function compose(state, now) {
   const chain = state.chain;
   const problems = [];
+  const notes = [];                         // per-wallet remarks that do not make the chain partial
   const partsOut = {};
   const items = [];
   const wallets = [];                       // { address, key, label } seen on this chain
@@ -332,6 +333,7 @@ function compose(state, now) {
 
   // ---- tokens ----
   const tokenItems = [];
+  const unknownWallets = new Set();         // token discovery never succeeded: the token list is incomplete, not empty
   const tokenByAddr = new Map();            // wallet|address -> first non-native row (staking tags it)
   const pushToken = (row) => {
     tokenItems.push(row);
@@ -396,7 +398,7 @@ function compose(state, now) {
       if (!w.ok) continue;
       const wallet = walletOf(w.address, w.label);
       if (!w.holdings) continue;
-      if (!w.holdings.ok) { problems.push({ wallet: wallet.key, code: "holdings-unavailable" }); }
+      if (!w.holdings.ok) { notes.push({ wallet: wallet.key, code: "holdings-unavailable" }); unknownWallets.add(wallet.key); }
       const asOf = w.stale && w.staleSince ? w.staleSince : wat.asOf;
       addTokens(wallet, w.holdings.tokens, "watch", asOf, wat.stale || w.stale, w.holdings.unscaled);
     }
@@ -438,6 +440,7 @@ function compose(state, now) {
       applyStaking(walletOf(w.address, w.label), w.tokens);
     }
   }
+  for (const it of tokenItems) if (unknownWallets.has(it.wallet.key)) it.flags.holdingsUnknown = true;
   items.push(...tokenItems);
 
   // Decided last: a wallet that could not be read makes the chain partial, like a missing part.
@@ -447,7 +450,7 @@ function compose(state, now) {
   else status = problems.length ? "partial" : "ok";
 
   return {
-    chain, status, problems, parts: partsOut, items, wallets,
+    chain, status, problems, notes, parts: partsOut, items, wallets,
     fetchedAt: state.roundAt || null, dataAt, lastGoodAt: have.length ? lastGoodAt : null,
   };
 }
@@ -469,13 +472,14 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
     const cTotals = { countedUsd: 0, uncountedUsd: 0, staleUsd: 0 };
     for (const w of c.wallets) {
       let m = walletMap.get(w.key);
-      if (!m) { m = { key: w.key, address: w.address, label: "", labels: {}, aliases: [], chains: [], countedUsd: 0, unreadable: 0 }; walletMap.set(w.key, m); }
+      if (!m) { m = { key: w.key, address: w.address, label: "", labels: {}, aliases: [], chains: [], countedUsd: 0, unreadable: 0, notes: [] }; walletMap.set(w.key, m); }
       if (!m.chains.includes(c.chain.key)) {
         m.chains.push(c.chain.key);
         // a watched wallet the chain could not read at all has no figure there, not a zero one
         if (c.problems.some((p) => p.wallet === w.key && p.code === "unavailable")) m.unreadable++;
       }
       if (w.label) m.labels[c.chain.key] = w.label;
+      for (const n of c.notes || []) if (n.wallet === w.key && !m.notes.includes(n.code)) m.notes.push(n.code);
     }
     for (const it of c.items) {
       all.push(it);
@@ -513,7 +517,7 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
     chainsOut.push({
       key: c.chain.key, label: c.chain.label, accent: c.chain.accent, status: c.status,
       fetchedAt: c.fetchedAt, dataAt: c.dataAt, lastGoodAt: c.lastGoodAt, ageMs: ref ? Math.max(0, now - ref) : null,
-      problems: c.problems.map((p) => ({ ...p })), parts: c.parts,
+      problems: c.problems.map((p) => ({ ...p })), notes: (c.notes || []).map((n) => ({ ...n })), parts: c.parts,
       totals: noData ? { countedUsd: null, uncountedUsd: null, staleUsd: null }
         : { countedUsd: round(cTotals.countedUsd), uncountedUsd: round(cTotals.uncountedUsd), staleUsd: round(cTotals.staleUsd) },
     });
@@ -532,6 +536,7 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
     return {
       key: m.key, address: m.address, label, aliases: [...new Set(labs.filter((l) => l !== label))],
       labels: m.labels, chains: m.chains,
+      ...(m.notes.length ? { notes: m.notes, holdingsUnknown: m.notes.includes("holdings-unavailable") } : {}),
       ...(m.unreadable >= m.chains.length ? { countedUsd: null, unavailable: true } : { countedUsd: round(m.countedUsd) }),
     };
   });

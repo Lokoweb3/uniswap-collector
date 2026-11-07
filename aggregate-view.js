@@ -120,6 +120,7 @@ function badgesHtml(it) {
   if (it.flags.thin) partsHtml.push('<span class="badge warn">thin</span>');
   if (it.flags.assumed) partsHtml.push('<span class="badge warn">assumed price</span>');
   if (it.flags.stale) partsHtml.push('<span class="badge bad">stale</span>');
+  if (it.flags.holdingsUnknown) partsHtml.push('<span class="badge warn">tokens unknown (discovery failed)</span>');
   return partsHtml.join(' ');
 }
 
@@ -222,8 +223,14 @@ function breakdownHtml(payload, items, sel) {
     by = { chain: clean(payload.breakdown.byChain), wallet: clean(payload.breakdown.byWallet), protocol: clean(payload.breakdown.byProtocol) };
   } else by = breakdownFor(items);
   const total = Object.values(by.chain).reduce((a, b) => a + b, 0);
+  const unknownKeys = new Set((payload.wallets || []).filter(w => w.holdingsUnknown).map(w => w.key));
   const sectionHtml = (title, map, label, extraRowsHtml) => {
-    const rowsHtml = Object.entries(map).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(label(k))}</td><td class="num">${esc(usd(v))}</td><td class="num">${esc(pct(v, total))}</td></tr>`).join('');
+    const rowsHtml = Object.entries(map).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+      const unknown = title === 'By wallet' && unknownKeys.has(k);
+      const badgeHtml = unknown ? ' <span class="badge warn">tokens unknown (discovery failed)</span>' : '';
+      const atLeastHtml = unknown ? 'at least ' : '';
+      return `<tr><td>${esc(label(k))}${badgeHtml}</td><td class="num">${atLeastHtml}${esc(usd(v))}</td><td class="num">${esc(pct(v, total))}</td></tr>`;
+    }).join('');
     const emptyHtml = rowsHtml || extraRowsHtml ? '' : '<tr><td class="muted">none</td></tr>';
     return `<section class="agg-sec half"><h2>${esc(title)}</h2><table><tbody>${rowsHtml}${extraRowsHtml}${emptyHtml}</tbody></table></section>`;
   };

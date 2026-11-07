@@ -216,5 +216,22 @@ const healthy = () => ({
     assert.ok(/encodeURIComponent\(c\.key\)/.test(code));
   }
 
+  // ---- P2 5. a holdings-unavailable note is a badge, not a banner
+  {
+    const evil = "<img src=x onerror=alert(1)>";
+    const d = healthy();
+    d.a.watch = F.watch([F.walletRow(addr(2), evil, { holdings: { ok: false, unscaled: [], tokens: [F.tok("USDC", 30)] } })]);
+    const pl = JSON.parse(JSON.stringify(await payloadFor(d)));
+    assert.strictEqual(pl.incomplete, false);
+    assert.ok(pl.chains.find((c) => c.key === "a").notes.length === 1);
+    const sel = { chains: new Set(["a", "b"]), wallet: "", sort: "value" };
+    assert.ok(!V.bannersHtml(pl, sel).includes("banner"), "no banner for a note");
+    const html = V.renderPage(pl, sel);
+    assert.ok(!html.includes('class="banner'), "no banner in the page");
+    assert.ok(!html.includes("incomplete:"), "no incomplete badge");
+    assert.ok(html.includes("tokens unknown (discovery failed)") && html.includes("at least "));
+    assert.ok(!html.includes(evil) && !html.includes("<img"), "label escaped");
+  }
+
   console.log("aggregate-view.test.js ok");
 })().catch((e) => { console.error(e); process.exit(1); });

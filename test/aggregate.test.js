@@ -435,6 +435,64 @@ function scenario() {
     assert.ok(protos("base").has("aerodrome"), "base has aerodrome");
   }
 
+  // ---- P2 1-4, 6. holdings-unavailable is a per-wallet note ---------------------------------------------------
+  {
+    const one = [CH[0]];
+    const healthyA = (wallets, over = {}) => ({ a: { positions: F.positions(M, { positions: [lp(1, { valueUsd: 100, feesUsd: 1 })] }), watch: F.watch(wallets), portfolio: F.portfolio(M, [row("ETH", 1, 2000, { native: true })]), staking: F.staking(), ...over } });
+    const bad = (a, label, tokens = [], extra = {}) => F.walletRow(a, label, { holdings: { ok: false, unscaled: [], tokens }, ...extra });
+    const good = (a, label, tokens = []) => F.walletRow(a, label, { holdings: { ok: true, unscaled: [], tokens } });
+    const toks = [tok("USDC", 30), tok("NOPRICE", 5, { usd: null, price: null })];
+    const rBad = await make(healthyA([bad(W1, "Wallet 1", toks)]), { chains: one }).get();
+    const rGood = await make(healthyA([good(W1, "Wallet 1", toks)]), { chains: one }).get();
+    const c = rBad.chains[0];
+    assert.strictEqual(c.status, "ok"); assert.ok(!c.problems.some((p) => p.code === "holdings-unavailable"));
+    assert.ok(!rBad.incompleteList.some((p) => p.code === "holdings-unavailable")); assert.strictEqual(rBad.incomplete, false);
+    assert.deepStrictEqual(c.notes, [{ wallet: W1.toLowerCase(), code: "holdings-unavailable" }]);
+    const w = rBad.wallets.find((x) => x.key === W1.toLowerCase());
+    assert.ok(w.holdingsUnknown === true && w.notes.includes("holdings-unavailable"));
+    const wt = rBad.items.filter((i) => i.wallet.key === W1.toLowerCase() && i.kind === "token");
+    assert.ok(wt.length >= 2 && wt.every((i) => i.flags.holdingsUnknown === true));
+    assert.strictEqual(wt.find((i) => i.name === "NOPRICE").valueUsd, null);
+    assert.ok(!wt.some((i) => i.valueUsd === 0), "no zero item");
+    assert.ok(!rGood.wallets.find((x) => x.key === W1.toLowerCase()).holdingsUnknown);
+    near(rBad.totals.grandUsd, rGood.totals.grandUsd, "counting unchanged");
+    assert.strictEqual(typeof rBad.breakdown.byWallet[W1.toLowerCase()], "number");
+    const rEmpty = await make(healthyA([bad(W1, "Wallet 1")]), { chains: one }).get();
+    assert.ok(!rEmpty.items.some((i) => i.wallet.key === W1.toLowerCase()), "no rows, no items");
+    assert.strictEqual(rEmpty.chains[0].status, "ok");
+
+    // every other cause still makes the chain partial; combined, only the other cause is listed
+    const cases = {
+      "http-500": healthyA([good(W1, "W")], { staking: { __http: 500, body: {} } }),
+      loading: healthyA([good(W1, "W")], { watch: { __http: 202, body: { ok: false, loading: true } } }),
+      "stale-source": healthyA([good(W1, "W")], { watch: F.watch([good(W1, "W")], { at: clock.t - 20 * 60000 }) }),
+      unavailable: healthyA([good(W1, "W")].map((x) => ({ ...x, ok: false, totals: null }))),
+      stale: healthyA([{ ...good(W1, "W"), stale: true, staleSince: clock.t - 1000 }]),
+      "tokens-unavailable": healthyA([good(W1, "W")], { portfolio: { __code: "unreachable" } }),
+      "no-owner": { a: { positions: { __code: "unreachable" }, watch: F.watch([good(W1, "W")]), portfolio: { __code: "unreachable" }, staking: F.staking([F.stakeTok(SN, 10, 50)]) } },
+    };
+    for (const [code, data] of Object.entries(cases)) {
+      for (const withBad of [false, true]) {
+        const d = JSON.parse(JSON.stringify(data));
+        if (withBad) d.a.watch = { ...d.a.watch, wallets: [...(d.a.watch.wallets || []), bad(W3, "Wallet 3")] };
+        const r = await make(d, { chains: one }).get();
+        assert.strictEqual(r.chains[0].status, "partial", `${code}: partial`);
+        assert.strictEqual(r.incomplete, true, `${code}: incomplete`);
+        assert.ok(r.incompleteList.some((p) => p.code === code || (code === "http-500" && p.code === "http-500")), `${code}: listed ${JSON.stringify(r.incompleteList)}`);
+        assert.ok(!r.incompleteList.some((p) => p.code === "holdings-unavailable"), `${code}: bad wallet not listed`);
+      }
+    }
+
+    // fixtures: two wallets without discovery on a chain that is otherwise fine
+    for (const k of ["base", "robinhood"]) {
+      const d = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "aggregate", `live-shape-${k}.json`), "utf8"));
+      d.watch.wallets.slice(0, 2).forEach((x) => { x.holdings.ok = false; });
+      const r = await make({ [k]: d }, { chains: [{ key: k, label: k, accent: "#123456", port: 1 }] }).get();
+      assert.strictEqual(r.chains[0].status, "ok", `${k}: ok`);
+      assert.strictEqual(r.wallets.filter((x) => x.holdingsUnknown).length, 2, `${k}: two unknown wallets`);
+    }
+  }
+
   // ---- 33. performance ----------------------------------------------------------------------------------------
   {
     const big = {};

@@ -349,7 +349,7 @@ L1 ages and stale flags
 11. TTL and rate limits unchanged: the round-5 cache tests (one upstream request per path per chain per TTL, one in-flight round, forced round gap, no query string, no `fresh=1`) pass unmodified.
 
 Fixtures
-12. `test/fixtures/aggregate/live-shape-arc.json` line 51 `poolAddress` is a synthetic id (`0x` followed by 62 `b` characters and two hex digits, e.g. `...b1`), and `node test/run-all.js aggregate` passes; `0xebde8959fac1a0a1f837189e7f00f40566f4c1fc6efa3b3c987222222fd31455` appears nowhere in the repo working tree (grep).
+12. `test/fixtures/aggregate/live-shape-arc.json` line 51 `poolAddress` is a synthetic id (`0x` followed by 62 `b` characters and two hex digits, e.g. `...b1`), and `node test/run-all.js aggregate` passes; `the former real 64-hex pool id (prefix 0xebde8959)` appears nowhere in the repo working tree (grep).
 13. A hygiene test scans every `test/fixtures/aggregate/*.json`: each `0x` + 40-hex and `0x` + 64-hex string must match `/^0xa{30,}[0-9a-f]{1,8}$/` or `/^0xb{60,}[0-9a-f]{1,4}$/` or be in an explicit allow-list of public contract addresses (empty); the test fails and names the file and line otherwise. Labels must be `Main`, `Wallet N` or `NET staking`.
 
 Spec wording

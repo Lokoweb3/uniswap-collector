@@ -61,13 +61,18 @@
     ]
   },
   "baseCollect": {
-    "_comment": "Limits of the daily Base collect pass (collector-base.js); every key is optional, these are the defaults. A position is collected only when its fees are at least minFeesUsd AND at least minFeesToGasRatio times the gas cost. maxGasPerRunEth caps what one run may spend, maxGasPriceGwei refuses to send when the network is dearer, maxCollectsPerRun caps the transactions, dailyGasCapEth caps the trailing 24 hours.",
+    "_comment": "Limits of the daily Base collect pass (collector-base.js); every key is optional, these are the defaults. A position is collected only when its fees are at least minFeesUsd AND at least minFeesToGasRatio times the gas cost. maxGasPerRunEth caps what one run may spend, maxGasPriceGwei is a HARD CAP on the SIGNED maxFeePerGas (the pass computes the fee itself from the block base fee and refuses when base fee + tip exceed it), maxPriorityFeeGwei caps the tip, maxGasLimit is an absolute ceiling on one collect (a larger estimate is skipped), maxGasPerTxEth caps one transaction at its worst case (gasLimit x maxFeePerGas + 2 x the L1 fee quote), maxCollectsPerRun caps the transactions, dailyGasCapEth caps the trailing 24 hours (reservations of unconfirmed transactions included), waitTimeoutSec is how long one transaction may stay unconfirmed before the run stops, minL1AllowanceEth is the floor of the L1 data-fee allowance (allowance = max(2 x oracle quote, this floor); the L1 part is an estimate, not a hard bound).",
     "minFeesUsd": 2,
     "minFeesToGasRatio": 5,
     "maxGasPerRunEth": 0.0003,
     "maxGasPriceGwei": 1,
     "maxCollectsPerRun": 6,
-    "dailyGasCapEth": 0.001
+    "dailyGasCapEth": 0.001,
+    "maxGasPerTxEth": 0.0002,
+    "maxGasLimit": 500000,
+    "maxPriorityFeeGwei": 0.01,
+    "waitTimeoutSec": 120,
+    "minL1AllowanceEth": 0.00002
   },
   "portfolio": {},
   "dashboard": { "port": 8796 }

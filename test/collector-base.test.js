@@ -8,106 +8,15 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { ethers } = require("ethers");
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lp-base-collect-"));
-process.env.LP_DATA_DIR = TMP;
-process.on("exit", () => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* gone */ } });
-
+const { TICK, TMP, OWNER, W11, MGR_A, MGR_B, FAC_A, FAC_B, ID_A, ID_B, EVIL, E18, OP, iface, exampleRaw, cfgOf, enableMain, scene, fakeSigner, pass } = require("./lib/base-scene"); // sets LP_DATA_DIR first
 const u = require("../univ3");
 const settings = require("../settings");
 const L = require("../collector-base-logic");
-const { runPass, skipLine, MANAGER_ABI, MAX128, makeReaders } = require("../collector-base");
-const { world, revert } = require("./fixtures/mock-chain");
+const { skipLine, MANAGER_ABI, ORACLE_ABI, MAX128 } = require("../collector-base");
 const { hermeticEnv, hermeticCwd } = require("./lib/hermetic");
 
-const OWNER = "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743", W11 = "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb";
-const MGR_A = "0x827922686190790b37229fd06084350E74485b72", MGR_B = "0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53";
-const FAC_A = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A", FAC_B = "0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef";
-const WETH = "0x4200000000000000000000000000000000000006", USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const POOL_A = "0x70aCDF2Ad0bf2402C957154f944c19Ef4e1cbAE1", POOL_B = "0x99cf3E8bfB02c300312c53Aac5D0B082e3D5975C";
-const GAUGE = "0x41b2126661C673C2beDd208cC72E85DC51a5320a", VOTER = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5", AERO_POOL = "0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d";
-const AERO = "0x940181a94A35A4569E4529A3CDfB74e38FD98631", POOL_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da";
-const ID_A = 79371151, ID_B = 8905958, TICK = -200300, E18 = 10n ** 18n;
-const EVIL = "0x00000000000000000000000000000000000000ee";
-const iface = new ethers.Interface(MANAGER_ABI);
-const exampleRaw = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "settings.base.example.json"), "utf8"));
-const cfgOf = (mutate = () => {}, baseCollect) => {
-  const raw = JSON.parse(JSON.stringify(exampleRaw));
-  mutate(raw);
-  if (baseCollect) raw.baseCollect = baseCollect;
-  return settings.toLegacy(raw);
-};
-const enableMain = (r) => { r.wallets.main.collect = true; };
-
-// the operator: a throwaway key, never the real one
-const operatorKey = ethers.Wallet.createRandom();
-const OP = operatorKey.address;
-
-/** A mocked Base: two managers, one unstaked position each, owned by OWNER unless `o` says otherwise. */
-function scene(o = {}) {
-  const w = world();
-  const approved = { [MGR_A]: true, [MGR_B]: true, ...(o.approved || {}) };
-  const fees = { [MGR_A]: [2n * 10n ** 15n, 5_000_000n], [MGR_B]: [3n * 10n ** 15n, 1_000_000n], ...(o.fees || {}) };
-  const ownerCalls = { [MGR_A]: 0, [MGR_B]: 0 };
-  for (const [a, s, d] of [[WETH, "WETH", 18], [USDC, "USDC", 6], [AERO, "AERO", 18]]) w.on(a, "symbol", () => [s]).on(a, "decimals", () => [d]);
-  w.on(POOL_FACTORY, "getPool", () => [AERO_POOL]).on(AERO_POOL, "token0", () => [AERO]).on(AERO_POOL, "getReserves", () => [1000n * E18, 600n * 10n ** 6n, 0n]);
-  w.contract(GAUGE).contract(POOL_A).contract(POOL_B).contract(MGR_A).contract(MGR_B);
-  const POS = (liq) => [0n, ethers.ZeroAddress, WETH, USDC, 100n, BigInt(TICK - 700), BigInt(TICK + 700), BigInt(liq), 0n, 0n, 0n, 0n];
-  const dex = (mgr, fac, pool, id, holder) => {
-    w.on(fac, "getPool", () => [pool]).on(fac, "voter", () => [VOTER]);
-    w.on(pool, "slot0", () => [u.getSqrtRatioAtTick(TICK), BigInt(TICK), 0n, 1n, 1n, true]).on(pool, "gauge", () => [GAUGE]);
-    w.on(mgr, "balanceOf", (who) => [who.toLowerCase() === OWNER.toLowerCase() && holder === OWNER ? 1n : 0n]).on(mgr, "tokenOfOwnerByIndex", () => [BigInt(id)]);
-    w.on(mgr, "ownerOf", (x) => {
-      if (BigInt(x) !== BigInt(id)) throw revert("nonexistent");
-      ownerCalls[mgr]++;
-      return [o.ownerAt ? o.ownerAt(mgr, ownerCalls[mgr]) : holder];
-    });
-    w.on(mgr, "positions", () => POS(5n * 10n ** 15n));
-    w.on(mgr, "isApprovedForAll", (owner, op) => [approved[mgr] && op.toLowerCase() === OP.toLowerCase()]);
-    w.on(mgr, "collect", (params, tx) => {
-      // the owner's estimate (the reader) always works; the operator's simulation needs the approval
-      if (tx && tx.from && tx.from.toLowerCase() === OP.toLowerCase() && !approved[mgr]) throw revert("Not approved");
-      if (o.feesFail && mgr === MGR_A && tx && tx.from && tx.from.toLowerCase() !== OP.toLowerCase()) throw revert("collect failed");
-      return fees[mgr];
-    });
-  };
-  w.on(VOTER, "isAlive", () => [false]);
-  w.on(GAUGE, "nft", () => [MGR_A]).on(GAUGE, "rewardToken", () => [AERO]).on(GAUGE, "stakedValues", () => [o.stakedA ? [BigInt(ID_A)] : []]);
-  w.on(GAUGE, "stakedContains", () => [!!o.stakedA]).on(GAUGE, "earned", () => { throw revert("NA"); });
-  dex(MGR_A, FAC_A, POOL_A, ID_A, o.stakedA ? GAUGE : OWNER);
-  dex(MGR_B, FAC_B, POOL_B, ID_B, OWNER);
-  if (o.chainId) w.chainId = o.chainId;
-  if (o.gasEstimate !== undefined) w.gasEstimate = o.gasEstimate;
-  if (o.feeData) w.feeData = o.feeData;
-  return w;
-}
-
-/** A fake operator signer: signs with the throwaway key, records the signed transaction, never broadcasts. */
-function fakeSigner(w, { failFirst = false, status = 1, gasUsed = 120_000n } = {}) {
-  const s = { address: OP, sent: [], failures: 0, nonce: 7 };
-  s.sendTransaction = async (tx) => {
-    if (failFirst && s.failures === 0) { s.failures++; throw new Error("nonce too low"); }
-    const raw = await operatorKey.signTransaction({ type: 2, chainId: 8453n, nonce: s.nonce++, to: tx.to, data: tx.data, value: tx.value, gasLimit: tx.gasLimit, maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas });
-    const parsed = ethers.Transaction.from(raw);
-    s.sent.push({ from: parsed.from, to: parsed.to, data: parsed.data, value: parsed.value, chainId: parsed.chainId, tx });
-    return { hash: parsed.hash, wait: async () => ({ status, gasUsed, gasPrice: 50_000_000n }) };
-  };
-  return s;
-}
-
-async function pass(w, { cfg, mode = "collect", signer = fakeSigner(w), state = { gasSpends: [] }, getSigner, operatorAddress = OP, ethUsd = 2000 } = {}) {
-  const lines = [];
-  const saved = [];
-  const readers = makeReaders({ cfg, provider: w.runner, dataDir: fs.mkdtempSync(path.join(TMP, "d-")), log: (l) => lines.push(l) });
-  global.fetch = async () => ({ ok: true, status: 200, headers: { get: () => "text/html" }, json: async () => { throw new SyntaxError("html"); } });
-  let signerCalls = 0;
-  const res = await runPass({
-    cfg, mode, provider: w.runner, operatorAddress, readers, state, saveState: (s) => saved.push(JSON.parse(JSON.stringify(s))),
-    getSigner: getSigner || (async () => { signerCalls++; return signer; }), getEthUsd: async () => ethUsd, log: (l) => lines.push(l), now: () => Date.now(),
-  });
-  return { res, lines, text: lines.join("\n"), signer, saved, state, signerCalls: () => signerCalls };
-}
 const writes = (w, signer) => w.estimates.length + (signer ? signer.sent.length : 0) + w.calls.filter((c) => c.name === "collect").length;
-const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll|safeTransferFrom|transferFrom|transfer|swap|safeTransfer)/i.test(c.name) || !["ownerOf", "isApprovedForAll", "collect", "balanceOf", "tokenOfOwnerByIndex", "positions"].includes(c.name) && !/^(getPool|slot0|symbol|decimals|voter|isAlive|gauge|nft|rewardToken|stakedValues|stakedContains|earned|token0|getReserves)$/.test(c.name));
+const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll|safeTransferFrom|transferFrom|transfer|swap|safeTransfer)/i.test(c.name) || !["ownerOf", "isApprovedForAll", "collect", "balanceOf", "tokenOfOwnerByIndex", "positions", "getL1Fee"].includes(c.name) && !/^(getPool|slot0|symbol|decimals|voter|isAlive|gauge|nft|rewardToken|stakedValues|stakedContains|earned|token0|getReserves)$/.test(c.name));
 
 (async () => {
   // ---- 3. collect:false everywhere (the shipped example) -> nothing at all
@@ -117,7 +26,8 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
     assert.ok(exampleRaw.wallets.watched.length >= 2 && exampleRaw.wallets.watched.every((x) => x.collect === false), "every watched wallet ships collect:false");
     assert.strictEqual(cfg.ownerCollect, false);
     assert.ok(L.owners(cfg).every((x) => !x.enabled));
-    assert.deepStrictEqual(L.limits(cfg.baseCollect), { minFeesUsd: 2, minFeesToGasRatio: 5, maxGasPerRunEth: 0.0003, maxGasPriceGwei: 1, maxCollectsPerRun: 6, dailyGasCapEth: 0.001 }, "the example carries the defaults");
+    assert.deepStrictEqual(L.limits(cfg.baseCollect), { minFeesUsd: 2, minFeesToGasRatio: 5, maxGasPerRunEth: 0.0003, maxGasPriceGwei: 1, maxCollectsPerRun: 6, dailyGasCapEth: 0.001, maxGasPerTxEth: 0.0002, maxGasLimit: 500000, maxPriorityFeeGwei: 0.01, waitTimeoutSec: 120, minL1AllowanceEth: 0.00002 }, "the example carries the defaults");
+    assert.deepStrictEqual(L.limits(cfg.baseCollect), L.limits(undefined));
     const w = scene();
     const r = await pass(w, { cfg });
     assert.strictEqual(w.calls.length, 0, "no contract read at all");
@@ -191,11 +101,12 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
     assert.strictEqual(r.res.collected, 2);
     assert.ok(/=== base collect mode=collect chainId=8453 ===/.test(r.lines[0]));
     assert.ok(/^--- Trading \(0xaDf94A20558E1E6d64c429F8F9f017169BF3d743\) ---$/.test(r.lines.find((l) => l.startsWith("---"))));
-    assert.ok(r.lines.some((l) => /^  collected #79371151 to 0xaDf9.* tx 0x[0-9a-f]{64}, simulated amounts \d+ \/ \d+ \(raw\), gas used 120000, paid 0\.000006 ETH$/.test(l)), r.text);
-    assert.ok(/^=== base done: 2 collected, 0 skipped, gas 0\.000012 ETH ===$/.test(r.lines[r.lines.length - 1]), r.lines[r.lines.length - 1]);
+    assert.ok(r.lines.some((l) => /^  collected #79371151 to 0xaDf9.* tx 0x[0-9a-f]{64}, simulated amounts \d+ \/ \d+ \(raw\), gas used 120000, paid 0\.000026 ETH$/.test(l)), r.text);
+    assert.ok(/^=== base done: 2 collected, 0 skipped, gas 0\.000052 ETH ===$/.test(r.lines[r.lines.length - 1]), r.lines[r.lines.length - 1]);
     // spend recorded for the rolling cap
-    assert.strictEqual(r.state.gasSpends.length, 2); assert.strictEqual(r.saved.length, 2);
-    assert.strictEqual(BigInt(r.state.gasSpends[0].wei), 120_000n * 50_000_000n);
+    assert.strictEqual(r.state.gasSpends.length, 2); assert.ok(r.state.gasSpends.every((e) => e.kind === "settled" && /^0x[0-9a-f]{64}$/.test(e.tx)));
+    assert.strictEqual(r.saved.length, 6, "reservation, hash and settlement per send");
+    assert.strictEqual(BigInt(r.state.gasSpends[0].wei), 120_000n * 50_000_000n + 20_000_000_000_000n);
 
     // ownerOf at send time differs from the configured owner -> no send
     const w2 = scene({ ownerAt: (mgr, n) => (mgr === MGR_A && n >= 3 ? EVIL : OWNER) }); // call 1 is the reader's, 2 the decision's, 3 the one just before sending
@@ -207,14 +118,15 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
     const r3 = await pass(w3, { cfg: cfgOf(enableMain) });
     assert.strictEqual(r3.signer.sent.length, 1);
     assert.ok(r3.lines.some((l) => l.includes(`ownerOf is ${ethers.getAddress(EVIL)}, not the configured owner`)), r3.text);
-    // a failed send is logged and the pass goes on
+    // a failed send may still have been broadcast: the worst case stays counted and the run stops
     const w4 = scene();
     const r4 = await pass(w4, { cfg: cfgOf(enableMain), signer: fakeSigner(w4, { failFirst: true }) });
-    assert.strictEqual(r4.signer.sent.length, 1); assert.ok(r4.lines.some((l) => /collect failed: nonce too low; continuing/.test(l)), r4.text);
-    assert.strictEqual(r4.res.collected, 1);
+    assert.strictEqual(r4.signer.sent.length, 0); assert.ok(r4.lines.some((l) => /outcome unknown \(sendTransaction failed, broadcast not ruled out: nonce too low\)/.test(l)), r4.text);
+    assert.strictEqual(r4.res.collected, 0); assert.strictEqual(r4.res.aborted, true); assert.strictEqual(r4.state.gasSpends[0].kind, "unknown");
     // a collect mined as reverted still cost gas: recorded, not counted as collected
     const w5 = scene();
     const r5 = await pass(w5, { cfg: cfgOf(enableMain), signer: fakeSigner(w5, { status: 0 }) });
+    assert.ok(r5.lines.some((l) => /collect reverted on-chain/.test(l)));
     assert.strictEqual(r5.res.collected, 0); assert.strictEqual(r5.state.gasSpends.length, 2);
     // the unlocked key must be the operator whose approval was checked
     const w6 = scene();
@@ -245,8 +157,8 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
     assert.strictEqual(rl.signer.sent.length, 1);
 
     // fees below 5x gas: an expensive gas estimate
-    const wg = scene({ gasEstimate: 40_000_000n }); // 40M gas * 0.05 gwei = 0.002 ETH = $4
-    const rg = await pass(wg, { cfg: cfgOf(enableMain) });
+    const wg = scene(); wg.l1Fee = 10n ** 15n; // an L1 quote of 0.001 ETH = $2 per collect: fees $9 < 5 x $2
+    const rg = await pass(wg, { cfg: cfgOf(enableMain, { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 }) });
     assert.ok(rg.lines.some((l) => /-> skip: fees < 5x gas/.test(l)), rg.text);
     assert.strictEqual(rg.signer.sent.length, 0);
 
@@ -262,12 +174,12 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
     const r = await pass(w, { cfg: cfgOf(enableMain, { maxCollectsPerRun: 1 }) });
     assert.strictEqual(r.signer.sent.length, 1);
     assert.ok(r.lines.some((l) => /-> skip: maxCollectsPerRun 1 reached/.test(l)), r.text);
-    const wg = scene({ feeData: { maxFeePerGas: 3_000_000_000n, gasPrice: 2_000_000_000n, maxPriorityFeePerGas: 0n } });
+    const wg = scene(); wg.block = { baseFeePerGas: 2_000_000_000n }; // a base fee of 2 gwei against a 1 gwei cap
     const rg = await pass(wg, { cfg: cfgOf(enableMain) });
-    assert.strictEqual(rg.signer.sent.length, 0); assert.ok(/gas price 2\.0000 gwei exceeds maxGasPriceGwei 1/.test(rg.text), rg.text);
+    assert.strictEqual(rg.signer.sent.length, 0); assert.ok(/base fee 2 gwei .*exceeds maxGasPriceGwei 1 \(cap 1 gwei\)/.test(rg.text), rg.text);
     const wr = scene();
-    const rr = await pass(wr, { cfg: cfgOf(enableMain, { maxGasPerRunEth: 0.00001 }) }); // one collect's estimate is ~0.0000094 ETH, two exceed it
-    assert.strictEqual(rr.signer.sent.length, 1); assert.ok(/maxGasPerRunEth 0\.00001 ETH would be exceeded/.test(rr.text), rr.text);
+    const rr = await pass(wr, { cfg: cfgOf(enableMain, { maxGasPerRunEth: 0.00005 }) }); // one worst case is ~0.0000314 ETH (incl. the L1 floor), the first settles at 0.000026: the second would pass 0.00005
+    assert.strictEqual(rr.signer.sent.length, 1); assert.ok(/maxGasPerRunEth 0\.00005 ETH would be exceeded/.test(rr.text), rr.text);
     const wd = scene();
     const rd = await pass(wd, { cfg: cfgOf(enableMain), state: { gasSpends: [{ t: Date.now() - 3600_000, wei: String(ethers.parseUnits("0.000995", 18)) }] } });
     assert.strictEqual(rd.signer.sent.length, 0); assert.ok(/24 h gas cap 0\.001 ETH would be exceeded/.test(rd.text), rd.text);
@@ -346,13 +258,31 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
       assert.ok(!hit, `${name} mentions ${hit && hit[0]}`);
     }
     assert.strictEqual(MANAGER_ABI.length, 3);
+    assert.strictEqual(ORACLE_ABI.length, 1); assert.deepStrictEqual(new ethers.Interface(ORACLE_ABI).fragments.map((f) => f.name), ["getL1Fee"]);
+    assert.ok(src.split("\n").filter((l) => /"function /.test(l)).length === 4, "three manager strings and one oracle string");
     assert.deepStrictEqual(new ethers.Interface(MANAGER_ABI).fragments.map((f) => f.name).sort(), ["collect", "isApprovedForAll", "ownerOf"]);
     assert.ok(src.split("\n").filter((l) => /^\s*"function /.test(l)).length === 3, "exactly three ABI strings in the file");
+    assert.ok(!/gasPrice\s*:/.test(src), "no gasPrice key is ever built");
+    assert.ok(/signer\.sendTransaction\(txFields\)/.test(src) && /logic\.assertSignable\(txFields, lim, \{/.test(src), "the signed object is the asserted one");
     // the only transaction it builds is collect
     assert.ok((src.match(/encodeFunctionData\("([a-zA-Z]+)"/g) || []).length === 1 && /encodeFunctionData\("collect"/.test(src));
     // it does not consult LP_READONLY, and the server never imports it
     assert.ok(!/LP_READONLY/.test(src.replace(/^\s*\*.*$/gm, "").replace(/\/\/.*$/gm, "")), "collector-base.js does not read LP_READONLY");
     for (const f of ["server.js", "slipstream.js", "watch.js", "claim-fees-target.js"]) assert.ok(!/collector-base/.test(fs.readFileSync(path.join(__dirname, "..", f), "utf8")), `${f} does not import collector-base`);
+  }
+  // ---- S6: the passphrase is cleared from the environment on success AND on failure; the keystore here is a throwaway one
+  {
+    const { unlockSigner } = require("../collector-base");
+    const ks = path.join(fs.mkdtempSync(path.join(TMP, "ks-")), "ks.json");
+    fs.writeFileSync(ks, await ethers.encryptKeystoreJson(ethers.Wallet.createRandom(), "right", { scrypt: { N: 16 } }));
+    const good = { LP_KEYSTORE_PATH: ks, LP_KEYSTORE_PASS: "right" };
+    const signer = await unlockSigner(null, good);
+    assert.ok(signer.address); assert.ok(!("LP_KEYSTORE_PASS" in good), "cleared after success");
+    const wrong = { LP_KEYSTORE_PATH: ks, LP_KEYSTORE_PASS: "wrong" };
+    await assert.rejects(() => unlockSigner(null, wrong)); assert.ok(!("LP_KEYSTORE_PASS" in wrong), "cleared after a failed decrypt");
+    const nofile = { LP_KEYSTORE_PATH: path.join(TMP, "missing.json"), LP_KEYSTORE_PASS: "x" };
+    await assert.rejects(() => unlockSigner(null, nofile)); assert.ok(!("LP_KEYSTORE_PASS" in nofile), "cleared when the file cannot be read");
+    await assert.rejects(() => unlockSigner(null, {}), /must be set/);
   }
   console.log("collector-base tests passed");
 })().catch((e) => { console.error(e); process.exit(1); });

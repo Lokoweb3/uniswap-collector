@@ -674,6 +674,47 @@ reads the wallet's positions, skips staked ones, positions whose fees are unread
 least `minFeesUsd` and at least `minFeesToGasRatio` times the gas cost and the gas caps allow it. The fees always go to the
 NFT's owner (`recipient` = `ownerOf`, re-read just before sending).
 
+**Where it runs.** Two ways start `run-collector.sh`, and both run the Base pass: the scheduled task, and the
+**Collect button** of the Robinhood dashboard (`POST /api/collect` spawns `run-collector.sh collect|full`, `server.js`
+`startCollectRun`). The Base dashboard has no such button (that route answers 403). The Base pass runs only after `collector.js`
+exits 0 in `collect` or `full` mode (the script is `set -e`, so a failed Robinhood pass stops it), and is skipped when the lock is held,
+when the unlock window is closed and the run is `--quiet` or has no TTY on stdin (the script logs `locked, skipping` and exits 0; an
+interactive run is asked for the passphrase instead), and when `LP_DATA_DIR` is set in the environment (for example `run-collector-arc.sh`).
+In `simulate` mode the Base pass runs even if the Robinhood simulate failed.
+
+**Gas accounting.** The pass never trusts the RPC's fee numbers. The signed fee is `maxFeePerGas = min(maxGasPriceGwei,
+2 x block base fee + tip)`, so it is never above `maxGasPriceGwei`, and the tip is at most `maxPriorityFeeGwei` (the transaction
+is always type 2 with both fields set explicitly). If the base fee plus tip exceeds `maxGasPriceGwei` the position is skipped
+(`exceeds maxGasPriceGwei`). `gasLimit = min(1.25 x estimate, maxGasLimit)`; an estimate above `maxGasLimit` is skipped, never
+clamped. Base also charges an L1 data fee: the pass asks the OP-stack GasPriceOracle (`getL1Fee`, read-only) about the exact
+transaction and uses 2 x that quote as an allowance. Before each send the caps (`maxGasPerTxEth`, `maxGasPerRunEth`,
+`dailyGasCapEth`) are checked against the worst case `gasLimit x maxFeePerGas + 2 x L1 fee quote`; the economic thresholds
+(`minFeesUsd`, `minFeesToGasRatio`) use the expected cost (current price, 1 x the L1 quote). A reservation of that worst case
+is written to `state.json` before the broadcast and replaced by `gasUsed x effective gas price + 2 x L1 quote` after the receipt;
+reverted transactions are counted too. An unknown outcome or a confirmation timeout (`waitTimeoutSec`) keeps the worst case
+counted and stops the run (exit code 1, so `run-collector.sh` logs `base pass failed`). Any error from `sendTransaction` is treated
+the same way (the transaction may already be signed and broadcast), counts toward `maxCollectsPerRun`, and stops the run.
+A receipt whose `gasUsed` is missing, negative or above the gas limit never lowers the count: a missing one keeps the worst case
+as unknown, a negative or oversized one counts the full worst case; a settled amount is always within `[0, reservation]`.
+
+**The L1 part is an estimate.** The L1 data fee comes from an RPC answer (the GasPriceOracle quote), so the allowance
+`max(2 x quote, minL1AllowanceEth)` (default floor `0.00002` ETH) is a padded floor, not a hard bound on what Base charges.
+
+**Unknown entries do not expire.** An entry of unknown outcome (`kind: "unknown"`) keeps counting in the 24 h total at any age until it
+is settled, and is exempt from the 7-day pruning. At the start of each collect run the pass asks the chain for the receipt of every
+unknown entry that has a transaction hash and settles it (clamped as above). An entry without a hash (a send whose broadcast was never
+confirmed) stays at its worst case. To clear one by hand, after checking on a block explorer that the operator's transaction did not
+happen or what it cost, edit `$HOME/base-data/state.json` (stop any run first): delete that entry from `gasSpends`, or change its `wei`
+to the real cost and its `kind` to `"settled"`.
+
+**Clock.** The 24 h window and the pruning follow the system clock; a forward jump of the clock can age entries out of the window early.
+
+**`state.json`** (Base data dir) is the 24 h budget. Corrupt or unreadable means today's budget is treated as spent: nothing is
+sent, and the file is left as it is. Missing means nothing is sent either, until you create it once with
+`LP_DATA_DIR=$HOME/base-data node collector-base.js --init-state` (it never overwrites an existing file). Deleting `state.json`
+therefore stops the pass sending until you re-create it, by design: otherwise a deleted file would reset the budget to zero.
+It is written atomically (tmp file, fsync, rename).
+
 **What it does not do.** Only `collect` is ever sent. No swap, no sell, no transfer, no approval: the code never calls
 `setApprovalForAll` or `approve`, it only reads `isApprovedForAll`, and a per-token approval is not accepted. It touches only
 the managers `0x827922686190790b37229fd06084350E74485b72` (`aerodrome-v1`) and `0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53`
@@ -688,8 +729,13 @@ the managers `0x827922686190790b37229fd06084350E74485b72` (`aerodrome-v1`) and `
 | `wallets.watched[].collect` | `false` | enable a watched wallet |
 | `baseCollect.minFeesUsd` | `2` | collect only when the fees are worth at least this many USD |
 | `baseCollect.minFeesToGasRatio` | `5` | and at least this many times the gas cost of the collect |
-| `baseCollect.maxGasPerRunEth` | `0.0003` | stop sending once spent + estimated gas would exceed this in one run |
-| `baseCollect.maxGasPriceGwei` | `1` | send nothing while the network gas price is above this |
+| `baseCollect.maxGasPerRunEth` | `0.0003` | stop sending once spent + the next worst case would exceed this in one run |
+| `baseCollect.maxGasPerTxEth` | `0.0002` | one transaction's worst case (`gasLimit x maxFeePerGas + 2 x L1 quote`) may not exceed this |
+| `baseCollect.maxGasPriceGwei` | `1` | HARD cap on the signed `maxFeePerGas`; nothing is sent when base fee + tip exceed it |
+| `baseCollect.maxPriorityFeeGwei` | `0.01` | cap on the signed tip |
+| `baseCollect.maxGasLimit` | `500000` | absolute gas-limit ceiling; a larger estimate is skipped |
+| `baseCollect.waitTimeoutSec` | `120` | how long to wait for a receipt before the run stops |
+| `baseCollect.minL1AllowanceEth` | `0.00002` | floor of the L1 data-fee allowance (`max(2 x quote, floor)`); an estimate, not a hard bound |
 | `baseCollect.maxCollectsPerRun` | `6` | at most this many collect transactions per run |
 | `baseCollect.dailyGasCapEth` | `0.001` | rolling 24 h gas ceiling over all runs (from the Base `state.json`) |
 
@@ -734,11 +780,20 @@ OWNS the NFTs (Trading), once for each manager.
 line appears again). Set `collect` back to `false` when you do not want the pass to run for that wallet.
 
 **RISK, read this.** `setApprovalForAll` does not mean "collect only". It lets the operator key **transfer** or sell **every**
-Aerodrome position NFT of that wallet on that manager on Base, and remove their liquidity, not only collect fees. The
-operator key is the same one that runs the Robinhood collector: it is cached in `/dev/shm` while the unlock window is armed
-and any process of your user can read it there. The code only ever calls `collect`, but an attacker who has the key is not bound
-by the code. Mitigations: keep the unlock window short, revoke the approval when you do not need it, and keep in that wallet
-only the positions you accept this for.
+Aerodrome position NFT of that wallet on that manager on Base, and remove their liquidity, not only collect fees. It is blanket,
+not a list: it covers every NFT the wallet holds now AND any NFT it receives later on that manager. The operator key is the same
+one that runs the Robinhood collector: it is cached in `/dev/shm` while the unlock window is armed and any process of your user
+can read it there. In addition, `run-collector.sh` hands `LP_KEYSTORE_PASS` to the node process as an environment prefix, so the
+passphrase is in that process's initial environment (`/proc/<pid>/environ`, readable by the same user and by root); this is the
+same exposure as the Robinhood collector. `collector-base.js` unsets `LP_KEYSTORE_PASS` from its own `process.env` after
+decrypting (hygiene only; it does not clear `/proc/<pid>/environ`). The code only ever calls `collect`, but an attacker who has
+the key is not bound by the code. Mitigations: keep the unlock window short, revoke the approval when you do not need it, and
+keep in that wallet only the positions you accept this for.
+
+**Revoke on EVERY manager the operator was ever approved on:** the two Aerodrome managers named above and, if the same operator
+EOA was ever approved on Base's Uniswap v3 NonfungiblePositionManager `0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1` or v4
+PositionManager `0x7C5f5A4bBd8fD63184577525326123B519429bDc`, those too. Verify each with `isApprovedForAll(owner, operator)` on
+its Read tab; all four must read `false` after revocation.
 
 **Schedule.** The task runs `run-collector.sh` as before; the Base pass rides on it. Register it for 8:00 with
 `windows-task.ps1 -At 8am` (the script defaults to 9am). Nothing changes in how the task is registered.

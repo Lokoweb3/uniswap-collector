@@ -27,9 +27,11 @@ const SIGS = [
   "function getReserves() view returns (uint256,uint256,uint256)",
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
+  "function getL1Fee(bytes) view returns (uint256)",
 ];
 const iface = new ethers.Interface([...new Set(SIGS)]);
 const lc = (a) => String(a).toLowerCase();
+const ORACLE = "0x420000000000000000000000000000000000000f";
 
 function revert(msg = "reverted") { const e = new Error(msg); e.code = "CALL_EXCEPTION"; e.shortMessage = msg; return e; }
 
@@ -37,7 +39,7 @@ function revert(msg = "reverted") { const e = new Error(msg); e.code = "CALL_EXC
 function world({ head = 1_000_000 } = {}) {
   const w = {
     head, chainId: 8453n, feeData: { maxFeePerGas: 100_000_000n, gasPrice: 50_000_000n, maxPriorityFeePerGas: 1_000_000n }, gasEstimate: 150_000n,
-    handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
+    block: { baseFeePerGas: 30_000_000n }, l1Fee: 0n, nonce: 7, receipts: [], receiptCalls: [], handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
     on(addr, name, fn) { (w.handlers[lc(addr)] = w.handlers[lc(addr)] || {})[name] = fn; return w; },
     contract(addr, code = "0x6080") { w.code[lc(addr)] = code; return w; },
     /** the provider-like runner the readers are given */
@@ -58,6 +60,15 @@ function world({ head = 1_000_000 } = {}) {
         w.estimates.push({ to: lc(tx.to), name: d.name, from: tx.from ? lc(tx.from) : null });
         if (typeof w.gasEstimate === "function") return w.gasEstimate(tx);
         return w.gasEstimate;
+      },
+      // OP-stack fee reads and the receipt lookups of the Base collect pass (all read-only).
+      async getBlock() { return typeof w.block === "function" ? w.block() : w.block; },
+      async getTransactionCount() { return w.nonce; },
+      async getTransactionReceipt(hash) {
+        w.receiptCalls.push(hash);
+        const r = typeof w.receipts === "function" ? w.receipts(hash, w.receiptCalls.length) : w.receipts[w.receiptCalls.length - 1];
+        if (r instanceof Error) throw r;
+        return r || null;
       },
       async getCode(a) { return w.code[lc(a)] || "0x"; },
       async getBlockNumber() { return w.head; },
@@ -82,6 +93,7 @@ function world({ head = 1_000_000 } = {}) {
     },
     callsTo(addr, name) { return w.calls.filter((c) => c.to === lc(addr) && (!name || c.name === name)); },
   };
+  w.on(ORACLE, "getL1Fee", () => [typeof w.l1Fee === "function" ? w.l1Fee() : w.l1Fee]);
   return w;
 }
 

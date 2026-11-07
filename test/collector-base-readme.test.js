@@ -15,6 +15,19 @@ for (const word of ["setApprovalForAll", "isApprovedForAll", "Rabby", "approved`
 const risk = section.slice(section.indexOf("**RISK"));
 assert.ok(/transfer/.test(risk) && /every/i.test(risk) && /\*\*every\*\*/.test(risk), "the risk paragraph says the operator can transfer EVERY position");
 for (const d of ["minFeesUsd", "minFeesToGasRatio", "maxGasPerRunEth", "maxGasPriceGwei", "maxCollectsPerRun"]) assert.ok(section.includes(d), `${d} documented`);
+// the fixed gas accounting, state and risk statements
+for (const d of ["maxGasPerTxEth", "maxGasLimit", "maxPriorityFeeGwei", "waitTimeoutSec"]) assert.ok(section.includes(d), `${d} documented`);
+for (const word of ["POST /api/collect", "Collect button", "exit", "LP_DATA_DIR", "maxFeePerGas", "getL1Fee", "L1 fee", "state.json", "--init-state", "/proc/", "LP_KEYSTORE_PASS",
+  "0x7C5f5A4bBd8fD63184577525326123B519429bDc", "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1", "later", "run-collector-arc.sh", "simulate", "reverted", "timeout", "by design", "isApprovedForAll(owner, operator)"]) {
+  assert.ok(section.includes(word), `${word} in the section`);
+}
+for (const word of ["minL1AllowanceEth", "not a hard bound", "Unknown entries do not expire", "system clock", "forward jump", "exits 0 in `collect` or `full` mode", "no TTY", "`--quiet`", "LP_DATA_DIR=$HOME/base-data node collector-base.js --init-state", "negative"]) {
+  assert.ok(section.includes(word), `${word} in the section`);
+}
+assert.ok(!/exits 0 in collect mode/.test(section), "the skip/exit wording was corrected");
+assert.ok(/min\(maxGasPriceGwei,\s+2 x block base fee \+ tip\)/.test(section), "the signed fee formula");
+assert.ok(/gasLimit x maxFeePerGas \+ 2 x L1 fee quote/.test(section), "the worst case formula");
+assert.ok(/all four must read `false`/.test(section), "revocation covers all four managers");
 // the README does not claim the whole Base instance cannot sign any more
 assert.ok(!/It cannot sign: it runs/.test(readme), "the old absolute wording is gone");
 // the example ships collect:false everywhere

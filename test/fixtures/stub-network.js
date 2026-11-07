@@ -9,12 +9,14 @@ const { ethers } = require("ethers");
 const note = (o) => { if (process.env.STUB_LOG) { try { fs.appendFileSync(process.env.STUB_LOG, JSON.stringify(o) + "\n"); } catch { /* ignore */ } } };
 
 ethers.FetchRequest.registerGetUrl(async (req) => {
-  note({ kind: "rpc", host: new URL(req.url).host });
+  const u = new URL(req.url);
+  note({ kind: "rpc", host: u.host, path: u.pathname + u.search });
   return { statusCode: 500, statusMessage: "Internal Server Error", headers: {}, body: Uint8Array.from(Buffer.from("stubbed upstream failure")) };
 });
 
 global.fetch = async (url, init = {}) => {
   const h = init.headers || {};
-  note({ kind: "fetch", host: new URL(String(url)).host, auth: !!(h.Authorization || h.authorization) });
+  const u = new URL(String(url));
+  note({ kind: "fetch", host: u.host, path: u.pathname + u.search, auth: !!(h.Authorization || h.authorization) });
   throw new Error(`fetch failed: ${String(url)}`);   // carries the URL, as undici's errors can
 };

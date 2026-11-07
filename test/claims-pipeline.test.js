@@ -18,11 +18,13 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 const { spawn } = require("child_process");
+const { hermeticEnv, hermeticCwd, PRELOAD } = require("./lib/hermetic");
 const { ethers } = require("ethers");
 const u = require("../univ3");
 
 const ROOT = path.join(__dirname, "..");
-const PORT = Number(process.env.PIPELINE_PORT || 8779);
+let PORT = 0;                                  // an ephemeral port, chosen in main()
+const freePort = () => new Promise((res) => { const s = http.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
 const CHAIN_ID = 5042;
 const HEAD = 5000;
 const T0 = 1789000000;                         // block n has timestamp T0 + n (1 s blocks)
@@ -240,11 +242,10 @@ function writeSettings(rpcPort) {
   fs.writeFileSync(path.join(DIR, "price-log.json"), JSON.stringify({ hours: { [hour]: { eth: 1, [USDC]: 1, [ARGUS]: 2.8e-14 } } }));
 }
 function startServer() {
-  const env = { ...process.env, TELEGRAM_TOKEN: "", TELEGRAM_CHAT_ID: "", LP_BLOCKSCOUT_KEY: "", LP_READONLY: "1",
-    LP_CLAIM_SCAN_DELAY_MS: "0", LP_REGISTRY_DELAY_MS: "0", LP_CLAIM_PAUSE_MS: "5", LP_CLAIM_CHUNK: "500", LP_CLAIM_LOOKBACK_DAYS: "0.02" };
   const log = fs.openSync(path.join(DIR, "server.log"), "a");
-  return spawn(process.execPath, ["server.js", `--data-dir=${DIR}`, `--port=${PORT}`, "--no-loops", "--no-services", "--claim-scan"],
-    { cwd: ROOT, env, stdio: ["ignore", log, log] });
+  return spawn(process.execPath, ["--require", PRELOAD, path.join(ROOT, "server.js"), `--data-dir=${DIR}`, `--port=${PORT}`, "--no-loops", "--no-services", "--claim-scan"],
+    { cwd: hermeticCwd(), stdio: ["ignore", log, log],
+      env: hermeticEnv({ LP_READONLY: "1", LP_CLAIM_SCAN_DELAY_MS: "0", LP_REGISTRY_DELAY_MS: "0", LP_CLAIM_PAUSE_MS: "5", LP_CLAIM_CHUNK: "500", LP_CLAIM_LOOKBACK_DAYS: "0.02" }) });
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function get(p) {
@@ -312,6 +313,7 @@ function cardFns() {
 }
 
 async function main() {
+  PORT = await freePort();
   await new Promise((r) => rpc.listen(0, "127.0.0.1", r));
   writeSettings(rpc.address().port);
   let server = startServer();

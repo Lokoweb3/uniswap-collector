@@ -8,6 +8,7 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const { hermeticEnv, hermeticCwd, PRELOAD } = require("./lib/hermetic");
 
 const ROOT = path.join(__dirname, "..");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lp-endpoint-"));
@@ -54,7 +55,7 @@ const bs = require("../blockscout");
     const bad = JSON.parse(JSON.stringify(example));
     bad.chain.rpcUrl = "http://rpc.example/v2/PATHSECRET?key=QUERYSECRET";
     fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify(bad));
-    const r = spawnSync(process.execPath, ["-e", 'require("./settings").load()'], { cwd: ROOT, env: { ...process.env, LP_DATA_DIR: dir }, encoding: "utf8" });
+    const r = spawnSync(process.execPath, ["--require", PRELOAD, "-e", `require(${JSON.stringify(path.join(ROOT, "settings"))}).load()`], { cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: dir }), encoding: "utf8" });
     assert.notStrictEqual(r.status, 0, "fails closed");
     assert.ok(/chain\.rpcUrl rejected: only https/.test(r.stderr), r.stderr);
     assert.ok(!/PATHSECRET|QUERYSECRET/.test(r.stdout + r.stderr), "the startup error does not echo the path or query");
@@ -179,9 +180,9 @@ const bs = require("../blockscout");
     fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify(example));
     const stubLog = path.join(dir, "stub.log");
     const out = [];
-    const child = spawn(process.execPath, ["--require", path.join(__dirname, "fixtures", "stub-network.js"), "server.js", `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
-      cwd: ROOT,
-      env: { ...process.env, LP_DATA_DIR: "", LP_READONLY: "1", HOME: dir, STUB_LOG: stubLog, LP_BASE_RPC_URL: "https://x.example/v2/SECRETKEY", BLOCKSCOUT_API_KEY: "proapi_SECRET", LP_BIND: "127.0.0.1" },
+    const child = spawn(process.execPath, ["--require", PRELOAD, "--require", path.join(__dirname, "fixtures", "stub-network.js"), path.join(ROOT, "server.js"), `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
+      cwd: hermeticCwd(),
+      env: hermeticEnv({ LP_DATA_DIR: "", LP_READONLY: "1", HOME: dir, STUB_LOG: stubLog, LP_BASE_RPC_URL: "https://x.example/v2/SECRETKEY", BLOCKSCOUT_API_KEY: "proapi_SECRET", LP_BIND: "127.0.0.1" }),
     });
     child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
     const get = (p) => new Promise((resolve) => {

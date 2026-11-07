@@ -8,6 +8,7 @@ const os = require("os");
 const path = require("path");
 const vm = require("vm");
 const { execFileSync, spawnSync } = require("child_process");
+const { filesNaming } = require("./lib/tracked-files");
 const ROOT = path.join(__dirname, "..");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hygiene-"));
 try {
@@ -15,18 +16,7 @@ const OLD = "home/steve" + "n"; // spelled in two parts so this file does not ma
 
 // 1. nothing in the tree names the old home
 {
-  const hits = [];
-  (function walk(d) {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (["node_modules", ".git"].includes(e.name)) continue;
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (!["SPEC.md", "REPORT.md"].includes(e.name) && fs.statSync(p).size < 5e6) {
-        const t = fs.readFileSync(p); if (!t.includes(0) && t.toString("utf8").includes(OLD)) hits.push(p);
-      }
-    }
-  })(ROOT);
-  assert.deepStrictEqual(hits, []);
+  assert.deepStrictEqual(filesNaming(ROOT, OLD), []);
 }
 
 // 2. backup-ledgers.sh default DATA_DIRS (only the assignment line is executed)

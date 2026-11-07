@@ -12,6 +12,7 @@
  */
 "use strict";
 const { spawn, spawnSync } = require("child_process");
+const { scrubbedEnv } = require("./lib/hermetic");
 const path = require("path");
 const fs = require("fs");
 
@@ -84,7 +85,7 @@ async function main() {
   }
   fs.mkdirSync(path.join(ROOT, "test", ".tmp"), { recursive: true });
   const log = fs.openSync(LOG_PATH, "w");
-  const server = spawn(process.execPath, ["server.js", `--port=${PORT}`], { cwd: ROOT, stdio: ["ignore", log, log], env: { ...process.env, TELEGRAM_TOKEN: "", TELEGRAM_CHAT_ID: "" } });
+  const server = spawn(process.execPath, ["server.js", `--port=${PORT}`], { cwd: ROOT, stdio: ["ignore", log, log], env: scrubbedEnv() });
   let exited = null;
   let onExit, onError;
   const exitP = new Promise((resolve) => {

@@ -10,6 +10,7 @@ const os = require("os");
 const path = require("path");
 const vm = require("vm");
 const { spawn, spawnSync } = require("child_process");
+const { hermeticEnv, hermeticCwd, PRELOAD } = require("./lib/hermetic");
 const { ethers } = require("ethers");
 
 const ROOT = path.join(__dirname, "..");
@@ -37,8 +38,8 @@ const upstream = (key, port) => new Promise((resolve) => {
 async function startServer(dir, env = {}, port = null) {
   port = port || await freePort();
   const out = [];
-  const child = spawn(process.execPath, ["--require", STUB, "server.js", `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
-    cwd: ROOT, env: { ...process.env, LP_DATA_DIR: "", LP_READONLY: "1", HOME: dir, LP_BIND: "127.0.0.1", ...env },
+  const child = spawn(process.execPath, ["--require", PRELOAD, "--require", STUB, path.join(ROOT, "server.js"), `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
+    cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: "", LP_READONLY: "1", HOME: dir, LP_BIND: "127.0.0.1", ...env }),
   });
   child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
   const t0 = Date.now();
@@ -94,15 +95,21 @@ const mkDir = (settings = example) => { const d = fs.mkdtempSync(path.join(TMP, 
     const [rh, arc, pulse, router1, router2] = await Promise.all([freePort(), freePort(), freePort(), freePort(), freePort()]);
     const servers = [await upstream("robinhood", rh), await upstream("arc", arc)];
     const pulseServer = await upstream("pulsechain", pulse);
-    const argv = (p, chains) => ["chain-router.js", `--port=${p}`, `--robinhood-port=${rh}`, `--arc-port=${arc}`, `--pulsechain-port=${pulse}`, ...(chains ? [`--chains=${chains}`] : [])];
+    const argv = (p, chains) => [path.join(ROOT, "chain-router.js"), `--port=${p}`, `--robinhood-port=${rh}`, `--arc-port=${arc}`, `--pulsechain-port=${pulse}`, ...(chains ? [`--chains=${chains}`] : [])];
     const children = [];
     const launch = async (args) => {
       const out = [];
-      const c = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, LP_ROUTER_CHAINS: "" } });
+      const c = spawn(process.execPath, ["--require", PRELOAD, ...args], { cwd: hermeticCwd(), env: hermeticEnv({ LP_ROUTER_CHAINS: "" }) });
       c.stdout.on("data", (d) => out.push(String(d))); c.stderr.on("data", (d) => out.push(String(d)));
       children.push(c);
       const t0 = Date.now();
-      while (!out.join("").includes("chain router on")) { if (Date.now() - t0 > 10000) throw new Error("router did not start"); await new Promise((r) => setTimeout(r, 50)); }
+      // the banner is several lines that can arrive in separate chunks: wait for one "->" line per chain asked for
+      const want = (args.find((a) => a.startsWith("--chains=")) || "").split("=")[1];
+      const lines = want ? want.split(",").length : 1;
+      while (!/chain router on/.test(out.join("")) || (out.join("").match(/->\s+127\.0\.0\.1:/g) || []).length < lines) {
+        if (Date.now() - t0 > 10000) throw new Error("router did not start");
+        await new Promise((r) => setTimeout(r, 50));
+      }
       return { out };
     };
     try {
@@ -126,7 +133,7 @@ const mkDir = (settings = example) => { const d = fs.mkdtempSync(path.join(TMP, 
       await new Promise((r) => pulseServer.close(r));
       const down = await request(router2, "/", { headers: { cookie: "lpchain=pulsechain" } });
       assert.strictEqual(down.status, 502); assert.ok(/PulseChain is not answering/.test(down.body));
-      const banner = spawnSync(process.execPath, ["-e", 'process.argv.push("--chains=robinhood,arc,base,pulsechain");const r=require("./chain-router");console.log(JSON.stringify(r.CHAINS.map(c=>[c.key,c.port])));r.server.close()'], { cwd: ROOT, encoding: "utf8" });
+      const banner = spawnSync(process.execPath, ["--require", PRELOAD, "-e", `process.argv.push("--chains=robinhood,arc,base,pulsechain");const r=require(${JSON.stringify(path.join(ROOT, "chain-router"))});console.log(JSON.stringify(r.CHAINS.map(c=>[c.key,c.port])));r.server.close()`], { cwd: hermeticCwd(), env: hermeticEnv(), encoding: "utf8" });
       assert.deepStrictEqual(JSON.parse(banner.stdout.trim()), [["robinhood", 8787], ["arc", 8797], ["base", 8796], ["pulsechain", 8795]]);
     } finally {
       for (const c of children) c.kill("SIGTERM");
@@ -295,7 +302,7 @@ const mkDir = (settings = example) => { const d = fs.mkdtempSync(path.join(TMP, 
     } finally { await srv3.stop(); }
     // invalid endpoints fail closed without echoing the URL
     for (const bad of ["http://rpc.example/SECRETPATH?k=SECRETQ", "https://127.0.0.1/SECRETPATH", "https://localhost/SECRETPATH", "https://user:SECRETPW@rpc.example/p", "https://169.254.169.254/SECRETPATH"]) {
-      const r = spawnSync(process.execPath, ["-e", 'require("./settings").load()'], { cwd: ROOT, env: { ...process.env, LP_DATA_DIR: dir, LP_PULSE_RPC_URL: bad }, encoding: "utf8" });
+      const r = spawnSync(process.execPath, ["--require", PRELOAD, "-e", `require(${JSON.stringify(path.join(ROOT, "settings"))}).load()`], { cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: dir, LP_PULSE_RPC_URL: bad }), encoding: "utf8" });
       assert.notStrictEqual(r.status, 0, `${bad} is refused`);
       assert.ok(/LP_PULSE_RPC_URL rejected/.test(r.stderr), r.stderr.slice(0, 300));
       assert.ok(!/SECRET/.test(r.stdout + r.stderr), "the error carries no part of the URL");
@@ -306,15 +313,15 @@ const mkDir = (settings = example) => { const d = fs.mkdtempSync(path.join(TMP, 
       assert.throws(() => require("../settings").toLegacy(c), new RegExp(`chain\\.${field} rejected`), field);
     }
     // the PRO key is never sent to the PulseChain explorer, and bsFetch refuses a stranger
-    const bs = spawnSync(process.execPath, ["--require", STUB, "-e", `
-      const b = require("./blockscout");
+    const bs = spawnSync(process.execPath, ["--require", PRELOAD, "--require", STUB, "-e", `
+      const b = require(${JSON.stringify(path.join(ROOT, "blockscout"))});
       (async () => {
         const r1 = await b.bsFetch("/v2/addresses/0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A/token-balances");
         let refused = false;
         try { await b.bsFetch("https://evil.example/x"); } catch (e) { refused = /not an allowed Blockscout host/.test(e.message); }
         const r2 = await b.bsFetch("https://api.scan.pulsechain.com/api/v2/addresses/0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A/token-balances");
         console.log(JSON.stringify({ ok1: r1.ok, ok2: r2.ok, refused, apiBase: b.apiBase(), auth: !!b.headers().Authorization }));
-      })();`], { cwd: ROOT, env: { ...process.env, LP_DATA_DIR: dir, BLOCKSCOUT_API_KEY: "proapi_SECRETPROKEY", STUB_LOG: path.join(TMP, "bs.log") }, encoding: "utf8" });
+      })();`], { cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: dir, BLOCKSCOUT_API_KEY: "proapi_SECRETPROKEY", STUB_LOG: path.join(TMP, "bs.log") }), encoding: "utf8" });
     const bsOut = JSON.parse(bs.stdout.trim().split("\n").pop());
     assert.deepStrictEqual(bsOut, { ok1: true, ok2: true, refused: true, apiBase: "https://api.scan.pulsechain.com/api", auth: false });
     const bsNet = fs.readFileSync(path.join(TMP, "bs.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
@@ -386,7 +393,7 @@ const mkDir = (settings = example) => { const d = fs.mkdtempSync(path.join(TMP, 
     // the CLI, with --json, against the in-memory chain: parseable, holds the LP, and a keyed PULSE_RPC never appears
     const KEY = "0123456789abcdefABCDEF0123456789";
     const before = fs.readdirSync(ROOT).sort().join();
-    const cli = spawnSync(process.execPath, ["--require", STUB, "tools/verify-pulsechain-wallets.js", "--json"], { cwd: ROOT, env: { ...process.env, PULSE_RPC: `https://x.example/pulse/${KEY}`, LP_DATA_DIR: TMP }, encoding: "utf8", timeout: 60000 });
+    const cli = spawnSync(process.execPath, ["--require", PRELOAD, "--require", STUB, path.join(ROOT, "tools/verify-pulsechain-wallets.js"), "--json"], { cwd: hermeticCwd(), env: hermeticEnv({ PULSE_RPC: `https://x.example/pulse/${KEY}`, LP_DATA_DIR: TMP }), encoding: "utf8", timeout: 60000 });
     assert.strictEqual(cli.status, 0, cli.stderr);
     const parsed = JSON.parse(cli.stdout);
     assert.strictEqual(parsed.wallets.length, 6); assert.strictEqual(parsed.chainId, 369);
@@ -394,9 +401,9 @@ const mkDir = (settings = example) => { const d = fs.mkdtempSync(path.join(TMP, 
     assert.ok(!(cli.stdout + cli.stderr).includes(KEY), "no keyed URL in the output");
     assert.strictEqual(parsed.rpc, "https://rpc.pulsechain.com", "the RPC is shown as the public origin");
     assert.strictEqual(fs.readdirSync(ROOT).sort().join(), before, "the tool wrote no file into the project");
-    const cli2 = spawnSync(process.execPath, ["--require", STUB, "tools/verify-pulsechain-wallets.js"], { cwd: ROOT, env: { ...process.env, LP_DATA_DIR: TMP }, encoding: "utf8", timeout: 60000 });
+    const cli2 = spawnSync(process.execPath, ["--require", PRELOAD, "--require", STUB, path.join(ROOT, "tools/verify-pulsechain-wallets.js")], { cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: TMP }), encoding: "utf8", timeout: 60000 });
     assert.strictEqual(cli2.status, 0, cli2.stderr); assert.ok(/== Wallet 12/.test(cli2.stdout) && /MEME \/ WPLS/.test(cli2.stdout));
-    const bad = spawnSync(process.execPath, ["tools/verify-pulsechain-wallets.js"], { cwd: ROOT, env: { ...process.env, PULSE_RPC: "http://127.0.0.1:1/SECRETPATH" }, encoding: "utf8" });
+    const bad = spawnSync(process.execPath, ["--require", PRELOAD, path.join(ROOT, "tools/verify-pulsechain-wallets.js")], { cwd: hermeticCwd(), env: hermeticEnv({ PULSE_RPC: "http://127.0.0.1:1/SECRETPATH" }), encoding: "utf8" });
     assert.notStrictEqual(bad.status, 0); assert.ok(!/SECRETPATH/.test(bad.stdout + bad.stderr), "a rejected RPC is not echoed");
   }
 

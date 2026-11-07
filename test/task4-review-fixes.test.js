@@ -9,6 +9,7 @@ const os = require("os");
 const path = require("path");
 const vm = require("vm");
 const { spawn, spawnSync } = require("child_process");
+const { hermeticEnv, hermeticCwd, PRELOAD } = require("./lib/hermetic");
 
 const ROOT = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(ROOT, "wallet.html"), "utf8");
@@ -83,10 +84,9 @@ function stub() {
   try {
     const example = fs.readFileSync(path.join(ROOT, "settings.base.example.json"), "utf8");
     fs.writeFileSync(path.join(tmp, "settings.json"), example);
-    const env = { ...process.env, LP_DATA_DIR: "", HOME: tmp, LP_BIND: "127.0.0.1", LP_ROUTER_CHAINS: "" };
-    delete env.LP_READONLY;
-    const args = ["--require", path.join(__dirname, "fixtures", "stub-network.js"), "server.js", `--data-dir=${tmp}`, "--port=0", "--no-loops", "--no-services"];
-    const r = spawnSync(process.execPath, args, { cwd: ROOT, env, encoding: "utf8", timeout: 30000 });
+    const env = hermeticEnv({ LP_DATA_DIR: "", HOME: tmp, LP_BIND: "127.0.0.1", LP_ROUTER_CHAINS: "" });   // no LP_READONLY: the server must refuse
+    const args = ["--require", PRELOAD, "--require", path.join(__dirname, "fixtures", "stub-network.js"), path.join(ROOT, "server.js"), `--data-dir=${tmp}`, "--port=0", "--no-loops", "--no-services"];
+    const r = spawnSync(process.execPath, args, { cwd: hermeticCwd(), env, encoding: "utf8", timeout: 30000 });
     assert.strictEqual(r.status, 1, `refuses to start: ${r.stdout}${r.stderr}`.slice(0, 300));
     assert.ok(/LP_READONLY/.test(r.stderr), "says why");
     // The gate itself, statically: the arm/unlock/collect refusal covers NO_TX as well as READONLY.

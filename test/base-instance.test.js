@@ -8,6 +8,7 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const { hermeticEnv, hermeticCwd, PRELOAD } = require("./lib/hermetic");
 
 const ROOT = path.join(__dirname, "..");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lp-inst-"));
@@ -42,15 +43,21 @@ const upstream = (key, port) => new Promise((resolve) => {
     const [rh, arc, base, router1, router2] = await Promise.all([freePort(), freePort(), freePort(), freePort(), freePort()]);
     const servers = [await upstream("robinhood", rh), await upstream("arc", arc)];
     const baseServer = await upstream("base", base);
-    const argv = (p, chains) => ["chain-router.js", `--port=${p}`, `--robinhood-port=${rh}`, `--arc-port=${arc}`, `--base-port=${base}`, ...(chains ? [`--chains=${chains}`] : [])];
+    const argv = (p, chains) => [path.join(ROOT, "chain-router.js"), `--port=${p}`, `--robinhood-port=${rh}`, `--arc-port=${arc}`, `--base-port=${base}`, ...(chains ? [`--chains=${chains}`] : [])];
     const children = [];
     const launch = async (args) => {
       const out = [];
-      const c = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, LP_ROUTER_CHAINS: "" } });
+      const c = spawn(process.execPath, ["--require", PRELOAD, ...args], { cwd: hermeticCwd(), env: hermeticEnv({ LP_ROUTER_CHAINS: "" }) });
       c.stdout.on("data", (d) => out.push(String(d))); c.stderr.on("data", (d) => out.push(String(d)));
       children.push(c);
       const t0 = Date.now();
-      while (!out.join("").includes("chain router on")) { if (Date.now() - t0 > 10000) throw new Error("router did not start"); await new Promise((r) => setTimeout(r, 50)); }
+      // the banner is several lines that can arrive in separate chunks: wait for one "->" line per chain asked for
+      const want = (args.find((a) => a.startsWith("--chains=")) || "").split("=")[1];
+      const lines = want ? want.split(",").length : 1;
+      while (!/chain router on/.test(out.join("")) || (out.join("").match(/->\s+127\.0\.0\.1:/g) || []).length < lines) {
+        if (Date.now() - t0 > 10000) throw new Error("router did not start");
+        await new Promise((r) => setTimeout(r, 50));
+      }
       return { out };
     };
     try {
@@ -95,7 +102,7 @@ const upstream = (key, port) => new Promise((resolve) => {
       assert.deepStrictEqual(vaults.chains.map((c) => c.key), ["robinhood", "arc", "base"]);
       assert.strictEqual(vaults.chains.find((c) => c.key === "base").reachable, false);
       // the default ports, as shipped
-      const banner = spawnSync(process.execPath, ["-e", 'process.argv.push("--chains=robinhood,arc,base");const r=require("./chain-router");console.log(JSON.stringify(r.CHAINS.map(c=>[c.key,c.port])));r.server.close()'], { cwd: ROOT, encoding: "utf8" });
+      const banner = spawnSync(process.execPath, ["--require", PRELOAD, "-e", `process.argv.push("--chains=robinhood,arc,base");const r=require(${JSON.stringify(path.join(ROOT, "chain-router"))});console.log(JSON.stringify(r.CHAINS.map(c=>[c.key,c.port])));r.server.close()`], { cwd: hermeticCwd(), env: hermeticEnv(), encoding: "utf8" });
       assert.deepStrictEqual(JSON.parse(banner.stdout.trim()), [["robinhood", 8787], ["arc", 8797], ["base", 8796]]);
     } finally {
       for (const c of children) c.kill("SIGTERM");
@@ -199,8 +206,8 @@ const upstream = (key, port) => new Promise((resolve) => {
     const dir = fs.mkdtempSync(path.join(TMP, "ro-"));
     fs.writeFileSync(path.join(dir, "settings.json"), example);
     const out = [];
-    const child = spawn(process.execPath, ["--require", path.join(__dirname, "fixtures", "stub-network.js"), "server.js", `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
-      cwd: ROOT, env: { ...process.env, LP_DATA_DIR: "", LP_READONLY: "1", HOME: dir, LP_BIND: "127.0.0.1" },
+    const child = spawn(process.execPath, ["--require", PRELOAD, "--require", path.join(__dirname, "fixtures", "stub-network.js"), path.join(ROOT, "server.js"), `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
+      cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: "", LP_READONLY: "1", HOME: dir, LP_BIND: "127.0.0.1" }),
     });
     child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
     try {
@@ -250,8 +257,8 @@ const upstream = (key, port) => new Promise((resolve) => {
     const ks = path.join(dir, "ks.json");
     fs.writeFileSync(ks, JSON.stringify({ address: OPERATOR.slice(2) }));
     const out = [];
-    const child = spawn(process.execPath, ["--require", path.join(__dirname, "fixtures", "stub-network-approval.js"), "server.js", `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
-      cwd: ROOT, env: { ...process.env, LP_DATA_DIR: "", LP_READONLY: "1", STUB_CHAIN_ID: "4663", LP_KEYSTORE_PATH: ks, HOME: dir, LP_BIND: "127.0.0.1" },
+    const child = spawn(process.execPath, ["--require", PRELOAD, "--require", path.join(__dirname, "fixtures", "stub-network-approval.js"), path.join(ROOT, "server.js"), `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
+      cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: "", LP_READONLY: "1", STUB_CHAIN_ID: "4663", LP_KEYSTORE_PATH: ks, HOME: dir, LP_BIND: "127.0.0.1" }),
     });
     child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
     try {
@@ -284,8 +291,8 @@ const upstream = (key, port) => new Promise((resolve) => {
     const dir = fs.mkdtempSync(path.join(TMP, "ro-env-"));
     fs.writeFileSync(path.join(dir, "settings.json"), fs.readFileSync(path.join(ROOT, "settings.base.example.json"), "utf8"));
     const out = [];
-    const child = spawn(process.execPath, ["--require", path.join(__dirname, "fixtures", "stub-network.js"), "server.js", `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
-      cwd: ROOT, env: { ...process.env, LP_DATA_DIR: "", LP_READONLY: "1", LP_BASE_RPC_URL: `https://x.example/ethereum/${KEY}`, HOME: dir, LP_BIND: "127.0.0.1" },
+    const child = spawn(process.execPath, ["--require", PRELOAD, "--require", path.join(__dirname, "fixtures", "stub-network.js"), path.join(ROOT, "server.js"), `--data-dir=${dir}`, `--port=${port}`, "--no-loops", "--no-services"], {
+      cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: "", LP_READONLY: "1", LP_BASE_RPC_URL: `https://x.example/ethereum/${KEY}`, HOME: dir, LP_BIND: "127.0.0.1" }),
     });
     child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
     try {

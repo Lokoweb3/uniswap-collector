@@ -9,9 +9,8 @@ const ALLOW = new Set([]);                           // public contract addresse
 const SYNTH = [/^0xa{30,}[0-9a-f]{1,8}$/, /^0xb{60,}[0-9a-f]{1,4}$/];
 const LABEL = /^(Main|Wallet \d+|NET staking)$/;
 const SYM = /^(TKN[A-Z0-9]*|USDC|WETH|ETH|cbBTC|sNET)$/;   // generic token symbols plus the kept real ones
-const LABEL_KEYS = /"(label|ownerLabel|name|alias|aliases)"\s*:\s*(\[[^\]]*\]|"[^"]*")/g;
+const LABEL_KEY = new Set(["label", "ownerLabel", "name", "alias", "aliases"]);
 const SYM_KEYS = /"(pair|symbol0|symbol1|symbol)"\s*:\s*"([^"]*)"/g;
-const strings = (v) => [...v.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
 
 const files = fs.readdirSync(DIR).filter((f) => f.endsWith(".json"));
 assert.ok(files.length >= 3, "fixtures found");
@@ -21,6 +20,10 @@ const labelsValues = (node, out) => {
   else if (node && typeof node === "object") {
     for (const [k, v] of Object.entries(node)) {
       if (k === "labels" && v && typeof v === "object") for (const x of Object.values(v)) if (typeof x === "string") out.push(x);
+      if (LABEL_KEY.has(k)) {
+        if (typeof v === "string") out.push(v);
+        else if (Array.isArray(v)) for (const x of v) if (typeof x === "string") out.push(x);
+      }
       labelsValues(v, out);
     }
   }
@@ -37,9 +40,6 @@ for (const f of files) {
       bad.push(`${f}:${i + 1} ${id.slice(0, 10)}... is not a synthetic id`);
     }
     for (const m of line.matchAll(/(?<![0-9a-fA-Fx])[0-9a-fA-F]{64,}/g)) bad.push(`${f}:${i + 1} bare hex run ${m[0].slice(0, 6)}...`);
-    for (const m of line.matchAll(LABEL_KEYS)) {
-      for (const v of strings(m[2])) if (v !== "" && !LABEL.test(v)) bad.push(`${f}:${i + 1} ${m[1]} "${v}"`);
-    }
     for (const m of line.matchAll(SYM_KEYS)) {
       const parts = m[1] === "pair" ? m[2].split(" / ") : [m[2]];
       for (const v of parts) if (v !== "" && !SYM.test(v)) bad.push(`${f}:${i + 1} ${m[1]} "${v}"`);

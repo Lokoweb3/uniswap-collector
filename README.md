@@ -225,7 +225,8 @@ Deploying. After merging, restart **only** the chain router (`node chain-router.
 `--chains=` as before) to pick up the new routes. The per-chain instances are untouched.
 
 The router binds to `127.0.0.1` by default; set the `HOST` environment variable (or pass `--host=`, which
-wins) to bind elsewhere. Errors on `/api/vaults` and the per-chain vault cards are fixed strings; detail is
+wins) to bind elsewhere. A non-loopback bind exposes every proxied chain without router-level auth, and
+`LP_ALLOWED_HOSTS` only covers `/portfolio`; the router warns on stderr when started that way. Errors on `/api/vaults` and the per-chain vault cards are fixed strings; detail is
 logged server-side as a bare error code only.
 
 Tests: `node test/run-all.js aggregate` (`aggregate.test.js` for the module,

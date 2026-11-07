@@ -8,7 +8,7 @@
 "use strict";
 const assert = require("assert");
 const http = require("http");
-const { chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, CHAINS, KNOWN_CHAINS, COOKIE, nsName } = require("../chain-router");
+const { chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, CHAINS, KNOWN_CHAINS, COOKIE, nsName, vaultOf } = require("../chain-router");
 
 const req = (cookie) => ({ headers: cookie ? { cookie } : {} });
 const url = (q = "") => new URL(`http://x/page${q}`);
@@ -209,6 +209,16 @@ const url = (q = "") => new URL(`http://x/page${q}`);
     assert.strictEqual(up.ok, false, "the fake chain answers HTML, so it yields no vault");
     assert.strictEqual(up.reachable, true, "but it is running, and must not be called down");
     assert.ok(!/nothing is listening/.test(up.error), `a reachable chain is not reported as refused: ${up.error}`);
+  }
+
+  // An upstream that fails with some other code (here a reset) shows only the fixed string.
+  {
+    const rst = http.createServer((q, s) => q.socket.destroy());
+    await new Promise((r) => rst.listen(0, "127.0.0.1", r));
+    const v = await vaultOf({ key: "x", port: rst.address().port });
+    await new Promise((r) => rst.close(r));
+    assert.strictEqual(v.error, "could not reach the instance");
+    assert.ok(!/ECONNRESET|socket/i.test(JSON.stringify(v)), "the code never reaches the client");
   }
 
   await new Promise((r) => router.close(r));

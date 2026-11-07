@@ -360,7 +360,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify({ ok: true, at: Date.now(), current: chain.key, chains }));
     }).catch((err) => {
-      logDetail(`/api/vaults failed: ${err && err.name ? err.name : "Error"} ${safeCode(err)}`);
+      logDetail(`/api/vaults failed: ${err && typeof err.name === "string" && /^[A-Za-z0-9_]{1,40}$/.test(err.name) ? err.name : "Error"} ${safeCode(err)}`);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: "vault summary unavailable" }));
     });
@@ -407,12 +407,13 @@ const server = http.createServer((req, res) => {
   });
 
   upstream.on("error", (err) => {
+    logDetail(`proxy ${target.key}: ${safeCode(err)}`);
     // A chain that is down says which chain and where, rather than a bare 502.
     res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!doctype html><meta charset="utf-8"><title>${target.label} is not answering</title>
 <body style="font:14px/1.5 system-ui;margin:40px;color:#e2e8f0;background:#0f172a">
 <h1 style="font-size:18px">${target.label} is not answering</h1>
-<p>The dashboard for <b>${target.label}</b> should be listening on 127.0.0.1:${target.port}. It is not: <code>${err.code || err.message}</code>.</p>
+<p>The dashboard for <b>${target.label}</b> should be listening on 127.0.0.1:${target.port}. It is not: <code>${err && err.code === "ECONNREFUSED" ? "connection refused" : "no answer"}</code>.</p>
 <p>The other chain is unaffected — nothing here is shared between them.</p>
 ${injectPicker("", picked)}
 </body>`);
@@ -424,6 +425,9 @@ ${injectPicker("", picked)}
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
     console.log(`chain router on http://${HOST}:${PORT}`);
+    if (!["127.0.0.1", "::1", "localhost"].includes(HOST)) {
+      console.error(`[chain-router] WARNING: bound to ${HOST}, not loopback. Every proxied chain is exposed without router-level auth; LP_ALLOWED_HOSTS only covers /portfolio.`);
+    }
     for (const c of CHAINS) console.log(`  ${c.label.padEnd(10)} -> 127.0.0.1:${c.port}${c.key === DEFAULT ? "  (default)" : ""}`);
   });
 }

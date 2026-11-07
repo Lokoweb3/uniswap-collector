@@ -1,0 +1,17 @@
+[TS] === mode=simulate chainId=4663 ===
+[TS] Network gas: 1.1000 gwei
+[TS] LOKOVault: split 10% (config) -> 0x0000000000000000000000000000000000000021
+[TS] Owners in this run: Main
+[TS] --- Main (0x00000000000000000000000000000000000000a1) ---
+[TS] Auto-discovering: owner holds 2 position NFT(s) (open and closed).
+[TS] #7 WETH/USDG 0.3%  0.003000 WETH + 12.500000 USDG  ≈ 0.007 WETH
+[TS] Skipped 1 closed position(s); 1 open.
+[TS] Total collectable across open positions: ≈ 0.007 WETH
+[TS] Eligible for collection: 1/1
+[TS] Destinations — mode=collect: fees to the owner 0x00000000000000000000000000000000000000a1. mode=full: fees to the operator (no operator key loaded), swapped there, then delivered to 0x00000000000000000000000000000000000000a1 (collector.sweepDestination).
+[TS] If run in full mode with sweeping on, target USDG: the eligible ≈ 0.007 WETH quotes at ≈ 4000000000.00 USDG now, before 1.5% slippage tolerance and pool fees.
+[TS]   Fee legs that are not WETH are swapped into it first (pool fee + up to 1.5% slippage), so the delivered amount can be lower than this quote; it is not a guaranteed amount.
+[TS] Treasury split: 400000000.00 USDG (10%) → LOKOVault TBA 0x0000000000000000000000000000000000000021
+[TS] Owner receives: ≈ 3600000000.00 USDG → Main 0x00000000000000000000000000000000000000a1
+[TS] Simulate mode — nothing sent. Reconcile the above against Revert before going live.
+[TS] === done ===

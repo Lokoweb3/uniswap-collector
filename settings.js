@@ -3,13 +3,14 @@
  *
  * Sections (see settings.example.json):
  *   chain      rpcUrl, chainId, explorer
- *   wallets    main { address, label }, watched [ { address, label, collect } ]
+ *   wallets    main { address, label, collect }, watched [ { address, label, collect } ]  (collect on main: Base only)
  *   tokens     USDG, WETH (each address written once), usdReferenceFeeTier, usdReferencePair (a v2 pair, PulseChain)
  *   contracts  Uniswap v3 / v4 / v2 addresses (weth comes from tokens.WETH)
  *   collector  sweepDestination, thresholds, sweep, tokenIds, denylist, v4Collect, swapFeeTierOverrides
  *   vault      nft, tba, implementation, tokenId, feeSplitPct, feeSplitMax, withdrawAlertUsdg
  *   risk       memecoins [ rule blocks ], defaults, discovery, autoCollect, sell
  *   alerts     telegramChat (group), fallbackChat (personal), treasuryChat, dailySummary
+ *   baseCollect  Base fee-collect pass (collector-base.js): minFeesUsd, minFeesToGasRatio, maxGasPerRunEth, maxGasPriceGwei, maxCollectsPerRun, dailyGasCapEth
  *   dashboard  port, collectMode
  *   portfolio, staking
  *
@@ -142,6 +143,11 @@ function toLegacy(raw) {
     blockscout: chain.blockscout !== undefined ? (chain.blockscout || "") : (chain.explorer || ""),
     ownerAddress: main.address,
     ownerLabel: main.label || "Main",
+    // wallets.main.collect: opt-in for the Base fee-collect pass (collector-base.js), which has no other way
+    // to enable the main wallet. Carried only when the file states it.
+    ...(typeof main.collect === "boolean" ? { ownerCollect: main.collect } : {}),
+    // Top-level "baseCollect": thresholds and gas caps of that pass. Carried only when present.
+    ...(s.baseCollect && typeof s.baseCollect === "object" ? { baseCollect: s.baseCollect } : {}),
     sweepDestination: col.sweepDestination || main.address,
     contracts: { ...(s.contracts || {}), weth: tokens.WETH || (s.contracts || {}).weth },
     thresholds: col.thresholds || {},
@@ -213,7 +219,7 @@ function fromLegacy(c, w = null, chats = {}) {
     chain: { rpcUrl: c.rpcUrl, ...(Array.isArray(c.rpcUrls) && c.rpcUrls.length ? { rpcUrls: c.rpcUrls } : {}), ...(c.rpcBatch === false ? { rpcBatch: false } : {}), ...(c.nativeCurrency ? { nativeCurrency: c.nativeCurrency } : {}), chainId: c.chainId, ...(c.maxLogRange ? { maxLogRange: c.maxLogRange } : {}), ...(c.historyStartBlock ? { historyStartBlock: c.historyStartBlock } : {}), ...(c.blockMs ? { blockMs: c.blockMs } : {}), explorer: c.explorer || "https://robinhoodchain.blockscout.com", ...(c.blockscout !== undefined ? { blockscout: c.blockscout } : {}) },
     wallets: {
       _comment: "main: the collector's own wallet (positions read, fees swept back to it). watched: extra wallets shown read-only; collect: true makes the collector also collect that wallet's positions (after it approves the operator on the v3/v4 position managers, Wallet page > Approvals) and deliver the swept fees back to that same wallet.",
-      main: { address: c.ownerAddress, label: (w && w.owner && w.owner.label) || "Main" },
+      main: { address: c.ownerAddress, label: (w && w.owner && w.owner.label) || "Main", ...(typeof c.ownerCollect === "boolean" ? { collect: c.ownerCollect } : {}) },
       watched: (w && Array.isArray(w.watched) ? w.watched : c.watchWallets || []).map((x) => pick(x, ["address", "label", "collect"])),
     },
     tokens: {
@@ -257,6 +263,7 @@ function fromLegacy(c, w = null, chats = {}) {
       dailySummary: strip(c.dailySummary || {}),
     },
     launchScanner: strip(c.launchScanner || {}),
+    ...(c.baseCollect && typeof c.baseCollect === "object" ? { baseCollect: strip(c.baseCollect) } : {}),
     dashboard: strip(c.dashboard || {}),
     portfolio: strip(c.portfolio || {}),
     staking: strip(c.staking || {}),

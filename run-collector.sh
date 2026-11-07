@@ -30,6 +30,24 @@ case "$MODE" in simulate|collect|full) ;; *)
   echo "Usage: $0 {simulate|collect|full} [--quiet] [--compound]" >&2; exit 1 ;;
 esac
 
+# --- Base pass (collector-base.js) -------------------------------------------------------------------------
+# After the Robinhood call, when $LP_BASE_DATA_DIR (default $HOME/base-data) holds a settings.json. Not for a run
+# that already targets another chain's data dir (LP_DATA_DIR set, e.g. run-collector-arc.sh). It shares this flock,
+# unlock window and environment. A failing Base pass is logged to the Base data dir and never changes this
+# script's exit status or the Robinhood output.
+BASE_DIR="${LP_BASE_DATA_DIR:-$HOME/base-data}"
+base_enabled() { [ -z "${LP_DATA_DIR:-}" ] && [ -f "$BASE_DIR/settings.json" ]; }
+base_failed() { echo "$(date -Is) base pass failed (exit $1); the Robinhood run is unaffected." | tee -a "$BASE_DIR/collector.log" || true; }
+if [ "$MODE" = "simulate" ] && base_enabled; then
+  rc=0
+  node "$HERE/collector.js" "--mode=$MODE" $COMPOUND || rc=$?
+  brc=0
+  LP_DATA_DIR="$BASE_DIR" node "$HERE/collector-base.js" --mode=simulate || brc=$?
+  [ "$brc" -eq 0 ] || base_failed "$brc"
+  exit "$rc"
+fi
+# --- end Base pass -------------------------------------------------------------------------------------------
+
 if [ "$MODE" = "simulate" ]; then
   exec node "$HERE/collector.js" "--mode=$MODE" $COMPOUND
 fi
@@ -75,3 +93,11 @@ trap cleanup EXIT INT TERM
 
 LP_KEYSTORE_PATH="$KEYSTORE" LP_KEYSTORE_PASS="$PASS" \
   node "$HERE/collector.js" "--mode=$MODE" $COMPOUND
+
+# --- Base pass (see above): collect on Base for wallets with collect:true that approved the operator ---------
+if base_enabled; then
+  brc=0
+  LP_KEYSTORE_PATH="$KEYSTORE" LP_KEYSTORE_PASS="$PASS" LP_DATA_DIR="$BASE_DIR" \
+    node "$HERE/collector-base.js" --mode=collect || brc=$?
+  [ "$brc" -eq 0 ] || base_failed "$brc"
+fi

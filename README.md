@@ -599,9 +599,11 @@ page has a "Preview the weekly Telegram digest" link under the Performance panel
 
 A second, read-only dashboard for Base (chain 8453), started like the Arc viewer and reachable through
 the chain router. It shows Aerodrome Slipstream positions (staked in a gauge and unstaked, with pending
-AERO) through `slipstream.js`, plus Uniswap v3/v4 through the existing readers. It cannot sign: it runs
+AERO) through `slipstream.js`, plus Uniswap v3/v4 through the existing readers. The Base SERVER cannot sign: it runs
 `LP_READONLY=1 ... --no-loops --no-services`, its settings have no `collector`, `vault` or `risk`
-sections, and contracts are only ever called with view / `staticCall`.
+sections, and it only ever calls contracts with view / `staticCall`. Signing on Base exists only in
+`collector-base.js`, started by `run-collector.sh`, and only for wallets with `collect: true` whose owner approved
+the operator (see "Auto-collect on Base" below). The server never imports it.
 
 `"noTransactionData": true` (top level of `settings.json`; set in `settings.base.example.json`, and set it
 in the PulseChain settings too) makes an instance refuse `/api/approval`, `/api/v4-approval`,
@@ -655,6 +657,91 @@ node tools/verify-onchain.js base      # read-only proof of every address in the
   URL is validated (https, no credentials, no localhost/private/link-local/metadata host); a page is only
   ever told an origin (`rpc` in `/api/chain` etc.), errors and logs have URL paths and `proapi_` keys
   redacted, and the Bearer key is sent only to `api.blockscout.com` and the configured explorer host.
+
+## Auto-collect on Base
+
+The daily collector run (`run-collector.sh`, the 8:00 Windows task) can also collect swap fees on your Aerodrome
+Slipstream positions on Base. It is **off** until you turn it on, and it ships off everywhere
+(`collect: false` in `settings.base.example.json`).
+
+**What it does.** After the Robinhood pass, `run-collector.sh` runs `collector-base.js` when
+`$LP_BASE_DATA_DIR/settings.json` exists (default `$HOME/base-data/settings.json`). It shares the Robinhood run's lock, unlock
+window and environment, and its log and state live in the Base data dir (`collector.log`, `state.json`), never in
+Robinhood's. For each wallet with `collect: true` and for each of the two managers it first reads
+`isApprovedForAll(owner, operator)`; if that is false it logs one `SKIP` line and does nothing else for that pair. Otherwise it
+reads the wallet's positions, skips staked ones, positions whose fees are unreadable or unpriced, and any NFT whose
+`ownerOf` is not the configured owner, simulates `collect` as the operator, and collects only when the fees are at
+least `minFeesUsd` and at least `minFeesToGasRatio` times the gas cost and the gas caps allow it. The fees always go to the
+NFT's owner (`recipient` = `ownerOf`, re-read just before sending).
+
+**What it does not do.** Only `collect` is ever sent. No swap, no sell, no transfer, no approval: the code never calls
+`setApprovalForAll` or `approve`, it only reads `isApprovedForAll`, and a per-token approval is not accepted. It touches only
+the managers `0x827922686190790b37229fd06084350E74485b72` (`aerodrome-v1`) and `0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53`
+(`aerodrome-cl2`), and aborts unless the settings and the RPC both say chain 8453. The Base server stays read-only
+(`LP_READONLY=1`); `collector-base.js` is a separate short-lived process and does not read `LP_READONLY`.
+
+**Settings** (`$HOME/base-data/settings.json`):
+
+| key | default | meaning |
+| --- | --- | --- |
+| `wallets.main.collect` | `false` | enable the main wallet (Trading holds the positions, so this is the one you want) |
+| `wallets.watched[].collect` | `false` | enable a watched wallet |
+| `baseCollect.minFeesUsd` | `2` | collect only when the fees are worth at least this many USD |
+| `baseCollect.minFeesToGasRatio` | `5` | and at least this many times the gas cost of the collect |
+| `baseCollect.maxGasPerRunEth` | `0.0003` | stop sending once spent + estimated gas would exceed this in one run |
+| `baseCollect.maxGasPriceGwei` | `1` | send nothing while the network gas price is above this |
+| `baseCollect.maxCollectsPerRun` | `6` | at most this many collect transactions per run |
+| `baseCollect.dailyGasCapEth` | `0.001` | rolling 24 h gas ceiling over all runs (from the Base `state.json`) |
+
+**Log lines** (a run prints them and appends them to `$HOME/base-data/collector.log`):
+
+```
+=== base collect mode=collect chainId=8453 ===
+Operator: 0x...                     <- the address to approve below
+--- Trading (0x...) ---
+SKIP aerodrome-v1 Trading 0x...: operator 0x... is not approved for all on 0x827922686190790b37229fd06084350E74485b72 (isApprovedForAll=false); no transaction sent, no approval requested
+#8905958 USDC / LAPTOP fees $6.9989 gas $0.0150 -> collect: fees $6.9989 >= $2 and >= 5x gas
+  collected #8905958 to 0x...: tx 0x..., simulated amounts ..., gas used ..., paid ... ETH
+#79371151 WETH / cbBTC fees $0.4000 gas $0.0150 -> skip: below minFeesUsd ($0.4000 < $2)
+=== base done: 1 collected, 1 skipped, gas 0.000006 ETH ===
+```
+
+`./run-collector.sh simulate` runs the Base pass as `--mode=simulate` (reads only, nothing sent, no keystore is decrypted; the
+operator address is read from the keystore's public `address` field) and marks every decision line `(simulate)`. You can also run
+`LP_DATA_DIR=$HOME/base-data node collector-base.js --mode=simulate` yourself.
+
+### Approving the operator (Rabby, once per manager)
+
+The collector can only collect for a wallet that approved the operator on the position manager. Do this for the wallet that
+OWNS the NFTs (Trading), once for each manager.
+
+1. Get the operator address: run `LP_DATA_DIR=$HOME/base-data node collector-base.js --mode=simulate` (or `./run-collector.sh simulate`)
+   and read the line `Operator: 0x...`. Never type it from memory.
+2. Open Rabby, select the owner wallet, switch the network to **Base**.
+3. Open `https://basescan.org/address/<manager>#writeContract` (or `#writeProxyContract` if that is the tab shown) for
+   `0x827922686190790b37229fd06084350E74485b72` (`aerodrome-v1`), checking the address character by character against this
+   page. Do the same later for `0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53` (`aerodrome-cl2`).
+4. Click **Connect to Web3** and choose Rabby.
+5. Find `setApprovalForAll(operator address, bool approved)`: `operator` = the address from step 1, `approved` = `true`.
+6. Click **Write** and read the Rabby prompt before confirming: it must say Base, the manager as the contract, and an
+   "Approve all NFTs" style warning for the operator address. Confirm. Repeat steps 3 to 6 for the second manager.
+7. Verify: on each manager's **Read Contract** tab call `isApprovedForAll(owner, operator)` with the owner wallet and the
+   operator; it must return `true`.
+8. Then set `"collect": true` for that wallet in `$HOME/base-data/settings.json` (`wallets.main.collect` for Trading) and run
+   `./run-collector.sh simulate` to see the decisions before the next scheduled run.
+
+**Revoke:** the same `setApprovalForAll` call with `approved` = `false` (then `isApprovedForAll` reads `false` and the SKIP
+line appears again). Set `collect` back to `false` when you do not want the pass to run for that wallet.
+
+**RISK, read this.** `setApprovalForAll` does not mean "collect only". It lets the operator key **transfer** or sell **every**
+Aerodrome position NFT of that wallet on that manager on Base, and remove their liquidity, not only collect fees. The
+operator key is the same one that runs the Robinhood collector: it is cached in `/dev/shm` while the unlock window is armed
+and any process of your user can read it there. The code only ever calls `collect`, but an attacker who has the key is not bound
+by the code. Mitigations: keep the unlock window short, revoke the approval when you do not need it, and keep in that wallet
+only the positions you accept this for.
+
+**Schedule.** The task runs `run-collector.sh` as before; the Base pass rides on it. Register it for 8:00 with
+`windows-task.ps1 -At 8am` (the script defaults to 9am). Nothing changes in how the task is registered.
 
 ## PulseChain (read-only instance): PulseX v1 and v2 liquidity
 

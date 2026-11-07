@@ -1,7 +1,7 @@
 {
   "noTransactionData": true,
   "_noTransactionDataComment": "true: this instance reads no operator key file and serves no unsigned calldata (/api/approval, /api/v4-approval, /api/sell/quote, /api/mint/* answer 403) and the Wallet page hides the operator approvals, Sell and Mint tabs. Defaults to true for chain 8453 and 369 (PulseChain: set it explicitly in its settings.json too) and false elsewhere: LP_READONLY alone does not imply it.",
-  "_comment": "Base (8453), READ-ONLY instance: Aerodrome Slipstream (two position managers) plus Uniswap v3/v4. Copy to $HOME/base-data/settings.json (or LP_BASE_DATA_DIR). No collector, vault, risk.autoCollect or risk.sell sections: this instance cannot sign. Secrets are NEVER written here: a keyed RPC goes in the environment as LP_BASE_RPC_URL, a Blockscout PRO key as BLOCKSCOUT_API_KEY (both from .env). Every address below is proven by: node tools/verify-onchain.js base",
+  "_comment": "Base (8453): the SERVER is read-only: Aerodrome Slipstream (two position managers) plus Uniswap v3/v4. Copy to $HOME/base-data/settings.json (or LP_BASE_DATA_DIR). No collector, vault, risk.autoCollect or risk.sell sections: the server cannot sign. The only signing is collector-base.js, run by run-collector.sh, and only for wallets with collect:true whose owner approved the operator (see baseCollect below and README: Auto-collect on Base). Secrets are NEVER written here: a keyed RPC goes in the environment as LP_BASE_RPC_URL, a Blockscout PRO key as BLOCKSCOUT_API_KEY (both from .env). Every address below is proven by: node tools/verify-onchain.js base",
   "chain": {
     "name": "Base",
     "rpcUrl": "https://mainnet.base.org",
@@ -17,11 +17,11 @@
     "nativeCurrency": { "symbol": "ETH", "decimals": 18 }
   },
   "wallets": {
-    "_comment": "main: Trading, the wallet that holds the Aerodrome positions (no collector exists on this instance). watched: shown read-only.",
-    "main": { "address": "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743", "label": "Trading" },
+    "_comment": "main: Trading, the wallet that holds the Aerodrome positions. watched: shown read-only. collect (main and watched): false ships everywhere. true lets collector-base.js (run by run-collector.sh) collect that wallet's fees on Base, to the wallet itself, but ONLY after the wallet approved the operator with setApprovalForAll on each position manager (README: Auto-collect on Base, including the risk). Nothing else changes.",
+    "main": { "address": "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743", "label": "Trading", "collect": false },
     "watched": [
-      { "address": "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb", "label": "Wallet 11" },
-      { "address": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "label": "Wallet 12" }
+      { "address": "0xFc1235E6523Becf4b329ed9ADf21750cfAF65Bfb", "label": "Wallet 11", "collect": false },
+      { "address": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "label": "Wallet 12", "collect": false }
     ]
   },
   "tokens": {
@@ -59,6 +59,15 @@
         "fromBlock": 44394730
       }
     ]
+  },
+  "baseCollect": {
+    "_comment": "Limits of the daily Base collect pass (collector-base.js); every key is optional, these are the defaults. A position is collected only when its fees are at least minFeesUsd AND at least minFeesToGasRatio times the gas cost. maxGasPerRunEth caps what one run may spend, maxGasPriceGwei refuses to send when the network is dearer, maxCollectsPerRun caps the transactions, dailyGasCapEth caps the trailing 24 hours.",
+    "minFeesUsd": 2,
+    "minFeesToGasRatio": 5,
+    "maxGasPerRunEth": 0.0003,
+    "maxGasPriceGwei": 1,
+    "maxCollectsPerRun": 6,
+    "dailyGasCapEth": 0.001
   },
   "portfolio": {},
   "dashboard": { "port": 8796 }

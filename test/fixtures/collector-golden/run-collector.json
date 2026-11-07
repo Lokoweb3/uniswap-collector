@@ -1,0 +1,90 @@
+{
+  "simulate": {
+    "status": 0,
+    "stdout": "stub-node $HERE/collector.js --mode=simulate\n",
+    "stderr": "",
+    "calls": [
+      {
+        "argv": [
+          "$HERE/collector.js",
+          "--mode=simulate"
+        ],
+        "keystorePath": "$HOME/no-such-keystore/operator-keystore.json",
+        "pass": "unset",
+        "dataDir": ""
+      }
+    ],
+    "log": ""
+  },
+  "collect": {
+    "status": 0,
+    "stdout": "stub-node $HERE/collector.js --mode=collect\n",
+    "stderr": "",
+    "calls": [
+      {
+        "argv": [
+          "$HERE/collector.js",
+          "--mode=collect"
+        ],
+        "keystorePath": "$HOME/.lp-collector/operator-keystore.json",
+        "pass": "set",
+        "dataDir": ""
+      },
+      "sync-to-vm"
+    ],
+    "log": ""
+  },
+  "full": {
+    "status": 0,
+    "stdout": "stub-node $HERE/collector.js --mode=full\n",
+    "stderr": "",
+    "calls": [
+      {
+        "argv": [
+          "$HERE/collector.js",
+          "--mode=full"
+        ],
+        "keystorePath": "$HOME/.lp-collector/operator-keystore.json",
+        "pass": "set",
+        "dataDir": ""
+      },
+      "sync-to-vm"
+    ],
+    "log": ""
+  },
+  "full-compound": {
+    "status": 0,
+    "stdout": "stub-node $HERE/collector.js --mode=full --compound\n",
+    "stderr": "",
+    "calls": [
+      {
+        "argv": [
+          "$HERE/collector.js",
+          "--mode=full",
+          "--compound"
+        ],
+        "keystorePath": "$HOME/.lp-collector/operator-keystore.json",
+        "pass": "set",
+        "dataDir": ""
+      },
+      "sync-to-vm"
+    ],
+    "log": ""
+  },
+  "locked-quiet": {
+    "status": 0,
+    "stdout": "<ISO> locked, skipping collect run. Run ./unlock.sh to arm it.\n",
+    "stderr": "",
+    "calls": [
+      "sync-to-vm"
+    ],
+    "log": "<ISO> locked, skipping collect run. Run ./unlock.sh to arm it.\n"
+  },
+  "usage": {
+    "status": 1,
+    "stdout": "",
+    "stderr": "Usage: $HERE/run-collector.sh {simulate|collect|full} [--quiet] [--compound]\n",
+    "calls": [],
+    "log": ""
+  }
+}

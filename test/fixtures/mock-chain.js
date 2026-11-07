@@ -10,6 +10,7 @@ const SIGS = [
   "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
   "function positions(uint256) view returns (uint96 nonce, address operator, address token0, address token1, int24 tickSpacing, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
   "function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)) payable returns (uint256 amount0, uint256 amount1)",
+  "function isApprovedForAll(address owner, address operator) view returns (bool)",
   "function getPool(address,address,int24) view returns (address)",
   "function getPool(address,address,bool) view returns (address)",
   "function getPool(address,address,uint24) view returns (address)",
@@ -35,7 +36,8 @@ function revert(msg = "reverted") { const e = new Error(msg); e.code = "CALL_EXC
 /** A world: handlers by address, code by address, a head, and logs. */
 function world({ head = 1_000_000 } = {}) {
   const w = {
-    head, handlers: {}, code: {}, logs: [], calls: [], logCalls: [], failLogs: null, hangLogs: false,
+    head, chainId: 8453n, feeData: { maxFeePerGas: 100_000_000n, gasPrice: 50_000_000n, maxPriorityFeePerGas: 1_000_000n }, gasEstimate: 150_000n,
+    handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
     on(addr, name, fn) { (w.handlers[lc(addr)] = w.handlers[lc(addr)] || {})[name] = fn; return w; },
     contract(addr, code = "0x6080") { w.code[lc(addr)] = code; return w; },
     /** the provider-like runner the readers are given */
@@ -47,6 +49,15 @@ function world({ head = 1_000_000 } = {}) {
         if (!h) throw revert(`no handler ${lc(tx.to)}.${d.name}`);
         const res = await h(...d.args, tx);
         return iface.encodeFunctionResult(d.fragment, res);
+      },
+      // The write-side reads a collector needs. Nothing here sends: a test's fake signer records what it was asked to send.
+      async getNetwork() { return { chainId: w.chainId }; },
+      async getFeeData() { return w.feeData; },
+      async estimateGas(tx) {
+        const d = iface.parseTransaction({ data: tx.data });
+        w.estimates.push({ to: lc(tx.to), name: d.name, from: tx.from ? lc(tx.from) : null });
+        if (typeof w.gasEstimate === "function") return w.gasEstimate(tx);
+        return w.gasEstimate;
       },
       async getCode(a) { return w.code[lc(a)] || "0x"; },
       async getBlockNumber() { return w.head; },

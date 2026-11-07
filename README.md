@@ -170,11 +170,21 @@ name in `LP_ALLOWED_HOSTS`); the existing proxy path is unchanged. `?refresh=1` 
 | `LP_AGG_TIMEOUT_MS` | 8000 | per upstream request deadline (the connection is closed after it) |
 | `LP_AGG_WAIT_MS` | 4000 | how long a request waits for a refresh round before answering from cache with the unfinished chains marked `loading` |
 | `LP_AGG_TTL_MS` | 30000 | cache lifetime; no more than one upstream round per chain per TTL, however many browsers poll |
+| `LP_AGG_BUILD_MS` | 1000 | a cached payload is rebuilt at most this old, so `at` and `ageMs` stay current; the 15-minute stale flag flips exactly on time. Upstream rate limits are unaffected |
 | `LP_AGG_MAX_BYTES` | 8388608 | upstream body cap; a larger answer is aborted (`too-large`) |
 | `LP_AGG_THEME_DIR` | the repo folder | where `dashboard.css` is read from (for tests) |
 
 Counting rules.
 
+- **`holdings-unavailable` is a per-wallet note, not a problem.** A watched wallet whose token discovery has
+  never succeeded keeps its native balance and position tokens, but its token list is incomplete. It is shown
+  as `tokens unknown (discovery failed)` (`chains[].notes`, `wallets[].holdingsUnknown`, `flags.holdingsUnknown`),
+  its figure is labelled "at least", and it does **not** make its chain `partial` or the total `incomplete`. Every
+  other cause (a failing or slow part, a stale source, an unreadable or stale wallet, `tokens-unavailable`,
+  `no-owner`) still does. Unknown is never shown as `$0.00`.
+- **Ages and stale flags are computed at response time.** `at`, `ageMs` and the `stale-source` flag (a part older
+  than 15 minutes) are rebuilt from the cached upstream data at most every `LP_AGG_BUILD_MS`, and when a part
+  crosses the 15-minute line, so a cached payload never shows frozen ages.
 - **Grand total = LP + fees + pending rewards + tokens.** `uncounted` and `rewards not counted` are
   reported separately and are never in it.
 - An LP is counted when it has a USD value, is not thin and is not flagged by the instance (the same

@@ -701,25 +701,45 @@ In `simulate` mode the Base pass runs even if the Robinhood simulate failed.
 is always type 2 with both fields set explicitly). If the base fee plus tip exceeds `maxGasPriceGwei` the position is skipped
 (`exceeds maxGasPriceGwei`). `gasLimit = min(1.25 x estimate, maxGasLimit)`; an estimate above `maxGasLimit` is skipped, never
 clamped. Base also charges an L1 data fee: the pass asks the OP-stack GasPriceOracle (`getL1Fee`, read-only) about the exact
-transaction and uses 2 x that quote as an allowance. Before each send the caps (`maxGasPerTxEth`, `maxGasPerRunEth`,
-`dailyGasCapEth`) are checked against the worst case `gasLimit x maxFeePerGas + 2 x L1 fee quote`; the economic thresholds
-(`minFeesUsd`, `minFeesToGasRatio`) use the expected cost (current price, 1 x the L1 quote). A reservation of that worst case
-is written to `state.json` before the broadcast and replaced by `gasUsed x effective gas price + 2 x L1 quote` after the receipt;
-reverted transactions are counted too. An unknown outcome or a confirmation timeout (`waitTimeoutSec`) keeps the worst case
-counted and stops the run (exit code 1, so `run-collector.sh` logs `base pass failed`). Any error from `sendTransaction` is treated
-the same way (the transaction may already be signed and broadcast), counts toward `maxCollectsPerRun`, and stops the run.
-A receipt whose `gasUsed` is missing, negative or above the gas limit never lowers the count: a missing one keeps the worst case
-as unknown, a negative or oversized one counts the full worst case; a settled amount is always within `[0, reservation]`.
+transaction and uses `max(2 x L1 quote, minL1AllowanceEth)` as the L1 fee allowance. Before each send the caps (`maxGasPerTxEth`, `maxGasPerRunEth`,
+`dailyGasCapEth`) are checked against the worst case `gasLimit x maxFeePerGas + max(2 x L1 quote, minL1AllowanceEth)`; the economic
+thresholds (`minFeesUsd`, `minFeesToGasRatio`) use the expected cost (current price, 1 x the L1 quote).
+
+**Sign, record, broadcast.** Every send goes in this order: the pass signs the transaction (the nonce is the one it already read for
+the L1 quote, so the quoted bytes are the signed bytes), checks the signed bytes field by field (sender, destination, nonce, gas
+fields, value 0, calldata, chain), takes the hash from those bytes, writes a `reserved` entry with the worst case, the hash and the
+`nonce` to `state.json` (atomically), and only then broadcasts. If that write fails nothing is broadcast and the run stops. The entry
+is replaced by `gasUsed x effective gas price + max(2 x L1 quote, minL1AllowanceEth)` after the receipt; reverted transactions are
+counted too. A confirmation timeout (`waitTimeoutSec`) keeps the worst case counted and stops the run (exit code 1, so
+`run-collector.sh` logs `base pass failed`). A broadcast error (the transaction may still have reached the network) or a broadcast
+answer without the expected hash also stops the run (exit 1), counts toward `maxCollectsPerRun`, and is settled on the next run.
+The receipt of a send is validated before it is counted (same checks as at run start: hash, sender, manager, block number,
+`gasUsed` between 21000 and the gas limit); a receipt that fails keeps the worst case counted as unknown and stops the run. A
+`TRANSACTION_REPLACED` answer is treated the same way (never settled at the replacement's receipt; the next run settles it by nonce).
+A missing, negative or oversized `gasUsed` also keeps the worst case as unknown (a negative or non-numeric price counts `maxFeePerGas`); a settled amount is always within `[0, reservation]`. A receipt price below
+the signed `maxPriorityFeePerGas` (recorded in each new entry) cannot be real and counts as `maxFeePerGas`.
 
 **The L1 part is an estimate.** The L1 data fee comes from an RPC answer (the GasPriceOracle quote), so the allowance
 `max(2 x quote, minL1AllowanceEth)` (default floor `0.00002` ETH) is a padded floor, not a hard bound on what Base charges.
 
-**Unknown entries do not expire.** An entry of unknown outcome (`kind: "unknown"`) keeps counting in the 24 h total at any age until it
-is settled, and is exempt from the 7-day pruning. At the start of each collect run the pass asks the chain for the receipt of every
-unknown entry that has a transaction hash and settles it (clamped as above). An entry without a hash (a send whose broadcast was never
-confirmed) stays at its worst case. To clear one by hand, after checking on a block explorer that the operator's transaction did not
-happen or what it cost, edit `$HOME/base-data/state.json` (stop any run first): delete that entry from `gasSpends`, or change its `wei`
-to the real cost and its `kind` to `"settled"`.
+**Unknown entries do not expire.** An entry that is not settled (`kind: "reserved"` or `"unknown"`) keeps counting in the 24 h total
+at any age and is exempt from the 7-day pruning, so a crashed run's reservation is never silently aged out. Nothing needs a manual
+edit: at the start of each collect run the pass settles every such entry from the chain.
+
+- A receipt is used only when it is provably that transaction: same hash, sent by the operator, to the recorded manager (one of the two
+  allowlisted), mined in a block (a positive safe-integer block number), and `gasUsed` between 21000 and the signed gas limit. The entry then settles at `gasUsed x min(price, maxFeePerGas)` plus
+  the recorded L1 allowance, never above its reservation. An entry older than 24 h that settles from its receipt gets a fresh clock, so the late-paid gas counts in the current window. A receipt that fails a check is logged with the failed check and the worst
+  case stays counted. If the operator's `latest` nonce is above the entry's nonce, the entry is closed once at its worst case with a
+  fresh clock (`closed: "receipt-rejected"`, same semantics as replaced-or-dropped), so a receipt that keeps failing never needs a manual edit.
+- No receipt and the operator's `latest` nonce is above the entry's `nonce`: the transaction was replaced or dropped. Standard
+  JSON-RPC cannot look up the transaction that used a nonce, so the entry is closed once at its worst case with a fresh clock (`closed:
+  "replaced-or-dropped"`): it counts for another 24 h, then ages out. (A lookup can be plugged in through `findByNonce`.)
+- No receipt and the nonce is not used yet: the transaction is `pending`; the entry stays `reserved` at its worst case. If the node dropped it, the next
+  send reuses that nonce and supersedes it; otherwise it is settled from its receipt once mined.
+- Legacy entries (from versions that did not record a nonce, or without a hash) cannot be proven: they are closed once at their worst
+  case with a fresh 24 h (`closed: "legacy-unsettled"`), or settled from the receipt when they have a hash and a valid receipt.
+- An RPC error while settling leaves the entry unchanged and counted, and the run goes on. A failed save of a settlement stops the run.
+- `simulate` never settles or writes; it counts these entries in its cap decisions.
 
 **Clock.** The 24 h window and the pruning follow the system clock; a forward jump of the clock can age entries out of the window early.
 
@@ -744,7 +764,7 @@ the managers `0x827922686190790b37229fd06084350E74485b72` (`aerodrome-v1`) and `
 | `baseCollect.minFeesUsd` | `2` | collect only when the fees are worth at least this many USD |
 | `baseCollect.minFeesToGasRatio` | `5` | and at least this many times the gas cost of the collect |
 | `baseCollect.maxGasPerRunEth` | `0.0003` | stop sending once spent + the next worst case would exceed this in one run |
-| `baseCollect.maxGasPerTxEth` | `0.0002` | one transaction's worst case (`gasLimit x maxFeePerGas + 2 x L1 quote`) may not exceed this |
+| `baseCollect.maxGasPerTxEth` | `0.0002` | one transaction's worst case (`gasLimit x maxFeePerGas + max(2 x L1 quote, minL1AllowanceEth)`) may not exceed this |
 | `baseCollect.maxGasPriceGwei` | `1` | HARD cap on the signed `maxFeePerGas`; nothing is sent when base fee + tip exceed it |
 | `baseCollect.maxPriorityFeeGwei` | `0.01` | cap on the signed tip |
 | `baseCollect.maxGasLimit` | `500000` | absolute gas-limit ceiling; a larger estimate is skipped |

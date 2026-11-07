@@ -30,8 +30,7 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
       assert.ok(s.maxFeePerGas <= gwei(1), "maxFeePerGas <= cap");
       assert.ok(s.maxPriorityFeePerGas <= gwei("0.01") && s.maxPriorityFeePerGas <= s.maxFeePerGas);
       assert.strictEqual(s.type, 2);
-      assert.strictEqual(s.tx.type, 2);
-      assert.ok(!("gasPrice" in s.tx), "no gasPrice key");
+      assert.ok(r.signer.signs.every((t) => t.type === 2 && !("gasPrice" in t)), "type 2, no gasPrice key");
       assert.strictEqual(s.maxFeePerGas, 70_000_000n); assert.strictEqual(s.maxPriorityFeePerGas, gwei("0.01"));
       assert.strictEqual(s.gasLimit, GAS_LIMIT);
     }
@@ -174,7 +173,7 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
   {
     const w = scene();
     const receipt = { gasUsed: 100_000n, gasPrice: 40_000_000n, status: 0 };
-    w.receipts = (hash, n) => (n >= 2 ? receipt : null);
+    w.receipts = (hash, n) => (n >= 2 ? { hash, from: OP, to: MGR_A, blockNumber: 5, ...receipt } : null);
     const sleeps = [];
     const wait = async () => { throw Object.assign(new Error("execution reverted"), { code: "CALL_EXCEPTION" }); };
     const r = await pass(w, { cfg: cfgOf(enableMain, { maxCollectsPerRun: 1 }), signer: fakeSigner(w, { wait }), extra: { sleep: async (ms) => { sleeps.push(ms); } } });
@@ -214,13 +213,13 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
     assert.strictEqual(r3.signer.sent.length, 1); assert.strictEqual(r3.res.aborted, true); assert.strictEqual(r3.state.gasSpends[0].kind, "unknown");
   }
 
-  // ---- 12. sendTransaction failures (S2): the transaction may already be signed and broadcast, so ANY error keeps the worst case and stops
+  // ---- 12. broadcast failures (S2): the transaction may already be signed and broadcast, so ANY error keeps the worst case and stops
   {
     for (const err of [new Error("replacement transaction underpriced"), new Error("insufficient funds for intrinsic transaction cost"), Object.assign(new Error("custom error 0xdeadbeef"), { code: "ACTION_REJECTED" }), "plain string"]) {
       const w = scene();
       const r = await pass(w, { cfg: cfgOf(enableMain), signer: fakeSigner(w, { sendError: err }) });
-      assert.strictEqual(r.state.gasSpends.length, 1, "reservation kept"); assert.strictEqual(r.state.gasSpends[0].kind, "unknown"); assert.strictEqual(r.state.gasSpends[0].wei, String(WORST0));
-      assert.strictEqual(r.state.gasSpends[0].tx, null);
+      assert.strictEqual(r.state.gasSpends.length, 1, "reservation kept"); assert.strictEqual(r.state.gasSpends[0].kind, "reserved"); assert.strictEqual(r.state.gasSpends[0].wei, String(WORST0));
+      assert.ok(/^0x[0-9a-f]{64}$/.test(r.state.gasSpends[0].tx) && Number.isInteger(r.state.gasSpends[0].nonce), "hash and nonce are on disk");
       assert.strictEqual(r.res.aborted, true); assert.ok(r.lines.some((l) => /^STOP:/.test(l)), r.text);
       assert.strictEqual(r.lines.filter((l) => /^  sending #/.test(l)).length, 1, "the run stopped");
       assert.strictEqual(r.res.spentWei, WORST0, "counted toward the run's spend");
@@ -232,7 +231,7 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
     assert.strictEqual(r1.signer.sent.length, 0); assert.strictEqual(r1.state.gasSpends.length, 1); assert.strictEqual(r1.res.aborted, true);
     const w2 = scene();
     const r2 = await pass(w2, { cfg: cfgOf(enableMain), signer: fakeSigner(w2, { sendError: Object.assign(new Error("request timeout"), { code: "TIMEOUT" }) }) });
-    assert.strictEqual(r2.state.gasSpends.length, 1); assert.strictEqual(r2.state.gasSpends[0].kind, "unknown"); assert.strictEqual(r2.state.gasSpends[0].wei, String(WORST0));
+    assert.strictEqual(r2.state.gasSpends.length, 1); assert.strictEqual(r2.state.gasSpends[0].kind, "reserved"); assert.strictEqual(r2.state.gasSpends[0].wei, String(WORST0));
     assert.strictEqual(r2.res.aborted, true); assert.strictEqual(r2.lines.filter((l) => /^  sending #/.test(l)).length, 1, "the run stopped");
     // a save that fails before the send: no send at all
     const w3 = scene();
@@ -262,9 +261,9 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
       const w = scene();
       const wait = async () => ({ status: 1, gasUsed, gasPrice: 50_000_000n });
       const r = await pass(w, { cfg: cfgOf(enableMain, roomy), signer: fakeSigner(w, { wait }) });
-      assert.strictEqual(r.signer.sent.length, 2, r.text);
-      for (const e of r.state.gasSpends) { assert.strictEqual(e.kind, "settled"); assert.strictEqual(e.wei, String(WORST0), `gasUsed ${gasUsed} counts the full worst case`); }
-      assert.strictEqual(r.res.spentWei, 2n * WORST0);
+      assert.strictEqual(r.signer.sent.length, 1, r.text); assert.ok(r.res.aborted, "an implausible receipt stops the run");
+      for (const e of r.state.gasSpends) { assert.strictEqual(e.kind, "unknown"); assert.strictEqual(e.wei, String(WORST0), `gasUsed ${gasUsed} counts the full worst case`); }
+      assert.strictEqual(r.res.spentWei, WORST0);
     }
     for (const gasPrice of [-5n, 10n ** 18n, "junk"]) {
       const w = scene();
@@ -309,13 +308,13 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
     // no receipt yet / no hash: stays unknown, nothing is queried without a hash
     const w2 = scene(); w2.receipts = () => null;
     const e2 = { t: old, wei: String(dayCap - WORST0 + 1n), kind: "unknown", tx, gasLimit: "187500", maxFeePerGas: "61000000", l1: String(FLOOR) };
-    const r2 = await pass(w2, { cfg: cfgOf(enableMain), state: { gasSpends: [e2] } });
-    assert.strictEqual(w2.receiptCalls.length, 1); assert.strictEqual(r2.state.gasSpends[0].kind, "unknown"); assert.strictEqual(r2.signer.sent.length, 0);
+    const r2 = await pass(w2, { cfg: cfgOf(enableMain), state: { gasSpends: [{ ...e2 }] } });
+    assert.strictEqual(w2.receiptCalls.length, 1); assert.strictEqual(r2.state.gasSpends[0].closed, "legacy-unsettled", "a hash without a nonce and without a receipt cannot be proven: closed once"); assert.strictEqual(r2.state.gasSpends[0].wei, e2.wei); assert.strictEqual(r2.signer.sent.length, 0);
     const w3 = scene(); w3.receipts = () => null;
     await pass(w3, { cfg: cfgOf(enableMain), state: { gasSpends: [{ ...e2, tx: null }] } });
     assert.strictEqual(w3.receiptCalls.length, 0, "no hash, no lookup");
     // receipt found: settled (clamped), the budget is free again and the run can send
-    const w4 = scene(); w4.receipts = () => ({ status: 1, gasUsed: 100_000n, gasPrice: 50_000_000n });
+    const w4 = scene(); w4.receipts = () => ({ hash: tx, from: OP, to: MGR_A, blockNumber: 5, status: 1, gasUsed: 100_000n, gasPrice: 50_000_000n });
     const r4 = await pass(w4, { cfg: cfgOf(enableMain), state: { gasSpends: [{ ...e2 }] } });
     assert.strictEqual(r4.state.gasSpends[0].kind, "settled"); assert.strictEqual(r4.state.gasSpends[0].wei, String(100_000n * 50_000_000n + FLOOR));
     assert.strictEqual(r4.signer.sent.length, 2, r4.text); assert.ok(r4.lines.some((l) => /settled from its receipt/.test(l)));
@@ -326,9 +325,9 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
       assert.strictEqual(r5.state.gasSpends[0].wei, "123456789");
     }
     // simulate never settles or writes
-    const w6 = scene(); w6.receipts = () => ({ status: 1, gasUsed: 1n, gasPrice: 1n });
+    const w6 = scene(); w6.receipts = () => ({ hash: tx, from: OP, to: MGR_A, blockNumber: 5, status: 1, gasUsed: 30_000n, gasPrice: 1n });
     const r6 = await pass(w6, { cfg: cfgOf(enableMain), mode: "simulate", state: { gasSpends: [{ ...e2 }] } });
-    assert.strictEqual(w6.receiptCalls.length, 0); assert.strictEqual(r6.state.gasSpends[0].kind, "unknown");
+    assert.strictEqual(w6.receiptCalls.length, 0); assert.strictEqual(w6.nonceCalls.filter((t) => t === "latest").length, 0); assert.strictEqual(r6.state.gasSpends[0].kind, "unknown");
   }
 
   // ---- S7 at pass level: fees with tip 0.5 gwei / maxFee 0.9 gwei are valid for ethers; the guard (not serialization) refuses
@@ -340,6 +339,30 @@ const roomy = { maxGasPerTxEth: 0.01, maxGasPerRunEth: 0.1, dailyGasCapEth: 0.1 
     const zeroTip = () => ({ ok: true, maxFeePerGas: gwei("0.9"), maxPriorityFeePerGas: 0n, baseFeeWei: gwei("0.4"), expectedPriceWei: gwei("0.9") });
     const r2 = await pass(scene(), { cfg: cfgOf(enableMain, roomy), extra: { buildFees: zeroTip } });
     assert.strictEqual(r2.signer.sent.length, 0); assert.ok(/refusing to sign: maxPriorityFeePerGas is not in/.test(r2.text), r2.text);
+  }
+
+  // ---- 24. in-run receipts are validated: gasUsed 0, wrong hash, replaced -> worst case stays, run stops
+  {
+    const cases = [
+      ["gasUsed 0", () => async () => ({ status: 1, gasUsed: 0n, gasPrice: 0n }), /receipt rejected: gasUsed 0 is below/],
+      ["wrong hash", () => async () => ({ hash: "0x" + "ee".repeat(32), status: 1, gasUsed: 100_000n, gasPrice: 50_000_000n }), /receipt rejected: hash mismatch/],
+      ["wrong sender", () => async () => ({ from: "0x00000000000000000000000000000000000000ee", status: 1, gasUsed: 100_000n, gasPrice: 50_000_000n }), /receipt rejected: from/],
+      ["err.receipt gasUsed 0", () => async () => { throw Object.assign(new Error("reverted"), { code: "CALL_EXCEPTION", receipt: { status: 0, gasUsed: 0n, gasPrice: 0n } }); }, /receipt rejected: gasUsed 0 is below/],
+      ["replaced with a receipt", () => async () => { throw Object.assign(new Error("replaced"), { code: "TRANSACTION_REPLACED", receipt: { status: 1, gasUsed: 21_000n, gasPrice: 1n } }); }, /replaced or cancelled/],
+    ];
+    for (const [name, mk, re] of cases) {
+      const w = scene();
+      const r = await pass(w, { cfg: cfgOf(enableMain), signer: fakeSigner(w, { wait: mk() }) });
+      assert.strictEqual(r.signer.sent.length, 1, `${name}: the run stops after the first`);
+      assert.ok(r.res.aborted, name); assert.ok(r.lines.some((l) => /^STOP:/.test(l)), name);
+      assert.strictEqual(r.state.gasSpends.length, 1); assert.strictEqual(r.state.gasSpends[0].kind, "unknown", name);
+      assert.strictEqual(r.state.gasSpends[0].wei, String(WORST0), `${name}: worst case kept`);
+      assert.strictEqual(r.res.spentWei, WORST0, name); assert.ok(re.test(r.text), `${name}: ${r.text}`);
+    }
+    // the refetched receipt is validated too
+    const w = scene(); w.receipts = (hash) => ({ hash, from: OP, to: MGR_A, blockNumber: 5, status: 0, gasUsed: 0n, gasPrice: 0n });
+    const rr = await pass(w, { cfg: cfgOf(enableMain), signer: fakeSigner(w, { wait: async () => { throw Object.assign(new Error("execution reverted"), { code: "CALL_EXCEPTION" }); } }) });
+    assert.strictEqual(rr.state.gasSpends[0].kind, "unknown"); assert.strictEqual(rr.state.gasSpends[0].wei, String(WORST0)); assert.ok(rr.res.aborted);
   }
 
   // limits are plain numbers the pass can read

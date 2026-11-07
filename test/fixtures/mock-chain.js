@@ -39,7 +39,7 @@ function revert(msg = "reverted") { const e = new Error(msg); e.code = "CALL_EXC
 function world({ head = 1_000_000 } = {}) {
   const w = {
     head, chainId: 8453n, feeData: { maxFeePerGas: 100_000_000n, gasPrice: 50_000_000n, maxPriorityFeePerGas: 1_000_000n }, gasEstimate: 150_000n,
-    block: { baseFeePerGas: 30_000_000n }, l1Fee: 0n, nonce: 7, receipts: [], receiptCalls: [], handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
+    block: { baseFeePerGas: 30_000_000n }, l1Fee: 0n, nonce: 7, receipts: [], receiptCalls: [], latestNonce: null, nonceCalls: [], broadcasts: [], onBroadcast: null, handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
     on(addr, name, fn) { (w.handlers[lc(addr)] = w.handlers[lc(addr)] || {})[name] = fn; return w; },
     contract(addr, code = "0x6080") { w.code[lc(addr)] = code; return w; },
     /** the provider-like runner the readers are given */
@@ -63,7 +63,21 @@ function world({ head = 1_000_000 } = {}) {
       },
       // OP-stack fee reads and the receipt lookups of the Base collect pass (all read-only).
       async getBlock() { return typeof w.block === "function" ? w.block() : w.block; },
-      async getTransactionCount() { return w.nonce; },
+      // "pending" is w.nonce; "latest" is w.latestNonce (defaults to w.nonce). A number or a function; an Error is thrown.
+      async getTransactionCount(addr, tag) {
+        w.nonceCalls.push(tag);
+        const v = tag === "latest" && w.latestNonce !== null ? w.latestNonce : w.nonce;
+        const n = typeof v === "function" ? v(tag) : v;
+        if (n instanceof Error) throw n;
+        return n;
+      },
+      // Records the raw bytes; the test (or the fake signer) decides what the network answers. Default: accepted, mined at once.
+      async broadcastTransaction(raw) {
+        w.broadcasts.push(raw);
+        if (w.onBroadcast) return w.onBroadcast(raw);
+        if (typeof w.nonce === "number") w.nonce++;
+        return { hash: ethers.Transaction.from(raw).hash, wait: async () => ({ status: 1, gasUsed: 120_000n, gasPrice: 50_000_000n }) };
+      },
       async getTransactionReceipt(hash) {
         w.receiptCalls.push(hash);
         const r = typeof w.receipts === "function" ? w.receipts(hash, w.receiptCalls.length) : w.receipts[w.receiptCalls.length - 1];

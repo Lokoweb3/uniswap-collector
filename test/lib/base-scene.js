@@ -77,16 +77,38 @@ function scene(o = {}) {
   return w;
 }
 
-/** A fake operator signer: signs with the throwaway key, records the signed transaction, never broadcasts. */
-function fakeSigner(w, { failFirst = false, status = 1, gasUsed = 120_000n, wait = null, sendError = null } = {}) {
-  const s = { address: OP, sent: [], failures: 0, nonce: 7 };
-  s.sendTransaction = async (tx) => {
+/**
+ * A fake operator signer: signs with the throwaway key and records what it signed (`signs`). It never broadcasts: the
+ * mocked provider does (`w.broadcasts`), answering as the options say. `sent` lists the transactions that were broadcast.
+ *   failFirst / sendError  the broadcast rejects (first one only / every one)
+ *   status, gasUsed, wait  what the receipt says
+ *   signTweak(tx)          alters the fields handed to the key (a signer that signs something else)
+ *   broadcastResult(raw, hash)  replaces the broadcast answer (undefined, {}, other hash ...)
+ *   key                    the wallet that signs (default: the operator's throwaway key)
+ *   log                    shared call log: "sign" and "broadcast" are pushed in order
+ */
+function fakeSigner(w, { failFirst = false, status = 1, gasUsed = 120_000n, wait = null, sendError = null, signTweak = null, broadcastResult = null, log = null, key = operatorKey } = {}) {
+  const s = { address: OP, sent: [], signs: [], failures: 0 };
+  s.signTransaction = async (tx) => {
+    if (log) log.push("sign");
+    s.signs.push(tx);
+    const f = signTweak ? signTweak({ ...tx }) : tx;
+    return key.signTransaction({ type: 2, chainId: 8453n, nonce: f.nonce, to: f.to, data: f.data, value: f.value, gasLimit: f.gasLimit, maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas });
+  };
+  w.onBroadcast = async (raw) => {
+    if (log) log.push("broadcast");
     if (failFirst && s.failures === 0) { s.failures++; throw new Error("nonce too low"); }
     if (sendError) throw sendError;
-    const raw = await operatorKey.signTransaction({ type: 2, chainId: 8453n, nonce: s.nonce++, to: tx.to, data: tx.data, value: tx.value, gasLimit: tx.gasLimit, maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas });
     const parsed = ethers.Transaction.from(raw);
-    s.sent.push({ from: parsed.from, to: parsed.to, data: parsed.data, value: parsed.value, chainId: parsed.chainId, type: parsed.type, gasLimit: parsed.gasLimit, maxFeePerGas: parsed.maxFeePerGas, maxPriorityFeePerGas: parsed.maxPriorityFeePerGas, tx });
-    return { hash: parsed.hash, wait: wait ? (...a) => wait(...a) : async () => ({ status, gasUsed, gasPrice: 50_000_000n }) };
+    if (broadcastResult) return broadcastResult(raw, parsed.hash);
+    if (typeof w.nonce === "number") w.nonce++;
+    s.sent.push({ from: parsed.from, to: parsed.to, data: parsed.data, value: parsed.value, chainId: parsed.chainId, type: parsed.type, nonce: parsed.nonce, gasLimit: parsed.gasLimit, maxFeePerGas: parsed.maxFeePerGas, maxPriorityFeePerGas: parsed.maxPriorityFeePerGas, raw });
+    // Receipts are filled up to a well-formed one (hash, from, to, block) unless the test sets those keys itself.
+    const fill = (rc) => (rc && typeof rc === "object" ? { hash: parsed.hash, from: parsed.from, to: parsed.to, blockNumber: 5, ...rc } : rc);
+    const waitFn = wait || (async () => ({ status, gasUsed, gasPrice: 50_000_000n }));
+    return { hash: parsed.hash, wait: async (...a) => {
+      try { return fill(await waitFn(...a)); } catch (err) { if (err && err.receipt) err.receipt = fill(err.receipt); throw err; }
+    } };
   };
   return s;
 }

@@ -16,7 +16,7 @@
  *   3. simulate collect() as the operator, estimate gas, apply the thresholds (minFeesUsd, fees versus gas);
  *   4. compute the fees ourselves (clamped to maxGasPriceGwei), apply the caps (collects per run, gas per transaction,
  *      gas per run, rolling 24 h, all against the worst case signed), re-read ownerOf, reserve the worst case in
- *      state.json, then send
+ *      state.json, then sign, record the hash and nonce, and only then broadcast
  *      collect({tokenId, recipient: owner, amount0Max: MAX, amount1Max: MAX}).
  * Collect only. The recipient is always the NFT's owner. Nothing in this file requests, sets or changes an
  * approval, moves an NFT or touches a token balance; the manager ABI below has exactly three functions (plus one read-only oracle fragment).
@@ -64,11 +64,77 @@ function withTimeout(promise, ms) {
   return Promise.race([Promise.resolve(promise), t]).finally(() => clearTimeout(timer));
 }
 
+/** The reservation of an entry, as a bigint; throws on a malformed value. */
+const big = (v) => BigInt(v);
+
+/**
+ * Settle one reserved/unknown entry of an earlier run from the chain. Returns true when the entry changed (the caller saves).
+ * A receipt is used only when it is provably this transaction; no receipt and the nonce used means replaced or dropped
+ * (closed once at the worst case); no receipt and the nonce unused means still pending (stays counted).
+ */
+async function settleEarlier(e, { provider, operator, log, now, findByNonce }) {
+  const label = e.tx || "(no hash)";
+  const hasHash = typeof e.tx === "string" && /^0x[0-9a-fA-F]{64}$/.test(e.tx);
+  const hasNonce = Number.isSafeInteger(e.nonce) && e.nonce >= 0;
+  const worst = big(e.wei);
+  const settleAt = (rc, why) => {
+    const paid = logic.settledWei({ gasUsed: rc.gasUsed, price: rc.gasPrice ?? rc.effectiveGasPrice, gasLimit: big(e.gasLimit), maxFeePerGas: big(e.maxFeePerGas), maxPriorityFeePerGas: e.maxPriorityFeePerGas, l1AllowanceWei: big(e.l1), worstCaseWei: worst });
+    e.kind = "settled"; e.wei = paid.toString();
+    // Gas paid late must count in the current window: an entry older than 24 h would otherwise drop out of it unseen.
+    if (!(e.t > now() - 24 * 3600 * 1000)) e.t = now();
+    log(`  earlier transaction ${label} settled ${why}: ${ethers.formatEther(paid)} ETH`);
+    return true;
+  };
+  const closeAt = (reason, msg) => {
+    e.kind = "settled"; e.t = now(); e.closed = reason;
+    log(`  earlier transaction ${label} ${msg}; closed once at its worst case ${ethers.formatEther(worst)} ETH (counts 24 h from now)`);
+    return true;
+  };
+  const complete = ["gasLimit", "maxFeePerGas", "l1"].every((k) => typeof e[k] === "string");
+  let rc = null;
+  if (hasHash) {
+    try { rc = (await provider.getTransactionReceipt(e.tx)) || null; } catch (err) { log(`  earlier transaction ${label}: receipt lookup failed (${short(err)}); it stays counted`); return false; }
+  }
+  if (rc) {
+    if (!complete) return hasNonce ? (log(`  earlier transaction ${label} lacks gasLimit/maxFeePerGas/l1; it stays counted`), false) : closeAt("legacy-unsettled", "has a receipt but no recorded limits");
+    const bad = logic.checkReceipt(rc, { hash: e.tx, operator, entry: e });
+    if (bad) {
+      const was = e.kind; e.kind = "unknown";
+      log(`  earlier transaction ${label}: receipt rejected (${bad}); the worst case ${ethers.formatEther(worst)} ETH stays counted`);
+      if (hasNonce) {
+        // A receipt that keeps failing validation must not stay counted forever: once the nonce is used on chain, close it once.
+        let used;
+        try { used = Number(await provider.getTransactionCount(operator, "latest")) > e.nonce; } catch (err) { log(`  earlier transaction ${label}: nonce lookup failed (${short(err)}); it stays counted`); used = false; }
+        if (used) return closeAt("receipt-rejected", `has a rejected receipt and nonce ${e.nonce} is used`);
+      }
+      return was !== "unknown";
+    }
+    return settleAt(rc, "from its receipt");
+  }
+  if (!hasNonce) return closeAt("legacy-unsettled", "is a legacy entry that cannot be proven");
+  let latest;
+  try { latest = await provider.getTransactionCount(operator, "latest"); } catch (err) { log(`  earlier transaction ${label}: nonce lookup failed (${short(err)}); it stays counted`); return false; }
+  if (!(Number(latest) > e.nonce)) { log(`  earlier transaction ${label} is pending: nonce ${e.nonce} not used yet; its worst case ${ethers.formatEther(worst)} ETH stays counted`); return false; }
+  let found = null;
+  try { found = typeof findByNonce === "function" ? await findByNonce(operator, e.nonce) : null; } catch (err) { log(`  earlier transaction ${label}: lookup by nonce failed (${short(err)}); it stays counted`); return false; }
+  if (found && found.receipt && found.tx && complete) {
+    let bad = null;
+    if (!found.tx.hash || String(found.tx.nonce) !== String(e.nonce)) bad = "replacement nonce does not match";
+    else if (!eq(found.tx.from, operator)) bad = "replacement is not from the operator";
+    else if (typeof found.tx.gasLimit !== "bigint" && !(typeof found.tx.gasLimit === "string" && /^\d{1,30}$/.test(found.tx.gasLimit)) && !(Number.isSafeInteger(found.tx.gasLimit) && found.tx.gasLimit >= 0)) bad = "replacement has no gasLimit";
+    else bad = logic.checkReceipt(found.receipt, { hash: found.tx.hash, operator, entry: e, txGasLimit: found.tx.gasLimit });
+    if (!bad) return settleAt(found.receipt, `at the replacing transaction ${found.tx.hash}`);
+    log(`  earlier transaction ${label}: replacement rejected (${bad})`);
+  }
+  return closeAt("replaced-or-dropped", `was replaced or dropped (nonce ${e.nonce} is used)`);
+}
+
 /**
  * One pass. Everything outside the process is injected so a test can run it on a mocked chain:
  *   cfg, mode ("simulate"|"collect"), provider (getNetwork, getFeeData, getBlock, getTransactionCount, call,
- *   estimateGas, getTransactionReceipt), operatorAddress, getSigner() -> signer with .address and .sendTransaction
- *   (collect mode only), getEthUsd() -> number|null, state ({gasSpends}) or readState() -> logic.readState result,
+ *   estimateGas, getTransactionReceipt, broadcastTransaction), operatorAddress, getSigner() -> signer with .address and
+ *   a signing method (collect mode only), findByNonce(operator, nonce) -> {receipt, tx}|null (default: null),
+ *   tweakTxFields (tests only: may alter the fields just before the last look), getEthUsd() -> number|null, state ({gasSpends}) or readState() -> logic.readState result,
  *   saveState(state) (must throw when it cannot persist), log(line), now() -> ms, sleep(ms), buildFees (default
  *   logic.buildFees), logsProvider (optional), dataDir (slipstream scan cursor), readers (optional: {name: {positionsOf}}).
  * Returns { collected, skipped, wouldCollect, spentWei, aborted }.
@@ -129,16 +195,14 @@ async function runPass(deps) {
     if (!simulate) { result.aborted = true; done(); return result; }
   }
 
-  // Unknown outcomes from earlier runs: if the transaction has a hash, ask the chain what it cost and settle it.
+  // Entries of earlier runs that are not settled: ask the chain, close what cannot be proven. Nothing in here may throw.
   if (!simulate && st.ok) {
-    for (const e of state.gasSpends.filter((x) => x && x.kind === "unknown" && x.tx)) {
-      let rc = null;
-      try { rc = (await provider.getTransactionReceipt(e.tx)) || null; } catch { rc = null; }
-      if (!rc || rc.gasUsed == null || e.gasLimit == null || e.maxFeePerGas == null || e.l1 == null) { log(`  unsettled earlier transaction ${e.tx} (${ethers.formatEther(BigInt(e.wei))} ETH worst case) is still counted${rc ? "" : ": no receipt yet"}`); continue; }
-      const paid = logic.settledWei({ gasUsed: rc.gasUsed, price: rc.gasPrice ?? rc.effectiveGasPrice, gasLimit: BigInt(e.gasLimit), maxFeePerGas: BigInt(e.maxFeePerGas), l1AllowanceWei: BigInt(e.l1), worstCaseWei: BigInt(e.wei) });
-      e.kind = "settled"; e.wei = paid.toString();
-      log(`  earlier transaction ${e.tx} settled from its receipt: ${ethers.formatEther(paid)} ETH`);
-      try { saveState(state); } catch (err) { log(`STOP: the budget cannot be recorded (settlement of ${e.tx}: ${short(err)}); nothing is sent this run`); result.aborted = true; done(); return result; }
+    for (const e of state.gasSpends) {
+      if (!e || (e.kind !== "reserved" && e.kind !== "unknown")) continue;
+      let changed = false;
+      try { changed = await settleEarlier(e, { provider, operator, lim, log, now, findByNonce: deps.findByNonce }); } catch (err) { log(`  ! earlier entry could not be examined (${short(err)}); it stays counted`); }
+      if (!changed) continue;
+      try { saveState(state); } catch (err) { log(`STOP: the budget cannot be recorded (settlement of ${e.tx || "an earlier entry"}: ${short(err)}); nothing is sent this run`); result.aborted = true; done(); return result; }
     }
   }
 
@@ -219,13 +283,16 @@ async function runPass(deps) {
         try { block = await provider.getBlock("latest"); } catch (err) { skip(null, `latest block could not be read (${short(err)})`); continue; }
         const fees = buildFees({ baseFeeWei: block && block.baseFeePerGas, rpcPriorityWei: feeData.maxPriorityFeePerGas, lim });
         if (!fees.ok) { skip(null, fees.reason); continue; }
-        const txFields = { type: 2, chainId: logic.BASE_CHAIN_ID, to: manager.positionManager, data: IFACE.encodeFunctionData("collect", [params]), value: 0n, gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas };
+        // The nonce is read once: the oracle quotes, and the signer signs, exactly these fields.
+        let nonce;
+        try { nonce = await provider.getTransactionCount(operator, "pending"); } catch (err) { skip(null, `nonce unreadable (${short(err)})`); continue; }
+        let txFields = { type: 2, chainId: logic.BASE_CHAIN_ID, to: manager.positionManager, data: IFACE.encodeFunctionData("collect", [params]), value: 0n, nonce, gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas };
 
         // The L1 data fee, quoted by the OP-stack oracle for this exact (unsigned) transaction.
         let l1FeeWei;
         try {
-          const nonce = await provider.getTransactionCount(operator, "pending");
-          const raw = ethers.Transaction.from({ ...txFields, nonce }).unsignedSerialized;
+          if (!Number.isSafeInteger(nonce) || nonce < 0) throw new Error("nonce is not a non-negative integer");
+          const raw = ethers.Transaction.from(txFields).unsignedSerialized;
           l1FeeWei = await oracle.getL1Fee(raw);
           if (typeof l1FeeWei !== "bigint" || l1FeeWei < 0n) throw new Error("not a number");
         } catch (err) { skip(null, `L1 fee unreadable (${short(err)})`); continue; }
@@ -256,15 +323,35 @@ async function runPass(deps) {
               if (!signer || !eq(signer.address, operator)) throw new Error("the unlocked key is not the operator whose approval was checked");
             } catch (err) { signer = null; signerError = err; throw err; }
           }
-          logic.assertSignable(txFields, lim, { tokenId: id, owner: owner.address });
+          if (deps.tweakTxFields) txFields = deps.tweakTxFields({ ...txFields }, { manager, tokenId: id });
+          logic.assertSignable(txFields, lim, { tokenId: id, owner: owner.address, manager: manager.positionManager });
         } catch (err) {
           log(`  ! #${id} collect failed: ${short(err)}; continuing`);
           result.skipped++;
           continue;
         }
 
-        // Reserve the worst case on disk BEFORE broadcasting; no durable reservation, no send.
-        const entry = { t: now(), wei: worstCaseWei.toString(), kind: "reserved", tx: null, gasLimit: gasLimit.toString(), maxFeePerGas: fees.maxFeePerGas.toString(), l1: l1AllowanceWei.toString() };
+        // Sign first: the hash is known before anything leaves the process, and what was signed is checked field by field.
+        let raw, hash;
+        try {
+          raw = await signer.signTransaction(txFields);
+          const parsed = ethers.Transaction.from(raw);
+          const mismatch = [
+            ["from", eq(parsed.from, operator)], ["to", eq(parsed.to, manager.positionManager)], ["nonce", parsed.nonce === nonce],
+            ["gasLimit", parsed.gasLimit === gasLimit], ["maxFeePerGas", parsed.maxFeePerGas === fees.maxFeePerGas], ["maxPriorityFeePerGas", parsed.maxPriorityFeePerGas === fees.maxPriorityFeePerGas],
+            ["value", parsed.value === 0n], ["data", parsed.data === txFields.data], ["chainId", parsed.chainId === BigInt(logic.BASE_CHAIN_ID)], ["type", parsed.type === 2],
+            ["accessList", !parsed.accessList || parsed.accessList.length === 0],
+          ].filter(([, ok]) => !ok).map(([k]) => k);
+          if (mismatch.length) throw new Error(`the signed transaction differs from the one asked for (${mismatch.join(", ")}); nothing recorded, nothing broadcast`);
+          hash = parsed.hash;
+        } catch (err) {
+          log(`  ! #${id} signing refused: ${short(err)}; continuing`);
+          result.skipped++;
+          continue;
+        }
+
+        // Record the worst case, hash and nonce on disk BEFORE broadcasting; no durable reservation, no broadcast.
+        const entry = { t: now(), wei: worstCaseWei.toString(), kind: "reserved", tx: hash, nonce, from: operator, to: manager.positionManager, gasLimit: gasLimit.toString(), maxFeePerGas: fees.maxFeePerGas.toString(), maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(), l1: l1AllowanceWei.toString() };
         state.gasSpends.push(entry);
         if (!persist("reservation")) {
           state.gasSpends.splice(state.gasSpends.indexOf(entry), 1);
@@ -272,15 +359,17 @@ async function runPass(deps) {
           result.skipped++; result.aborted = true;
           break outer;
         }
+        const noRecord = () => { log("STOP: the budget cannot be recorded; nothing more is sent this run"); result.aborted = true; };
         const keepUnknown = (why) => {
           entry.kind = "unknown";
           spentRun += worstCaseWei; result.spentWei += worstCaseWei;
-          persist("unknown outcome");
+          const saved = persist("unknown outcome");
           log(`  ! #${id} outcome unknown (${why}); the worst case ${ethers.formatEther(worstCaseWei)} ETH stays counted until the transaction is settled`);
+          if (!saved) noRecord();
         };
         /** Replace the reservation by what the receipt says it cost. false when that cannot be saved. */
         const settle = (receipt) => {
-          const paid = logic.settledWei({ gasUsed: receipt.gasUsed, price: receipt.gasPrice ?? receipt.effectiveGasPrice, gasLimit, maxFeePerGas: fees.maxFeePerGas, l1AllowanceWei, worstCaseWei });
+          const paid = logic.settledWei({ gasUsed: receipt.gasUsed, price: receipt.gasPrice ?? receipt.effectiveGasPrice, gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas, l1AllowanceWei, worstCaseWei });
           entry.kind = "settled"; entry.wei = paid.toString();
           spentRun += paid; result.spentWei += paid;
           return { paid, saved: persist("settlement") };
@@ -289,17 +378,22 @@ async function runPass(deps) {
 
         let tx;
         try {
-          tx = await signer.sendTransaction(txFields);
+          tx = await provider.broadcastTransaction(raw);
         } catch (err) {
-          // The signer may already have signed and broadcast: whatever the error says, the worst case stays counted.
+          // The broadcast may have reached the network: the reservation stays on disk and is settled at the next run start.
           sent++;
-          keepUnknown(`sendTransaction failed, broadcast not ruled out: ${short(err)}`);
-          result.skipped++; stopRun("a send of unknown outcome");
+          spentRun += worstCaseWei; result.spentWei += worstCaseWei;
+          log(`  ! #${id} broadcast failed (${short(err)}); not ruled out that it was sent; the reservation of tx ${hash} stays and is settled next run`);
+          result.skipped++; stopRun("a broadcast of unknown outcome");
           break outer;
         }
         sent++;
-        entry.tx = tx.hash;
-        persist("transaction hash");
+        if (!tx || typeof tx.hash !== "string" || !eq(tx.hash, hash)) {
+          keepUnknown(`broadcast returned ${!tx || typeof tx.hash !== "string" ? "no hash" : `hash ${tx.hash}`}, signed hash ${hash}`);
+          result.skipped++; stopRun("broadcast returned no/mismatching hash");
+          break outer;
+        }
+        if (!persist("transaction hash")) { noRecord(); result.skipped++; break outer; }
 
         let receipt = null, revertedErr = null;
         try {
@@ -310,13 +404,19 @@ async function runPass(deps) {
             result.skipped++; stopRun("a transaction is unconfirmed");
             break outer;
           }
+          if (err && err.code === "TRANSACTION_REPLACED") {
+            // Never settle at the replacement's receipt here; the next run start settles it by nonce.
+            keepUnknown(`transaction replaced or cancelled, tx ${tx.hash}`);
+            result.skipped++; stopRun("a transaction was replaced");
+            break outer;
+          }
           if (err && err.receipt) { receipt = err.receipt; revertedErr = err; }
           else if (isRevertClass(err)) {
             for (let n = 0; n < REFETCH_TRIES && !receipt; n++) {
               if (n > 0) await sleep(2000);
               try { receipt = (await provider.getTransactionReceipt(tx.hash)) || null; } catch { receipt = null; }
             }
-            if (!receipt) { keepUnknown(`reverted, receipt not found, tx ${tx.hash}`); result.skipped++; continue; }
+            if (!receipt) { keepUnknown(`reverted, receipt not found, tx ${hash}`); result.skipped++; if (result.aborted) break outer; continue; }
             revertedErr = err;
           } else {
             keepUnknown(`${short(err)}, tx ${tx.hash}`);
@@ -327,6 +427,12 @@ async function runPass(deps) {
         if (!receipt || receipt.gasUsed == null) {
           keepUnknown(`receipt without gasUsed, tx ${tx.hash}`);
           result.skipped++; stopRun("a receipt without gasUsed");
+          break outer;
+        }
+        const badReceipt = logic.checkReceipt(receipt, { hash, operator, entry });
+        if (badReceipt) {
+          keepUnknown(`receipt rejected: ${badReceipt}, tx ${tx.hash}`);
+          result.skipped++; stopRun("a receipt failed validation");
           break outer;
         }
         const { paid, saved } = settle(receipt);

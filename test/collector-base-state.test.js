@@ -146,7 +146,7 @@ const good = JSON.stringify({ version: 1, gasSpends: [] });
     const f = path.join(mk("keep-"), "state.json");
     const now = Date.now();
     const old = { t: now - 3 * 86400_000, wei: "5", kind: "settled", tx: null };
-    const unk = { t: now - 20 * 86400_000, wei: "9", kind: "unknown", tx: null };
+    const unk = { t: now - 20 * 86400_000, wei: "9", kind: "unknown", tx: null, nonce: 100 }; // nonce 100 is not used yet (pending): it stays
     const gone = { t: now - 20 * 86400_000, wei: "9", kind: "settled", tx: null };
     fs.writeFileSync(f, JSON.stringify({ version: 1, gasSpends: [old, unk, gone] }));
     const r = await pass(scene(), { cfg: cfgOf(enableMain), extra: stateOpts(f) });

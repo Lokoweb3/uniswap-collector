@@ -26,7 +26,14 @@ for (const word of ["minL1AllowanceEth", "not a hard bound", "Unknown entries do
 }
 assert.ok(!/exits 0 in collect mode/.test(section), "the skip/exit wording was corrected");
 assert.ok(/min\(maxGasPriceGwei,\s+2 x block base fee \+ tip\)/.test(section), "the signed fee formula");
-assert.ok(/gasLimit x maxFeePerGas \+ 2 x L1 fee quote/.test(section), "the worst case formula");
+const F = "max(2 x L1 quote, minL1AllowanceEth)";
+assert.ok(section.includes(`gasLimit x maxFeePerGas + ${F}`), "the worst case formula (gas-accounting paragraph)");
+assert.ok(section.includes(`gasUsed x effective gas price + ${F}`), "the settled-amount sentence");
+assert.ok(/\| `baseCollect\.maxGasPerTxEth` \|[^\n]*max\(2 x L1 quote, minL1AllowanceEth\)/.test(section), "the maxGasPerTxEth row");
+assert.ok(!/\+ 2 x L1 (fee )?quote/.test(section), "no old formula");
+for (const word of ["nonce", "replaced or dropped", "pending", "legacy", "--init-state"]) assert.ok(section.includes(word), `${word} in the section`);
+assert.ok(!/\$HOME\/base-data\/state\.json/.test(section), "no hand-editing of state.json");
+assert.ok(!/edit `?\$HOME/.test(section) && !/sendTransaction/.test(section));
 assert.ok(/all four must read `false`/.test(section), "revocation covers all four managers");
 // the README does not claim the whole Base instance cannot sign any more
 assert.ok(!/It cannot sign: it runs/.test(readme), "the old absolute wording is gone");

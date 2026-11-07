@@ -135,15 +135,18 @@ function buildFees({ baseFeeWei, rpcPriorityWei, lim }) {
 
 /**
  * The last look before signing. Throws unless the transaction is exactly what this pass is allowed to send.
- * `expect` = { tokenId, owner }: the calldata must decode to collect(tokenId, owner, MAX, MAX).
+ * `expect` = { tokenId, owner, manager }: `to` must be exactly `manager` (and allowlisted); the calldata must decode to collect(tokenId, owner, MAX, MAX).
  */
 function assertSignable(tx, lim, expect) {
   const bad = (m) => { throw new Error(`refusing to sign: ${m}`); };
   if (!tx || typeof tx !== "object") bad("no transaction");
   if (!expect || expect.tokenId === undefined || !expect.owner) bad("no expected token and owner to check the calldata against");
+  if (!expect.manager) bad("no expected manager to check the destination against");
+  if (!Number.isSafeInteger(tx.nonce) || tx.nonce < 0) bad(`nonce ${tx.nonce} is not a non-negative integer`);
   if (tx.type !== 2) bad(`type ${tx.type} is not 2`);
   if ("gasPrice" in tx) bad("a gasPrice field is present");
   if (!tx.to || !ALLOWED_MANAGERS.some((a) => a.toLowerCase() === String(tx.to).toLowerCase())) bad(`to ${tx.to} is not an allowlisted manager`);
+  if (String(tx.to).toLowerCase() !== String(expect.manager).toLowerCase()) bad(`to ${tx.to} is not this position's manager ${expect.manager}`);
   if (tx.value !== 0n) bad("value is not 0");
   if (typeof tx.gasLimit !== "bigint" || tx.gasLimit <= 0n || tx.gasLimit > BigInt(lim.maxGasLimit)) bad(`gasLimit ${tx.gasLimit} exceeds maxGasLimit ${lim.maxGasLimit}`);
   const capWei = gweiToWei(lim.maxGasPriceGwei);
@@ -168,23 +171,65 @@ function l1Allowance(quoteWei, lim) {
 
 /**
  * What a receipt costs, always within [0, reservation]. A gasUsed that is not a number, negative or above the
- * gas limit (a lying RPC) counts the full worst case; the price is clamped to [0, maxFee] (negative or not a number: maxFee).
+ * gas limit (a lying RPC) counts the full worst case; the price is clamped to [0, maxFee] (negative or not a number: maxFee),
+ * and a price below the signed maxPriorityFeePerGas (when known) counts as maxFee.
  */
-function settledWei({ gasUsed, price, gasLimit, maxFeePerGas, l1AllowanceWei, worstCaseWei }) {
+function settledWei({ gasUsed, price, gasLimit, maxFeePerGas, maxPriorityFeePerGas, l1AllowanceWei, worstCaseWei }) {
   let gu;
   try { gu = BigInt(gasUsed); } catch { return worstCaseWei; }
   if (gu < 0n || gu > gasLimit) return worstCaseWei;
   let p;
   try { p = BigInt(price); } catch { p = maxFeePerGas; }
   if (p < 0n || p > maxFeePerGas) p = maxFeePerGas;
+  // A price below the signed tip is impossible on chain (price = base fee + tip, base fee >= 0): a lying RPC; count the worst case price.
+  let tip = null;
+  try { if (maxPriorityFeePerGas != null) tip = BigInt(maxPriorityFeePerGas); } catch { tip = null; }
+  if (tip !== null && p < tip) p = maxFeePerGas;
   const paid = gu * p + l1AllowanceWei;
   return paid > worstCaseWei ? worstCaseWei : paid;
 }
 
-/** The gas counted against the rolling 24 h cap: entries younger than 24 h, plus every unsettled (unknown) one at any age. Does not mutate. */
+/** The gas counted against the rolling 24 h cap: entries younger than 24 h, plus every unsettled (reserved or unknown) one at any age. Does not mutate. */
 function spentWindowWei(state, nowMs = Date.now()) {
   const cutoff = nowMs - DAY_MS;
-  return (state.gasSpends || []).reduce((acc, e) => (e.kind === "unknown" || e.t > cutoff ? acc + BigInt(e.wei) : acc), 0n);
+  return (state.gasSpends || []).reduce((acc, e) => (e.kind === "unknown" || e.kind === "reserved" || e.t > cutoff ? acc + BigInt(e.wei) : acc), 0n);
+}
+
+const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+const sameHex = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+const MIN_TX_GAS = 21000n;
+
+/**
+ * Is `rc` the receipt of the transaction recorded in `entry`? null when it is, else the name of the first failed check.
+ * `hash` is the hash the receipt must carry; `txGasLimit` (optional) bounds gasUsed instead of entry.gasLimit.
+ */
+function checkReceipt(rc, { hash, operator, entry, txGasLimit }) {
+  if (!rc || typeof rc !== "object") return "receipt is not an object";
+  const rh = rc.hash !== undefined ? rc.hash : rc.transactionHash;
+  if (!sameHex(rh, hash)) return `hash mismatch (receipt ${rh}, expected ${hash})`;
+  if (!sameHex(rc.from, operator)) return `from ${rc.from} is not the operator`;
+  if (entry.from != null && !sameHex(rc.from, entry.from)) return `from ${rc.from} is not the recorded sender`;
+  if (typeof rc.to !== "string" || !ALLOWED_MANAGERS.some((a) => sameHex(a, rc.to))) return `to ${rc.to} is not an allowlisted manager`;
+  if (entry.to != null && !sameHex(rc.to, entry.to)) return `to ${rc.to} is not the recorded manager ${entry.to}`;
+  if (rc.blockNumber == null || rc.blockNumber === "") return "no blockNumber";
+  {
+    const bn = rc.blockNumber;
+    let ok = false;
+    if (typeof bn === "number") ok = Number.isSafeInteger(bn) && bn > 0;
+    else if (typeof bn === "bigint") ok = bn > 0n && bn <= BigInt(Number.MAX_SAFE_INTEGER);
+    else if (typeof bn === "string" && (/^\d{1,16}$/.test(bn) || /^0x[0-9a-fA-F]{1,14}$/.test(bn))) { const n = Number(bn); ok = Number.isSafeInteger(n) && n > 0; }
+    if (!ok) return "blockNumber is not a positive safe integer";
+  }
+  if (rc.blockHash !== undefined && (typeof rc.blockHash !== "string" || !HASH_RE.test(rc.blockHash))) return "blockHash is malformed";
+  let gu;
+  if (typeof rc.gasUsed === "bigint") gu = rc.gasUsed;
+  else if (typeof rc.gasUsed === "string" && /^\d{1,30}$/.test(rc.gasUsed)) gu = BigInt(rc.gasUsed);
+  else return `gasUsed ${String(rc.gasUsed).slice(0, 30)} is not a number`;
+  let hi;
+  try { hi = txGasLimit !== undefined ? BigInt(txGasLimit) : BigInt(entry.gasLimit); } catch { return "no gasLimit to check gasUsed against"; }
+  if (gu < MIN_TX_GAS) return `gasUsed ${gu} is below ${MIN_TX_GAS}`;
+  if (gu > hi) return `gasUsed ${gu} is above the gas limit ${hi}`;
+  return null;
 }
 
 const usd = (n) => (n == null || !Number.isFinite(n) ? "n/a" : `$${n.toFixed(4)}`);
@@ -235,6 +280,19 @@ function capCheck({ lim, worstCaseWei, sentCount, spentRunWei, spent24hWei }) {
 // state.json: the 24 h budget. Fails closed on anything it cannot read; written atomically.
 // ---------------------------------------------------------------------------------------------------------------------
 
+/** The first field of a budget entry that is present but malformed ("field is not ..."), else null. Unknown fields are ignored. */
+function entryProblem(e) {
+  const has = (k) => e[k] !== undefined;
+  if (has("kind") && !["reserved", "unknown", "settled"].includes(e.kind)) return "kind is not reserved, unknown or settled";
+  if (has("tx") && e.tx !== null && !(typeof e.tx === "string" && HASH_RE.test(e.tx))) return "tx is not a 32-byte hex hash";
+  if (has("nonce") && !(Number.isSafeInteger(e.nonce) && e.nonce >= 0)) return "nonce is not a non-negative integer";
+  for (const k of ["gasLimit", "maxFeePerGas", "l1"]) if (has(k) && !(typeof e[k] === "string" && /^\d{1,40}$/.test(e[k]))) return `${k} is not a decimal string`;
+  if (has("maxPriorityFeePerGas") && !(typeof e.maxPriorityFeePerGas === "string" && /^\d{1,40}$/.test(e.maxPriorityFeePerGas))) return "maxPriorityFeePerGas is not a decimal string";
+  for (const k of ["from", "to"]) if (has(k) && !(typeof e[k] === "string" && ethers.isAddress(e[k]))) return `${k} is not an address`;
+  if (has("closed") && !(typeof e.closed === "string" && e.closed.length <= 40)) return "closed is not a short string";
+  return null;
+}
+
 /**
  * Read and validate the state file. { ok:true, state:{gasSpends} } | { ok:false, kind:"missing"|"corrupt", reason, file }.
  * The file is never touched here. `fsm` is injectable for tests.
@@ -254,13 +312,15 @@ function readState(file, fsm = fs) {
   for (const [i, e] of j.gasSpends.entries()) {
     if (!e || typeof e !== "object" || typeof e.t !== "number" || !Number.isFinite(e.t) || e.t < 0) return corrupt(`gasSpends[${i}].t is not a timestamp`);
     if (typeof e.wei !== "string" || !/^\d+$/.test(e.wei)) return corrupt(`gasSpends[${i}].wei is not a non-negative decimal string`);
+    const bad = entryProblem(e);
+    if (bad) return corrupt(`gasSpends[${i}].${bad}`);
   }
   return { ok: true, state: { gasSpends: j.gasSpends } };
 }
 
-/** The text of a state file: version 1, entries older than 7 days dropped (unsettled "unknown" ones are kept until settled). */
+/** The text of a state file: version 1, entries older than 7 days dropped (unsettled "reserved" and "unknown" ones are kept until settled). */
 function serializeState(state, nowMs = Date.now()) {
-  const keep = (Array.isArray(state && state.gasSpends) ? state.gasSpends : []).filter((e) => e && (e.kind === "unknown" || e.t > nowMs - STATE_KEEP_MS));
+  const keep = (Array.isArray(state && state.gasSpends) ? state.gasSpends : []).filter((e) => e && (e.kind === "unknown" || e.kind === "reserved" || e.t > nowMs - STATE_KEEP_MS));
   return JSON.stringify({ version: STATE_VERSION, gasSpends: keep }, null, 2) + "\n";
 }
 
@@ -306,5 +366,5 @@ function initStateFile(file, fsm = fs) {
 module.exports = {
   BASE_CHAIN_ID, ALLOWED_MANAGERS, DEFAULTS, DEFAULT_PRIORITY_WEI, L1_ORACLE, STATE_VERSION,
   limits, owners, managers, gasCostUsd, decide, capCheck, usd, gweiToWei, ethToWei,
-  buildFees, assertSignable, l1Allowance, settledWei, spentWindowWei, readState, serializeState, writeFileAtomic, initStateFile,
+  buildFees, assertSignable, l1Allowance, settledWei, checkReceipt, spentWindowWei, entryProblem, readState, serializeState, writeFileAtomic, initStateFile,
 };

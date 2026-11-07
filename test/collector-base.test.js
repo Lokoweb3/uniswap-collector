@@ -121,8 +121,8 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
     // a failed send may still have been broadcast: the worst case stays counted and the run stops
     const w4 = scene();
     const r4 = await pass(w4, { cfg: cfgOf(enableMain), signer: fakeSigner(w4, { failFirst: true }) });
-    assert.strictEqual(r4.signer.sent.length, 0); assert.ok(r4.lines.some((l) => /outcome unknown \(sendTransaction failed, broadcast not ruled out: nonce too low\)/.test(l)), r4.text);
-    assert.strictEqual(r4.res.collected, 0); assert.strictEqual(r4.res.aborted, true); assert.strictEqual(r4.state.gasSpends[0].kind, "unknown");
+    assert.strictEqual(r4.signer.sent.length, 0); assert.ok(r4.lines.some((l) => /broadcast failed \(nonce too low\); not ruled out that it was sent/.test(l)), r4.text);
+    assert.strictEqual(r4.res.collected, 0); assert.strictEqual(r4.res.aborted, true); assert.strictEqual(r4.state.gasSpends[0].kind, "reserved");
     // a collect mined as reverted still cost gas: recorded, not counted as collected
     const w5 = scene();
     const r5 = await pass(w5, { cfg: cfgOf(enableMain), signer: fakeSigner(w5, { status: 0 }) });
@@ -263,7 +263,9 @@ const forbiddenCalls = (w) => w.calls.filter((c) => /^(approve|setApprovalForAll
     assert.deepStrictEqual(new ethers.Interface(MANAGER_ABI).fragments.map((f) => f.name).sort(), ["collect", "isApprovedForAll", "ownerOf"]);
     assert.ok(src.split("\n").filter((l) => /^\s*"function /.test(l)).length === 3, "exactly three ABI strings in the file");
     assert.ok(!/gasPrice\s*:/.test(src), "no gasPrice key is ever built");
-    assert.ok(/signer\.sendTransaction\(txFields\)/.test(src) && /logic\.assertSignable\(txFields, lim, \{/.test(src), "the signed object is the asserted one");
+    assert.ok(/signer\.signTransaction\(txFields\)/.test(src) && /logic\.assertSignable\(txFields, lim, \{/.test(src), "the signed object is the asserted one");
+    assert.ok(!/sendTransaction/.test(src), "no send through the signer");
+    assert.strictEqual((src.match(/\.signTransaction\(/g) || []).length, 1); assert.strictEqual((src.match(/\.broadcastTransaction\(/g) || []).length, 1);
     // the only transaction it builds is collect
     assert.ok((src.match(/encodeFunctionData\("([a-zA-Z]+)"/g) || []).length === 1 && /encodeFunctionData\("collect"/.test(src));
     // it does not consult LP_READONLY, and the server never imports it

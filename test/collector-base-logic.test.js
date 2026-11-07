@@ -81,8 +81,8 @@ assert.ok(L.capCheck({ ...base, lim: L.limits({ maxGasPerRunEth: 0.01, dailyGasC
   const ifc = new ethers.Interface(["function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)) payable returns (uint256, uint256)"]);
   const M = 2n ** 128n - 1n;
   const data = (o = {}) => ifc.encodeFunctionData("collect", [{ tokenId: 5n, recipient: OWN, amount0Max: M, amount1Max: M, ...o }]);
-  const exp = { tokenId: 5n, owner: OWN };
-  const ok = { type: 2, chainId: 8453, to: A, data: data(), value: 0n, gasLimit: 375000n, maxFeePerGas: gwei("0.5"), maxPriorityFeePerGas: gwei("0.01") };
+  const exp = { tokenId: 5n, owner: OWN, manager: A };
+  const ok = { type: 2, chainId: 8453, to: A, data: data(), value: 0n, nonce: 7, gasLimit: 375000n, maxFeePerGas: gwei("0.5"), maxPriorityFeePerGas: gwei("0.01") };
   L.assertSignable(ok, lim, exp);
   for (const [why, t] of [["type 1", { ...ok, type: 1 }], ["type 0", { ...ok, type: 0 }], ["gasPrice", { ...ok, gasPrice: 1n }], ["maxFee over cap", { ...ok, maxFeePerGas: gwei("1.01") }],
     ["tip over maxFee", { ...ok, maxPriorityFeePerGas: gwei("0.6") }], ["gasLimit over ceiling", { ...ok, gasLimit: 500001n }], ["other manager", { ...ok, to: "0x00000000000000000000000000000000000000ee" }],
@@ -93,8 +93,15 @@ assert.ok(L.capCheck({ ...base, lim: L.limits({ maxGasPerRunEth: 0.01, dailyGasC
     assert.throws(() => L.assertSignable(t, lim, exp), /refusing to sign/, why);
   }
   assert.throws(() => L.assertSignable(ok, lim), /refusing to sign/, "no expectation given");
+  // L1-4: the exact manager of the position, and a real nonce
+  const B = L.ALLOWED_MANAGERS[1];
+  assert.notStrictEqual(A.toLowerCase(), B.toLowerCase());
+  assert.throws(() => L.assertSignable({ ...ok, to: B }, lim, exp), /refusing to sign/, "the other allowlisted manager");
+  assert.throws(() => L.assertSignable(ok, lim, { tokenId: 5n, owner: OWN }), /refusing to sign/, "no expect.manager");
+  L.assertSignable({ ...ok, to: A.toLowerCase() }, lim, { ...exp, manager: A.toUpperCase().replace("0X", "0x") });
+  for (const n of [undefined, -1, 1.5, "3", 2 ** 60, null]) assert.throws(() => L.assertSignable({ ...ok, nonce: n }, lim, exp), /refusing to sign/, `nonce ${String(n)}`);
   assert.strictEqual(L.limits({ maxPriorityFeeGwei: 0.01 }).maxPriorityFeeGwei, 0.01);
-  L.assertSignable({ ...ok, to: A.toLowerCase(), gasLimit: 500000n, chainId: 8453n }, lim, { tokenId: 5, owner: OWN.toLowerCase() });
+  L.assertSignable({ ...ok, to: A.toLowerCase(), gasLimit: 500000n, chainId: 8453n }, lim, { tokenId: 5, owner: OWN.toLowerCase(), manager: A });
 }
 
 // S3: the L1 allowance is max(2 x quote, floor)

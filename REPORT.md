@@ -32,3 +32,20 @@ fc3b8f9 is deployed on live (2026-11-07). f0c24ab and e521641 are not.
 
 ## Cost
 Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both runs.
+
+---
+
+# Round 4: auto-collect self-healing and v4 pinning leftovers (8db9320 → ccfec18)
+
+| Commit | What | Reviewer (final) | Security (final) |
+|---|---|---|---|
+| bc52cba | Base auto-collect signs before recording; every entry has hash + nonce; run-start settlement by validated receipt (hash, from, to, block, 21000 ≤ gasUsed ≤ gasLimit) and nonce; stop on failed state save; strict readState; exact-manager pre-sign check; in-run receipts validated (Medium found and fixed: hostile RPC reporting gasUsed 0) | APPROVE | PASS WITH FIXES (Info/Low, non-blocking) |
+| ccfec18 | v4: denylist subtracts only ownerOf-confirmed ids; departed pinned ids tombstoned; redaction before truncation; discovery.error redacted on /api/watch; the two missing tests | APPROVE | PASS |
+
+- Orchestrator addition (approved on re-review): an entry whose receipt keeps failing checks is closed once at worst case after its nonce is used, so state.json never needs a hand edit.
+- Assumptions: no by-nonce lookup (replaced/dropped entries close once at worst case); a pending nonce stays reserved with no expiry; a definite broadcast rejection stops the run (exit 1) and settles next run.
+- Tests: 123/124 pass (smoke.js needs settings.json); eslint clean; collector-golden passes; Robinhood collector files byte-identical to 8db9320; npm audit 0.
+- Live check: the live ~/base-data/state.json passes the new strict readState; simulate run left it unchanged.
+- Open (non-blocking): optional fee floor at baseFee + tip; findByNonce replacement branch settles at original fee (unreachable today); revert without refetched receipt stays unknown (caps hold); a few optional tests; wallet.html frame headers; 12 s target cache; spawn-audit gaps.
+- Before enabling auto-collect: setApprovalForAll(operator 0x8B65…b9dF, true) from Trading on both Aerodrome managers, verify, set wallets.main.collect true.
+- Cost: about 16 subagent runs, not measured precisely.

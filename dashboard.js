@@ -3351,7 +3351,7 @@ function positionCard(p, d, opts) {
         <h3>${p.pair}</h3>
         ${o.wallet ? `<span class="pcwallet" title="Held by ${esc(o.wallet)}">${esc(o.wallet)}</span>` : ''}
         <span class="nft mono">${nftLink(d, p, '#' + (p.nftId || p.tokenId))}</span>
-        <span class="tier"${p.protocol ? ` title="A position on ${esc(p.protocol)}, not Uniswap: shown here, never collected, closed or sold by this dashboard"` : ''}>${p.protocol ? esc(p.protocol) : p.version === 4 ? 'v4' : 'v3'}</span>
+        <span class="tier"${p.protocol ? ` title="${claimFeesChain(d) ? `A position on ${esc(p.protocol)}, not Uniswap: fees are claimed with your browser wallet (Claim fees); this dashboard never closes or sells it` : `A position on ${esc(p.protocol)}, not Uniswap: shown here, never collected, closed or sold by this dashboard`}"` : ''}>${p.protocol ? esc(p.protocol) : p.version === 4 ? 'v4' : 'v3'}</span>
         <span class="tier">${p.feeTierLabel}</span>
         ${p.staked ? `<span class="tier" title="Deposited in the pool's gauge ${esc(p.gauge || '')}: it earns ${esc((p.rewards && p.rewards.symbol) || 'the gauge reward')} instead of trading fees">staked</span>` : ''}
         ${full ? '<span class="full" title="Liquidity across the whole price range">full range</span>' : ''}
@@ -3366,11 +3366,12 @@ function positionCard(p, d, opts) {
       <div class="metric"><span class="ml">Position value</span><span class="mv">${usd(p.valueUsd)}</span>
         <span class="msub">${p.symbol0} + ${p.symbol1}</span></div>
       <div class="metric"><span class="ml">${p.staked ? 'Staking rewards' : 'Uncollected fees'}</span>${feeMetric(p)}</div>
-      ${p.protocol ? platformMetric(p) : claimedMetric(p, uid, o.walletAddr)}
+      ${p.protocol ? platformMetric(p, d) : claimedMetric(p, uid, o.walletAddr)}
       <div class="metric"><span class="ml">Range status</span><span class="mv ${st.cls}">${st.text}</span>
         <span class="msub">${st.sub}</span></div>
     </div>
 
+    ${claimFeesControl(p, d)}
     <div class="rail wide">
       <div class="track">
         <div class="bar"></div>
@@ -3453,11 +3454,34 @@ function dgroupBody(parts, emptyNote) {
 // The uncollected-fee metric body. A failed read is not zero and says so.
 // Where a non-Uniswap position lives. Its claim history is not scanned (that covers
 // the Uniswap managers), so the tile says where it is instead of "not scanned yet".
-function platformMetric(p) {
+function platformMetric(p, d) {
   const where = p.staked ? 'Staked in gauge' : 'In wallet';
   const link = p.gauge ? chainRef(EXPLORER, `/address/${p.gauge}`, shortA(p.gauge), p.gauge) : '';
+  const note = !claimFeesChain(d) ? 'read only: not collected, closed or sold here'
+    : p.staked ? 'rewards are claimed through the gauge; closing and selling are not done here'
+    : 'fees can be claimed with your browser wallet; closing and selling are not done here';
   return `<div class="metric"><span class="ml">On ${esc(p.protocol)}</span><span class="mv">${where}</span>` +
-    `<span class="msub">${p.staked ? `gauge ${link} · ` : ''}read only: not collected, closed or sold here</span></div>`;
+    `<span class="msub">${p.staked ? `gauge ${link} · ` : ''}${note}</span></div>`;
+}
+
+// "Claim fees" (claim-fees.js): Slipstream positions on Base only. The browser wallet signs; this
+// dashboard never does. The button carries the settings name and the NFT id, never an address.
+function claimFeesChain(d) {
+  const id = d && d.chainId != null ? d.chainId : CHAIN.id;
+  return Number(id) === 8453;
+}
+function claimFeesControl(p, d) {
+  if (!p.protocol || p.kind === 'v2lp' || !p.positionManager || p.nftId == null || !claimFeesChain(d)) return '';
+  const staked = 'Staked in the gauge: trading fees go to the gauge\'s voters. Rewards are claimed through the gauge, not here.';
+  let reason = '';
+  if (p.staked) reason = staked;
+  else if (p.feesOk === false) reason = 'Fee read unavailable: nothing to claim can be shown.';
+  else if (!(Number(p.fee0) > 0 || Number(p.fee1) > 0)) reason = 'Nothing to collect right now.';
+  const id = String(p.nftId);
+  const attrs = `data-protocol="${esc(p.protocol)}" data-id="${esc(id)}"`;
+  return reason
+    ? `<div class="claimfees"><button type="button" class="claimbtn" ${attrs} disabled title="${esc(reason)}">Claim fees</button> <span class="muted claimwhy">${esc(reason)}</span></div>`
+    : `<div class="claimfees"><button type="button" class="claimbtn" ${attrs} title="Collect the uncollected fees to the position's owner, signed in your browser wallet">Claim fees</button> <span class="muted claimwhy">signed in your browser wallet; fees go to the NFT's owner</span></div>`;
 }
 function feeMetric(p) {
   // A staked position's trading fees go to the gauge's voters; what it earns is the reward.

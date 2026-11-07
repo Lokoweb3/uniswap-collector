@@ -2326,6 +2326,33 @@ async function handleRequest(req, res) {
       nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
     }));
   }
+  // Read-only facts for the browser-wallet "Claim fees" button (claim-fees.js): the manager from the
+  // settings allowlist, the NFT's on-chain owner and a fee estimate. No calldata, no `to`: the wallet
+  // builds and signs the collect; this server never does. Allowed under LP_READONLY / noTransactionData.
+  if (url.pathname === "/api/claim-fees/target") {
+    res.setHeader("Content-Type", "application/json");
+    if (req.method !== "GET") { res.writeHead(405, { Allow: "GET" }); return res.end(JSON.stringify({ ok: false, error: "GET only" })); }
+    try {
+      const protocol = url.searchParams.get("protocol"), id = url.searchParams.get("id");
+      let payload = cache.payload;
+      const wanted = typeof protocol === "string" && typeof id === "string" && /^\d{1,78}$/.test(id);
+      if (wanted && !payload) {
+        if (!buildInFlight) {
+          buildInFlight = build().then((pl) => { cache = { at: Date.now(), payload: pl }; return pl; }).finally(() => { buildInFlight = null; });
+          buildInFlight.catch(() => {});
+        }
+        payload = await buildInFlight;
+      }
+      const positions = [...((payload && payload.external) || [])];
+      for (const w of (watch.latest && watch.latest.wallets) || []) for (const p of w.positions || []) if (p && p.protocol) positions.push(p);
+      const r = await require("./claim-fees-target").resolveTarget({ cfg, provider, positions, protocol, id, chainName: chainDisplayName() });
+      res.writeHead(r.status);
+      return res.end(JSON.stringify(r.body));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: endpoint.redactText(err.shortMessage || err.message) }));
+    }
+  }
   if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
     res.setHeader("Content-Type", "application/json");
     try {
@@ -2664,6 +2691,17 @@ async function handleRequest(req, res) {
     } catch (err) {
       res.writeHead(500);
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+    }
+  }
+  if (url.pathname === "/claim-fees.js" || url.pathname === "/claim-fees-core.js") {
+    try {
+      const file = url.pathname.slice(1);
+      res.staticAsset = true;
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(fs.readFileSync(path.join(__dirname, file)));
+    } catch {
+      res.writeHead(404);
+      return res.end("not found");
     }
   }
   if (url.pathname === "/qr.js") {

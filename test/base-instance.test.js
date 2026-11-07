@@ -241,10 +241,30 @@ const upstream = (key, port) => new Promise((resolve) => {
       await new Promise((r) => child.once("exit", r));
     }
     // And statically: nothing in the new code signs or sends.
-    for (const f of ["slipstream.js", "endpoint.js", "tools/verify-onchain.js"]) {
+    for (const f of ["slipstream.js", "endpoint.js", "tools/verify-onchain.js", "server.js", "watch.js", "claim-fees-target.js"]) {
       const src = fs.readFileSync(path.join(ROOT, f), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
       assert.ok(!/sendTransaction|signTransaction|signMessage|new ethers\.Wallet|sendRawTransaction|\.approve\(|setApprovalForAll|\.deposit\(|\.withdraw\(|getReward\(/.test(src), `${f} has no signing or write path`);
     }
+    // Claim fees (browser-wallet signing): eth_sendTransaction lives in claim-fees.js and nowhere else that ships.
+    // (rpc.js only lists the method in its never-retry set; it cannot send one.)
+    const shipped = [];
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (["node_modules", ".git", ".claude", "test", "brain", "agent-memory", "backups", "docs", "vm"].includes(e.name)) continue;
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) walk(f);
+        else if (/\.(js|mjs|html|sh)$/.test(e.name)) shipped.push(path.relative(ROOT, f));
+      }
+    };
+    walk(ROOT);
+    const senders = shipped.filter((f) => /eth_sendTransaction/.test(fs.readFileSync(path.join(ROOT, f), "utf8")) && f !== "rpc.js");
+    assert.deepStrictEqual(senders, ["claim-fees.js"], "eth_sendTransaction appears in exactly one shipped file");
+    assert.ok(/SENDS = new Set\(\[[^\]]*eth_sendTransaction/.test(fs.readFileSync(path.join(ROOT, "rpc.js"), "utf8")), "rpc.js only names it in its deny set");
+    const cf = fs.readFileSync(path.join(ROOT, "claim-fees.js"), "utf8");
+    const fetches = [...cf.matchAll(/\bfetch\(([^)]{0,60})/g)].map((m) => m[1]);
+    assert.ok(fetches.length >= 1 && fetches.every((a) => /^`\/api\/claim-fees\/target\?/.test(a)), `claim-fees.js fetches only the target route: ${fetches}`);
+    assert.ok(!/ethers|<script|cdnjs|https?:\/\/[a-z]/i.test(cf.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "").replace(/"https:\/\/\[A-Za-z[^"]*"/g, "")), "claim-fees.js has no ethers, CDN or script tag");
+    assert.ok(!/wallet_addEthereumChain/.test(cf.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")), "never adds a chain");
   }
 
   // ---- LP_READONLY alone does not remove calldata or the operator (Arc viewer, Robinhood VM) ----------

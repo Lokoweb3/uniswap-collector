@@ -637,6 +637,16 @@ node tools/verify-onchain.js base      # read-only proof of every address in the
   against a v4 position: the addresses pass `verify-onchain.js`, but treat v4 results there as unconfirmed.
 - The approval and quote routes (`/api/approval`, `/api/v4-approval`, `/api/sell/quote`, `/api/mint/*`) answer 403 on
   a read-only instance and the operator keystore is never read; the Wallet page hides the approval card.
+- "Claim fees" button: each unstaked Aerodrome Slipstream card on Base has one. Rabby (or any injected wallet)
+  signs; the server never does. The button opens a panel showing the manager, the NFT's on-chain owner (always
+  the recipient, never editable) and the estimated fees, then asks the wallet to connect, to switch to Base
+  (`wallet_switchEthereumChain`, no chain is ever added), checks that the connected account is the owner and that
+  the wallet's own `ownerOf` agrees, and sends `collect((tokenId, owner, 2^128-1, 2^128-1))` to the manager. The
+  manager comes only from the `contracts.slipstream` entry of settings (the allowlist is those entries). Server side
+  there is one read-only route, `GET /api/claim-fees/target?protocol=<name>&id=<digits>` (manager, owner, fee estimate;
+  never calldata or `to`); the browser modules are `claim-fees-core.js` (calldata) and `claim-fees.js` (the only file
+  that contains `eth_sendTransaction`). Staked positions get a disabled button (fees go to the gauge's voters;
+  rewards are claimed through the gauge), as do positions with nothing to collect. Fees are an estimate.
 - `chain.logsRpcUrl` (public) serves `eth_getLogs` when the main RPC refuses it; `mainnet.base.org` does.
 - A killed gauge (its voter says `isAlive` false) reports `rewards.amount` 0 with the note "gauge killed".
 - An EIP-7702 delegated wallet (code `0xef0100...`) is never mistaken for a gauge.

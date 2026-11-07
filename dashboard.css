@@ -2019,3 +2019,13 @@ polyline.tline{stroke:#C9B8FF;filter:drop-shadow(0 0 6px rgba(167,139,250,.8))}
   .stat,.pos.card2{transition:none}
   .stat:hover,.pos.card2:hover{transform:none}
 }
+
+/* Claim fees (claim-fees.js): button on Slipstream cards and the confirmation panel */
+.claimfees{display:flex;align-items:center;gap:var(--s2);margin:var(--s2) 0;flex-wrap:wrap}
+.claimbtn{cursor:pointer}
+.claimbtn[disabled]{cursor:not-allowed;opacity:.6}
+.cfoverlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000}
+.cfbox{background:var(--bg, #fff);color:inherit;border:1px solid var(--rule-soft, #888);border-radius:8px;padding:16px;max-width:560px;width:calc(100% - 32px);max-height:90vh;overflow:auto}
+.cfbox dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:8px 0}
+.cfbox dd{margin:0;word-break:break-all}
+.cfbtns{display:flex;gap:8px;margin-top:12px}

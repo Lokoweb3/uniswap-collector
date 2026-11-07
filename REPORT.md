@@ -74,3 +74,29 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 5. SPEC acceptance test 1 still names the looser CSP; the shipped page and its test use the strict one.
 6. Pre-existing: /api/vaults and the router 502 page echo internal error text.
 - Cost: not measured; about 8 subagent runs.
+
+---
+
+# Round 6: Portfolio follow-ups (5f3aefc → f7cbe99)
+
+| Commit | What |
+|---|---|
+| 310344c | SPEC round 6 |
+| 52e00db | holdings-unavailable becomes a per-wallet note (tokens unknown, never $0, "at least" on the wallet row); no longer makes a chain partial or the total incomplete |
+| e9323a8 | Ages and the 15-minute stale flag computed at response time (rebuild at most once per LP_AGG_BUILD_MS, default 1000 ms, and exactly at the stale flip) |
+| 6288da0 | Synthetic pool id in the arc fixture; fixture hygiene test |
+| 02851a6 | README; SPEC round-5 test 1 states the shipped strict CSP |
+| b911557 | Fixes: stronger hygiene scan (0x runs of 40+ hex, bare 64+ hex, labels, symbols), generic token symbols in fixtures, explicit view flag, router honors HOST, fixed error strings in vaultOf and /api/vaults |
+| f7cbe99 | Review fixes: label scan on parsed JSON, ECONNRESET test, proxy 502 page shows only fixed text, sanitised err.name, stderr warning on non-loopback bind |
+
+- Verdicts: round 6, reviewer APPROVE (two independent reviews), security PASS WITH FIXES (Lows → b911557). b911557, reviewer APPROVE WITH FIXES, security PASS WITH FIXES (→ f7cbe99). f7cbe99, reviewer APPROVE, security PASS.
+- Tests (main session, f7cbe99): 127/128 pass (smoke.js needs settings.json); eslint clean; no stray servers.
+- Live partial causes at the time: holdings-unavailable only (Robinhood 1-3 wallets, Arc 0-2, Base 2); Blockscout token discovery blocked.
+- Deploy: router-only restart (chain-router.js, aggregate.js, aggregate-view.js) and a browser hard refresh.
+
+## Left to do
+- Optional tests: assert the 502 page text; assert reachable === true in the reset case.
+- Optional: no loopback warning for 127.0.0.x and [::1] spellings.
+- Before any push: the real arc pool id (prefix 0xebde8959) and real token symbols remain in history before 6288da0/b911557. A history rewrite needs user approval.
+- Root cause for holdings-unavailable (Blockscout token discovery blocked) is not addressed.
+- Cost: not measured; about 12 subagent runs, several cut off by forced hand-backs and resumed.

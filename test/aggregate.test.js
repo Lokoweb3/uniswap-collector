@@ -473,6 +473,9 @@ function scenario() {
     };
     for (const [code, data] of Object.entries(cases)) {
       for (const withBad of [false, true]) {
+        // skipped on purpose: the loading case replaces the watch part with an {__http:202} wrapper, which has no
+        // wallets list; the only part that carries wallet rows is watch, so a bad wallet cannot be placed in a present part.
+        if (withBad && code === "loading") continue;
         const d = JSON.parse(JSON.stringify(data));
         if (withBad) d.a.watch = { ...d.a.watch, wallets: [...(d.a.watch.wallets || []), bad(W3, "Wallet 3")] };
         const r = await make(d, { chains: one }).get();

@@ -224,6 +224,10 @@ Counting rules.
 Deploying. After merging, restart **only** the chain router (`node chain-router.js ...`, with the same
 `--chains=` as before) to pick up the new routes. The per-chain instances are untouched.
 
+The router binds to `127.0.0.1` by default; set the `HOST` environment variable (or pass `--host=`, which
+wins) to bind elsewhere. Errors on `/api/vaults` and the per-chain vault cards are fixed strings; detail is
+logged server-side as a bare error code only.
+
 Tests: `node test/run-all.js aggregate` (`aggregate.test.js` for the module,
 `aggregate-router.test.js` through the router with stub instances, `aggregate-view.test.js` for the
 page script and its escaping).

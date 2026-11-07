@@ -48,8 +48,13 @@ const arg = (n, d = null) => {
 };
 
 const PORT = Number(arg("port", 8800));
-const HOST = arg("host", "127.0.0.1");
+const HOST = arg("host", process.env.HOST || "127.0.0.1");
 const COOKIE = "lpchain";
+
+// Server-side detail for failures whose text must not reach the client. Only a short alphanumeric code is
+// ever logged: no message text (which can carry URLs, keys or addresses), no stack.
+const safeCode = (err) => (err && typeof err.code === "string" && /^[A-Za-z0-9_]{1,40}$/.test(err.code) ? err.code : "unknown");
+const logDetail = (msg) => console.error(`[chain-router] ${msg}`);
 
 // The only targets that exist. A request cannot name anything outside this list.
 // accent: each chain gets its own colour so the bar reads as "which chain" at a
@@ -183,9 +188,11 @@ function vaultOf(chain, timeoutMs = 15000) {
       });
     });
     r.on("timeout", () => { r.destroy(); resolve({ fail: `did not answer within ${Math.round(timeoutMs / 1000)}s — busy, not down` }); });
-    r.on("error", (err) => resolve({
-      fail: err.code === "ECONNREFUSED" ? `nothing is listening on 127.0.0.1:${chain.port}` : `${err.code || err.message}`,
-    }));
+    r.on("error", (err) => {
+      // Fixed strings only reach the client; the code is logged server-side (a bare code, never a message).
+      if (err.code !== "ECONNREFUSED") logDetail(`vault ${chain.key}: upstream error code ${safeCode(err)}`);
+      resolve({ fail: err.code === "ECONNREFUSED" ? `nothing is listening on 127.0.0.1:${chain.port}` : "could not reach the instance" });
+    });
     r.end();
   });
   return Promise.all([get("/api/vault-info"), get("/api/treasury")]).then(([v, t]) => {
@@ -197,7 +204,7 @@ function vaultOf(chain, timeoutMs = 15000) {
       // Read-only, and kept apart: each chain's figures stay under that chain's name.
       // Nothing here is added to anything from another chain.
       vault, treasury,
-      error: vault ? null : v.fail || (v.data && v.data.error) || "answered, but not with a vault",
+      error: vault ? null : v.fail || "answered, but not with a vault",
       // Whether the instance is reachable at all, which is a different question from
       // whether it produced a vault. A card that says "not running" when the process
       // is merely busy sends someone to restart something that is working.
@@ -353,8 +360,9 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify({ ok: true, at: Date.now(), current: chain.key, chains }));
     }).catch((err) => {
+      logDetail(`/api/vaults failed: ${err && err.name ? err.name : "Error"} ${safeCode(err)}`);
       res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: err.message }));
+      res.end(JSON.stringify({ ok: false, error: "vault summary unavailable" }));
     });
     return;
   }

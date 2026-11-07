@@ -493,6 +493,71 @@ function scenario() {
     }
   }
 
+  // ---- P2 8-10. ages and the 15-minute flag are computed at response time ---------------------------------------
+  {
+    const one = [CH[0]];
+    const T0 = F.AT + 60000;
+    const mk = (delayRef, ttlMs = 30000) => {
+      const state = { t: T0, upstream: 0 };
+      const ag = agg.createAggregator({
+        chains: one, now: () => state.t, waitMs: 50, ttlMs,
+        fetchJson: async (chain, p) => {
+          state.upstream++;
+          if (delayRef.ms) await new Promise((r) => setTimeout(r, delayRef.ms));
+          const part = p.split("/").pop();
+          const body = { positions: F.positions(M), watch: F.watch([], { at: state.watchAt ?? T0 }), portfolio: F.portfolio(M), staking: F.staking() }[part];
+          return { status: 200, data: { ...body, at: part === "watch" ? (state.watchAt ?? T0) : T0 } };
+        },
+      });
+      return { state, ag };
+    };
+    // 8: idle gap, slow upstream
+    {
+      const delay = { ms: 0 };
+      const { state, ag } = mk(delay);
+      const r1 = await ag.get(); assert.strictEqual(r1.chains[0].status, "ok");
+      state.t = T0 + 20 * 60000; delay.ms = 300;
+      const r2 = await ag.get();
+      assert.strictEqual(r2.at, state.t, "at is the new clock time");
+      assert.ok(r2.chains[0].ageMs >= 20 * 60000);
+      assert.ok(r2.chains[0].problems.some((p) => p.part === "watch" && p.code === "stale-source"));
+      assert.strictEqual(r2.chains[0].status, "partial");
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    // 9 + 10: boundary, ages move, build reuse
+    {
+      const { state, ag } = mk({ ms: 0 }, 1e9);
+      await ag.get();
+      const up = state.upstream;
+      state.t = T0 + 15 * 60000 - 1;
+      // keep the round TTL out of play by checking the cached payload only
+      let p = JSON.parse(await ag.getJson());
+      const before = state.upstream;
+      assert.ok(!p.chains[0].problems.some((x) => x.code === "stale-source"));
+      state.t = T0 + 15 * 60000 + 1;
+      p = JSON.parse(await ag.getJson());
+      const sp = p.chains[0].problems.find((x) => x.code === "stale-source" && x.part === "watch");
+      assert.ok(sp && sp.part === "watch" && sp.since === T0, "stale flag flips on time");
+      assert.strictEqual(p.chains[0].status, "partial");
+      assert.ok(up > 0 && before === up && state.upstream === up, "no upstream request between the two calls");
+    }
+    {
+      const { state, ag } = mk({ ms: 0 });
+      await ag.get();
+      const a1 = JSON.parse(await ag.getJson());
+      state.t += 1000;
+      const a2 = JSON.parse(await ag.getJson());
+      assert.ok(a2.at !== a1.at && a2.chains[0].ageMs >= a1.chains[0].ageMs + 1000, "ages move");
+      const b = ag.stats.builds;
+      state.t += 500;
+      await ag.getJson();
+      assert.strictEqual(ag.stats.builds, b, "inside buildMaxAgeMs: one build reused");
+      state.t += 1000;
+      await Promise.all(Array.from({ length: 20 }, () => ag.getJson()));
+      assert.strictEqual(ag.stats.builds, b + 1, "20 concurrent calls: at most one build");
+    }
+  }
+
   // ---- 33. performance ----------------------------------------------------------------------------------------
   {
     const big = {};

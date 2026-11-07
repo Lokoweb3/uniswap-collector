@@ -572,6 +572,7 @@ function createAggregator(opts = {}) {
   const waitMs = opts.waitMs ?? 4000;
   const ttlMs = opts.ttlMs ?? 30000;
   const maxBytes = opts.maxBytes ?? 8 * 1024 * 1024;
+  const buildMaxAgeMs = opts.buildMaxAgeMs ?? 1000;
   const clock = opts.now || Date.now;
   const fetchJson = opts.fetchJson || ((chain, path) => defaultFetchJson(chain.port, path, { timeoutMs, maxBytes }));
   const states = new Map(chains.map((c) => [c.key, blankState(c)]));
@@ -626,14 +627,26 @@ function createAggregator(opts = {}) {
   const stats = { builds: 0 };
   const versionOf = () => [...states.values()].map((s) => `${s.roundAt || 0}.${s.seq || 0}`).join("|");
 
+  // Ages ("ageMs", "at") and the 15-minute stale flag are computed at response time: a cached build is
+  // reused only while no round finished, it is younger than buildMaxAgeMs and no part crosses the stale line.
+  function nextFlipOf(now) {
+    let flip = Infinity;
+    for (const s of states.values()) for (const n of PART_NAMES) {
+      const p = s.parts[n];
+      if (p && p.data && p.at !== null) { const f = p.at + SOURCE_STALE_MS + 1; if (f > now && f < flip) flip = f; }
+    }
+    return flip;
+  }
+
   function cached() {
     const v = versionOf();
-    if (cache && cache.v === v) return cache;
-    const now = clock();
+    const t = clock();
+    if (cache && cache.v === v && t - cache.builtAt < buildMaxAgeMs && t >= cache.builtAt && t < cache.nextFlipAt) return cache;
+    const now = t;
     const composed = [...states.values()].map((s) => compose(s, now));
     const payload = build(composed, { now, ttlMs });
     stats.builds++;
-    cache = { v, payload, json: JSON.stringify(payload) };
+    cache = { v, builtAt: now, nextFlipAt: nextFlipOf(now), payload, json: JSON.stringify(payload) };
     return cache;
   }
 

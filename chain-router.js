@@ -217,6 +217,7 @@ const aggregator = aggregate.createAggregator({
   timeoutMs: envMs("LP_AGG_TIMEOUT_MS", 8000),
   waitMs: envMs("LP_AGG_WAIT_MS", 4000),
   ttlMs: envMs("LP_AGG_TTL_MS", 30000),
+  buildMaxAgeMs: envMs("LP_AGG_BUILD_MS", 1000),
   maxBytes: envMs("LP_AGG_MAX_BYTES", 8 * 1024 * 1024),
 });
 const AGG_ROUTES = new Set(["/portfolio", "/portfolio/", "/api/aggregate", "/aggregate-view.js", "/aggregate.css"]);

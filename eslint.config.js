@@ -57,6 +57,11 @@ module.exports = [
     languageOptions: { sourceType: "script", globals: BROWSER_GLOBALS },
   },
   {
+    // Also required by test/aggregate-view.test.js, hence `module`.
+    files: ["aggregate-view.js"],
+    languageOptions: { sourceType: "script", globals: { ...BROWSER_GLOBALS, module: "writable" } },
+  },
+  {
     files: ["**/*.mjs"],
     languageOptions: { sourceType: "module", globals: NODE_GLOBALS },
   },

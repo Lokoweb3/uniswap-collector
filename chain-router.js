@@ -14,8 +14,11 @@
  * because from the page's point of view nothing has changed.
  *
  * What it deliberately does NOT do:
- *   - merge data across chains. No cross-chain totals, no combined position list.
- *     Two right answers beat one wrong one, and a summed figure hides a stale half.
+ *   - merge data across chains on the proxy path. Everything proxied (the dashboards and
+ *     their /api/... calls) is one chain's data, unmerged. The one exception is a separate,
+ *     read-only, labelled-per-chain view, /portfolio + /api/aggregate (aggregate.js): it
+ *     reads four cached GET endpoints per chain, never sums over a chain it could not
+ *     read, shows each chain's status and stale data as such, and has no write path.
  *   - proxy anywhere but a configured chain. The target is chosen from a fixed list
  *     by key; nothing in a request can point it elsewhere.
  *   - share cookies between chains. Each instance's cookies are namespaced per chain
@@ -33,7 +36,10 @@
 "use strict";
 
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const csrf = require("./csrf");
+const aggregate = require("./aggregate");
 const { URL } = require("url");
 
 const arg = (n, d = null) => {
@@ -105,7 +111,7 @@ const PICKER_ID = "lp-chain-picker";
 // Methods a browser may send cross-site without the guard mattering; everything else
 // is checked before it is forwarded.
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-function pickerHtml(current) {
+function pickerHtml(current, opts = {}) {
   // A dropdown was easy to miss: it read as page furniture, and the chain a figure
   // belongs to is the one thing here that must never be misread. So: every chain
   // visible at once, the current one filled in its own colour and marked as current,
@@ -125,6 +131,13 @@ function pickerHtml(current) {
       <span style="width:7px;height:7px;border-radius:50%;background:${here ? "#0b1220" : c.accent};opacity:${here ? 0.75 : 1}"></span>
       ${c.label}</a>`;
   }).join("");
+  // The cross-chain page is not a chain, so it has no data-chain: the click handler below
+  // only reacts to a[data-chain] and leaves this a plain link.
+  const onPortfolio = !!opts.portfolio;
+  const portfolioTab = `<a href="/portfolio"${onPortfolio ? ' aria-current="page"' : ""} title="All chains, one page"
+      style="display:flex;align-items:center;text-decoration:none;border-radius:7px;padding:6px 11px;margin-left:4px;
+      font-weight:${onPortfolio ? 700 : 500};white-space:nowrap;color:${onPortfolio ? "#0b1220" : "#e2e8f0"};
+      background:${onPortfolio ? "#e2e8f0" : "transparent"};border:1px dashed rgba(226,232,240,.55)">Portfolio</a>`;
   // Fixed, always visible, and it names the chain in the page's own words: a picker
   // you cannot see is how someone reads Arc's numbers believing they are Robinhood's.
   return `
@@ -134,7 +147,7 @@ function pickerHtml(current) {
   font:13px/1.2 system-ui,-apple-system,Segoe UI,sans-serif;color:#e2e8f0;
   box-shadow:0 6px 22px rgba(0,0,0,.45),0 0 0 3px ${current.accent}1f">
   <span style="font-size:10px;text-transform:uppercase;letter-spacing:.9px;opacity:.6;padding-left:2px">Chain</span>
-  <span style="display:flex;gap:5px">${tabs}</span>
+  <span style="display:flex;gap:5px">${tabs}</span>${portfolioTab}
 </div>
 <script>(function(){var d=document.getElementById(${JSON.stringify(PICKER_ID)});if(!d)return;
 d.addEventListener('click',function(e){var a=e.target.closest('a[data-chain]');
@@ -194,8 +207,114 @@ function vaultOf(chain, timeoutMs = 15000) {
   });
 }
 
+// ---- the cross-chain Portfolio view (read-only) ----------------------------------------
+// /portfolio, /api/aggregate, /aggregate-view.js and /aggregate.css are answered here, ahead
+// of the ?chain= redirect and the proxy: they belong to no single chain. They accept GET and
+// HEAD only, check the Host header (these four routes only; the proxy path is unchanged) and
+// reach only the fixed ports in CHAINS, over the four fixed GET paths in aggregate.js.
+const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
+const aggregator = aggregate.createAggregator({
+  chains: CHAINS,
+  timeoutMs: envMs("LP_AGG_TIMEOUT_MS", 8000),
+  waitMs: envMs("LP_AGG_WAIT_MS", 4000),
+  ttlMs: envMs("LP_AGG_TTL_MS", 30000),
+  maxBytes: envMs("LP_AGG_MAX_BYTES", 8 * 1024 * 1024),
+});
+const AGG_ROUTES = new Set(["/portfolio", "/portfolio/", "/api/aggregate", "/aggregate-view.js", "/aggregate.css"]);
+const AGG_EXTRA_HOSTS = String(process.env.LP_ALLOWED_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+const AGG_THEME_DIR = process.env.LP_AGG_THEME_DIR || __dirname;
+const AGG_NOSNIFF = { "X-Content-Type-Options": "nosniff" };
+
+/** Loopback names only on the router's own port (or none), plus names in LP_ALLOWED_HOSTS. */
+function aggHostAllowed(raw, localPort) {
+  if (!raw) return false;
+  const host = String(raw).toLowerCase();
+  const bare = host.replace(/:\d+$/, "");
+  if (["127.0.0.1", "localhost", "[::1]", "::1"].includes(bare)) return host === bare || host === `${bare}:${localPort}`;
+  return AGG_EXTRA_HOSTS.includes(host) || AGG_EXTRA_HOSTS.includes(bare);
+}
+
+/** dashboard.css (the theme, read at request time) followed by the aggregate rules. */
+function aggregateCss(themeDir = AGG_THEME_DIR) {
+  let theme = Buffer.alloc(0);
+  try { theme = fs.readFileSync(path.join(themeDir, "dashboard.css")); } catch { /* the aggregate rules carry fallbacks */ }
+  let rules = Buffer.alloc(0);
+  try { rules = fs.readFileSync(path.join(__dirname, "aggregate.css")); } catch { /* served without */ }
+  return Buffer.concat([theme, theme.length ? Buffer.from("\n") : Buffer.alloc(0), rules]);
+}
+
+/** The page shell. No inline script and no upstream data: the view script fills it in. */
+function portfolioHtml() {
+  const tabs = CHAINS.map((c) => `<a class="chain-tab" href="/?chain=${encodeURIComponent(c.key)}" data-key="${c.key}" style="--accent:${c.accent}"><span class="dot"></span>${c.label}</a>`).join("");
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio - all chains</title>
+<link rel="stylesheet" href="/aggregate.css">
+</head>
+<body class="agg">
+<div class="wrap">
+<header class="topbar">
+  <h1 class="agg-title">Portfolio <span class="agg-sub">all chains</span></h1>
+  <nav class="pages" aria-label="Pages"><a href="/">Dashboard</a><a href="/analytics">Analytics</a><a href="/wallet">Wallet</a><a href="/portfolio" class="here" aria-current="page">Portfolio</a></nav>
+</header>
+<div class="agg-chainbar" role="navigation" aria-label="Chain"><span class="agg-chainbar-label">Open a chain</span>${tabs}<a class="chain-tab all" href="/">Dashboard</a></div>
+<main id="agg-root" aria-live="polite"><p class="agg-loading">Loading the portfolio...</p></main>
+<noscript><p>This page needs JavaScript to list the portfolio.</p></noscript>
+</div>
+<script src="/aggregate-view.js" defer></script>
+</body>
+</html>
+`;
+}
+
+/** Returns true when the request was one of the Portfolio routes (and has been answered). */
+function handleAggregate(req, res, url) {
+  if (!AGG_ROUTES.has(url.pathname)) return false;
+  const send = (status, headers, body) => {
+    res.writeHead(status, headers);
+    res.end(req.method === "HEAD" ? undefined : body);
+  };
+  if (!aggHostAllowed(req.headers.host, req.socket && req.socket.localPort)) {
+    send(421, { "Content-Type": "application/json", "Cache-Control": "no-store", ...AGG_NOSNIFF }, JSON.stringify({ ok: false }));
+    return true;
+  }
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    send(405, { Allow: "GET, HEAD", "Content-Type": "application/json", ...AGG_NOSNIFF }, JSON.stringify({ ok: false, error: "read-only" }));
+    return true;
+  }
+  const htmlHeaders = {
+    "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache",
+    "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer", ...AGG_NOSNIFF,
+  };
+  if (url.pathname === "/portfolio" || url.pathname === "/portfolio/") {
+    send(200, htmlHeaders, portfolioHtml());
+  } else if (url.pathname === "/aggregate.css") {
+    send(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache", ...AGG_NOSNIFF }, aggregateCss());
+  } else if (url.pathname === "/aggregate-view.js") {
+    let body = "";
+    try { body = fs.readFileSync(path.join(__dirname, "aggregate-view.js")); } catch { /* handled below */ }
+    if (!body.length) send(404, { "Content-Type": "application/json", ...AGG_NOSNIFF }, JSON.stringify({ ok: false }));
+    else send(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-cache", ...AGG_NOSNIFF }, body);
+  } else {
+    const json = { "Content-Type": "application/json", "Cache-Control": "no-store", ...AGG_NOSNIFF };
+    if (req.method === "HEAD") { send(200, json); return true; }
+    aggregator.get({ refresh: url.searchParams.get("refresh") === "1" })
+      .then((payload) => send(200, json, JSON.stringify(payload)))
+      .catch(() => send(500, json, JSON.stringify({ ok: false, error: "aggregate failed" })));
+  }
+  return true;
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+
+  // Before the ?chain= redirect: these routes ignore the chain cookie and query.
+  if (handleAggregate(req, res, url)) return;
+
   const { chain, fromQuery } = chainFor(req, url);
 
   // A chain chosen by query is remembered and the query dropped, so a shared link
@@ -283,4 +402,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { KNOWN_CHAINS, chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, vaultOf, CHAINS, COOKIE, nsName, server };
+module.exports = { KNOWN_CHAINS, chainFor, targetFor, renameSetCookie, restoreCookieHeader, injectPicker, pickerHtml, vaultOf, CHAINS, COOKIE, nsName, server, aggregateCss, portfolioHtml, aggHostAllowed, aggregator };

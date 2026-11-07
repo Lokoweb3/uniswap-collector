@@ -1,0 +1,217 @@
+{
+ "positions": {
+  "ok": true,
+  "at": 1794000000000,
+  "chainId": 0,
+  "owner": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7",
+  "ownerLabel": "Main",
+  "wethUsd": 2234.64,
+  "totals": {
+   "liquidityUsd": 853.394,
+   "uncountedUsd": 0,
+   "feesUsd": 57.664,
+   "count": 2,
+   "rewardsUsd": 0
+  },
+  "positions": [],
+  "external": [
+   {
+    "tokenId": "aerodrome-v1-79371151",
+    "nftId": "79371151",
+    "version": "aerodrome-v1",
+    "protocol": "aerodrome-v1",
+    "staked": false,
+    "gaugeKilled": null,
+    "pair": "WETH / cbBTC",
+    "symbol0": "WETH",
+    "symbol1": "cbBTC",
+    "inRange": true,
+    "poolAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1f",
+    "valueUsd": 270.086,
+    "feesUsd": 0.257305,
+    "feesOk": true,
+    "feeTierLabel": "tick 100",
+    "amount0": 0.0598275,
+    "amount1": 0.00180209,
+    "usd0": 2234.64,
+    "usd1": 75686.4,
+    "fee0": 0.0000673876,
+    "fee1": 0.00000141,
+    "rewards": null,
+    "gauge": null
+   },
+   {
+    "tokenId": "aerodrome-cl2-8905958",
+    "nftId": "8905958",
+    "version": "aerodrome-cl2",
+    "protocol": "aerodrome-cl2",
+    "staked": false,
+    "gaugeKilled": null,
+    "pair": "USDC / LAPTOP",
+    "symbol0": "USDC",
+    "symbol1": "LAPTOP",
+    "inRange": true,
+    "poolAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa21",
+    "valueUsd": 583.308,
+    "feesUsd": 57.4067,
+    "feesOk": true,
+    "feeTierLabel": "tick 200",
+    "amount0": 326.344,
+    "amount1": 5604.81,
+    "usd0": 1,
+    "usd1": 0.0458471,
+    "fee0": 26.389,
+    "fee1": 676.548,
+    "rewards": null,
+    "gauge": null
+   }
+  ],
+  "closed": [],
+  "errors": [],
+  "notes": [],
+  "warnings": []
+ },
+ "watch": {
+  "ok": true,
+  "at": 1794000000000,
+  "wallets": [
+   {
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1e",
+    "label": "Wallet 1",
+    "ok": true,
+    "collect": false,
+    "totals": {
+     "count": 1,
+     "idle": 1,
+     "liquidityUsd": 0,
+     "uncountedUsd": 0,
+     "feesUsd": 0.0158941,
+     "rewardsUsd": 0,
+     "walletUsd": 2.12777,
+     "totalUsd": 2.14366
+    },
+    "positions": [],
+    "external": [
+     {
+      "tokenId": "aerodrome-v1-11534544",
+      "nftId": "11534544",
+      "version": "aerodrome-v1",
+      "protocol": "aerodrome-v1",
+      "staked": false,
+      "gaugeKilled": null,
+      "pair": "WETH / cbBTC",
+      "symbol0": "WETH",
+      "symbol1": "cbBTC",
+      "inRange": false,
+      "poolAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1f",
+      "valueUsd": 0,
+      "feesUsd": 0.0158941,
+      "feesOk": true,
+      "feeTierLabel": "tick 100",
+      "amount0": 0,
+      "amount1": 0,
+      "usd0": 2234.64,
+      "usd1": 75686.4,
+      "fee0": 0,
+      "fee1": 2.1e-7,
+      "rewards": null,
+      "gauge": null
+     }
+    ],
+    "holdings": {
+     "ok": false,
+     "walletUsd": 2.12777,
+     "unscaled": [],
+     "tokens": [
+      {
+       "symbol": "TKN0",
+       "native": true,
+       "amount": 0.000952176,
+       "price": 2234.64,
+       "usd": 2.12777,
+       "thin": false,
+       "address": null
+      }
+     ]
+    }
+   },
+   {
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa20",
+    "label": "Wallet 2",
+    "ok": true,
+    "collect": false,
+    "totals": {
+     "count": 0,
+     "idle": 0,
+     "liquidityUsd": 0,
+     "uncountedUsd": 0,
+     "feesUsd": 0,
+     "rewardsUsd": 0,
+     "walletUsd": 0.674332,
+     "totalUsd": 0.674332
+    },
+    "positions": [],
+    "external": [],
+    "holdings": {
+     "ok": false,
+     "walletUsd": 0.674332,
+     "unscaled": [],
+     "tokens": [
+      {
+       "symbol": "TKN0",
+       "native": true,
+       "amount": 0.000301764,
+       "price": 2234.64,
+       "usd": 0.674332,
+       "thin": false,
+       "address": null
+      }
+     ]
+    }
+   }
+  ],
+  "totals": {
+   "wallets": 2,
+   "liquidityUsd": 0,
+   "uncountedUsd": 0,
+   "feesUsd": 0.0158941,
+   "walletUsd": 2.8021,
+   "totalUsd": 2.818
+  },
+  "refreshing": false
+ },
+ "portfolio": {
+  "ok": true,
+  "at": 1794000000000,
+  "owner": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7",
+  "totals": {
+   "walletUsd": 9.99899,
+   "lpUsd": 853.394,
+   "feesUsd": 57.664,
+   "totalUsd": 921.057
+  },
+  "partial": false,
+  "unpriced": [],
+  "rows": [
+   {
+    "native": true,
+    "wallet": 0.00447454,
+    "pools": 0,
+    "fees": 0,
+    "price": 2234.64,
+    "walletUsd": 9.99899,
+    "usd": 9.99899,
+    "thin": false,
+    "source": "wallet",
+    "address": null,
+    "symbol": "ETH"
+   }
+  ]
+ },
+ "staking": {
+  "ok": true,
+  "at": 1794000000000,
+  "tokens": [],
+  "wallets": []
+ }
+}

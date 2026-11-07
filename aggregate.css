@@ -1,0 +1,43 @@
+/* Aggregate (Portfolio) page rules. Served after dashboard.css by the router, so the theme
+   variables apply; every colour here has a readable fallback in case that file is missing. */
+body.agg { background: var(--bg, #0b1220); color: var(--ink, #e5edf8); font: 14px/1.45 var(--sans, system-ui, -apple-system, "Segoe UI", sans-serif); margin: 0; }
+body.agg .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+body.agg .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--rule, #24364c); }
+body.agg .agg-title { margin: 0; font-size: 20px; }
+body.agg .agg-sub { font-size: 12px; color: var(--muted, #9aafca); font-weight: 500; margin-left: 6px; }
+body.agg .pages { display: flex; gap: 4px; }
+body.agg .pages a { font-size: 12.5px; font-weight: 600; color: var(--muted, #9aafca); text-decoration: none; padding: 3px 10px; border-radius: 5px; border: 1px solid transparent; }
+body.agg .pages a.here { color: var(--bright, #fff); border-color: var(--rule, #24364c); background: var(--card, #111a2b); }
+body.agg .agg-chainbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+body.agg .agg-chainbar-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted, #9aafca); }
+body.agg .chain-tab, body.agg .ctag { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink, #e5edf8); border: 1px solid var(--accent, var(--rule, #24364c)); border-radius: var(--r-ctl, 8px); padding: 3px 10px; font-weight: 600; }
+body.agg .ctag { padding: 0 7px; font-size: 12px; }
+body.agg .chain-tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent, #888); }
+body.agg .chain-tab.all { --accent: var(--rule, #24364c); font-weight: 500; }
+body.agg .tile { background: var(--card, #111a2b); border: 1px solid var(--rule, #24364c); border-radius: var(--r-card, 12px); padding: 14px 16px; margin: 12px 0; }
+body.agg .tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted, #9aafca); }
+body.agg .tile .grand { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+body.agg .tile .sub { color: var(--muted, #9aafca); font-variant-numeric: tabular-nums; }
+body.agg .banner { border: 1px solid var(--accent, var(--warn, #ffb547)); background: var(--warn-dim, rgba(255, 181, 71, .13)); border-radius: var(--r-ctl, 8px); padding: 8px 12px; margin: 8px 0; }
+body.agg .banner.down { background: var(--neg-dim, rgba(255, 102, 122, .12)); }
+body.agg .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 12px 0; }
+body.agg .chip { border: 1px solid var(--accent, var(--rule, #24364c)); border-radius: var(--r-pill, 999px); padding: 2px 10px; }
+body.agg select, body.agg button { background: var(--raised, #152137); color: var(--ink, #e5edf8); border: 1px solid var(--rule, #24364c); border-radius: var(--r-ctl, 8px); padding: 4px 10px; font: inherit; }
+body.agg button { cursor: pointer; }
+body.agg .agg-sec { margin: 18px 0; overflow-x: auto; }
+body.agg .agg-sec h2 { font-size: 15px; margin: 0 0 6px; }
+body.agg table { width: 100%; border-collapse: collapse; }
+body.agg th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted, #9aafca); background: var(--raised, #152137); padding: 6px 8px; white-space: nowrap; }
+body.agg th.sortable { cursor: pointer; }
+body.agg td { padding: 6px 8px; border-top: 1px solid var(--rule-soft, #1b2a3e); vertical-align: top; }
+body.agg td.num, body.agg th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+body.agg tr.group td { color: var(--muted, #9aafca); background: var(--raised, #152137); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+body.agg .muted { color: var(--muted, #9aafca); }
+body.agg .badge { display: inline-block; font-size: 11px; border-radius: var(--r-pill, 999px); padding: 0 7px; border: 1px solid var(--rule, #24364c); }
+body.agg .badge.good { color: var(--pos, #35e6a1); border-color: var(--pos, #35e6a1); }
+body.agg .badge.warn { color: var(--warn, #ffb547); border-color: var(--warn, #ffb547); }
+body.agg .badge.bad { color: var(--neg, #ff667a); border-color: var(--neg, #ff667a); }
+body.agg .badge.staked { color: var(--cyan, #29d9ff); border-color: var(--cyan, #29d9ff); }
+body.agg .agg-breakdown { display: flex; flex-wrap: wrap; gap: 18px; }
+body.agg .agg-sec.half { flex: 1 1 300px; }
+body.agg .foot { font-size: 12px; }

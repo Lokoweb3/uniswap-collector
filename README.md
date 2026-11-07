@@ -146,6 +146,77 @@ Pricing fallbacks, in order:
 
 The pool chosen per token is cached six hours in `portfolio.json`.
 
+## Cross-chain Portfolio page (`/portfolio`)
+
+One page for "what do I hold, on every chain": LP positions, wallet tokens and sNET staking across
+every enabled chain and every wallet, with a grand total and breakdowns by chain, wallet and
+protocol. It is served by the chain router (the same URL as the dashboards, `:8800`, and through
+the public gate), linked as **Portfolio** in the chain bar that the router injects into every
+dashboard page. It is read-only: GET/HEAD only, no form, no button that sends anything but a GET.
+
+How it works. The router (`aggregate.js`, a pure module) reads four cached GET endpoints of each
+chain's own instance -- `/api/positions`, `/api/watch`, `/api/portfolio`, `/api/staking` -- from
+`127.0.0.1:<chain port>` only, and answers `GET /api/aggregate`. The per-chain instances, their
+data directories, cookies and the proxy path are not changed and not merged: the dashboards still
+show one chain each. Routes: `/portfolio`, `/api/aggregate`, `/aggregate-view.js`,
+`/aggregate.css` (dashboard.css followed by the page rules, so a theme swap applies without a
+restart). These four routes also check the Host header (loopback on the router's own port, or a
+name in `LP_ALLOWED_HOSTS`); the existing proxy path is unchanged. `?refresh=1` on
+`/api/aggregate` forces a new round (at most one per chain per 5 s); `?chains=a,b` and
+`?wallet=<address|label>` on `/portfolio` only preselect the filters.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LP_AGG_TIMEOUT_MS` | 8000 | per upstream request deadline (the connection is closed after it) |
+| `LP_AGG_WAIT_MS` | 4000 | how long a request waits for a refresh round before answering from cache with the unfinished chains marked `loading` |
+| `LP_AGG_TTL_MS` | 30000 | cache lifetime; no more than one upstream round per chain per TTL, however many browsers poll |
+| `LP_AGG_MAX_BYTES` | 8388608 | upstream body cap; a larger answer is aborted (`too-large`) |
+| `LP_AGG_THEME_DIR` | the repo folder | where `dashboard.css` is read from (for tests) |
+
+Counting rules.
+
+- **Grand total = LP + fees + pending rewards + tokens.** `uncounted` and `rewards not counted` are
+  reported separately and are never in it.
+- An LP is counted when it has a USD value, is not thin and is not flagged by the instance (the same
+  rule the instance uses; the PulseChain price-gap rule is kept). Others are listed under "Not counted"
+  with a reason (`thin-pool`, `price-gap`, `unanchored`, `unpriced`). An unpriced value is shown as
+  "unpriced", never as `$0.00`.
+- **Fees** are counted only for counted pools whose fees were read. Difference from the instance:
+  its own `feesUsd` total also adds the fees of uncounted pools; the aggregate does not.
+- **Pending gauge / farm rewards** (for example AERO on a staked Aerodrome NFT, UP, a PulseX farm) are
+  **included** in the grand total and in the by-chain / by-wallet / by-protocol breakdowns, and also
+  shown as their own line (`pending rewards (included)`). A priced reward counts even when the pool
+  value itself is uncounted. Unpriced rewards and rewards of a killed gauge are **not counted**; they
+  are listed with the reason and summed into `rewardsUncounted*`.
+- sNET staking income (`rewards.today/d7/d30/total`) is history that is already in the rebased
+  balance. It is shown ("already received, not pending") but **never** added as pending rewards or
+  to the total, and the sNET balance is counted once, as a token row.
+- Tokens: the main wallet uses only the `wallet` amount of `/api/portfolio` rows (the rest of a row is
+  LP principal and fees that the positions already value); watched wallets use their holdings. Thin
+  rows count at the instance's capped value; assumed-price rows count and are summed into
+  `priced by assumption`. A native coin and its ERC-20 twin are one row.
+- **No double counting**: positions found in both `/api/positions` and `/api/watch` count once; the
+  main wallet in the watch list is read from `/api/positions` only; the same address on two chains is
+  one wallet in the breakdown (items stay per chain); a token that is also an LP pair address is not
+  counted again.
+- **Honesty about chains**: each chain has a status. `ok`; `partial` (a part, or a wallet, is
+  missing, loading or older than 15 minutes; named in the banner); `stale` (nothing fresh; the last
+  good data is shown); `loading`; `down` (listed with a banner, never omitted and never shown as
+  `$0`). Stale last-good data **is included** in the grand total, flagged, and its amount is shown
+  separately as `staleUsd` with the last-good time. Chains never seen are excluded and make
+  `incomplete` true. Last-good data is kept in memory only.
+- Nothing from an instance reaches the page except a fixed set of fields; operator, unlock, ops,
+  explorer, RPC and raw upstream error strings never do (errors become `timeout`, `unreachable`,
+  `http-<status>`, `bad-json`, `too-large`, `loading`, `upstream-error`). Lists are capped at 5000
+  items per kind (totals cover everything) and strings at 80 characters.
+
+Deploying. After merging, restart **only** the chain router (`node chain-router.js ...`, with the same
+`--chains=` as before) to pick up the new routes. The per-chain instances are untouched.
+
+Tests: `node test/run-all.js aggregate` (`aggregate.test.js` for the module,
+`aggregate-router.test.js` through the router with stub instances, `aggregate-view.test.js` for the
+page script and its escaping).
+
 ## Asking questions about the data
 
 ### The agent (`agent.js`): one brain, three front doors

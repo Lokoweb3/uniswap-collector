@@ -1,0 +1,516 @@
+{
+ "positions": {
+  "ok": true,
+  "at": 1794000000000,
+  "chainId": 0,
+  "owner": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa17",
+  "ownerLabel": "Main",
+  "wethUsd": 2234.24,
+  "totals": {
+   "liquidityUsd": 0,
+   "uncountedUsd": 0,
+   "feesUsd": 0,
+   "count": 0,
+   "rewardsUsd": 0
+  },
+  "positions": [],
+  "external": [],
+  "closed": [],
+  "errors": [],
+  "notes": [],
+  "warnings": []
+ },
+ "watch": {
+  "ok": true,
+  "at": 1794000000000,
+  "wallets": [
+   {
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+    "label": "Wallet 1",
+    "ok": true,
+    "collect": false,
+    "totals": {
+     "count": 0,
+     "idle": 0,
+     "liquidityUsd": 0,
+     "uncountedUsd": 0,
+     "feesUsd": 0,
+     "rewardsUsd": 0,
+     "walletUsd": 440.659,
+     "totalUsd": 440.659
+    },
+    "positions": [],
+    "external": [],
+    "holdings": {
+     "ok": true,
+     "walletUsd": 440.659,
+     "unscaled": [],
+     "tokens": [
+      {
+       "symbol": "TKN0",
+       "native": true,
+       "amount": 0.197472,
+       "price": 2231.42,
+       "usd": 440.643,
+       "thin": false,
+       "address": null
+      },
+      {
+       "symbol": "TKN1",
+       "native": false,
+       "amount": 1.58565,
+       "price": 0.00911213,
+       "usd": 0.0144486,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2"
+      },
+      {
+       "symbol": "TKN2",
+       "native": false,
+       "amount": 493.654,
+       "price": 0.00000331641,
+       "usd": 0.00163716,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3"
+      },
+      {
+       "symbol": "TKN3",
+       "native": false,
+       "amount": 30.5089,
+       "price": 0.00000464099,
+       "usd": 0.000141592,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4"
+      },
+      {
+       "symbol": "TKN4",
+       "native": false,
+       "amount": 1,
+       "price": 0.00000680871,
+       "usd": 0.00000680871,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5"
+      },
+      {
+       "symbol": "TKN5",
+       "native": false,
+       "amount": 1,
+       "price": 6.08821e-7,
+       "usd": 6.08821e-7,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6"
+      }
+     ]
+    }
+   },
+   {
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7",
+    "label": "Wallet 2",
+    "ok": true,
+    "collect": false,
+    "totals": {
+     "count": 2,
+     "idle": 1,
+     "liquidityUsd": 1405.82,
+     "uncountedUsd": 0,
+     "feesUsd": 21.2268,
+     "rewardsUsd": 0.497167,
+     "walletUsd": 455.111,
+     "totalUsd": 1882.16
+    },
+    "positions": [
+     {
+      "tokenId": "1492689",
+      "nftId": "1492689",
+      "version": 3,
+      "pair": "WETH / Index",
+      "symbol0": "WETH",
+      "symbol1": "Index",
+      "inRange": true,
+      "poolAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa8",
+      "valueUsd": 1251.28,
+      "feesUsd": 21.2268,
+      "feesOk": true,
+      "feeTierLabel": "1%",
+      "amount0": 0.431912,
+      "amount1": 37023.2,
+      "usd0": 2231.42,
+      "usd1": 0.00776559,
+      "fee0": 0.00473774,
+      "fee1": 1372.07
+     }
+    ],
+    "external": [
+     {
+      "tokenId": "up-317987",
+      "nftId": "317987",
+      "version": "up",
+      "protocol": "up",
+      "staked": true,
+      "gaugeKilled": false,
+      "pair": "CASHCAT / WETH",
+      "symbol0": "CASHCAT",
+      "symbol1": "WETH",
+      "inRange": false,
+      "poolAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa9",
+      "valueUsd": 154.533,
+      "feesUsd": 0,
+      "feesOk": true,
+      "feeTierLabel": "tick 200",
+      "amount0": 1705.19,
+      "amount1": 0,
+      "usd0": 0.0906249,
+      "usd1": 2231.42,
+      "fee0": 0,
+      "fee1": 0,
+      "rewards": {
+       "symbol": "UP",
+       "amount": 3.11078,
+       "usd": 0.497167,
+       "priceUsd": 0.159821
+      },
+      "gauge": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+     }
+    ],
+    "holdings": {
+     "ok": true,
+     "walletUsd": 455.111,
+     "unscaled": [],
+     "tokens": [
+      {
+       "symbol": "TKN0",
+       "native": false,
+       "amount": 4559.66,
+       "price": 0.0906249,
+       "usd": 413.219,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+      },
+      {
+       "symbol": "TKN1",
+       "native": true,
+       "amount": 0.0139901,
+       "price": 2231.42,
+       "usd": 31.2177,
+       "thin": false,
+       "address": null
+      },
+      {
+       "symbol": "TKN2",
+       "native": false,
+       "amount": 907.685,
+       "price": 0.00776559,
+       "usd": 7.0487,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"
+      },
+      {
+       "symbol": "TKN3",
+       "native": false,
+       "amount": 21.9833,
+       "price": 0.160053,
+       "usd": 3.5185,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad"
+      },
+      {
+       "symbol": "TKN4",
+       "native": false,
+       "amount": 0.085607,
+       "price": 1,
+       "usd": 0.085607,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaae"
+      },
+      {
+       "symbol": "TKN5",
+       "native": false,
+       "amount": 2000,
+       "price": 0.00000323161,
+       "usd": 0.00646322,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaf"
+      }
+     ]
+    }
+   },
+   {
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa10",
+    "label": "Wallet 3",
+    "ok": true,
+    "collect": false,
+    "totals": {
+     "count": 1,
+     "idle": 0,
+     "liquidityUsd": 1618.81,
+     "uncountedUsd": 0,
+     "feesUsd": 0.343786,
+     "rewardsUsd": 0,
+     "walletUsd": 141.811,
+     "totalUsd": 1760.97
+    },
+    "positions": [
+     {
+      "tokenId": "1557485",
+      "nftId": "1557485",
+      "version": 3,
+      "pair": "WETH / HMM",
+      "symbol0": "WETH",
+      "symbol1": "HMM",
+      "inRange": true,
+      "poolAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+      "valueUsd": 1618.81,
+      "feesUsd": 0.343786,
+      "feesOk": true,
+      "feeTierLabel": "1%",
+      "amount0": 0.357753,
+      "amount1": 89739.1,
+      "usd0": 2231.42,
+      "usd1": 0.00914334,
+      "fee0": 0.0000893051,
+      "fee1": 15.8048
+     }
+    ],
+    "external": [],
+    "holdings": {
+     "ok": true,
+     "walletUsd": 141.811,
+     "unscaled": [],
+     "tokens": [
+      {
+       "symbol": "TKN0",
+       "native": false,
+       "amount": 20000000,
+       "price": 0.00000315513,
+       "usd": 63.1026,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa12"
+      },
+      {
+       "symbol": "TKN1",
+       "native": false,
+       "amount": 0.0445621,
+       "price": 701.823,
+       "usd": 31.2747,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa13"
+      },
+      {
+       "symbol": "TKN2",
+       "native": true,
+       "amount": 0.011725,
+       "price": 2231.42,
+       "usd": 26.1635,
+       "thin": false,
+       "address": null
+      },
+      {
+       "symbol": "TKN3",
+       "native": false,
+       "amount": 1218440,
+       "price": 0.00000704728,
+       "usd": 8.58669,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa14"
+      },
+      {
+       "symbol": "TKN4",
+       "native": false,
+       "amount": 1464290000000,
+       "price": 2.89193e-12,
+       "usd": 4.2346,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa15"
+      },
+      {
+       "symbol": "TKN5",
+       "native": false,
+       "amount": 914102,
+       "price": 0.00000425185,
+       "usd": 3.88662,
+       "thin": false,
+       "assumed": false,
+       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa16"
+      }
+     ]
+    }
+   }
+  ],
+  "totals": {
+   "wallets": 12,
+   "liquidityUsd": 3024.63,
+   "uncountedUsd": 0,
+   "feesUsd": 21.5706,
+   "walletUsd": 1175.7,
+   "totalUsd": 4221.9
+  },
+  "refreshing": false
+ },
+ "portfolio": {
+  "ok": true,
+  "at": 1794000000000,
+  "owner": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa17",
+  "totals": {
+   "walletUsd": 2538.29,
+   "lpUsd": 0,
+   "feesUsd": 0,
+   "totalUsd": 2538.29
+  },
+  "partial": false,
+  "unpriced": [],
+  "rows": [
+   {
+    "native": false,
+    "wallet": 14.9096,
+    "pools": 0,
+    "fees": 0,
+    "price": 148.86,
+    "walletUsd": 2219.44,
+    "usd": 2219.44,
+    "thin": false,
+    "assumed": false,
+    "source": "pools",
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa18",
+    "symbol": "TKN0"
+   },
+   {
+    "native": true,
+    "wallet": 0.0893462,
+    "pools": 0,
+    "fees": 0,
+    "price": 2232.11,
+    "walletUsd": 199.431,
+    "usd": 199.431,
+    "thin": false,
+    "source": "wallet",
+    "address": null,
+    "symbol": "ETH"
+   },
+   {
+    "native": false,
+    "wallet": 108.271,
+    "pools": 0,
+    "fees": 0,
+    "price": 1,
+    "walletUsd": 108.271,
+    "usd": 108.271,
+    "thin": false,
+    "assumed": false,
+    "source": "wallet",
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaae",
+    "symbol": "TKN2"
+   },
+   {
+    "native": false,
+    "wallet": 0.00584642,
+    "pools": 0,
+    "fees": 0,
+    "price": 1039.35,
+    "walletUsd": 6.07647,
+    "usd": 6.07647,
+    "thin": false,
+    "assumed": false,
+    "source": "pools",
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa19",
+    "symbol": "TKN3"
+   },
+   {
+    "native": false,
+    "wallet": 0.0701569,
+    "pools": 0,
+    "fees": 0,
+    "price": 24.9735,
+    "walletUsd": 1.75206,
+    "usd": 1.75206,
+    "thin": false,
+    "assumed": false,
+    "source": "pools",
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1a",
+    "symbol": "TKN4"
+   },
+   {
+    "native": false,
+    "wallet": 131.859,
+    "pools": 0,
+    "fees": 0,
+    "price": 0.00778825,
+    "walletUsd": 1.02695,
+    "usd": 1.02695,
+    "thin": false,
+    "assumed": false,
+    "source": "pools",
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac",
+    "symbol": "TKN5"
+   },
+   {
+    "native": false,
+    "wallet": 0.00133302,
+    "pools": 0,
+    "fees": 0,
+    "price": 737.551,
+    "walletUsd": 0.983174,
+    "usd": 0.983174,
+    "thin": false,
+    "assumed": false,
+    "source": "wallet",
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1b",
+    "symbol": "TKN6"
+   },
+   {
+    "native": false,
+    "wallet": 230.476,
+    "pools": 0,
+    "fees": 0,
+    "price": 0.00201761,
+    "walletUsd": 0.46501,
+    "usd": 0.46501,
+    "thin": false,
+    "assumed": false,
+    "source": "wallet",
+    "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c",
+    "symbol": "TKN0"
+   }
+  ]
+ },
+ "staking": {
+  "ok": true,
+  "at": 1794000000000,
+  "tokens": [
+   {
+    "token": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1d",
+    "symbol": "sNET",
+    "label": "NET staking",
+    "underlying": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa18",
+    "balance": 0,
+    "principal": -5.88536,
+    "price": null,
+    "usd": null,
+    "rewards": {
+     "today": 0,
+     "d7": 0,
+     "d30": 0.546059,
+     "total": 5.88536,
+     "totalUsd": 2846.44,
+     "d7Usd": 0,
+     "d30Usd": 107.772
+    },
+    "aprPct": null
+   }
+  ],
+  "wallets": []
+ }
+}

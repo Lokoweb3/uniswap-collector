@@ -358,6 +358,7 @@ function readSweepState(file, fsm = fs) {
   if (j.version !== SWEEP_STATE_VERSION) return corrupt(`unknown version ${JSON.stringify(j.version)}`);
   if (!Array.isArray(j.jobs)) return corrupt("jobs is not an array");
   const collectTxs = new Set();
+  const swapHashes = new Set(); // every leg's swap.tx and swap.txs across ALL jobs: one swap receipt may back exactly one leg
   for (const [i, job] of j.jobs.entries()) {
     const m = jobProblem(job); if (m) return corrupt(`jobs[${i}].${m}`);
     // One collect transaction belongs to exactly one job: a duplicate would let one Collect receipt vouch for two jobs' amounts.
@@ -365,6 +366,17 @@ function readSweepState(file, fsm = fs) {
     if (tx) { if (collectTxs.has(tx)) return corrupt(`jobs[${i}].collect.tx ${job.collect.tx} duplicates the collect of an earlier job`); collectTxs.add(tx); }
     const seen = new Set();
     for (const [k, l] of job.legs.entries()) { const t = l.token.toLowerCase(); if (seen.has(t)) return corrupt(`jobs[${i}].legs[${k}].token ${l.token} duplicates an earlier leg of the same job`); seen.add(t); }
+  }
+  for (const [i, job] of j.jobs.entries()) {
+    for (const [k, l] of job.legs.entries()) {
+      if (!l.swap) continue;
+      const own = new Set([...(Array.isArray(l.swap.txs) ? l.swap.txs : []), ...(l.swap.tx ? [l.swap.tx] : [])].map((h) => h.toLowerCase()));
+      for (const h of own) {
+        if (collectTxs.has(h)) return corrupt(`jobs[${i}].legs[${k}] swap hash ${h} equals a collect transaction`);
+        if (swapHashes.has(h)) return corrupt(`jobs[${i}].legs[${k}] swap hash ${h} is already recorded for another leg`);
+        swapHashes.add(h);
+      }
+    }
   }
   return { ok: true, ledger: { jobs: j.jobs } };
 }

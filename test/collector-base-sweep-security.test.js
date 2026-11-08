@@ -153,21 +153,26 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
     assert.deepStrictEqual(names(w.signer), [], w.text); assert.ok(/WETH value .* above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(w.text), w.text);
     assert.strictEqual(W.balance(WETH, OP), 0n, "the declined WETH leg was not collected");
     // a token with no price and no route is capped by the position fee value: over the cap refused, under it delivered
-    const N = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 9000 });
+    const N = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 9000, usd1: 1800 });
     const n = await N.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
     assert.deepStrictEqual(names(n.signer), [], n.text); assert.ok(/no price and no safe route to USDC|above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(n.text), n.text);
-    const M = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 50 });
+    const M = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 50, usd1: 10 });
     assert.deepStrictEqual(names((await M.run({ sweep: { maxUnswappedValueUsdc: 1000 } })).signer), ["collect", "transfer"]);
-    // ...and with an unknown position fee value it is refused (preflight directly: the pass already skips unpriced positions)
+    // ...and with no per-side price it is refused; the position-wide fee value is no longer consulted (preflight directly)
     const sweepMod = require("../collector-base-sweep");
     const sw0 = sweepMod.create({ sw: SL.config({ enabled: true, maxUnswappedValueUsdc: 1000 }), provider: null, operator: OP, log() {}, now: () => 0, io: null, owners: [OWNER] });
-    const pl = { legs: [{ token: OTHER, amount: 5n * E18, d: { swap: false, reason: "no allowlisted route for this token" } }], ops: ["transfer"] };
-    for (const bad of [undefined, null, NaN, "abc", -1]) {
-      const pf = await sw0.preflight(pl, { collectWorstWei: 1n, perOpWei: () => 1n, run: {}, feesUsd: bad });
-      assert.ok(!pf.ok && /position fee value is unknown/.test(pf.reason), `${bad}: ${pf.reason}`);
+    const noRoute = { swap: false, reason: "no allowlisted route for this token" };
+    const pre = (leg) => sw0.preflight({ legs: [leg], ops: ["transfer"] }, { collectWorstWei: 1n, perOpWei: () => 1n, run: {}, feesUsd: 1 });
+    for (const bad of [undefined, null, NaN, "abc", -1, 0, Infinity]) {
+      const pf = await pre({ token: OTHER, amount: 5n * E18, d: noRoute, usd: bad, decimals: 18 });
+      assert.ok(!pf.ok && /no per-side USD price/.test(pf.reason), `${bad}: ${pf.reason}`);
     }
-    const hi = await sw0.preflight(pl, { collectWorstWei: 1n, perOpWei: () => 1n, run: {}, feesUsd: 1001 });
+    assert.ok(!(await pre({ token: OTHER, amount: 5n * E18, d: noRoute, usd: 10, decimals: null })).ok, "unknown decimals are refused");
+    const hi = await pre({ token: OTHER, amount: 5n * E18, d: noRoute, usd: 201, decimals: 18 });
     assert.ok(!hi.ok && /above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(hi.reason), hi.reason);
+    // (review) a swap-planned leg is capped at its mid price too, so a forced swap failure cannot get around the cap
+    const planned = await pre({ token: WETH, amount: E18, d: { swap: true, mid: 2000n * 10n ** 6n } });
+    assert.ok(!planned.ok && /planned swap of WETH value 2000.* above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(planned.reason), planned.reason);
     // bounds
     assert.strictEqual(SL.config({ maxUnswappedValueUsdc: 1e12 }).maxUnswappedValueUsdc, 50000); assert.strictEqual(SL.config({}).maxUnswappedValueUsdc, 5000);
   }

@@ -560,9 +560,9 @@ async function runPass(deps) {
           const blocked = sweep.blocker();
           if (blocked) { skip(gasUsd, `sweep: new collects are blocked (${blocked})`); continue; }
           if (sweep.hasOpenJob(manager.positionManager, id)) { skip(gasUsd, "an earlier sweep job of this position is still open; resumed from the ledger, no new collect"); continue; }
-          try { swPlan = await sweep.plan({ manager: manager.positionManager, tokenId: id, amounts: [amounts[0], amounts[1]] }); } catch (err) { skip(gasUsd, `sweep plan failed (${short(err)})`); continue; }
+          try { swPlan = await sweep.plan({ manager: manager.positionManager, tokenId: id, amounts: [amounts[0], amounts[1]], usd: [p.usd0, p.usd1] }); } catch (err) { skip(gasUsd, `sweep plan failed (${short(err)})`); continue; }
           const perOpWei = (op) => BigInt(lim.maxGasLimitByOp[op]) * fees.maxFeePerGas + l1AllowanceWei;
-          const pf = await sweep.preflight(swPlan, { collectWorstWei: worstCaseWei, perOpWei, feesUsd: p.feesUsd, run: { txCount, dayTxCount: sweepLogic.opCount24h(state, now()), spentRunWei: spentRun, spent24hWei: logic.spentWindowWei(state, now()), lim } });
+          const pf = await sweep.preflight(swPlan, { collectWorstWei: worstCaseWei, perOpWei, run: { txCount, dayTxCount: sweepLogic.opCount24h(state, now()), spentRunWei: spentRun, spent24hWei: logic.spentWindowWei(state, now()), lim } });
           if (simulate) {
             line(gasUsd, "collect", `${d.reason}; not sent${stateRefusal ? ` (would be refused: ${stateRefusal})` : ""}`);
             for (const l of sweep.describe(swPlan, id)) log(l);

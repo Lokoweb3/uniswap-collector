@@ -213,7 +213,7 @@ function sweepScene(o = {}) {
   S.readers = () => {
     const out = {};
     for (const [name, mgr] of [["aerodrome-v1", MGR_A], ["aerodrome-cl2", MGR_B]]) {
-      out[name] = { positionsOf: async () => ({ errors: [], positions: Object.values(S.pos).filter((p) => p.mgr === mgr && (p.a0 > 0n || p.a1 > 0n)).map((p) => ({ nftId: p.id, pair: `${p.pairName || "X / Y"}`, feesUsd: o.feesUsd ?? 50, staked: false, feesOk: true })) }) };
+      out[name] = { positionsOf: async () => ({ errors: [], positions: Object.values(S.pos).filter((p) => p.mgr === mgr && (p.a0 > 0n || p.a1 > 0n)).map((p) => ({ nftId: p.id, pair: `${p.pairName || "X / Y"}`, feesUsd: o.feesUsd ?? 50, usd0: "usd0" in o ? o.usd0 : 1, usd1: "usd1" in o ? o.usd1 : 1, staked: false, feesOk: true })) }) };
     }
     return out;
   };

@@ -8,7 +8,7 @@ const X = require("./lib/sweep-scene");
 const { exitCodeOf } = require("../collector-base");
 const { revert } = require("./fixtures/mock-chain");
 
-const { sweepScene, decodeSent, kindOf, OWNER, OP, USDC, WETH, E18, SL, VAULT, lc, ID_A, MGR_A } = X;
+const { sweepScene, decodeSent, kindOf, OWNER, OP, USDC, WETH, OTHER, E18, SL, VAULT, lc, ID_A, MGR_A, priceOf, ROUTES } = X;
 const AMT = 2n * E18 / 100n;
 const wethPos = () => [{ id: ID_A, mgr: MGR_A, t0: WETH, t1: USDC, a0: AMT, a1: 0n }];
 const mk = (positions = wethPos(), o = {}) => { const S = sweepScene({ positions, ...o }); S.init(); return S; };
@@ -128,6 +128,7 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
       "other token": (l) => [{ ...l, address: WETH }],
       "other recipient": (l) => [{ ...l, topics: [l.topics[0], l.topics[1], "0x" + "00".repeat(12) + "ee".repeat(20)] }],
       "other amount": (l) => [{ ...l, data: "0x" + (1n).toString(16).padStart(64, "0") }],
+      "removed (reorged) log": (l) => [{ ...l, removed: true }],
     };
     for (const [name, mut] of Object.entries(mutations)) {
       const S = mk(); failBlockReads(S);
@@ -158,6 +159,137 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
     assert.ok(r3.res.sweep.report.unattributed.length >= 1); assert.strictEqual(exitCodeOf(r3.res), 1);
     const r4 = await S.run({ signer: S.signer() });
     assert.strictEqual(r4.signer.sent.length, 0); assert.ok(/sweep: new collects are blocked \(job .* is unattributed\)/.test(r4.text), r4.text);
+  }
+
+  // ---- review fix 1. the receipt-total cache is per swap-hash set: a second swap in the same run is not cut down
+  {
+    const S = mk();
+    // the collect leaves only half the WETH on the operator; the other half arrives after the first swap, so the leg swaps twice in one run
+    S.hooks.push((p) => {
+      if (kindOf(p) === "collect") S.setBalance(WETH, OP, AMT / 2n);
+      if (lc(p.to) === lc(SL.ROUTER) && !S.topped) { S.topped = true; S.add(WETH, OP, AMT / 2n); }
+    });
+    const r = await S.run({});
+    const swaps = names(r.signer).filter((n) => n === "exactInputSingle").length;
+    assert.strictEqual(swaps, 2, r.text);
+    const l = leg0(S);
+    assert.strictEqual(l.swap.txs.length, 2, "both swap hashes recorded");
+    assert.strictEqual(l.phase, "delivered", r.text + JSON.stringify(l));
+    assert.strictEqual(S.balance(USDC, OWNER), BigInt(l.swap.outRaw), "the proceeds of both swaps reach the owner, none cut"); assert.ok(!/capped \(tampered ledger\)/.test(r.text), r.text);
+  }
+
+  // ---- review fix 2. one swap receipt backs one leg; a swap hash is never a collect hash
+  {
+    const S = mk();
+    await S.run({});
+    const base = S.ledger();
+    const write = (j) => fs.writeFileSync(S.file, JSON.stringify(j));
+    const clone = (x) => JSON.parse(JSON.stringify(x));
+    // cross-job: a second job whose leg reuses the first job's swap hash (its own collect.tx differs)
+    const a = clone(base); const j2 = clone(a.jobs[0]); j2.id = "other:2:2"; j2.collect.tx = H1; a.jobs.push(j2); write(a);
+    const ra = SL.readSweepState(S.file); assert.ok(!ra.ok && ra.kind === "corrupt" && /swap hash .* already recorded for another leg/.test(ra.reason), JSON.stringify(ra));
+    // case differences do not hide it
+    j2.legs[0].swap.tx = j2.legs[0].swap.tx.toUpperCase().replace("0X", "0x"); j2.legs[0].swap.txs = [j2.legs[0].swap.tx]; write(a); assert.ok(!SL.readSweepState(S.file).ok);
+    // cross-leg: a second leg of the same job (another token) reuses it
+    const b = clone(base); const l2 = clone(b.jobs[0].legs[0]); l2.token = USDC; b.jobs[0].legs.push(l2); write(b);
+    const rb = SL.readSweepState(S.file); assert.ok(!rb.ok && /already recorded for another leg/.test(rb.reason), JSON.stringify(rb));
+    // a swap hash equal to a collect.tx (this job's, the legacy single-hash shape; and another job's)
+    const c = clone(base); c.jobs[0].legs[0].swap.txs = undefined; c.jobs[0].legs[0].swap.tx = c.jobs[0].collect.tx; write(c);
+    const rc = SL.readSweepState(S.file); assert.ok(!rc.ok && /equals a collect transaction/.test(rc.reason), JSON.stringify(rc));
+    const d = clone(base); const j3 = clone(d.jobs[0]); j3.id = "other:3:3"; j3.legs = []; j3.collect.tx = d.jobs[0].legs[0].swap.tx; d.jobs.push(j3); write(d);
+    const rd = SL.readSweepState(S.file); assert.ok(!rd.ok && /equals a collect transaction/.test(rd.reason), JSON.stringify(rd));
+    // the pristine ledger still reads, and tx/txs listing the same hash in one leg is not a duplicate
+    write(base); assert.ok(SL.readSweepState(S.file).ok);
+  }
+
+  // ---- review fix 3. an unswapped delivery is capped at run time; a swap-planned leg is capped in preflight
+  {
+    // a swap that fails maxAttemptsPerLeg times while the price rises over the cap: held, not delivered
+    const mkFail = (extra = {}) => {
+      let broken = false;
+      const S = mk(wethPos(), { getPool: () => (broken ? OTHER : undefined), ...extra });
+      S.failNext.push(Object.assign((p) => lc(p.to) === lc(SL.ROUTER), { sticky: true }));
+      let fails = 0;
+      S.hooks.push((p) => {
+        if (lc(p.to) !== lc(SL.ROUTER) || ++fails < 3) return;
+        const np = priceOf(ROUTES.WETH, 20000); Object.assign(S.pools.WETH, { sqrt: np.sqrt, tick: np.tick, twapTick: np.tick });
+        if (extra.breakPool) broken = true;
+      });
+      return S;
+    };
+    const S = mkFail();
+    const r = await S.run({ sweep: { maxUnswappedValueUsdc: 100 } });
+    assert.strictEqual(leg0(S).phase, "held", r.text); assert.ok(/unswapped value .* is above maxUnswappedValueUsdc 100/.test(leg0(S).reason), leg0(S).reason);
+    assert.strictEqual(S.balance(WETH, OWNER), 0n, "not delivered"); assert.strictEqual(S.balance(WETH, OP), AMT, "still on the operator");
+    assert.ok(!names(r.signer).includes("transfer")); assert.strictEqual(exitCodeOf(r.res), 1);
+    // no mid and no price at all: held with a clear reason
+    const N = mkFail({ breakPool: true, usd0: null });
+    const n = await N.run({ sweep: { maxUnswappedValueUsdc: 100 } });
+    assert.strictEqual(leg0(N).phase, "held", n.text); assert.ok(/no value can be established/.test(leg0(N).reason), leg0(N).reason);
+    assert.strictEqual(N.balance(WETH, OWNER), 0n);
+    // control: no mid but the leg's own per-side price (usd0 = 1 per WETH here) is under the cap: delivered, as before
+    const C = mkFail({ breakPool: true });
+    const c = await C.run({ sweep: { maxUnswappedValueUsdc: 100 } });
+    assert.strictEqual(C.balance(WETH, OWNER), AMT, c.text); assert.strictEqual(leg0(C).phase, "delivered-unswapped");
+    // preflight: a swap-planned WETH leg worth about 40 USDC is refused over a cap of 10; nothing is collected
+    const P = mk();
+    const p = await P.run({ sweep: { maxUnswappedValueUsdc: 10 } });
+    assert.deepStrictEqual(names(p.signer), [], p.text); assert.ok(/planned swap of WETH value .* above maxUnswappedValueUsdc 10/.test(p.text) && /the fees stay in the NFT/.test(p.text), p.text);
+  }
+
+  // ---- review fix 4. a no-mid leg is valued from its own side price, not the position-wide fee value
+  {
+    const mkO = (o) => mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], o);
+    // the position-wide feesUsd is tiny, but this token's own price makes it worth 5 * 400 = 2000 USDC: refused over a cap of 1000
+    const A = mkO({ feesUsd: 3, usd1: 400 });
+    const a = await A.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
+    assert.deepStrictEqual(names(a.signer), [], a.text); assert.ok(/above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(a.text), a.text);
+    // a huge feesUsd with a small side price does not block it
+    const B = mkO({ feesUsd: 99999, usd1: 10 });
+    assert.deepStrictEqual(names((await B.run({ sweep: { maxUnswappedValueUsdc: 1000 } })).signer), ["collect", "transfer"]);
+    // no per-side price: refused
+    const C = mkO({ feesUsd: 3, usd1: null });
+    const c = await C.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
+    assert.deepStrictEqual(names(c.signer), [], c.text); assert.ok(/no per-side USD price/.test(c.text), c.text);
+  }
+
+  // ---- review fix 5. recovery credits a mined transfer only with proof
+  {
+    const run1 = async () => {
+      const S = mk(); S.noBalanceMove = true;
+      const r1 = await S.run({ baseCollect: SHORT, signer: S.signer({ dropReceipt: (p) => kindOf(p) === "transfer" }) });
+      assert.strictEqual(r1.res.aborted, true, r1.text); assert.ok(leg0(S).pending && leg0(S).pending.op === "transfer", JSON.stringify(leg0(S)));
+      return S;
+    };
+    // no balance fall at the block and no Transfer log: unattributed, not credited, never resent
+    const S = await run1(); const h = leg0(S).pending.tx;
+    S.mined.set(h, { ...S.mined.get(h), logs: [] });
+    const r2 = await S.run({ signer: S.signer() });
+    assert.strictEqual(leg0(S).unattributed, true, r2.text); assert.strictEqual(leg0(S).phase, "held"); assert.strictEqual(leg0(S).outDone === undefined || leg0(S).outDone === "0", true);
+    assert.ok(!decodeSent(r2.signer).some((t) => t.name === "transfer")); assert.strictEqual(exitCodeOf(r2.res), 1);
+    // with the matching Transfer log (balances unprovable) the same recovery credits it
+    const T = await run1();
+    await T.run({ signer: T.signer() });
+    assert.notStrictEqual(leg0(T).unattributed, true, "a transfer with its log is credited");
+  }
+
+  // ---- review fix 6. hardening
+  {
+    // (a) a swap receipt without to / from is refused
+    for (const field of ["to", "from"]) {
+      const S = mk();
+      await S.run({ signer: S.signer({ maxSigns: 3 }), baseCollect: SHORT });
+      const h = leg0(S).swap.tx; const rc = { ...S.mined.get(h) }; delete rc[field]; S.mined.set(h, rc);
+      const r = await S.run({ signer: S.signer() });
+      assert.ok(!decodeSent(r.signer).some((t) => t.name === "transfer"), field); assert.strictEqual(leg0(S).phase, "held", `${field}: ${r.text}`);
+    }
+    // (c) a non-array implementations list fails closed
+    const sweepMod = require("../collector-base-sweep");
+    const vcfg = SL.config({ enabled: true, vault: { tba: VAULT.tba, nft: VAULT.nft, tokenId: 7, implementation: VAULT.impl, registry: VAULT.reg, salt: "0x" + "00".repeat(32), expectedOwner: OWNER, splitPct: 10, maxSplitPct: 20 } });
+    for (const bad of [{}, "x", 5, null]) {
+      const v = await sweepMod.verifyVault(null, vcfg, { operator: OP, owners: [OWNER], tokens: [], implementations: bad });
+      assert.ok(!v.ok && /not in the code allowlist/.test(v.reason), `${JSON.stringify(bad)}: ${v.reason}`);
+    }
   }
 
   // ---- Info. VAULT_IMPLEMENTATIONS is deeply frozen; the injected list is what verifyVault uses

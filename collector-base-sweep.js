@@ -110,7 +110,7 @@ async function verifyVault(provider, sw, ctx = {}) {
   if (v.registry !== null && v.registry !== undefined && v.registry !== "" && !eq(v.registry, S.ERC6551_REGISTRY)) return no(`vault.registry ${v.registry} is not the canonical ERC-6551 registry ${S.ERC6551_REGISTRY}`);
   const need = { nft: S.addr(v.nft), implementation: S.addr(v.implementation), registry: S.ERC6551_REGISTRY, expectedOwner: S.addr(v.expectedOwner) };
   for (const [k, a] of Object.entries(need)) if (!a) return no(`vault.${k} is not an address`);
-  if (!(ctx.implementations || S.VAULT_IMPLEMENTATIONS).some((i) => eq(i, need.implementation))) return no(`vault.implementation ${need.implementation} is not in the code allowlist of ERC-6551 implementations (empty by default); the vault cannot verify`);
+  if (!(Array.isArray(ctx.implementations) ? ctx.implementations : S.VAULT_IMPLEMENTATIONS).some((i) => eq(i, need.implementation))) return no(`vault.implementation ${need.implementation} is not in the code allowlist of ERC-6551 implementations (empty by default); the vault cannot verify`);
   if (!(ctx.owners || []).some((o) => eq(o, need.expectedOwner))) return no(`vault.expectedOwner ${need.expectedOwner} is not one of the configured owner addresses`);
   let tokenId;
   try { tokenId = BigInt(v.tokenId); if (tokenId < 0n) throw new Error("negative"); } catch { return no("vault.tokenId is not a non-negative integer"); }
@@ -149,6 +149,7 @@ function create(env) {
   // The ERC-6551 implementation allowlist: the frozen code constant, unless a caller (tests) injects its own list. Never from settings.
   const vaultImplementations = Array.isArray(env.vaultImplementations) ? Object.freeze([...env.vaultImplementations]) : S.VAULT_IMPLEMENTATIONS;
   const ownerConfigured = (a) => owners.some((o) => eq(o, a));
+  const sidePrices = new Map(); // `${manager}:${tokenId}` (lowercase) -> [usd0, usd1] seen at plan time, copied to the job at the collect intent
   const collectChecks = new Map(); // job.id -> { amounts, tokens } read back from the chain this run
   let ledger = { jobs: [] };
   let ledgerBroken = false;
@@ -361,6 +362,7 @@ function create(env) {
   /** True when the receipt holds `token`'s own Transfer(operator -> to, amount) log. */
   function hasTransferLog(receipt, token, to, amount) {
     for (const l of (receipt && receipt.logs) || []) {
+      if (l.removed === true) continue;
       if (!eq(l.address, token) || !l.topics || l.topics[0] !== TRANSFER_TOPIC || l.topics.length !== 3) continue;
       try {
         if (eq(ethers.getAddress(ethers.dataSlice(l.topics[1], 12)), operator) && eq(ethers.getAddress(ethers.dataSlice(l.topics[2], 12)), to) && BigInt(l.data) === BigInt(amount)) return true;
@@ -435,6 +437,18 @@ function create(env) {
     return false;
   }
 
+  /** Decimals of a token: the known constants, else decimals() on-chain; null when unreadable or implausible. */
+  async function tokenDecimals(token) {
+    if (eq(token, S.USDC) || Object.values(S.ROUTES).some((x) => eq(x.token, token))) return decimalsOf(token);
+    try { const d = Number(await erc20(token).decimals()); return Number.isInteger(d) && d >= 0 && d <= 36 ? d : null; } catch { return null; }
+  }
+  /** USDC raw value of `raw` units of a token priced at `usd` per whole unit; null unless the price is a finite number above 0 and decimals are known. */
+  function sideValue(raw, usd, dec) {
+    if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0 || !Number.isInteger(dec)) return null;
+    const v = Number(ethers.formatUnits(raw, dec)) * usd;
+    return Number.isFinite(v) && v >= 0 ? S.usdcRaw(v) : null;
+  }
+
   async function stepConvert(job, leg) {
     const rem = outstanding(leg);
     if (rem > 0n) { const o = await ownerCheck(job); if (!o.ok) return hold(job, leg, o.reason); } // nothing is converted that cannot be delivered
@@ -450,10 +464,22 @@ function create(env) {
     if (halted()) return false;
     if (d.swap) return trySwap(job, leg, amount, d);
     {
-      // Unswapped delivery is value-capped too. USDC is valued 1:1; a routed token by the pool mid price when the decision read one.
-      // A token with no price was already capped before the collect (preflight, by the position fee value); here it is bounded only by the Collect receipt amount.
-      const value = d.usdc ? amount : (typeof d.mid === "bigint" ? d.mid : null);
-      if (value !== null && value > S.usdcRaw(sw.maxUnswappedValueUsdc)) return hold(job, leg, `unswapped value ${S.fmtUsdc(value)} USDC is above maxUnswappedValueUsdc ${sw.maxUnswappedValueUsdc}`);
+      // Every unswapped delivery is value-capped here, whatever the reason it is unswapped (declined, attempts used up, decision lost its mid).
+      // Value: USDC 1:1; else a FRESH pool mid price (re-read now when the decision carries none); else the leg's own raw amount times its
+      // per-side USD price recorded at plan time (job.priceUsd). That price is the pool spot price, so this is a best-effort cap, not a
+      // guarantee; tokens only ever go to the verified owner. With no value at all the leg is HELD, never delivered.
+      let value = d.usdc ? amount : (typeof d.mid === "bigint" ? d.mid : null);
+      if (value === null) {
+        try { const f = await decideLeg(provider, sw, leg.token, amount); if (typeof f.mid === "bigint") value = f.mid; } catch { /* no fresh mid */ }
+        if (halted()) return false;
+      }
+      if (value === null) {
+        const i = eq(leg.token, job.token0) ? 0 : (eq(leg.token, job.token1) ? 1 : -1);
+        const dec = await tokenDecimals(leg.token);
+        value = i < 0 ? null : sideValue(amount, Array.isArray(job.priceUsd) ? job.priceUsd[i] : null, dec);
+      }
+      if (value === null) return hold(job, leg, `${symbolOf(leg.token)} would be delivered unswapped (${d.reason}) but no value can be established (no pool mid price, no per-side USD price), so maxUnswappedValueUsdc cannot be applied`);
+      if (value > S.usdcRaw(sw.maxUnswappedValueUsdc)) return hold(job, leg, `unswapped value ${S.fmtUsdc(value)} USDC is above maxUnswappedValueUsdc ${sw.maxUnswappedValueUsdc}`);
     }
     if (!d.usdc) {
       if (leg.phase === "approved" && !(await resetAllowance(job, leg, "no swap"))) return false;
@@ -472,7 +498,10 @@ function create(env) {
    */
   const proceedsChecked = new WeakMap();
   async function capProceedsToReceipts(job, leg) {
-    let cap = proceedsChecked.get(leg);
+    // Keyed on the leg's joined lowercased swap hashes: a leg that swaps again in the same run gets its receipts read again.
+    const key = swapTxs(leg).map((h) => h.toLowerCase()).join(",");
+    const seenCheck = proceedsChecked.get(leg);
+    let cap = seenCheck && seenCheck.key === key ? seenCheck.cap : undefined;
     if (cap === undefined) {
       const route = Object.values(S.ROUTES).find((x) => eq(x.token, leg.token));
       const hashes = swapTxs(leg);
@@ -483,12 +512,12 @@ function create(env) {
           const rc = await provider.getTransactionReceipt(h);
           if (!rc) return `the swap receipt ${h} cannot be found; proceeds are not delivered unchecked`;
           if (rc.status === 0) return `the swap receipt ${h} shows a revert; refusing`;
-          if (rc.to && !eq(rc.to, S.ROUTER)) return `the swap receipt ${h} target ${rc.to} is not the router; refusing`;
-          if (rc.from && !eq(rc.from, operator)) return `the swap receipt ${h} sender ${rc.from} is not the operator; refusing`;
+          if (!rc.to || !eq(rc.to, S.ROUTER)) return `the swap receipt ${h} target ${rc.to} is not the router; refusing`;
+          if (!rc.from || !eq(rc.from, operator)) return `the swap receipt ${h} sender ${rc.from} is not the operator; refusing`;
           cap += swapOut(rc, route);
         } catch (err) { return `the swap receipt ${h} could not be read (${short(err)}); refusing`; }
       }
-      proceedsChecked.set(leg, cap);
+      proceedsChecked.set(leg, { key, cap });
     }
     if (BigInt(leg.swap.outRaw || "0") > cap) {
       log(`  ! ledger swap output ${leg.swap.outRaw} exceeds the ${cap} the swap receipt(s) show; capped (tampered ledger)`);
@@ -572,6 +601,7 @@ function create(env) {
     return ({ hash, nonce }) => {
       job.pending = { op: "collect", tx: hash, nonce };
       job.collect.tx = hash; job.collect.nonce = nonce;
+      const px = sidePrices.get(`${job.manager}:${job.tokenId}`.toLowerCase()); if (px) job.priceUsd = px;
       ledger.jobs.push(job);
       if (!save()) { ledger.jobs.splice(ledger.jobs.indexOf(job), 1); throw new Error("the sweep ledger cannot be written"); }
     };
@@ -695,6 +725,15 @@ function create(env) {
         } else { leg.attempts++; leg.phase = "collected"; }
       } else if (p.op === "transfer") {
         if (ok) {
+          // A mined transfer is credited only with proof: the operator balance fell by the amount at the receipt's block, or the token's
+          // own Transfer(operator -> to, amount) log is in the receipt. USDC for proceeds, the leg's token otherwise.
+          const ptoken = p.kind === "proceeds" ? S.USDC : leg.token;
+          let proven = false;
+          const bn = Number(r.receipt.blockNumber);
+          if (Number.isSafeInteger(bn) && bn > 0) {
+            try { const before = await erc20(ptoken).balanceOf(operator, { blockTag: bn - 1 }); const after = await erc20(ptoken).balanceOf(operator, { blockTag: bn }); proven = after <= before - raw; } catch { proven = false; }
+          }
+          if (!proven && !hasTransferLog(r.receipt, ptoken, p.to, raw)) { unattribute(job, leg, `recovered transfer ${p.tx} is mined but neither the block balances nor a matching Transfer log prove it`); continue; }
           if (p.kind === "proceeds") leg.outDone = (BigInt(leg.outDone || "0") + raw).toString();
           else leg.doneRaw = (BigInt(leg.doneRaw) + raw).toString();
           leg.deliver = { to: p.to, raw: raw.toString(), tx: p.tx };
@@ -730,13 +769,17 @@ function create(env) {
 
   // ---- plan (simulate and preflight) --------------------------------------------------------------------------------
   /** Everything a collect would do, from chain reads only. Never writes. */
-  async function plan({ manager, tokenId, amounts }) {
+  async function plan({ manager, tokenId, amounts, usd }) {
     const [t0, t1] = await positionTokens(manager, tokenId);
     const legs = [];
-    for (const [token, amt] of [[t0, amounts[0]], [t1, amounts[1]]]) {
+    const px = [0, 1].map((i) => (Array.isArray(usd) && typeof usd[i] === "number" && Number.isFinite(usd[i]) && usd[i] > 0 ? usd[i] : null));
+    sidePrices.set(`${manager}:${tokenId}`.toLowerCase(), px);
+    for (const [i, [token, amt]] of [[t0, amounts[0]], [t1, amounts[1]]].entries()) {
       if (BigInt(amt) <= 0n) continue;
       const d = await decideLeg(provider, sw, token, BigInt(amt));
-      legs.push({ token, amount: BigInt(amt), d });
+      // the per-side USD price and decimals, read only for a leg that has no pool mid price (see unswappedProblem)
+      const unpriced = !d.usdc && typeof d.mid !== "bigint";
+      legs.push({ token, amount: BigInt(amt), d, usd: px[i], decimals: unpriced ? await tokenDecimals(token) : null });
     }
     const vault = await verifyVault(provider, sw, { operator, owners, tokens: [t0, t1], implementations: vaultImplementations });
     let owner = null;
@@ -767,34 +810,30 @@ function create(env) {
   }
 
   /**
-   * The cap reason for a planned leg that will NOT be swapped, or null. Valued like stepConvert does: USDC 1:1, a priced token at the pool mid
-   * price (d.mid, also present when the swap was declined for size, e.g. above maxSwapValueUsdc). A leg the plan expects to swap is not valued here.
-   * A leg with no mid price (no route, route disabled, proof failed, pool/quoter unreadable) has no on-chain value and no safe route to USDC.
-   * Choice: it is CAPPED CONSERVATIVELY at the whole position's fee value in USD (feesUsd from the collector's price readers, which bounds every
-   * leg of the position), and REFUSED when that is not a finite non-negative number. Never assumed small: a cap that unpriced tokens skip is no
-   * cap at all. Refusing outright was rejected because it would stop collecting every position that pairs a token without an allowlisted route.
+   * The cap reason for a planned leg, or null. Every leg is capped, swapped or not (a forced swap failure must not get around the cap):
+   * USDC is valued 1:1, a priced token at the pool mid price (d.mid, also present when the swap was declined for size).
+   * A leg with no mid price (no route, route disabled, proof failed, pool/quoter unreadable) is valued from its OWN raw amount times its own
+   * per-side USD price (usd0/usd1 of the position, passed through from the price readers), never from the position-wide fee value, which a
+   * second token could inflate or deflate. With no such price the leg is REFUSED. The per-side price is the pool spot price, so this is a
+   * best-effort cap, not a guarantee; tokens only ever go to the verified owner.
    */
-  function unswappedProblem(l, feesUsd) {
+  function unswappedProblem(l) {
     const d = l.d;
-    if (d.swap) return null;
     const cap = S.usdcRaw(sw.maxUnswappedValueUsdc);
-    let value = d.usdc ? l.amount : (typeof d.mid === "bigint" ? d.mid : null);
-    if (value === null) {
-      const f = feesUsd === null || feesUsd === undefined || feesUsd === "" || typeof feesUsd === "boolean" ? NaN : Number(feesUsd);
-      if (!Number.isFinite(f) || f < 0) return `${symbolOf(l.token)} would be delivered unswapped with no price and no safe route to USDC (${d.reason}) and the position fee value is unknown, so maxUnswappedValueUsdc cannot be applied`;
-      value = S.usdcRaw(f);
-    }
-    if (value > cap) return `unswapped ${symbolOf(l.token)} value ${S.fmtUsdc(value)} USDC is above maxUnswappedValueUsdc ${sw.maxUnswappedValueUsdc}`;
+    const value = d.usdc ? l.amount : (typeof d.mid === "bigint" ? d.mid : sideValue(l.amount, l.usd, l.decimals));
+    if (value === null) return `${symbolOf(l.token)} has no pool price (${d.reason || "no mid price"}) and no per-side USD price, so maxUnswappedValueUsdc cannot be applied`;
+    if (value > cap) return `${d.swap ? "planned swap of " : "unswapped "}${symbolOf(l.token)} value ${S.fmtUsdc(value)} USDC is above maxUnswappedValueUsdc ${sw.maxUnswappedValueUsdc}`;
     return null;
   }
 
   /**
    * D2 preflight for one position, before anything moves onto the operator. perOpWei(op) is the worst case of one tx of that op;
-   * run = { txCount, dayTxCount, spentRunWei, spent24hWei, lim }; feesUsd = the position's total fee value in USD (bounds a leg with no price).
+   * run = { txCount, dayTxCount, spentRunWei, spent24hWei, lim }.
    */
-  async function preflight(pl, { collectWorstWei, perOpWei, run, feesUsd }) {
-    // maxUnswappedValueUsdc is applied BEFORE anything is collected: once the fees are on the operator they can only be swapped or sent on.
-    for (const l of pl.legs) { const why = unswappedProblem(l, feesUsd); if (why) return { ok: false, reason: `${why}; the fees stay in the NFT` }; }
+  async function preflight(pl, { collectWorstWei, perOpWei, run }) {
+    // maxUnswappedValueUsdc is applied BEFORE anything is collected, to swap-planned legs too: once the fees are on the operator they can only be
+    // swapped or sent on, and a swap that fails on every attempt ends in an unswapped delivery.
+    for (const l of pl.legs) { const why = unswappedProblem(l); if (why) return { ok: false, reason: `${why}; the fees stay in the NFT` }; }
     let total = collectWorstWei, gasTxs = 1;
     for (const op of pl.ops) { total += perOpWei(op); gasTxs++; }
     if (run.txCount + gasTxs > sw.maxTxPerRun) return { ok: false, reason: `the planned chain needs ${gasTxs} transactions, maxTxPerRun ${sw.maxTxPerRun} (${run.txCount} sent) would be exceeded` };

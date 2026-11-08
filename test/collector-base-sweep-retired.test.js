@@ -411,7 +411,7 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     // a replay refusal (high-water) is unattributed too, and the next run still refuses new collects
     S.w.head = 1_000_000;
     const l2 = S.ledger(); l2.jobs = l2.jobs.slice(0, 1); l2.retired = { hashes: [], floor: 0, collectBlock: { [key]: l2.jobs[0].collect.block + 5 } };
-    const lg2 = l2.jobs[0].legs[0]; delete lg2.unattributed; lg2.phase = "collected"; delete lg2.reason; write(S, l2);
+    const lg2 = l2.jobs[0].legs[0]; delete lg2.unattributed; delete lg2.agedAt; lg2.phase = "collected"; delete lg2.reason; write(S, l2); // agedAt cleared by hand: the head is back at 1M, below the sticky hold
     const r2 = await S.run({ signer: S.signer() });
     assert.strictEqual(r2.signer.sent.length, 0, r2.text);
     const a2 = S.ledger(); assert.strictEqual(a2.jobs[0].legs[0].unattributed, true, r2.text); assert.ok(/not newer than the retired collect/.test(a2.jobs[0].legs[0].reason));

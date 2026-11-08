@@ -30,7 +30,8 @@ const COLLECT_TOPICS = [ethers.id("Collect(uint256,address,uint256,uint256)")];
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 const COLLECT_ID = ethers.AbiCoder.defaultAbiCoder();
 
-const short = (err) => String((err && (err.shortMessage || err.message)) || err).split("\n")[0].slice(0, 160);
+// URLs are redacted first: an RPC URL may carry an API key and must never reach the log or Telegram (security S3).
+const short = (err) => String((err && (err.shortMessage || err.message)) || err).split("\n")[0].replace(/https?:\/\/\S+/gi, "<url>").slice(0, 160);
 const eq = S.eq;
 const minB = (a, b) => (a < b ? a : b);
 const ZERO = ethers.ZeroAddress;
@@ -171,6 +172,7 @@ function create(env) {
   const addTransferTx = (leg, hash) => { const t = Array.isArray(leg.transferTxs) ? leg.transferTxs : []; if (typeof hash === "string" && !t.some((h) => eq(h, hash))) t.push(hash); leg.transferTxs = t; }; // never truncated: payOut holds the leg before it can pass S.MAX_TRANSFERS_PER_LEG
   let knownHead = null; // the chain head read at start; pruning of old terminal jobs needs it (chain age as well as clock age)
   const warned = new Set();
+  const agedLogged = new Set();
   const mark = (job) => { if (S.jobTerminal(job) && job.finishedAt === undefined) job.finishedAt = now(); };
 
   /** Validate the settings and load the ledger. { ok:true } | { ok:false, reason }. Nothing is written. */
@@ -197,6 +199,7 @@ function create(env) {
     const ahead = S.ledgerAheadProblem(r.ledger, head);
     if (ahead) return { ok: false, reason: `sweep-state.json is unreadable (${ahead}; tampered ledger); refusing everything`, kind: "corrupt" };
     ledger = r.ledger;
+    for (const w of r.warnings || []) { log(`  WARNING ${w}`); report.warnings.push(w); }
     if (Number.isSafeInteger(head) && head > 0) knownHead = head;
     return { ok: true, active: true };
   }
@@ -641,9 +644,14 @@ function create(env) {
     const replay = S.collectReplayProblem(ledger.retired, job.collect.tx, c.block, job.manager, job.tokenId);
     if (replay) return { reason: `${replay} (replayed receipt of a pruned job, or a tampered ledger)`, fatal: true };
     // M-2: independent of the ledger file, a collect as old as a possibly-pruned job's is refused too.
-    const aged = S.collectAgeProblem(c.head, c.block);
+    const aged = S.collectAgeProblem(c.head, c.block, leg.agedAt);
     // An old collect is only HELD (reported, retried, never unattributed): it must not block other collects. Replays above stay fatal.
-    if (aged) return { reason: `collect ${job.collect.tx}: ${aged}`, aged: true };
+    if (aged) {
+      // Sticky (S1): the first hold records the head; later runs stay held even if the RPC reports a lower head.
+      if (!Number.isSafeInteger(leg.agedAt) && Number.isSafeInteger(c.head) && c.head > 0) { leg.agedAt = c.head; save(); }
+      if (!agedLogged.has(ckey)) { agedLogged.add(ckey); log(`  age hold: #${job.tokenId} collect block ${c.block}, chain head seen ${c.head}${leg.agedAt ? `, first held at head ${leg.agedAt}` : ""}`); }
+      return { reason: `collect ${job.collect.tx}: ${aged}`, aged: true };
+    }
     const warn = S.collectAgeWarning(c.head, c.block);
     if (warn && !warned.has(ckey)) { warned.add(ckey); const w = `#${job.tokenId} collect ${job.collect.tx}: ${warn}`; report.warnings.push(w); log(`  WARNING ${w}`); }
     if (job.collect.block !== c.block) job.collect.block = c.block;

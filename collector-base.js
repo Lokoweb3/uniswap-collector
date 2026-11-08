@@ -232,7 +232,7 @@ async function runPass(deps) {
   if (!swCfg.enabled && !(sweepIo && sweepIo.exists())) log("sweep: disabled (baseSweep.enabled is not true)");
   else {
     sweep = sweepMod.create({
-      sw: swCfg, provider, operator, log, now, io: sweepIo, owners: all.map((o) => o.address), halted: () => result.aborted,
+      sw: swCfg, provider, operator, log, now, io: sweepIo, owners: all.map((o) => o.address), vaultImplementations: deps.vaultImplementations, halted: () => result.aborted,
       findGasEntry: (hash) => state.gasSpends.find((e) => e && typeof e.tx === "string" && e.tx.toLowerCase() === String(hash).toLowerCase()) || null,
       send: (...a) => sweepTx(...a),
     });
@@ -562,7 +562,7 @@ async function runPass(deps) {
           if (sweep.hasOpenJob(manager.positionManager, id)) { skip(gasUsd, "an earlier sweep job of this position is still open; resumed from the ledger, no new collect"); continue; }
           try { swPlan = await sweep.plan({ manager: manager.positionManager, tokenId: id, amounts: [amounts[0], amounts[1]] }); } catch (err) { skip(gasUsd, `sweep plan failed (${short(err)})`); continue; }
           const perOpWei = (op) => BigInt(lim.maxGasLimitByOp[op]) * fees.maxFeePerGas + l1AllowanceWei;
-          const pf = await sweep.preflight(swPlan, { collectWorstWei: worstCaseWei, perOpWei, run: { txCount, dayTxCount: sweepLogic.opCount24h(state, now()), spentRunWei: spentRun, spent24hWei: logic.spentWindowWei(state, now()), lim } });
+          const pf = await sweep.preflight(swPlan, { collectWorstWei: worstCaseWei, perOpWei, feesUsd: p.feesUsd, run: { txCount, dayTxCount: sweepLogic.opCount24h(state, now()), spentRunWei: spentRun, spent24hWei: logic.spentWindowWei(state, now()), lim } });
           if (simulate) {
             line(gasUsd, "collect", `${d.reason}; not sent${stateRefusal ? ` (would be refused: ${stateRefusal})` : ""}`);
             for (const l of sweep.describe(swPlan, id)) log(l);

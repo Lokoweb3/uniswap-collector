@@ -179,8 +179,9 @@ function sweepScene(o = {}) {
   S.vault = (v = {}) => {
     const cfg = { tba: VAULT.tba, nft: VAULT.nft, tokenId: 7, implementation: VAULT.impl, registry: VAULT.reg, salt: ethers.ZeroHash, expectedOwner: OWNER, splitPct: 10, maxSplitPct: 20, ...(v.cfg || {}) };
     w.contract(VAULT.reg).contract(VAULT.nft);
-    // The allowlist is empty in code; tests that need a verifiable vault add the mock implementation (v.allowImpl === false keeps it empty).
-    if (v.allowImpl !== false && !SL.VAULT_IMPLEMENTATIONS.some((i) => lc(i) === lc(VAULT.impl))) SL.VAULT_IMPLEMENTATIONS.push(VAULT.impl);
+    // The allowlist is a frozen empty constant in code; tests that need a verifiable vault inject the mock implementation through the
+    // vaultImplementations dependency of the pass (v.allowImpl === false injects an empty list). SL.VAULT_IMPLEMENTATIONS is never mutated.
+    S.vaultImplementations = v.allowImpl !== false ? [VAULT.impl] : [];
     if (v.tbaCode !== false) w.contract(VAULT.tba);
     w.on(VAULT.reg, "account", () => { if (v.revertAccount) throw revert("account"); return [v.accountResult || VAULT.tba]; });
     w.on(VAULT.tba, "token", () => { if (v.revertToken) throw revert("token"); return [BigInt(v.chainId ?? 8453), v.nftBound || VAULT.nft, BigInt(v.tokenId ?? 7)]; });
@@ -228,6 +229,7 @@ function sweepScene(o = {}) {
       readers: S.readers(), sweepIo: opts.noIo ? null : S.io, now: () => Date.now(),
       notify: opts.noNotify ? undefined : async (t) => { S.notes.push(t); if (S.noteFail) throw new Error("telegram down"); },
       saveState: (st) => { events.push({ k: "state", txs: st.gasSpends.map((e) => `${e.tx}:${e.kind}`) }); if (S.failStateAt && S.failStateAt(st)) throw new Error("state disk full"); },
+      ...(S.vaultImplementations ? { vaultImplementations: S.vaultImplementations } : {}),
       ...(opts.extra || {}),
     };
     const r = await B.pass(S.w, { cfg, mode: opts.mode || "collect", signer, state: S.state, extra, ethUsd: 2000 });

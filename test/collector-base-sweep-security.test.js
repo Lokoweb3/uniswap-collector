@@ -140,7 +140,9 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
     // USDC fees over the cap are held, not transferred
     const S = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 500n * 10n ** 6n, a1: 0n }]);
     const r = await S.run({ sweep: { maxUnswappedValueUsdc: 100 } });
-    assert.deepStrictEqual(names(r.signer), ["collect"], r.text); assert.ok(/above maxUnswappedValueUsdc 100/.test(r.text)); assert.strictEqual(exitCodeOf(r.res), 1);
+    // (re-review of 4930f2a, MEDIUM) the cap is applied BEFORE the collect: the over-cap USDC leg is never collected, the fees stay in the NFT
+    assert.deepStrictEqual(names(r.signer), [], r.text); assert.ok(/above maxUnswappedValueUsdc 100/.test(r.text) && /the fees stay in the NFT/.test(r.text), r.text);
+    assert.strictEqual(S.ledger().jobs.length, 0, "no job, no intent"); assert.strictEqual(S.balance(USDC, OP), 0n, "nothing reached the operator");
     // under the cap: delivered
     const U = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 50n * 10n ** 6n, a1: 0n }]);
     const u = await U.run({ sweep: { maxUnswappedValueUsdc: 100 } });
@@ -148,7 +150,24 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
     // a routed token the swap declined (value above maxSwapValueUsdc) is valued at the pool mid price: 1 WETH (about 2000 USDC) over a 1000 cap is held
     const W = mk([{ id: ID_A, mgr: MGR_A, t0: WETH, t1: USDC, a0: E18, a1: 0n }]);
     const w = await W.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
-    assert.deepStrictEqual(names(w.signer), ["collect"], w.text);
+    assert.deepStrictEqual(names(w.signer), [], w.text); assert.ok(/WETH value .* above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(w.text), w.text);
+    assert.strictEqual(W.balance(WETH, OP), 0n, "the declined WETH leg was not collected");
+    // a token with no price and no route is capped by the position fee value: over the cap refused, under it delivered
+    const N = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 9000 });
+    const n = await N.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
+    assert.deepStrictEqual(names(n.signer), [], n.text); assert.ok(/no price and no safe route to USDC|above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(n.text), n.text);
+    const M = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 50 });
+    assert.deepStrictEqual(names((await M.run({ sweep: { maxUnswappedValueUsdc: 1000 } })).signer), ["collect", "transfer"]);
+    // ...and with an unknown position fee value it is refused (preflight directly: the pass already skips unpriced positions)
+    const sweepMod = require("../collector-base-sweep");
+    const sw0 = sweepMod.create({ sw: SL.config({ enabled: true, maxUnswappedValueUsdc: 1000 }), provider: null, operator: OP, log() {}, now: () => 0, io: null, owners: [OWNER] });
+    const pl = { legs: [{ token: OTHER, amount: 5n * E18, d: { swap: false, reason: "no allowlisted route for this token" } }], ops: ["transfer"] };
+    for (const bad of [undefined, null, NaN, "abc", -1]) {
+      const pf = await sw0.preflight(pl, { collectWorstWei: 1n, perOpWei: () => 1n, run: {}, feesUsd: bad });
+      assert.ok(!pf.ok && /position fee value is unknown/.test(pf.reason), `${bad}: ${pf.reason}`);
+    }
+    const hi = await sw0.preflight(pl, { collectWorstWei: 1n, perOpWei: () => 1n, run: {}, feesUsd: 1001 });
+    assert.ok(!hi.ok && /above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(hi.reason), hi.reason);
     // bounds
     assert.strictEqual(SL.config({ maxUnswappedValueUsdc: 1e12 }).maxUnswappedValueUsdc, 50000); assert.strictEqual(SL.config({}).maxUnswappedValueUsdc, 5000);
   }
@@ -156,7 +175,7 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
   // ---- L1. the vault: empty implementation allowlist, canonical registry, expectedOwner among the configured owners
   {
     const A = mk(); const ac = A.vault({ allowImpl: false });
-    SL.VAULT_IMPLEMENTATIONS.length = 0;
+    assert.ok(Object.isFrozen(SL.VAULT_IMPLEMENTATIONS) && SL.VAULT_IMPLEMENTATIONS.length === 0, "the allowlist constant is frozen and was never mutated");
     const ar = await A.run({ sweep: { vault: ac } });
     assert.ok(ar.res.sweep.report.vault.some((m) => /not in the code allowlist of ERC-6551 implementations/.test(m)), JSON.stringify(ar.res.sweep.report.vault));
     assert.ok(decodeSent(ar.signer).filter((t) => t.name === "transfer").every((t) => t.args[0] === OWNER)); assert.strictEqual(A.balance(USDC, VAULT.tba), 0n);

@@ -25,9 +25,11 @@ const ROUTES = Object.freeze({
 const ERC6551_REGISTRY = ethers.getAddress("0x000000006551c19487814612e58FE06813775758");
 /**
  * Allowlisted ERC-6551 account implementations for the vault split (D7). EMPTY by default: until a reviewed implementation address
- * is added here, in code, the vault can never verify and 100% goes to the owner. Settings cannot add to it. (Tests push to it.)
+ * is added here, in code, the vault can never verify and 100% goes to the owner. Settings cannot add to it. Frozen (deeply): tests inject their
+ * own list through collector-base-sweep.create({ vaultImplementations }) / verifyVault ctx.implementations, never by mutating this.
  */
-const VAULT_IMPLEMENTATIONS = [];
+const deepFreeze = (o) => { if (o && typeof o === "object" && !Object.isFrozen(o)) { Object.freeze(o); for (const v of Object.values(o)) deepFreeze(v); } return o; };
+const VAULT_IMPLEMENTATIONS = deepFreeze([]);
 const OPS = Object.freeze(["collect", "approve", "approve-reset", "swap", "transfer"]);
 const PHASES = Object.freeze(["collected", "approved", "swapped", "delivered", "delivered-unswapped", "held", "stuck"]);
 const TERMINAL_PHASES = Object.freeze(["delivered", "delivered-unswapped"]);
@@ -272,8 +274,8 @@ function assertSignableSweep(tx, lim, op, expect) {
     if (op === "approve" && want <= 0n) bad("approve of 0 is a reset");
     return;
   }
-  // transfer: a route token, USDC, or a token of the (chain-verified) active leg -- already established by the legTokens check above.
-  if (!routeToken && !eq(tx.to, USDC) && !legTokens.some((t) => eq(t, tx.to))) bad(`transfer target ${tx.to} is not a route token, USDC or a validated leg token`);
+  // transfer: the target is already pinned above (tx.to is in legTokens AND equals expect.token), which is stricter than any
+  // "route token / USDC / leg token" test; a second check here could only be weaker or equal, so it was removed as dead code.
   const [to, amount] = exact(ERC20_IFACE, "transfer");
   if (!(expect.recipients || []).some((r) => eq(r, to)) || eq(to, expect.operator)) bad(`transfer recipient ${to} is not a verified owner or vault`);
   if (BigInt(amount) !== BigInt(expect.amount) || BigInt(amount) <= 0n) bad(`transfer amount ${amount} is not the attributed ${expect.amount}`);
@@ -321,6 +323,9 @@ function legProblem(l) {
   if (!(Number.isSafeInteger(l.attempts) && l.attempts >= 0)) return "attempts is not a non-negative integer";
   if (BigInt(l.doneRaw) > BigInt(l.owedRaw)) return "doneRaw exceeds owedRaw";
   if (l.swap && l.swap.outRaw !== undefined && l.swap.outRaw !== null && !DEC.test(String(l.swap.outRaw))) return "swap.outRaw is malformed";
+  if (l.swap && l.swap.tx !== undefined && l.swap.tx !== null && !(typeof l.swap.tx === "string" && HASH.test(l.swap.tx))) return "swap.tx is not a hash";
+  // swap.txs (every swap hash of the leg) is optional: ledgers written before it existed carry only the single swap.tx.
+  if (l.swap && l.swap.txs !== undefined && !(Array.isArray(l.swap.txs) && l.swap.txs.every((h) => typeof h === "string" && HASH.test(h)) && new Set(l.swap.txs.map((h) => h.toLowerCase())).size === l.swap.txs.length)) return "swap.txs is not a list of distinct hashes";
   if (l.outDone !== undefined && !(typeof l.outDone === "string" && DEC.test(l.outDone))) return "outDone is not a decimal string";
   return pendingProblem(l.pending);
 }
@@ -352,7 +357,15 @@ function readSweepState(file, fsm = fs) {
   if (!j || typeof j !== "object" || Array.isArray(j)) return corrupt("not a JSON object");
   if (j.version !== SWEEP_STATE_VERSION) return corrupt(`unknown version ${JSON.stringify(j.version)}`);
   if (!Array.isArray(j.jobs)) return corrupt("jobs is not an array");
-  for (const [i, job] of j.jobs.entries()) { const m = jobProblem(job); if (m) return corrupt(`jobs[${i}].${m}`); }
+  const collectTxs = new Set();
+  for (const [i, job] of j.jobs.entries()) {
+    const m = jobProblem(job); if (m) return corrupt(`jobs[${i}].${m}`);
+    // One collect transaction belongs to exactly one job: a duplicate would let one Collect receipt vouch for two jobs' amounts.
+    const tx = typeof job.collect.tx === "string" ? job.collect.tx.toLowerCase() : null;
+    if (tx) { if (collectTxs.has(tx)) return corrupt(`jobs[${i}].collect.tx ${job.collect.tx} duplicates the collect of an earlier job`); collectTxs.add(tx); }
+    const seen = new Set();
+    for (const [k, l] of job.legs.entries()) { const t = l.token.toLowerCase(); if (seen.has(t)) return corrupt(`jobs[${i}].legs[${k}].token ${l.token} duplicates an earlier leg of the same job`); seen.add(t); }
+  }
   return { ok: true, ledger: { jobs: j.jobs } };
 }
 

@@ -12,7 +12,7 @@ const sweep = require("../collector-base-sweep");
 const PROBE = { WETH: 10n ** 15n, cbBTC: 100_000n, LAPTOP: 100n * 10n ** 18n }; // about 2, 60 and 5 USDC
 
 /** Runs every check against `provider`; `out(line)` receives each line. -> { bad, lines } */
-async function run(provider, { vault = null, owners = [], out = () => {} } = {}) {
+async function run(provider, { vault = null, owners = [], out = () => {}, vaultImplementations } = {}) {
   const lines = [];
   let bad = 0;
   const emit = (line) => { lines.push(line); out(line); };
@@ -56,7 +56,7 @@ async function run(provider, { vault = null, owners = [], out = () => {} } = {})
   emit("\nvault");
   if (!vault || vault.tba === null || vault.tba === undefined || vault.tba === "") emit("  ok    vault.tba is null: the split is 0% and no vault address is ever used (gated off)");
   else {
-    const v = await sweep.verifyVault(provider, sw, { operator: null, owners });
+    const v = await sweep.verifyVault(provider, sw, { operator: null, owners, implementations: vaultImplementations });
     check(v.ok, v.ok ? `vault ${v.tba} verified; effective split ${v.pct}%` : `vault refused: ${v.reason}`);
   }
   emit(`\n${bad ? `${bad} CHECK(S) FAILED` : "All checks passed."}`);

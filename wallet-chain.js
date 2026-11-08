@@ -34,6 +34,14 @@
     };
   }
 
+  /** What to type into the wallet by hand when the native decimals are unverified and nothing may be added automatically. */
+  function manualAddMessage(chain) {
+    const c = chain || {};
+    const id = Number(c.chainId);
+    const symbol = c.nativeSymbol || (c.nativeCurrency && c.nativeCurrency.symbol) || "(unstated)";
+    return `${c.chainName || "This chain"} is not in your wallet. Add it by hand: network name ${c.chainName || "(unstated)"}, chain ID ${id} (0x${id.toString(16)}), RPC ${c.rpc || "(unstated)"}, currency symbol ${symbol}, block explorer ${c.explorer || "(none)"}. This page will not guess the chain's native decimals (unverified), so it does not add the network for you.`;
+  }
+
   const isUnknownChain = (e) => !!e && (e.code === 4902 || /unrecognized|not added/i.test(String(e.message || "")));
 
   /** Resolves "switched" or "added"; rejects with the original error (or a clear one) otherwise. */
@@ -45,11 +53,11 @@
     } catch (e) {
       if (!isUnknownChain(e)) throw e;
       const params = walletChainParams(chain);
-      if (!params) throw new Error(`${chain.chainName || "This chain"} is not in your wallet. Add it by hand (chain id ${chain.chainId}, RPC ${chain.rpc}): this page will not guess the chain's native currency.`);
+      if (!params) throw new Error(manualAddMessage(chain));
       await ethereum.request({ method: "wallet_addEthereumChain", params: [params] });
       return "added";
     }
   }
 
-  return { walletChainParams, switchOrAdd, isUnknownChain };
+  return { walletChainParams, switchOrAdd, isUnknownChain, manualAddMessage };
 }));

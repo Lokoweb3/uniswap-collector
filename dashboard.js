@@ -315,6 +315,11 @@ function watchedRows(w){
   for (const t of (w.holdings && w.holdings.tokens) || []) {
     const key = t.native ? NATIVE_KEY : t.address.toLowerCase();
     const r = row(key, t.symbol, t.address, !!t.native);
+    if (t.decimalsUnverified) {
+      // Native decimals unverified (test network): carry the raw wei, never add the null amount.
+      r.decimalsUnverified = true; r.walletRaw = (BigInt(r.walletRaw || 0) + BigInt(t.amountRaw || 0)).toString();
+      continue;
+    }
     r.wallet += t.amount; r.price = t.price; r.depthUsd = t.depthUsd;
   }
   const side = (p, addr, sym, amt, fee, usdPer) => {
@@ -338,6 +343,7 @@ function mergeRows(lists){
     const key = x.native ? NATIVE_KEY : x.address.toLowerCase();
     const r = m.get(key) || { symbol: x.symbol, address: x.address, native: x.native, wallet: 0, pools: 0, fees: 0, price: null, depthUsd: null, source: 'wallet', change24h: null };
     r.wallet += x.wallet || 0; r.pools += x.pools || 0; r.fees += x.fees || 0;
+    if (x.decimalsUnverified) { r.decimalsUnverified = true; r.walletRaw = (BigInt(r.walletRaw || 0) + BigInt(x.walletRaw || 0)).toString(); }
     if (r.price == null && x.price != null) { r.price = x.price; r.depthUsd = x.depthUsd; r.via = x.via || null; }
     if (x.source === 'pools') r.source = 'pools';
     if (r.change24h == null && x.change24h != null) r.change24h = x.change24h;
@@ -567,6 +573,8 @@ function assumedTip(totals){
   const list = (totals.assumedTokens || []).map(t => `${t.symbol} valued as ${t.via || 'another token'} (${usd(t.usd)})`).join('; ');
   return `${list}. A receipt token with no market of its own is priced one for one against what it represents, because settings.json says to. Nothing on chain confirms that ratio: there is no pool for it and no exchange rate to read. The holding is real; the rate it is valued at is an assumption.`;
 }
+/** Native balance whose decimals are unverified: the raw wei with a badge, never scaled by a guess. */
+const rawWei = x => `${esc(String(x.walletRaw))} wei <span class="badge unverified" title="This chain's native decimals are not independently verified, so the balance is shown unscaled.">decimals unverified</span>`;
 function renderPortfolio(){
   const d = lastPortfolio;
   if (!d) return;
@@ -617,17 +625,17 @@ function renderPortfolio(){
     : `<td class="chg ${x.change24h >= 0 ? 'up' : 'down'}">${x.change24h >= 0 ? '+' : '−'}${Math.abs(x.change24h).toFixed(1)}%</td>`;
   const q = x => Math.abs(x) < 1e-6 ? '<span class="unpriced">0</span>' : amount(x);
   const showDust = pref('portfolio:dust') === '1';
-  const main = rows.filter(x => showDust || (x.usd == null ? x.source === 'pools' : x.usd >= 1));
+  const main = rows.filter(x => showDust || x.decimalsUnverified || (x.usd == null ? x.source === 'pools' : x.usd >= 1));
   const dust = rows.length - main.length;
   const link = x => x.native ? esc(x.symbol) : chainRef(d.explorer, `/token/${x.address}${holder ? `?holder_address_hash=${holder}` : ''}`, esc(x.symbol), x.address);
   $('#baltable').innerHTML = `<table class="etable">
     <tr><th>Token</th><th>Wallet</th><th>In pools</th><th>Fees</th><th>Total</th><th>Price</th><th>≈ USD</th><th>Share</th><th>24h</th></tr>
     ${main.map(x => `<tr>
       <td>${link(x)}</td>
-      <td>${q(x.wallet)}</td>
+      <td>${x.decimalsUnverified ? rawWei(x) : q(x.wallet)}</td>
       <td>${q(x.pools)}</td>
       <td>${q(x.fees)}</td>
-      <td><b>${amount(x.total)}</b></td>
+      <td>${x.decimalsUnverified ? rawWei(x) : `<b>${amount(x.total)}</b>`}</td>
       <td>${x.price == null ? '<span class="unpriced">no pool</span>' : x.via ? `<span title="Priced as ${esc(x.via)}, redeemable 1:1">$${price(x.price)} <span class="muted">as ${esc(x.via)}</span></span>` : '$' + price(x.price)}</td>
       <td class="u">${x.thin ? `<span class="approx" title="${esc(`The pool this is priced from holds only ${usd(x.depthUsd)} on its pricing side, so selling would move it. Treat as a quote, not cash. ${pricingText()}`)}">≈</span>` : ''}${usd(x.usd)}</td>
       <td>${x.share == null ? '—' : x.share.toFixed(1) + '%'}</td>

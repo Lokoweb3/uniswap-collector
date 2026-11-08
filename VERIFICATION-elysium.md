@@ -62,6 +62,15 @@ eth_blockNumber -> {"jsonrpc":"2.0","id":1,"result":"0x18e99b5"}   (26,122,677)
 - `eth_getBalance` of `0xf32fa92f...ab07` returned `0x6cbe8ce5f5d2176` (~0.49 if 18 decimals); this alone proves
   nothing about decimals, as the spec says. Gas price `0x5f6f270` = 0.100 gwei at 18 decimals is plausible, not proof.
 
+- (e) Public chain registries, read-only GETs, fetched in the fix stage (2026-11-08):
+  - `https://raw.githubusercontent.com/ethereum-lists/chains/master/_data/chains/eip155-99801.json` returned
+    HTTP 404 ("404: Not Found"): ethereum-lists/chains has no entry for chain 99801.
+  - `https://chainid.network/chains.json` returned HTTP 200 (1,212,224 bytes, 2,855 chains). Searching for
+    `chainId` 99801 (and the mainnet id 99901) found NO entry. Nothing states `nativeCurrency.decimals` for Elysium.
+  - Result: zero sources state decimals = 18 (two independent ones are required). NOT PROVEN; the unverified
+    fallback stays: no `decimals` in the registry or the example, no automatic wallet add, raw wei with a
+    "decimals unverified" badge.
+
 Consequence (spec open question 2): `nativeCurrency.decimals` is OMITTED from the registry and from
 `settings.elysium-testnet.example.json`; the example `_comment`, the README and this file say "18 NOT independently
 proven". The loader leaves `nativeCurrency` unset, `/api/chain` answers `nativeCurrency: null`, the Wallet page

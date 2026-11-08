@@ -186,8 +186,16 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
     assert.deepStrictEqual(eth.calls.map((c) => c.method), ["wallet_switchEthereumChain"]);
     // the page uses it, and still carries no chain of its own (test/chain-identity.test.js stays green, unmodified)
     const html = read("wallet.html");
-    assert.ok(/<script src="\/wallet-chain\.js"><\/script>/.test(html) && (html.match(/WalletChain\.walletChainParams\(/g) || []).length === 2);
-    assert.ok(/if \(!WalletChain\.isUnknownChain\(e\)\)/.test(html), "connectWallet no longer adds after a rejection");
+    assert.ok(/<script src="\/wallet-chain\.js"><\/script>/.test(html));
+    assert.strictEqual((html.match(/window\.WalletChain\.switchOrAdd\(window\.ethereum,/g) || []).length, 2, "switchChain and connectWallet both run the tested switchOrAdd");
+    assert.ok(!/wallet_addEthereumChain|wallet_switchEthereumChain'\s*,\s*\[\{ chainId: '0x' \+ CHAIN_ID/.test(html.replace(/<!--[\s\S]*?-->/g, "")), "no hand-rolled add/switch left in the page");
+    assert.ok(!/(?<!window\.)\bWalletChain\./.test(html.replace(/<script src="\/wallet-chain\.js">/, "")), "every use goes through window.WalletChain, so a missing module is not a ReferenceError");
+    assert.strictEqual((html.match(/if \(!window\.WalletChain\)/g) || []).length, 2, "both entry points say so when the module is missing");
+    // the manual-add message names everything the user must type
+    const man = walletChain.manualAddMessage({ ...verified, nativeCurrency: null, nativeSymbol: "HYPE" });
+    for (const s of ["Elysium Testnet", "99801", "0x185d9", T.rpcUrl, "HYPE", T.explorer]) assert.ok(man.includes(s), `manual message has ${s}: ${man}`);
+    eth = mock(Object.assign(new Error("x"), { code: 4902 }));
+    await assert.rejects(walletChain.switchOrAdd(eth, { ...verified, nativeCurrency: null, nativeSymbol: "HYPE" }), (e) => ["99801", "0x185d9", "HYPE", T.rpcUrl, T.explorer, "Elysium Testnet"].every((s) => e.message.includes(s)));
     assert.strictEqual(spawnSync(process.execPath, [path.join(__dirname, "chain-identity.test.js")], { encoding: "utf8" }).status, 0, "chain-identity.test.js passes");
     // statically: no signing request in the new wallet code
     assert.ok(!/personal_sign|eth_sign|eth_signTypedData|eth_sendTransaction|mnemonic|privateKey/.test(read("wallet-chain.js")));
@@ -280,6 +288,7 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
       assert.strictEqual(ch.chainId, 99801); assert.strictEqual(ch.chainName, "Elysium Testnet"); assert.strictEqual(ch.testnet, true);
       assert.strictEqual(ch.rpc, "https://testnet-rpc.elysium.kinetiq.xyz", "an origin only"); assert.strictEqual(ch.explorer, T.explorer);
       assert.strictEqual(ch.nativeCurrency, null, "unverified: the wallet page will not guess");
+      assert.strictEqual(ch.nativeSymbol, "HYPE"); assert.strictEqual(ch.nativeDecimalsUnverified, true, "the symbol is exposed, marked unverified");
       assert.strictEqual(ch.noTx, true); assert.strictEqual(ch.readOnly, true);
       const vi = JSON.parse((await request(srv.port, "/api/vault-info", { headers: h })).body);
       assert.strictEqual(vi.ok, true); assert.strictEqual(vi.testnet, true); assert.strictEqual(vi.artError, undefined, "no error for a vault that does not exist here");
@@ -310,6 +319,12 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
       assert.ok(native, `a native row: ${JSON.stringify(pf).slice(0, 300)}`);
       assert.strictEqual(native.symbol, "HYPE"); assert.strictEqual(native.walletRaw, "489000000000000000"); assert.strictEqual(native.decimalsUnverified, true);
       assert.strictEqual(native.wallet, null); assert.strictEqual(native.price, null); assert.strictEqual(native.walletUsd, null);
+      // /api/balances: the native row is raw wei under the chain's symbol, never "ETH" and never formatEther
+      const bal = JSON.parse((await request(srv.port, "/api/balances", { headers: h })).body);
+      assert.strictEqual(bal.ok, true, JSON.stringify(bal).slice(0, 300));
+      const bn = bal.rows.find((r) => r.native);
+      assert.strictEqual(bn.symbol, "HYPE"); assert.strictEqual(bn.balance, null); assert.strictEqual(bn.balanceRaw, "489000000000000000");
+      assert.strictEqual(bn.decimalsUnverified, true); assert.strictEqual(bn.usd, null);
       // only read methods reached the chain
       const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((c) => c.kind === "rpc").map((c) => c.method);
       const READ = new Set(["eth_chainId", "net_version", "eth_blockNumber", "eth_getBalance", "eth_gasPrice", "eth_feeHistory", "eth_getBlockByNumber", "eth_getCode", "eth_call", "eth_estimateGas"]);
@@ -328,6 +343,9 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
       for (let i = 0; i < 60; i++) { pf = JSON.parse((await request(srv2.port, "/api/portfolio", { headers: h })).body); if (pf.ok !== false) break; await new Promise((res) => setTimeout(res, 300)); }
       const native = pf.rows.find((r) => r.native);
       assert.strictEqual(native.wallet, 0.489); assert.strictEqual(native.price, null, "a testnet balance is never priced"); assert.ok(!native.decimalsUnverified);
+      const bal2 = JSON.parse((await request(srv2.port, "/api/balances", { headers: h })).body);
+      const bn2 = bal2.rows.find((r) => r.native);
+      assert.strictEqual(bn2.symbol, "HYPE"); assert.strictEqual(bn2.balance, 0.489); assert.ok(!bn2.decimalsUnverified, "verified decimals: scaled");
     } finally { await srv2.stop(); }
 
     // the env RPC: used in-process, never in a served response or the log
@@ -339,6 +357,28 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
       assert.strictEqual(JSON.parse((await request(srv3.port, "/api/chain", { headers: h })).body).rpc, T.rpcUrl);
       assert.ok(!srv3.out.join("").includes(KEY));
     } finally { await srv3.stop(); }
+  }
+
+  // ---- approve-serve.js (npm run approve) serves the browser module the Wallet page needs ----------------------------
+  {
+    const port = await freePort(), dir = mkDir();
+    const out = [];
+    const child = spawn(process.execPath, ["--require", PRELOAD, "--require", STUB, path.join(ROOT, "approve-serve.js")], {
+      cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: dir, PORT: String(port), LP_BIND: "127.0.0.1" }),
+    });
+    child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
+    try {
+      const t0 = Date.now();
+      while (!out.join("").includes("/wallet#approvals")) {
+        if (child.exitCode != null) throw new Error("approve-serve exited: " + out.join(""));
+        if (Date.now() - t0 > 30000) throw new Error("approve-serve did not start");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const r = await request(port, "/wallet-chain.js");
+      assert.strictEqual(r.status, 200); assert.ok(/javascript/.test(r.headers["content-type"]) && r.body.includes("switchOrAdd"), "approve-serve serves /wallet-chain.js");
+      const c = JSON.parse((await request(port, "/api/chain")).body);
+      assert.strictEqual(c.chainId, 99801); assert.strictEqual(c.nativeSymbol, "HYPE"); assert.strictEqual(c.nativeDecimalsUnverified, true); assert.strictEqual(c.nativeCurrency, null);
+    } finally { child.kill("SIGTERM"); await new Promise((res) => (child.exitCode != null ? res() : child.once("exit", res))); }
   }
 
   // ---- 20. 21. start-all.sh / stop-all.sh under a stub harness ------------------------------------------------

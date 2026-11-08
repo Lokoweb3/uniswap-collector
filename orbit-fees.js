@@ -51,11 +51,11 @@ async function estimateGas(provider, { to, data = "0x", from, value } = {}, { he
   if (!ethers.isAddress(to)) throw new Error("estimateGas: `to` is not an address");
   const tx = { to, data };
   if (from) tx.from = from;
-  if (value != null) tx.value = ethers.toBeHex(BigInt(value));
+  if (value != null) tx.value = "0x" + BigInt(value).toString(16); // JSON-RPC quantity: no leading zeros
   let total = null, gasForL1 = null, source = null;
   try {
     const callData = NI_IFACE.encodeFunctionData("gasEstimateComponents", [to, false, data]);
-    const ret = await provider.send("eth_call", [{ to: NODE_INTERFACE, data: callData, ...(from ? { from } : {}) }, "latest"]);
+    const ret = await provider.send("eth_call", [{ to: NODE_INTERFACE, data: callData, ...(from ? { from } : {}), ...(tx.value ? { value: tx.value } : {}) }, "latest"]);
     // The first two words are uint64: a word above that range is an overflow, not a gas figure (ethers would truncate it).
     const word = (i) => BigInt("0x" + ret.slice(2 + i * 64, 2 + (i + 1) * 64));
     if (typeof ret === "string" && /^0x[0-9a-fA-F]{256}$/.test(ret) && word(0) <= UINT64_MAX && word(1) <= UINT64_MAX) {

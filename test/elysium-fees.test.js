@@ -57,6 +57,15 @@ const TO = "0x698C3A3F06B7EdBD175169d1cfa219c8232F48d8";
     assert.strictEqual(p.calls[0].params[0].to.toLowerCase(), NI.toLowerCase(), "the call goes to exactly 0x...C8");
     assert.strictEqual(p.calls[0].params[0].data.slice(0, 10), IFACE.getFunction("gasEstimateComponents").selector);
     assert.strictEqual((await orbit.estimateGas(p, { to: TO }, { headroomPct: 0 })).gas, 100000n);
+    // value reaches the NodeInterface eth_call (as a hex quantity) as well as from; absent value adds no key
+    const pv = mock({ eth_call: ret, eth_estimateGas: hex(21000) });
+    await orbit.estimateGas(pv, { to: TO, from: TO, value: 1000000000000000000n });
+    assert.deepStrictEqual(Object.keys(pv.calls[0].params[0]).sort(), ["data", "from", "to", "value"]);
+    assert.strictEqual(pv.calls[0].params[0].value, "0xde0b6b3a7640000"); assert.strictEqual(pv.calls[0].params[0].from, TO);
+    assert.ok(!("value" in p.calls[0].params[0]), "no value, no key");
+    const pf = mock({ eth_call: "0x", eth_estimateGas: hex(21000) });
+    await orbit.estimateGas(pf, { to: TO, from: TO, value: 5 });
+    assert.strictEqual(pf.calls[1].params[0].value, "0x5", "the eth_estimateGas fallback carries it too");
     // every way NodeInterface can fail falls back to eth_estimateGas
     for (const [label, handler] of [["revert", () => { throw new Error("execution reverted"); }], ["empty data", "0x"], ["null", null], ["undecodable", "0x1234"], ["zero estimate", IFACE.encodeFunctionResult("gasEstimateComponents", [0n, 0n, 1n, 1n])]]) {
       const q = mock({ eth_call: handler, eth_estimateGas: hex(21000) });

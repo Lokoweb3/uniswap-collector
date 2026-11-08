@@ -2369,6 +2369,8 @@ async function handleRequest(req, res) {
       ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
       rpc: RPC_SHOWN, explorer: EXPLORER_URL, readOnly: READONLY, noTx: NO_TX,
       ...(TESTNET ? { testnet: true } : {}),
+      ...(cfg.nativeSymbol ? { nativeSymbol: cfg.nativeSymbol } : {}),
+      ...(!cfg.nativeCurrency && cfg.nativeSymbol ? { nativeDecimalsUnverified: true } : {}),
       // Null unless settings verify it: a wallet told the wrong native asset keeps
       // showing gas under the wrong ticker.
       nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
@@ -2440,6 +2442,7 @@ async function handleRequest(req, res) {
         // asset is verified in settings: declaring the wrong one would register the
         // network in someone's wallet with gas labelled as a currency it is not.
         nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
+        ...(cfg.nativeSymbol ? { nativeSymbol: cfg.nativeSymbol } : {}),
         explorer: EXPLORER_URL, approved, others, wallets,
       }));
     } catch (err) {
@@ -3120,7 +3123,12 @@ async function handleRequest(req, res) {
       if (Date.now() - balCache.at > 5 * 60 * 1000) {
         const rows = [];
         const native = await provider.getBalance(cfg.ownerAddress);
-        rows.push({ symbol: "ETH", balance: Number(ethers.formatEther(native)), native: true });
+        if (cfg.testnet === true && !Number.isInteger(cfg.nativeCurrency && cfg.nativeCurrency.decimals)) {
+          // Testnet whose native decimals are not verified: never scale by a guessed 18; give the raw wei.
+          rows.push({ symbol: cfg.nativeSymbol || cl.nativeLabel(cfg), balance: null, balanceRaw: native.toString(), decimalsUnverified: true, native: true });
+        } else {
+          rows.push({ symbol: cl.nativeLabel(cfg), balance: Number(ethers.formatUnits(native, cl.nativeDecimals(cfg))), native: true });
+        }
         for (const t of tokenSet.values()) {
           const erc = new ethers.Contract(t.address, ["function balanceOf(address) view returns (uint256)"], provider);
           const raw = await erc.balanceOf(cfg.ownerAddress).catch(() => null);
@@ -3134,7 +3142,7 @@ async function handleRequest(req, res) {
       // Price at read time, not cache time — prices arrive with the first build.
       const priced = balCache.data.map((r) => {
         const price = r.native ? lastPrices[WETH] : lastPrices[r.address.toLowerCase()];
-        return { ...r, usd: price != null ? r.balance * price : null };
+        return { ...r, usd: price != null && r.balance != null ? r.balance * price : null };
       });
       priced.sort((a, b) => (b.usd || 0) - (a.usd || 0));
       res.writeHead(200);

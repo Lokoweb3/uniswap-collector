@@ -122,6 +122,8 @@ function ingestEntry(e) {
     pairAddress: lc(addrOf(e.pairAddress)),
     valueUsd: num(e.valueUsd),
     feesUsd: num(e.feesUsd),
+    dailyUsd: num(e.dailyUsd),
+    rateWindowH: num(e.rateWindowH),
     feesOk: e.feesOk !== false,
     thin: e.thin === true,
     counted: e.counted !== false,
@@ -177,6 +179,7 @@ function ingest(name, raw) {
         address, label: str(w.label),
         ok: w.ok !== false && w.totals !== null,
         stale: w.stale === true, staleSince: num(w.staleSince),
+        earned: isObj(w.earned) ? { perHour: num(w.earned.perHour), rateWindowH: num(w.earned.rateWindowH) } : null,
         entries: ingestEntries(w),
         holdings: h ? {
           ok: h.ok !== false,
@@ -314,6 +317,7 @@ function compose(state, now) {
         flags: { thin: e.thin, assumed: false, staked: e.staked, killedGauge: !!(e.gaugeKilled || (r && r.killed)), feesUnavailable, stale, staking: false },
         inRange: e.inRange, amount: null, price: null, asOf, source, link,
         _feesCounted: counted && e.feesOk && e.feesUsd !== null,
+        _dailyUsd: e.dailyUsd, _rateWindowH: e.rateWindowH,
       });
     }
   };
@@ -328,6 +332,39 @@ function compose(state, now) {
       const asOf = w.stale && w.staleSince ? w.staleSince : wat.asOf;
       if (w.stale) problems.push({ wallet: wallet.key, code: "stale", since: w.staleSince || undefined });
       addEntries(wallet, w.entries, "watch", asOf, wStale);
+    }
+  }
+
+  // ---- earning rate: measured by the instance itself, never estimated here ----
+  const rates = [];
+  const lpOf = (key) => items.filter((it) => it.kind === "lp" && it.wallet.key === key);
+  if (mainWallet) {
+    const mine = lpOf(mainWallet.key);
+    if (mine.length || !pos) {
+      const counted = mine.filter((it) => it._feesCounted);
+      const meas = counted.filter((it) => it._dailyUsd !== null);
+      const wins = meas.map((it) => it._rateWindowH).filter((x) => x !== null);
+      rates.push({
+        wallet: mainWallet.key, kind: "positions",
+        perDayUsd: meas.length ? round(meas.reduce((a, it) => a + it._dailyUsd, 0)) : null,
+        windowH: wins.length ? Math.min(...wins) : null,
+        measured: meas.length, total: counted.length, stale: pos ? pos.stale : false,
+      });
+    }
+  }
+  if (wat) {
+    for (const w of wat.data.wallets) {
+      if (mainKey && w.address.toLowerCase() === mainKey) continue;
+      const key = w.address.toLowerCase();
+      const hasLp = lpOf(key).length > 0;
+      if (w.ok && !hasLp) continue;
+      const ph = w.ok && w.earned ? w.earned.perHour : null;
+      rates.push({
+        wallet: key, kind: "wallet",
+        perDayUsd: ph === null ? null : round(ph * 24),
+        windowH: ph === null ? null : w.earned.rateWindowH,
+        measured: null, total: null, stale: wat.stale || w.stale,
+      });
     }
   }
 
@@ -450,7 +487,7 @@ function compose(state, now) {
   else status = problems.length ? "partial" : "ok";
 
   return {
-    chain, status, problems, notes, parts: partsOut, items, wallets,
+    chain, status, problems, notes, parts: partsOut, items, wallets, rates,
     fetchedAt: state.roundAt || null, dataAt, lastGoodAt: have.length ? lastGoodAt : null,
   };
 }
@@ -459,9 +496,11 @@ function compose(state, now) {
 function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
   const totals = {
     grandUsd: 0, lpUsd: 0, feesUsd: 0, rewardsUsd: 0, tokensUsd: 0, uncountedUsd: 0, uncountedCount: 0,
-    rewardsUncountedUsd: 0, rewardsUncountedCount: 0, assumedUsd: 0, staleUsd: 0, staleOldestAsOf: null, itemCount: 0,
+    rewardsUncountedUsd: 0, rewardsUncountedCount: 0, feesUncountedUsd: 0, feesUncountedCount: 0, assumedUsd: 0, staleUsd: 0, staleOldestAsOf: null, itemCount: 0,
   };
   const byChain = {}, byWallet = {}, byProtocol = {};
+  const feesByChain = {}, feesByWallet = {};
+  const rates = [];
   const walletMap = new Map();
   const chainsOut = [];
   const all = [];
@@ -486,7 +525,8 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
       let contrib = 0;
       if (it.kind === "lp") {
         if (it.counted) { totals.lpUsd += it.valueUsd; contrib += it.valueUsd; }
-        if (it._feesCounted) { totals.feesUsd += it.feesUsd; contrib += it.feesUsd; }
+        if (it._feesCounted) { totals.feesUsd += it.feesUsd; contrib += it.feesUsd; add(feesByChain, c.chain.key, it.feesUsd); add(feesByWallet, it.wallet.key, it.feesUsd); }
+        else if (it.feesUsd !== null) { totals.feesUncountedCount++; totals.feesUncountedUsd += it.feesUsd; }
         if (it.rewardsCounted) { totals.rewardsUsd += it.rewardsUsd; contrib += it.rewardsUsd; }
         else if (it.rewardsReason) { totals.rewardsUncountedCount++; if (it.rewardsUsd !== null) totals.rewardsUncountedUsd += it.rewardsUsd; }
         if (!it.counted) { totals.uncountedCount++; if (it.valueUsd !== null) { totals.uncountedUsd += it.valueUsd; cTotals.uncountedUsd += it.valueUsd; } }
@@ -508,7 +548,11 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
       it._contrib = contrib;
     }
     const noData = c.status === "down" || c.status === "loading";
-    if (noData) byChain[c.chain.key] = null; else if (!(c.chain.key in byChain)) byChain[c.chain.key] = 0;
+    if (noData) { byChain[c.chain.key] = null; feesByChain[c.chain.key] = null; } else {
+      if (!(c.chain.key in byChain)) byChain[c.chain.key] = 0;
+      if (!(c.chain.key in feesByChain)) feesByChain[c.chain.key] = 0;
+    }
+    for (const r of c.rates || []) rates.push({ chain: c.chain.key, ...r });
     if (c.status !== "ok") {
       if (!c.problems.length) incompleteList.push({ chain: c.chain.key, code: c.status });
       for (const p of c.problems) incompleteList.push({ chain: c.chain.key, ...(p.part ? { part: p.part } : { wallet: p.wallet }), code: p.code });
@@ -525,8 +569,8 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
 
   totals.grandUsd = totals.lpUsd + totals.feesUsd + totals.rewardsUsd + totals.tokensUsd;
   totals.itemCount = all.length;
-  for (const k of ["grandUsd", "lpUsd", "feesUsd", "rewardsUsd", "tokensUsd", "uncountedUsd", "rewardsUncountedUsd", "assumedUsd", "staleUsd"]) totals[k] = round(totals[k]);
-  for (const o of [byChain, byWallet, byProtocol]) for (const k of Object.keys(o)) if (o[k] !== null) o[k] = round(o[k]);
+  for (const k of ["grandUsd", "lpUsd", "feesUsd", "rewardsUsd", "tokensUsd", "uncountedUsd", "rewardsUncountedUsd", "feesUncountedUsd", "assumedUsd", "staleUsd"]) totals[k] = round(totals[k]);
+  for (const o of [byChain, byWallet, byProtocol, feesByChain, feesByWallet]) for (const k of Object.keys(o)) if (o[k] !== null) o[k] = round(o[k]);
 
   // wallets: first non-empty label in CHAINS order, the rest as aliases
   const order = composed.map((c) => c.chain.key);
@@ -559,7 +603,8 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
   return {
     ok: true, at: now, ttlMs,
     chains: chainsOut, wallets: walletsOut, items, totals,
-    breakdown: { byChain, byWallet, byProtocol },
+    breakdown: { byChain, byWallet, byProtocol, feesByChain, feesByWallet },
+    rates,
     incomplete: composed.some((c) => c.status !== "ok") || incompleteList.length > 0,
     incompleteList, truncated,
   };

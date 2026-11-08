@@ -174,6 +174,17 @@ name in `LP_ALLOWED_HOSTS`); the existing proxy path is unchanged. `?refresh=1` 
 | `LP_AGG_MAX_BYTES` | 8388608 | upstream body cap; a larger answer is aborted (`too-large`) |
 | `LP_AGG_THEME_DIR` | the repo folder | where `dashboard.css` is read from (for tests) |
 
+Fee totals and earning rate. The LP table ends in a totals row: counted LP value, counted
+uncollected fees and priced pending rewards (the same figures that are in the grand total), with
+`fees not counted` shown separately (thin pool, price gap, unpriced or fees unavailable). Under it,
+a measured fees-per-day line (per week is day x 7, labelled extrapolated). The rate covers
+uncollected fees only, not pending rewards, and is never estimated here: the main wallet uses the
+sum of `dailyUsd` over its counted positions from `/api/positions`; a watched wallet uses its
+`earned.perHour` x 24 from `/api/watch`, which covers all of that wallet's positions. A source
+without a measured value reads `rate unknown` (never $0). APR is not aggregated. By chain and By
+wallet each get a fees column. `/api/aggregate` carries `rates`, `breakdown.feesByChain/feesByWallet`
+and `totals.feesUncountedUsd/Count`; no new upstream path is fetched.
+
 Counting rules.
 
 - **`holdings-unavailable` is a per-wallet note, not a problem.** A watched wallet whose token discovery has

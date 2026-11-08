@@ -63,14 +63,19 @@ function isUnfiltered(payload, sel) {
 function isFiltered(payload, sel) { return !isUnfiltered(payload, sel); }
 
 function totalsFor(payload, items, sel) {
-  const all = isUnfiltered(payload, sel);
-  if (all) return payload.totals;
-  const t = { lpUsd: 0, feesUsd: 0, rewardsUsd: 0, tokensUsd: 0, uncountedUsd: 0, uncountedCount: 0, rewardsUncountedUsd: 0, rewardsUncountedCount: 0, assumedUsd: 0, staleUsd: 0 };
+  if (isUnfiltered(payload, sel)) return payload.totals;
+  return clientTotals(items);
+}
+
+/** The server's totals rules applied to a list of items (used when a filter is on). */
+function clientTotals(items) {
+  const t = { lpUsd: 0, feesUsd: 0, rewardsUsd: 0, tokensUsd: 0, uncountedUsd: 0, uncountedCount: 0, rewardsUncountedUsd: 0, rewardsUncountedCount: 0, feesUncountedUsd: 0, feesUncountedCount: 0, assumedUsd: 0, staleUsd: 0 };
   for (const it of items) {
     let c = 0;
     if (it.kind === 'lp') {
       if (it.counted) { t.lpUsd += it.valueUsd; c += it.valueUsd; }
       if (it.counted && isNum(it.feesUsd) && !it.flags.feesUnavailable) { t.feesUsd += it.feesUsd; c += it.feesUsd; }
+      else if (isNum(it.feesUsd)) { t.feesUncountedCount++; t.feesUncountedUsd += it.feesUsd; }
       if (it.rewardsCounted) { t.rewardsUsd += it.rewardsUsd; c += it.rewardsUsd; }
       else if (it.rewardsReason) { t.rewardsUncountedCount++; if (isNum(it.rewardsUsd)) t.rewardsUncountedUsd += it.rewardsUsd; }
       if (!it.counted) { t.uncountedCount++; if (isNum(it.valueUsd)) t.uncountedUsd += it.valueUsd; }
@@ -86,12 +91,16 @@ function totalsFor(payload, items, sel) {
 }
 
 function breakdownFor(items) {
-  const by = { chain: {}, wallet: {}, protocol: {} };
+  const by = { chain: {}, wallet: {}, protocol: {}, feesChain: {}, feesWallet: {} };
   for (const it of items) {
     let c = 0;
     if (it.kind === 'lp') {
       if (it.counted) c += it.valueUsd;
-      if (it.counted && isNum(it.feesUsd) && !it.flags.feesUnavailable) c += it.feesUsd;
+      if (it.counted && isNum(it.feesUsd) && !it.flags.feesUnavailable) {
+        c += it.feesUsd;
+        by.feesChain[it.chain] = (by.feesChain[it.chain] || 0) + it.feesUsd;
+        by.feesWallet[it.wallet.key] = (by.feesWallet[it.wallet.key] || 0) + it.feesUsd;
+      }
       if (it.rewardsCounted) c += it.rewardsUsd;
     } else if (it.counted) c += it.valueUsd;
     by.chain[it.chain] = (by.chain[it.chain] || 0) + c;
@@ -156,13 +165,72 @@ function stakingRowHtml(payload, it) {
     + `<td class="num">${esc(usd(r.d7Usd))} / ${esc(usd(r.d30Usd))}</td></tr>`;
 }
 
-function tableHtml(title, head, rows, notCounted, rowHtml, payload, cols) {
-  if (!rows.length && !notCounted.length) return `<section class="agg-sec"><h2>${esc(title)}</h2><p class="muted">Nothing to show.</p></section>`;
+// ---- LP totals row and earning rate -----------------------------------------------------
+const SHORT_WINDOW_H = 6;
+const hours = h => (isNum(h) ? h.toFixed(1) + ' h' : '-');
+
+function unavailableWallet(payload, sel) {
+  return (sel && sel.wallet ? (payload.wallets || []).find(w => w.key === sel.wallet && w.unavailable === true) : null) || null;
+}
+
+function totalsRowHtml(payload, t, sel) {
+  if (unavailableWallet(payload, sel)) return '<tr class="total"><td colspan="5">Total (counted)</td><td class="num">unavailable</td><td class="num">unavailable</td></tr>';
+  const linesHtml = [`<span>fees ${esc(usd(t.feesUsd))}</span>`, `<span>pending rewards ${esc(usd(t.rewardsUsd))}</span>`];
+  if (t.feesUncountedCount > 0) linesHtml.push(`<span class="muted">fees not counted ${esc(usd(t.feesUncountedUsd))} (${esc(t.feesUncountedCount)} items)</span>`);
+  if (t.rewardsUncountedCount > 0) linesHtml.push(`<span class="muted">rewards not counted: ${esc(t.rewardsUncountedCount)} (${esc(usd(t.rewardsUncountedUsd))})</span>`);
+  return `<tr class="total"><td colspan="5">Total (counted)</td><td class="num">${esc(usd(t.lpUsd))}</td><td class="num">${linesHtml.join('<br>')}</td></tr>`;
+}
+
+/** The rate entries in scope: same chain set and wallet rule as filterItems. */
+function ratesFor(payload, sel) {
+  return (payload.rates || []).filter(r => (!sel.chains || sel.chains.has(r.chain)) && (!sel.wallet || r.wallet === sel.wallet));
+}
+
+function ratesHtml(payload, sel) {
+  const rs = ratesFor(payload, sel);
+  const head = 'Fees earning (measured, uncollected fees only, excludes pending rewards)';
+  if (!rs.length) return `<p class="agg-rate muted">${esc(head)}: no measured source in this selection</p>`;
+  const wname = k => { const w = (payload.wallets || []).find(x => x.key === k); return w ? (w.label || shortAddr(w.address)) : shortAddr(k); };
+  const known = rs.filter(r => isNum(r.perDayUsd));
+  const srcHtml = rs.map(r => {
+    const whoHtml = `${esc(chainOf(payload, r.chain).label)} ${esc(wname(r.wallet))}`;
+    if (!isNum(r.perDayUsd)) return `<li>${whoHtml}: rate unknown</li>`;
+    const bitsHtml = [];
+    if (isNum(r.windowH)) bitsHtml.push(`over ${esc(hours(r.windowH))}`);
+    if (r.kind === 'wallet') bitsHtml.push('wallet accrual, all positions');
+    else {
+      bitsHtml.push('sum of per-position accrual');
+      if (isNum(r.measured) && isNum(r.total) && r.measured < r.total) bitsHtml.push(`${esc(r.measured)} of ${esc(r.total)} positions measured`);
+    }
+    if (isNum(r.windowH) && r.windowH < SHORT_WINDOW_H) bitsHtml.push('short window');
+    return `<li>${whoHtml}: ${esc(usd(r.perDayUsd))}/day, ${bitsHtml.join(', ')}${r.stale ? ' <span class="badge bad">stale</span>' : ''}</li>`;
+  }).join('');
+  let headlineHtml;
+  if (!known.length) headlineHtml = `${esc(head)}: rate unknown`;
+  else {
+    const day = known.reduce((a, r) => a + r.perDayUsd, 0);
+    const wins = known.map(r => r.windowH).filter(isNum);
+    const lo = Math.min(...wins), hi = Math.max(...wins);
+    const winHtml = wins.length ? `; measured over ${esc(lo === hi ? hours(lo) : lo.toFixed(1) + '-' + hours(hi))}` : '';
+    const flagsHtml = (known.some(r => isNum(r.windowH) && r.windowH < SHORT_WINDOW_H) ? ' (short window)' : '')
+      + (known.some(r => r.stale) ? ' <span class="badge bad">stale</span>' : '');
+    headlineHtml = `${esc(head)}: <b>${esc(usd(day))}/day</b>, ${esc(usd(day * 7))}/week (x7, extrapolated)${winHtml}${flagsHtml}`
+      + `; from ${esc(known.length)} of ${esc(rs.length)} sources (chain/wallet)`
+      + `<br><span class="muted">main wallet: sum of per-position accrual; watched wallets: wallet accrual, all positions</span>`;
+  }
+  return `<div class="agg-rate"><p>${headlineHtml}</p><ul>${srcHtml}</ul></div>`;
+}
+
+function tableHtml(title, head, rows, notCounted, rowHtml, payload, cols, extra) {
+  if (!rows.length && !notCounted.length && !(extra && extra.always)) return `<section class="agg-sec"><h2>${esc(title)}</h2><p class="muted">Nothing to show.</p></section>`;
   const headHtml = head.map(([label, key]) => (key ? `<th data-sort="${esc(key)}" class="sortable">${esc(label)}</th>` : `<th>${esc(label)}</th>`)).join('');
   const bodyHtml = rows.map(it => rowHtml(payload, it)).join('');
   const countedRowsHtml = notCounted.map(it => rowHtml(payload, it)).join('');
   const groupHtml = notCounted.length ? `<tr class="group"><td colspan="${esc(cols)}">Not counted (${esc(notCounted.length)})</td></tr>${countedRowsHtml}` : '';
-  return `<section class="agg-sec"><h2>${esc(title)}</h2><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}${groupHtml}</tbody></table></section>`;
+  const footRowHtml = extra && extra.foot ? extra.foot : '';
+  const afterHtml = extra && extra.after ? extra.after : '';
+  const footHtml = footRowHtml ? `<tfoot>${footRowHtml}</tfoot>` : '';
+  return `<section class="agg-sec"><h2>${esc(title)}</h2><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}${groupHtml}</tbody>${footHtml}</table>${afterHtml}</section>`;
 }
 
 function bannersHtml(payload, sel) {
@@ -220,24 +288,32 @@ function breakdownHtml(payload, items, sel) {
   let by;
   if (isUnfiltered(payload, sel) && payload.breakdown) {
     const clean = o => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => isNum(v)));
-    by = { chain: clean(payload.breakdown.byChain), wallet: clean(payload.breakdown.byWallet), protocol: clean(payload.breakdown.byProtocol) };
+    by = {
+      chain: clean(payload.breakdown.byChain), wallet: clean(payload.breakdown.byWallet), protocol: clean(payload.breakdown.byProtocol),
+      feesChain: payload.breakdown.feesByChain, feesWallet: payload.breakdown.feesByWallet,
+    };
   } else by = breakdownFor(items);
   const total = Object.values(by.chain).reduce((a, b) => a + b, 0);
   const unknownKeys = new Set((payload.wallets || []).filter(w => w.holdingsUnknown).map(w => w.key));
-  const sectionHtml = (title, map, label, extraRowsHtml, flagUnknown) => {
+  const feeCellHtml = (fmap, k) => {
+    if (!fmap) return '';
+    const v = fmap[k];
+    return `<td class="num">${v === null ? 'no figure' : esc(isNum(v) ? 'fees ' + usd(v) : v === undefined ? 'fees ' + usd(0) : '-')}</td>`;
+  };
+  const sectionHtml = (title, map, label, extraRowsHtml, flagUnknown, fmap) => {
     const rowsHtml = Object.entries(map).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
       const unknown = flagUnknown === true && unknownKeys.has(k);
       const badgeHtml = unknown ? ' <span class="badge warn">tokens unknown (discovery failed)</span>' : '';
       const atLeastHtml = unknown ? 'at least ' : '';
-      return `<tr><td>${esc(label(k))}${badgeHtml}</td><td class="num">${atLeastHtml}${esc(usd(v))}</td><td class="num">${esc(pct(v, total))}</td></tr>`;
+      return `<tr><td>${esc(label(k))}${badgeHtml}</td><td class="num">${atLeastHtml}${esc(usd(v))}</td><td class="num">${esc(pct(v, total))}</td>${feeCellHtml(fmap, k)}</tr>`;
     }).join('');
     const emptyHtml = rowsHtml || extraRowsHtml ? '' : '<tr><td class="muted">none</td></tr>';
     return `<section class="agg-sec half"><h2>${esc(title)}</h2><table><tbody>${rowsHtml}${extraRowsHtml}${emptyHtml}</tbody></table></section>`;
   };
-  const downRowsHtml = (payload.chains || []).filter(c => c.status === 'down' || c.status === 'loading').map(c => `<tr><td>${esc(c.label)}</td><td class="num muted">${esc(c.status)}, no figure</td><td></td></tr>`).join('');
+  const downRowsHtml = (payload.chains || []).filter(c => c.status === 'down' || c.status === 'loading').map(c => `<tr><td>${esc(c.label)}</td><td class="num muted">${esc(c.status)}, no figure</td><td></td><td class="num">no figure</td></tr>`).join('');
   const walletLabel = k => { const w = (payload.wallets || []).find(x => x.key === k); return w ? (w.label || shortAddr(w.address)) : shortAddr(k); };
-  const chainHtml = sectionHtml('By chain', by.chain, k => chainOf(payload, k).label, downRowsHtml);
-  const walletHtml = sectionHtml('By wallet', by.wallet, walletLabel, '', true);
+  const chainHtml = sectionHtml('By chain', by.chain, k => chainOf(payload, k).label, downRowsHtml, false, by.feesChain || {});
+  const walletHtml = sectionHtml('By wallet', by.wallet, walletLabel, '', true, by.feesWallet || {});
   const protocolHtml = sectionHtml('By protocol', by.protocol, k => k, '');
   return `<div class="agg-breakdown">${chainHtml}${walletHtml}${protocolHtml}</div>`;
 }
@@ -262,7 +338,7 @@ function renderPage(payload, sel) {
   const [tkOk, tkNo] = split(tokens);
   const [stOk, stNo] = split(staking);
   return bannersHtml(payload, sel) + tileHtml(payload, t, items, isFiltered(payload, sel), sel) + controlsHtml(payload, sel)
-    + tableHtml('LP positions', HEADS.lp, lpOk, lpNo, lpRowHtml, payload, 7)
+    + tableHtml('LP positions', HEADS.lp, lpOk, lpNo, lpRowHtml, payload, 7, { foot: totalsRowHtml(payload, t, sel), after: ratesHtml(payload, sel), always: unavailableWallet(payload, sel) !== null })
     + tableHtml('Tokens', HEADS.token, tkOk, tkNo, tokenRowHtml, payload, 7)
     + tableHtml('Staking', HEADS.staking, stOk, stNo, stakingRowHtml, payload, 7)
     + breakdownHtml(payload, items, sel)
@@ -322,5 +398,5 @@ function boot() {
 
 if (typeof document !== 'undefined') boot();
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { esc, usd, qty, pct, renderPage, filterItems, totalsFor, breakdownFor, sortItems, initialSelection, bannersHtml, lpRowHtml, tokenRowHtml, stakingRowHtml };
+  module.exports = { esc, usd, qty, pct, renderPage, filterItems, totalsFor, clientTotals, breakdownFor, ratesFor, ratesHtml, totalsRowHtml, sortItems, initialSelection, bannersHtml, lpRowHtml, tokenRowHtml, stakingRowHtml };
 }

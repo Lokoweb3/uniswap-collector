@@ -41,3 +41,8 @@ body.agg .badge.staked { color: var(--cyan, #29d9ff); border-color: var(--cyan, 
 body.agg .agg-breakdown { display: flex; flex-wrap: wrap; gap: 18px; }
 body.agg .agg-sec.half { flex: 1 1 300px; }
 body.agg .foot { font-size: 12px; }
+body.agg tr.total td { font-weight: 600; border-top: 2px solid var(--rule, #24364c); }
+body.agg tr.total .muted { font-weight: 400; font-size: 12px; }
+body.agg .agg-rate { margin: 8px 0 0; }
+body.agg .agg-rate p { margin: 0 0 4px; }
+body.agg .agg-rate ul { margin: 0; padding-left: 18px; color: var(--muted, #9aafca); font-size: 12.5px; }

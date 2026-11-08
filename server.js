@@ -42,7 +42,9 @@ const cfg = settings.load();
 const elysiumPages = require("./elysium-chains");
 const TESTNET = cfg.testnet === true;
 // A test network says so on every page it serves: a persistent banner naming the chain.
-const markPage = (html) => (TESTNET ? elysiumPages.injectBanner(html.toString("utf8"), chainDisplayName(), cfg.chainId) : html);
+// True while a test network's RPC has not yet answered eth_chainId (see the startup check at the bottom).
+let rpcUnverified = false;
+const markPage = (html) => (TESTNET ? elysiumPages.injectBanner(html.toString("utf8"), chainDisplayName(), cfg.chainId, rpcUnverified) : html);
 // The chain's name for anything a wallet will show a person. It was hardcoded to
 // "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
 // network and would have added chain 5042 to their wallet under that name.
@@ -922,7 +924,7 @@ function registryClaim(e) {
     return { status: "unavailable", state: "unsupported", verifiedZero: false, scope,
       reason: "a token's decimals were not read from chain, so no amount can be stated" };
   }
-  const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] ?? null : currentPrice(t.address) ?? null);
+  const price = (t) => (t.address === ethers.ZeroAddress ? nativeUsd() ?? null : currentPrice(t.address) ?? null);
   return claimedSummary(`v4-${e.tokenId}`, e.token0.decimals, e.token1.decimals, price(e.token0), price(e.token1),
     e.token0.symbol, e.token1.symbol, null, { token0: e.token0.address, token1: e.token1.address, owner: e.wallet });
 }
@@ -1056,7 +1058,7 @@ async function claimTotal(sel, status, from, to) {
   // Today's prices, separately: only when every token has one.
   let current = null;
   if (tokenTotals.length) {
-    const prices = tokenTotals.map((t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] ?? null : currentPrice(t.address) ?? null));
+    const prices = tokenTotals.map((t) => (t.address === ethers.ZeroAddress ? nativeUsd() ?? null : currentPrice(t.address) ?? null));
     current = prices.every((p) => p != null)
       ? { usd: +tokenTotals.reduce((s, t, i) => s + t.amount * prices[i], 0).toPrecision(12), note: "the same token amounts at today's prices; not what they were worth when claimed" }
       : { usd: null, note: "a claimed token has no current price, so there is no current-price figure" };
@@ -1313,6 +1315,11 @@ async function priceEvents() {
 // Latest per-token USD prices and discovered ids, refreshed by build() and
 // used to value history events and drive the background scanner.
 let lastPrices = {};
+// The native token's USD price. A test network's native token has no market value, so it is never priced,
+// whatever the WETH slot holds.
+const nativeUsd = () => (TESTNET ? null : lastPrices[WETH]);
+// Test seam (read-only test network only): lets a test put a WETH price in place to prove the guard above holds.
+if (TESTNET && READONLY && process.env.LP_TEST_WETH_USD) lastPrices[WETH] = Number(process.env.LP_TEST_WETH_USD);
 let lastWethUsdSeen = null;
 let latestIds = [];
 let latestOpenIds = [];
@@ -2372,6 +2379,7 @@ async function handleRequest(req, res) {
       ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
       rpc: RPC_SHOWN, explorer: EXPLORER_URL, readOnly: READONLY, noTx: NO_TX,
       ...(TESTNET ? { testnet: true } : {}),
+      ...(TESTNET && rpcUnverified ? { rpcUnverified: true } : {}),
       ...(cfg.nativeSymbol ? { nativeSymbol: cfg.nativeSymbol } : {}),
       ...(!cfg.nativeCurrency && cfg.nativeSymbol ? { nativeDecimalsUnverified: true } : {}),
       // Null unless settings verify it: a wallet told the wrong native asset keeps
@@ -2567,7 +2575,7 @@ async function handleRequest(req, res) {
         const key = Number(p.version) === 3 ? String(p.tokenId) : `v4-${p.tokenId}`;
         try {
           const m = await positionMeta(key);
-          const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
+          const price = (t) => (t.address === ethers.ZeroAddress ? nativeUsd() : lastPrices[t.address.toLowerCase()]) ?? (t.address === ethers.ZeroAddress && TESTNET ? null : currentPrice(priceAddr(t)));
           p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
           p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedBlock ?? null, { token0: m.t0.address, token1: m.t1.address, owner: riskClaimOwner(p) });
         } catch { p.collected = null; p.claimed = { status: "unavailable", reason: "this position's token metadata could not be read, so its claims cannot be valued" }; }
@@ -3028,7 +3036,7 @@ async function handleRequest(req, res) {
       const usdOf = async (cur, amt) => {
         const c = String(cur).toLowerCase();
         if (c === stable) return Number(ethers.formatUnits(amt, 6));
-        if (cur === ethers.ZeroAddress || c === WETH) { const px = lastPrices[WETH]; return px != null ? Number(ethers.formatEther(amt)) * px : null; }
+        if (cur === ethers.ZeroAddress || c === WETH) { const px = cur === ethers.ZeroAddress ? nativeUsd() : lastPrices[WETH]; return px != null ? Number(ethers.formatEther(amt)) * px : null; }
         return null;
       };
       const keys = [];
@@ -3100,7 +3108,7 @@ async function handleRequest(req, res) {
         if (pool.version === 4 && pool.key && pool.key.hooks && pool.key.hooks !== ethers.ZeroAddress) throw new Error("hooked pools are not supported here yet");
         out = await mint.quote({ wallet: walletOf(q.get("wallet")).address, pool, tickLower: Number(q.get("tickLower")), tickUpper: Number(q.get("tickUpper")), amount0: BigInt(q.get("amount0") || "0"), amount1: BigInt(q.get("amount1") || "0"), slippageBps: Math.min(1000, Math.max(10, Number(q.get("slippageBps") || 100))), payEth: q.get("payEth") !== "0", fill: q.get("fill") === "0" ? 0 : q.get("fill") === "1" ? 1 : null });
         // USD of the deposit, from the collector's prices (null for tokens it does not price).
-        const px = (m) => (m.native || m.isWeth ? lastPrices[WETH] : lastPrices[String(m.address).toLowerCase()] ?? currentPrice(m.address));
+        const px = (m) => (m.native ? nativeUsd() : m.isWeth ? lastPrices[WETH] : lastPrices[String(m.address).toLowerCase()] ?? currentPrice(m.address));
         const p0 = px(pool.token0), p1 = px(pool.token1);
         out.human.usd = p0 != null && p1 != null ? +(out.human.amount0 * p0 + out.human.amount1 * p1).toFixed(2) : null;
         out.human.usd0 = p0 ?? null; out.human.usd1 = p1 ?? null;
@@ -3144,7 +3152,7 @@ async function handleRequest(req, res) {
       }
       // Price at read time, not cache time — prices arrive with the first build.
       const priced = balCache.data.map((r) => {
-        const price = r.native ? (!cfg.testnet ? lastPrices[WETH] : null) : lastPrices[r.address.toLowerCase()];
+        const price = r.native ? nativeUsd() : lastPrices[r.address.toLowerCase()];
         return { ...r, usd: price != null && r.balance != null ? r.balance * price : null };
       });
       priced.sort((a, b) => (b.usd || 0) - (a.usd || 0));
@@ -4083,7 +4091,19 @@ const onListening = () => {
   console.log("it needs a live unlock window (./unlock.sh) and no key ever reaches the browser.");
 };
 // A testnet instance first checks that its primary RPC really is the chain it names; a mismatch refuses to start.
+const refuseChain = (err) => { console.error(`Refusing to start: ${endpoint.redactText(err.message)}.`); process.exit(1); };
 elysiumPages.assertRpcChain(cfg, require("./rpc").chainIdOf).then(
-  () => server.listen(PORT, HOST, onListening),
-  (err) => { console.error(`Refusing to start: ${endpoint.redactText(err.message)}.`); process.exit(1); },
+  (seen) => {
+    if (TESTNET && seen == null) {
+      // Not a mismatch, but not proof either: say so, show it, and keep asking until the RPC answers.
+      console.error("primary RPC unreachable at startup; chain id not verified");
+      rpcUnverified = true;
+      elysiumPages.watchRpcChain(cfg, require("./rpc").chainIdOf, {
+        onVerified: () => { rpcUnverified = false; console.log("primary RPC answered; chain id verified"); },
+        onMismatch: (err) => { console.error(`Exiting: ${endpoint.redactText(err.message)}.`); process.exit(1); },
+      });
+    }
+    server.listen(PORT, HOST, onListening);
+  },
+  refuseChain,
 );

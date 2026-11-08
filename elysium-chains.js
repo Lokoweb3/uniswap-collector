@@ -63,15 +63,15 @@ const isMainnetId = (id) => Number(id) === CHAINS["elysium-mainnet"].chainId;
 const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /** The persistent TESTNET banner every page of a test-network instance shows. Static markup, no script. */
-function bannerHtml(name, chainId) {
-  return `<div id="lp-testnet-banner" role="status" style="position:fixed;left:0;right:0;bottom:0;z-index:99998;background:#f59e0b;color:#111827;font:700 12px/1.3 system-ui,-apple-system,Segoe UI,sans-serif;letter-spacing:.4px;text-align:center;padding:4px 8px">TESTNET &middot; ${esc(name)}${chainId ? ` (chain ${esc(chainId)})` : ""} &middot; test tokens have no value &middot; read-only</div>`;
+function bannerHtml(name, chainId, unverified = false) {
+  return `<div id="lp-testnet-banner" role="status" style="position:fixed;left:0;right:0;bottom:0;z-index:99998;background:#f59e0b;color:#111827;font:700 12px/1.3 system-ui,-apple-system,Segoe UI,sans-serif;letter-spacing:.4px;text-align:center;padding:4px 8px">TESTNET &middot; ${esc(name)}${chainId ? ` (chain ${esc(chainId)})` : ""} &middot; test tokens have no value &middot; read-only${unverified ? " &middot; RPC chain id NOT VERIFIED" : ""}</div>`;
 }
 
 /** Inserts the banner before </body> (or appends it). Idempotent. */
-function injectBanner(html, name, chainId) {
+function injectBanner(html, name, chainId, unverified = false) {
   const text = String(html);
   if (text.includes('id="lp-testnet-banner"')) return text;
-  const tag = bannerHtml(name, chainId);
+  const tag = bannerHtml(name, chainId, unverified);
   // A function replacer: a string replacement would expand "$&" / "$`" patterns found in the tag (the chain name).
   return text.includes("</body>") ? text.replace("</body>", () => tag + "</body>") : text + tag;
 }
@@ -95,16 +95,48 @@ function resolveNoTx(cfg, strictChains) {
 
 /**
  * A testnet instance must be talking to the chain it says it is. `chainIdOf(url)` resolves to a number or null
- * (unreachable). A different id throws; an unreachable RPC does not (the instance then shows itself as down).
- * Returns the id seen (or null).
+ * (unreachable). A different id throws; an unreachable RPC does not (the caller flags the instance as unverified
+ * and re-checks, see watchRpcChain). The fallback endpoints (cfg.rpcUrls) are held to the same rule: one that
+ * ANSWERS with another chain id refuses the start (it is not silently dropped from failover); one that does not
+ * answer cannot be judged, and the failover provider checks the id again before it ever uses it.
+ * Returns the primary's id (or null).
  */
 async function assertRpcChain(cfg, chainIdOf) {
   if (cfg.testnet !== true) return null;
+  const want = Number(cfg.chainId);
   const seen = await chainIdOf(cfg.rpcUrl);
-  if (seen != null && seen !== Number(cfg.chainId)) {
-    throw new Error(`the primary RPC answers chain id ${seen}, settings say ${Number(cfg.chainId)}`);
+  if (seen != null && seen !== want) {
+    throw new Error(`the primary RPC answers chain id ${seen}, settings say ${want}`);
+  }
+  const fallbacks = (Array.isArray(cfg.rpcUrls) ? cfg.rpcUrls : []).filter((u) => u && u !== cfg.rpcUrl);
+  for (let i = 0; i < fallbacks.length; i++) {
+    const other = await chainIdOf(fallbacks[i]);
+    // By position only: a fallback URL may carry a provider key and must not reach a log line.
+    if (other != null && other !== want) throw new Error(`fallback RPC #${i + 1} answers chain id ${other}, settings say ${want}`);
   }
   return seen;
 }
 
-module.exports = { resolveNoTx, assertRpcChain, NO_TX_CHAIN_IDS, bannerHtml, injectBanner, CHAINS, requireEnabled, isMainnetId, MAINNET_DISABLED_MESSAGE };
+/**
+ * Re-asks the primary RPC on a timer until it answers (for an instance that started with it unreachable).
+ * A matching id calls onVerified(); another id calls onMismatch(error). Either way the timer stops.
+ * The timer is unref'd, so it never keeps the process alive. Returns the timer.
+ */
+function watchRpcChain(cfg, chainIdOf, { intervalMs = 30000, onVerified, onMismatch } = {}) {
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const seen = await chainIdOf(cfg.rpcUrl);
+      if (seen == null) return;
+      clearInterval(timer);
+      if (seen !== Number(cfg.chainId)) onMismatch && onMismatch(new Error(`the primary RPC answers chain id ${seen}, settings say ${Number(cfg.chainId)}`));
+      else onVerified && onVerified();
+    } catch { /* ask again next tick */ } finally { busy = false; }
+  }, intervalMs);
+  if (timer.unref) timer.unref();
+  return timer;
+}
+
+module.exports = { resolveNoTx, assertRpcChain, watchRpcChain, NO_TX_CHAIN_IDS, bannerHtml, injectBanner, CHAINS, requireEnabled, isMainnetId, MAINNET_DISABLED_MESSAGE };

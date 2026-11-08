@@ -102,7 +102,11 @@ function chainFor(req, url) {
   if (asked && byKey(asked)) return { chain: byKey(asked), fromQuery: true };
   const raw = req.headers.cookie || "";
   const hit = raw.split(";").map((s) => s.trim()).find((s) => s.startsWith(`${COOKIE}=`));
-  const fromCookie = hit ? byKey(decodeURIComponent(hit.slice(COOKIE.length + 1))) : null;
+  let fromCookie = null;
+  if (hit) {
+    // A malformed escape ("%", "%E0%A4%A") makes decodeURIComponent throw; that is a bad cookie, not a crash.
+    try { fromCookie = byKey(decodeURIComponent(hit.slice(COOKIE.length + 1))); } catch { fromCookie = null; }
+  }
   return { chain: fromCookie || byKey(DEFAULT) || CHAINS[0], fromQuery: false };
 }
 
@@ -341,7 +345,7 @@ function handleAggregate(req, res, url) {
   return true;
 }
 
-const server = http.createServer((req, res) => {
+function handle(req, res) {
   let url;
   try { url = new URL(req.url, `http://${req.headers.host || "localhost"}`); } catch {
     res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", "Content-Length": 12, "Connection": "close" });
@@ -434,6 +438,19 @@ ${injectPicker("", picked)}
   });
 
   req.pipe(upstream);
+}
+
+// An unexpected throw in a handler answers 500 instead of taking the router (and every chain's view) down.
+const server = http.createServer((req, res) => {
+  try {
+    handle(req, res);
+  } catch (err) {
+    logDetail(`request failed: ${err && typeof err.name === "string" && /^[A-Za-z0-9_]{1,40}$/.test(err.name) ? err.name : "Error"}`);
+    try {
+      if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8", "Connection": "close" });
+      res.end("internal error\n");
+    } catch { /* the socket is gone */ }
+  }
 });
 
 if (require.main === module) {

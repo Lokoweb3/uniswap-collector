@@ -33,6 +33,10 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   assert.strictEqual(chainFor(req(), url("?chain=http://evil")).chain.key, "robinhood");
   assert.strictEqual(chainFor(req(`${COOKIE}=../../etc`), url()).chain.key, "robinhood");
   assert.strictEqual(chainFor(req(`${COOKIE}=ARC`), url()).chain.key, "robinhood", "keys are exact, not fuzzy");
+  // A malformed percent-escape is a bad cookie, not an exception (it used to crash the router).
+  for (const bad of ["%", "%E0%A4%A", "%zz", "a=1; %"]) {
+    assert.strictEqual(chainFor(req(`${COOKIE}=${bad}`), url()).chain.key, "robinhood", `${bad}: default chain`);
+  }
 }
 
 // ---- 1b. PulseChain is a known chain, but not in the default list --------------
@@ -119,6 +123,25 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   assert.strictEqual(JSON.parse(dflt.body).chain, "robinhood", "default routes to Robinhood");
   const onArc = await get("/api/who", `${COOKIE}=arc`);
   assert.strictEqual(JSON.parse(onArc.body).chain, "arc", "the cookie routes to Arc");
+
+  // Malformed cookie escapes fall through to the default chain, and the router keeps serving.
+  for (const bad of ["%", "%E0%A4%A"]) {
+    const r = await get("/api/who", `${COOKIE}=${bad}`);
+    assert.strictEqual(r.status, 200, `lpchain=${bad} is served`);
+    assert.strictEqual(JSON.parse(r.body).chain, "robinhood", `lpchain=${bad} falls to the default chain`);
+    const after = await get("/api/who", `${COOKIE}=arc`);
+    assert.strictEqual(JSON.parse(after.body).chain, "arc", "still serving afterwards");
+  }
+  // An unexpected throw inside the handler answers 500 instead of crashing.
+  {
+    const written = [];
+    let boom = true; // the first writeHead (the ?chain= redirect) throws, as an unexpected fault would
+    const fakeRes = { headersSent: false, writeHead: (c) => { if (boom) { boom = false; throw new Error("boom"); } written.push(c); }, end: () => written.push("end") };
+    const origErr = console.error; console.error = () => {};
+    try { router.emit("request", { url: "/x?chain=arc", method: "GET", headers: {} }, fakeRes); } finally { console.error = origErr; }
+    assert.deepStrictEqual(written, [500, "end"], "a handler throw is a 500");
+    assert.strictEqual(JSON.parse((await get("/api/who")).body).chain, "robinhood", "and the router still serves");
+  }
 
   // The upstream cookie is namespaced on the way out...
   const page = await get("/", `${COOKIE}=arc`);

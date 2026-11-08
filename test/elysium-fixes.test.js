@@ -53,6 +53,33 @@ const STRICT = new Set([8453, 369, 99801]);
   assert.strictEqual(await ely.assertRpcChain(cfg, stub(null)), null, "an unreachable RPC does not block (the instance shows itself down)");
   assert.strictEqual(await ely.assertRpcChain({ chainId: 4663, rpcUrl: "x" }, async () => { throw new Error("must not be asked"); }), null, "non-testnet: not checked");
 
+  // ---- I1 follow-up: fallback endpoints, and the re-check of an unreachable primary ---------------------------
+  {
+    const by = (map) => async (url) => (url in map ? map[url] : null);
+    const withFb = { testnet: true, chainId: 99801, rpcUrl: "https://p.invalid", rpcUrls: ["https://p.invalid", "https://f1.invalid/KEY123", "https://f2.invalid"] };
+    assert.strictEqual(await ely.assertRpcChain(withFb, by({ "https://p.invalid": 99801, "https://f1.invalid/KEY123": 99801, "https://f2.invalid": null })), 99801, "matching and unreachable fallbacks pass");
+    await assert.rejects(ely.assertRpcChain(withFb, by({ "https://p.invalid": 99801, "https://f1.invalid/KEY123": 1 })), (e) => /fallback RPC #1 answers chain id 1, settings say 99801/.test(e.message) && !/KEY123/.test(e.message), "a mismatching fallback refuses the start, without naming its URL");
+    await assert.rejects(ely.assertRpcChain(withFb, by({ "https://p.invalid": null, "https://f2.invalid": 7 })), /fallback RPC #2 answers chain id 7/, "even when the primary is unreachable");
+    const asked = []; await ely.assertRpcChain(withFb, async (u) => { asked.push(u); return 99801; });
+    assert.deepStrictEqual(asked, ["https://p.invalid", "https://f1.invalid/KEY123", "https://f2.invalid"], "the primary is not asked twice");
+
+    // watchRpcChain: unref'd; keeps asking while unreachable; verified on a match; mismatch reported
+    const run = (answers) => new Promise((resolve) => {
+      let i = 0; const asks = [];
+      const t = ely.watchRpcChain({ testnet: true, chainId: 99801, rpcUrl: "x" }, async () => { asks.push(1); return answers[Math.min(i++, answers.length - 1)]; }, {
+        intervalMs: 5, onVerified: () => resolve({ ok: "verified", asks: asks.length }), onMismatch: (e) => resolve({ ok: "mismatch", asks: asks.length, msg: e.message }),
+      });
+      assert.strictEqual(t.hasRef(), false, "the timer is unref'd");
+    });
+    const keepAlive = setTimeout(() => {}, 5000); // unref'd timers do not hold the loop open on their own
+    const v = await run([null, null, 99801]);
+    assert.deepStrictEqual(v, { ok: "verified", asks: 3 }, "asks until an answer arrives, then clears the flag");
+    const m = await run([null, 1]);
+    assert.strictEqual(m.ok, "mismatch"); assert.ok(/answers chain id 1, settings say 99801/.test(m.msg));
+    clearTimeout(keepAlive);
+    assert.ok(ely.bannerHtml("N", 99801, true).includes("NOT VERIFIED") && !ely.bannerHtml("N", 99801).includes("NOT VERIFIED"), "the banner says so only when unverified");
+  }
+
   const mismatch = server(mkDir(() => {}), [STUB, WRONG]);
   assert.strictEqual(mismatch.status, 1, "server.js refuses to start when the RPC is another chain");
   assert.ok(/Refusing to start: the primary RPC answers chain id 1/.test(mismatch.stderr), mismatch.stderr);

@@ -15,7 +15,7 @@ const endpoint = require("./endpoint");
 endpoint.installConsoleRedaction(); // a provider key in a URL never reaches a log line
 // This server reads an operator keystore and answers approval state: never for a testnet or a strict
 // (noTransactionData) chain. Those run the read-only dashboard instead.
-if (cfg.testnet === true || settings.STRICT_CHAINS.has(Number(cfg.chainId))) {
+if (cfg.testnet === true || settings.STRICT_CHAINS.has(Number(cfg.chainId)) || require("./elysium-chains").resolveNoTx(cfg, settings.STRICT_CHAINS)) {
   console.error(`Refusing to start: approve-serve.js is not available for chain ${Number(cfg.chainId)} (testnet or no-transaction-data chain).`);
   process.exit(1);
 }

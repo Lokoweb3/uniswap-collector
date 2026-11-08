@@ -281,7 +281,8 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
     const WALLET = JSON.parse(example).wallets.main.address;
     const dir = mkDir();
     const log = path.join(TMP, "rpc.log");
-    const srv = await startServer(dir, { STUB_LOG: log, STUB_BALANCES: JSON.stringify({ [WALLET]: "489000000000000000" }) });
+    // LP_TEST_WETH_USD puts a WETH price in place, so the "native is never priced" guard is actually exercised.
+    const srv = await startServer(dir, { STUB_LOG: log, LP_TEST_WETH_USD: "3000", STUB_BALANCES: JSON.stringify({ [WALLET]: "489000000000000000" }) });
     try {
       const h = { host: `127.0.0.1:${srv.port}`, origin: `http://127.0.0.1:${srv.port}`, "content-type": "application/json" };
       const ch = JSON.parse((await request(srv.port, "/api/chain", { headers: h })).body);
@@ -290,6 +291,10 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
       assert.strictEqual(ch.nativeCurrency, null, "unverified: the wallet page will not guess");
       assert.strictEqual(ch.nativeSymbol, "HYPE"); assert.strictEqual(ch.nativeDecimalsUnverified, true, "the symbol is exposed, marked unverified");
       assert.strictEqual(ch.noTx, true); assert.strictEqual(ch.readOnly, true);
+      // the stub refuses every fetch, so the primary RPC was unreachable at startup: logged, flagged, and on the banner
+      assert.ok(srv.out.join("").includes("primary RPC unreachable at startup; chain id not verified"), "logged at startup");
+      assert.strictEqual(ch.rpcUnverified, true, "/api/chain exposes the unverified flag");
+      assert.ok((await request(srv.port, "/", { headers: h })).body.includes("RPC chain id NOT VERIFIED"), "and the banner says so");
       const vi = JSON.parse((await request(srv.port, "/api/vault-info", { headers: h })).body);
       assert.strictEqual(vi.ok, true); assert.strictEqual(vi.testnet, true); assert.strictEqual(vi.artError, undefined, "no error for a vault that does not exist here");
       // every page names the testnet
@@ -324,7 +329,8 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
       assert.strictEqual(bal.ok, true, JSON.stringify(bal).slice(0, 300));
       const bn = bal.rows.find((r) => r.native);
       assert.strictEqual(bn.symbol, "HYPE"); assert.strictEqual(bn.balance, null); assert.strictEqual(bn.balanceRaw, "489000000000000000");
-      assert.strictEqual(bn.decimalsUnverified, true); assert.strictEqual(bn.usd, null);
+      assert.strictEqual(bn.decimalsUnverified, true);
+      assert.strictEqual(bn.usd, null, "never priced, even with a WETH price in place (the native guard)");
       // only read methods reached the chain
       const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((c) => c.kind === "rpc").map((c) => c.method);
       const READ = new Set(["eth_chainId", "net_version", "eth_blockNumber", "eth_getBalance", "eth_gasPrice", "eth_feeHistory", "eth_getBlockByNumber", "eth_getCode", "eth_call", "eth_estimateGas"]);
@@ -334,7 +340,8 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
 
     // decimals verified in settings: the balance is scaled by them
     const withDec = JSON.parse(example); withDec.chain.nativeCurrency.decimals = 18;
-    const srv2 = await startServer(mkDir(JSON.stringify(withDec)), { STUB_BALANCES: JSON.stringify({ [WALLET]: "489000000000000000" }) });
+    // With verified decimals the balance is a number, so only the guard keeps usd null: give it a WETH price to be sure.
+    const srv2 = await startServer(mkDir(JSON.stringify(withDec)), { LP_TEST_WETH_USD: "3000", STUB_BALANCES: JSON.stringify({ [WALLET]: "489000000000000000" }) });
     try {
       const h = { host: `127.0.0.1:${srv2.port}`, origin: `http://127.0.0.1:${srv2.port}` };
       const ch = JSON.parse((await request(srv2.port, "/api/chain", { headers: h })).body);
@@ -346,6 +353,7 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
       const bal2 = JSON.parse((await request(srv2.port, "/api/balances", { headers: h })).body);
       const bn2 = bal2.rows.find((r) => r.native);
       assert.strictEqual(bn2.symbol, "HYPE"); assert.strictEqual(bn2.balance, 0.489); assert.ok(!bn2.decimalsUnverified, "verified decimals: scaled");
+      assert.strictEqual(bn2.usd, null, "a scaled native balance is still never priced, WETH price or not");
     } finally { await srv2.stop(); }
 
     // the env RPC: used in-process, never in a served response or the log
@@ -367,6 +375,13 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
     });
     assert.strictEqual(r.status, 1, "approve-serve exits at startup for the testnet");
     assert.ok(/Refusing to start: approve-serve\.js is not available for chain 99801/.test(r.stderr), r.stderr);
+    // a non-testnet chain whose settings say noTransactionData: true is refused too (resolveNoTx)
+    const ntx = JSON.parse(fs.readFileSync(path.join(ROOT, "settings.example.json"), "utf8")); ntx.noTransactionData = true;
+    const r2 = spawnSync(process.execPath, ["--require", PRELOAD, "--require", STUB, path.join(ROOT, "approve-serve.js")], {
+      cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: mkDir(JSON.stringify(ntx)), PORT: String(await freePort()), LP_BIND: "127.0.0.1" }), encoding: "utf8", timeout: 15000,
+    });
+    assert.strictEqual(r2.status, 1, `approve-serve refuses noTransactionData: true: ${r2.stderr}`);
+    assert.ok(/Refusing to start: approve-serve\.js is not available/.test(r2.stderr), r2.stderr);
   }
 
   // ---- 20. 21. start-all.sh / stop-all.sh under a stub harness ------------------------------------------------

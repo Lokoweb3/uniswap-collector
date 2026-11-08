@@ -157,3 +157,24 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 - Tests (main session, 08afeee): 139/140 pass (smoke.js needs settings.json); eslint clean; Robinhood collector files and golden test unchanged since 4a2b63a. v4-pinned.test.js failed once under load in an agent's chunked run and passed alone.
 - Left: security L-1 (older code) pruned-job receipt replay: a tampered ledger could point at a real older operator receipt from a pruned job (bounded by operator balance, paid only to a verified owner). Suggested fix: swap receipt blockNumber ≥ the job's collect block, plus a retired-hash list. Reviewer nit: when both decimals and price are missing, only one hold reason is listed. Info: verifyAgainstCollect checks to/from only when present; duplicate pending transfer hashes unchecked (under-delivery only); fee-on-transfer tokens now held when logs are present (fails closed).
 - Process: two of the implementer's test chunks went past the tool's 120 s default and were backgrounded by the harness; both finished and were read. 08afeee ran fully in the foreground.
+
+---
+
+# Base sweep retired-hash round (5ab1444 → 242d3ca)
+
+| Commit | What |
+|---|---|
+| 37d26c1 | Security L-1 (pruned-job receipt replay): new `retired` block in sweep-state (hashes cap 2000 with a FIFO floor; collectBlock per manager:tokenId cap 10000; malformed = corrupt). Swap/transfer receipts must be at or after the job's verified collect block; a collect must be newer than the position's retired high-water; retired hashes refused as proof. Both hold reasons listed when decimals and price are both missing |
+| 242d3ca | Review fixes: ledger blocks above the chain head refused; replay refusals mark the leg unattributed (blocks new collects); collects older than COLLECT_MAX_AGE_BLOCKS 1,166,400 (~27 d) refused; known-block entries evicted first; canonical tokenId; transfer hashes unique across legs with a full collision check in recovery; a leg holds at 99 transfers (cap 100); first-review fixes 2 and 4 |
+
+- Verdicts: 37d26c1 reviewer APPROVE WITH FIXES, security PASS WITH FIXES (M-1, M-2, L-1..L-5; all fixed in 242d3ca). 242d3ca reviewer APPROVE WITH FIXES, security PASS WITH FIXES (Low-1, Low-2; not applied, fix budget used). No fail-open found.
+- Tests: eslint clean; 140/140 (implementer; v4-pinned passes alone). Robinhood collector files and golden test unchanged since 5ab1444.
+
+## Left to do
+1. Decision: the age rule is fatal, so a leg D8 keeps held (NFT sold or gauge-staked) turns unattributed at ~day 27 and halts all collects. Options: make it a plain hold (fatal only for replay), or document it in D8/D10 with a test. Either way, a warning from ~day 20.
+2. The recovery fatal path drops the mined hash (collector-base-sweep.js ~801); put p.tx in the reason.
+3. README doesn't yet describe the new refusals (head check, age limit, transfer hold, throwing saves).
+4. An RPC failure at start is reported as kind "corrupt"; fix the wording.
+5. The head check has no slack for a lagging RPC; allow ~64 blocks.
+6. Pruning trusts the ledger's finishedAt and the local clock; validate finishedAt and require chain age (security Low-2).
+7. Residual: anyone who can write sweep-state.json can reset terminal legs (the deferred operator-guard item).

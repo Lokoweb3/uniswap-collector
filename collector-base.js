@@ -696,7 +696,7 @@ async function main() {
     sweepIo: {
       exists: () => fs.existsSync(SWEEP_FILE),
       read: () => sweepLogic.readSweepState(SWEEP_FILE),
-      save: (l) => logic.writeFileAtomic(SWEEP_FILE, sweepLogic.serializeSweepState(l)),
+      save: (l, head) => logic.writeFileAtomic(SWEEP_FILE, sweepLogic.serializeSweepState(l, Date.now(), head)),
     },
     notify: makeNotify(),
   });

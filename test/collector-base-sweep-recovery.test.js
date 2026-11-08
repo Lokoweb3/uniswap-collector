@@ -243,9 +243,9 @@ const leg0 = (S) => S.ledger().jobs[0].legs[0];
     L.writeFileAtomic(f, SL.serializeSweepState({ jobs: [] })); assert.strictEqual(fs.statSync(f).mode & 0o777, 0o600, "written with mode 0600");
     // terminal jobs are kept 30 days, open ones always
     const old = { ...good, collect: { status: "mined" }, legs: [{ ...good.legs[0], phase: "delivered" }], finishedAt: 1000 }, open = { ...good, id: "o", createdAt: 1 };
-    const kept = JSON.parse(SL.serializeSweepState({ jobs: [old, open] }, 1000 + 31 * 86400_000)).jobs.map((j) => j.id);
+    const kept = JSON.parse(SL.serializeSweepState({ jobs: [old, open] }, 1000 + 31 * 86400_000, 1e9)).jobs.map((j) => j.id);
     assert.deepStrictEqual(kept, ["o"]);
-    assert.deepStrictEqual(JSON.parse(SL.serializeSweepState({ jobs: [old, open] }, 1000 + 29 * 86400_000)).jobs.map((j) => j.id), ["j", "o"]);
+    assert.deepStrictEqual(JSON.parse(SL.serializeSweepState({ jobs: [old, open] }, 1000 + 29 * 86400_000, 1e9)).jobs.map((j) => j.id), ["j", "o"]);
   }
   console.log("collector-base-sweep-recovery tests passed");
 })().catch((e) => { console.error(e); process.exit(1); });

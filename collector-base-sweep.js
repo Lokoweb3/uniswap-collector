@@ -154,13 +154,13 @@ function create(env) {
   const collectChecks = new Map(); // manager:tokenId:collect.tx (lowercased) -> { amounts, tokens } read back from the chain this run
   let ledger = { jobs: [], retired: S.emptyRetired() };
   let ledgerBroken = false;
-  const report = { positions: 0, deliveredUsdcRaw: 0n, unswapped: [], stuck: [], held: [], unattributed: [], vault: [], pending: 0, refused: null, txs: 0 };
+  const report = { positions: 0, deliveredUsdcRaw: 0n, unswapped: [], stuck: [], held: [], unattributed: [], vault: [], pending: 0, refused: null, txs: 0, warnings: [] };
   const erc20 = (a) => new ethers.Contract(a, ERC20_ABI, provider);
   const halted = () => ledgerBroken || !!(env.halted && env.halted());
   const balanceOf = (token) => erc20(token).balanceOf(operator);
 
   function save() {
-    try { io.save(ledger); return true; } catch (err) {
+    try { io.save(ledger, knownHead); return true; } catch (err) {
       log(`STOP: the sweep ledger cannot be written (${short(err)}); nothing more is sent this run`);
       ledgerBroken = true;
       return false;
@@ -169,6 +169,8 @@ function create(env) {
   /** Notes the highest block a job has a receipt in (the retired list keeps it when the job is pruned). */
   const noteBlock = (job, rc) => { const b = Number(rc && rc.blockNumber); if (Number.isSafeInteger(b) && b > 0 && !(job.maxBlock >= b)) job.maxBlock = b; };
   const addTransferTx = (leg, hash) => { const t = Array.isArray(leg.transferTxs) ? leg.transferTxs : []; if (typeof hash === "string" && !t.some((h) => eq(h, hash))) t.push(hash); leg.transferTxs = t; }; // never truncated: payOut holds the leg before it can pass S.MAX_TRANSFERS_PER_LEG
+  let knownHead = null; // the chain head read at start; pruning of old terminal jobs needs it (chain age as well as clock age)
+  const warned = new Set();
   const mark = (job) => { if (S.jobTerminal(job) && job.finishedAt === undefined) job.finishedAt = now(); };
 
   /** Validate the settings and load the ledger. { ok:true } | { ok:false, reason }. Nothing is written. */
@@ -191,10 +193,11 @@ function create(env) {
     }
     // Security M-1: a block number above the chain head can only be a tamper (it would hold every job while new collects continue).
     let head;
-    try { head = Number(await provider.getBlockNumber()); } catch (err) { return { ok: false, reason: `sweep-state.json cannot be checked against the chain head (${short(err)}); refusing everything (${r.file || "ledger"})`, kind: "corrupt" }; }
+    try { head = Number(await provider.getBlockNumber()); } catch (err) { return { ok: false, reason: `sweep-state.json cannot be checked against the chain head (the RPC failed: ${short(err)}); refusing everything (${r.file || "ledger"})`, kind: "rpc" }; }
     const ahead = S.ledgerAheadProblem(r.ledger, head);
     if (ahead) return { ok: false, reason: `sweep-state.json is unreadable (${ahead}; tampered ledger); refusing everything`, kind: "corrupt" };
     ledger = r.ledger;
+    if (Number.isSafeInteger(head) && head > 0) knownHead = head;
     return { ok: true, active: true };
   }
 
@@ -609,8 +612,8 @@ function create(env) {
   /**
    * The ledger is not trusted: before a leg's first send its owed amount must not exceed what the job's own Collect receipt paid to the
    * operator for that token (manager, topic, tokenId and recipient parsed from the chain), and the token must be one of the position's.
-   * Returns null, or { reason, fatal }: fatal (a replay or too-old collect, security M-1/M-2) means the caller marks the leg
-   * UNATTRIBUTED (it blocks new collects); otherwise the leg is only held. Read once per job per run.
+   * Returns null, or { reason, fatal }: fatal (a replayed receipt, security L-1) means the caller marks the leg
+   * UNATTRIBUTED (it blocks new collects); otherwise the leg is only held. Read once per job per run. A collect older than COLLECT_MAX_AGE_BLOCKS returns { aged: true } and is only held.
    */
   async function verifyAgainstCollect(job, leg) {
     if (!ownerConfigured(job.owner)) return { reason: `the ledger owner ${job.owner} is not a configured owner address (tampered ledger)` };
@@ -639,7 +642,10 @@ function create(env) {
     if (replay) return { reason: `${replay} (replayed receipt of a pruned job, or a tampered ledger)`, fatal: true };
     // M-2: independent of the ledger file, a collect as old as a possibly-pruned job's is refused too.
     const aged = S.collectAgeProblem(c.head, c.block);
-    if (aged) return { reason: `collect ${job.collect.tx}: ${aged}`, fatal: true };
+    // An old collect is only HELD (reported, retried, never unattributed): it must not block other collects. Replays above stay fatal.
+    if (aged) return { reason: `collect ${job.collect.tx}: ${aged}`, aged: true };
+    const warn = S.collectAgeWarning(c.head, c.block);
+    if (warn && !warned.has(ckey)) { warned.add(ckey); const w = `#${job.tokenId} collect ${job.collect.tx}: ${warn}`; report.warnings.push(w); log(`  WARNING ${w}`); }
     if (job.collect.block !== c.block) job.collect.block = c.block;
     if (!eq(job.token0, c.tokens[0]) || !eq(job.token1, c.tokens[1])) return { reason: `the ledger tokens ${job.token0}/${job.token1} are not the tokens of position #${job.tokenId}; tampered ledger, refusing` };
     const i = c.tokens.findIndex((t) => eq(t, leg.token));
@@ -798,7 +804,7 @@ function create(env) {
       if (ok && (p.op === "swap" || p.op === "transfer")) {
         // A mined receipt is credited only if it is not a retired job's and is not older than this job's own verified collect (L-1).
         const v = await verifyAgainstCollect(job, leg);
-        if (v && v.fatal) { unattribute(job, leg, v.reason); continue; }
+        if (v && v.fatal) { unattribute(job, leg, `${v.reason} (mined ${p.op} ${p.tx})`); continue; }
         if (v) { log(`  recovery: ${p.op} ${p.tx} of ${symbolOf(leg.token)} (#${job.tokenId}) is not credited yet: ${v.reason}`); report.held.push(`#${job.tokenId} ${symbolOf(leg.token)}: ${v.reason}`); continue; }
         const replay = S.receiptReplayProblem(ledger.retired, p.tx, r.receipt.blockNumber, job.collect.block);
         if (replay) { unattribute(job, leg, `recovered ${p.op} ${replay}; not credited`); continue; }
@@ -957,6 +963,7 @@ function create(env) {
     for (const u of report.unswapped) out.push(`unswapped ${u.token}: ${u.reason}`);
     out.push(`vault: ${report.vault.length ? report.vault.join("; ") : (sw.vault.tba === null ? "0% (vault.tba not set)" : "ok")}`);
     for (const k of ["stuck", "held", "unattributed"]) for (const x of report[k]) out.push(`${k.toUpperCase()}: ${x}`);
+    for (const w of report.warnings) out.push(`WARNING: ${w}`);
     if (report.pending) out.push(`${report.pending} pending transaction(s) waiting`);
     if (aborted) out.push("run ABORTED");
     return out.join("\n");

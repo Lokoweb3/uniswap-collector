@@ -200,10 +200,10 @@ function sweepScene(o = {}) {
   S.io = {
     exists: () => { S.exists++; return fs.existsSync(S.file); },
     read: () => { S.reads++; return SL.readSweepState(S.file); },
-    save: (ledger) => {
+    save: (ledger, head) => {
       S.saves++;
       if (S.failSaveAt && S.failSaveAt(S.saves, ledger)) throw new Error("disk full");
-      L.writeFileAtomic(S.file, SL.serializeSweepState(ledger));
+      L.writeFileAtomic(S.file, SL.serializeSweepState(ledger, Date.now(), head));
       S.ev.push({ k: "ledger", pending: ledger.jobs.flatMap((j) => [j.pending, ...j.legs.map((l) => l.pending)]).filter(Boolean).map((p) => p.tx) });
     },
   };

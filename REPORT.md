@@ -196,3 +196,17 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 4. Docs: README "within 64 blocks of the head" (~:991) should say "not more than 64 above"; comment at collector-base-sweep.js:646 says "refused" where it should say "held"; README "do not hand-edit" conflicts with the aged-hold clear (removing agedAt), which should be documented.
 5. Info: sweep URL regex misses ws/wss, JSON-escaped https:\/\/ and hosts without a scheme; a far-future finishedAt is kept and warns until the clock passes it; block-0 retired entries are never evicted (save throws above 2000); pruning trusts the ledger's block numbers.
 6. Deferred: anyone who can write sweep-state.json can reset terminal legs or delete agedAt (operator-guard item).
+
+---
+
+# Watchdog public-probe fix (branch watchdog-probe, merged as 1a796e5)
+
+- Root cause: the public probe curled the Funnel hostname from WSL, where the resolver returns the tailnet IP 100.78.153.68. That address can't be reached under userspace-networking tailscaled, so curl gave 000 and the watchdog restarted tailscaled every 25-45 min, which really dropped the Funnel each time.
+- Commits:
+  - 79d143c: resolve via `dig +short A @1.1.1.1` (falls back to @8.8.8.8), reject private/CGNAT/loopback/reserved answers, pin curl with --resolve, no public IP = UNKNOWN (no restart), log the probed IP.
+  - bbc6961: down only on 000/502/503/504; lp-gate down = no restart, one notify; dig output read line by line; warning if dig is missing; self-test guards.
+  - e7613be: curl rc 35 counts as down (rc 51/60 stay UNKNOWN); tests for rc 35×3 → one repair, rc 51, streak reset; notify stubbed before the early self-test phases; UNKNOWN alert once per streak.
+- Verdicts: reviewer APPROVE (e7613be), security PASS WITH FIXES (nothing blocking).
+- Tests: watchdog-public.test.js and `watchdog.sh --self-test` pass; merged master 141/142 (smoke.js needs settings.json); eslint clean.
+- Deployed 2026-11-08 by copying watchdog.sh into live and restarting only the watchdog. Live holds this as a local edit until the next pull.
+- Left: N1, the shared alert cooldown can mute the once-per-streak UNKNOWN alert (logged, never restarts). Fix: a flag set only when the notify actually runs.

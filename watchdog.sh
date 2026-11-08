@@ -131,20 +131,79 @@ repair_tunnel() {
   bash "$HERE/run-tailscale.sh" >> "$LOG" 2>&1
 }
 
-# public_probe: one fetch through the relay, exactly as a browser does.
+# Why the probe resolves the name itself (2026-11): tailscaled runs with
+# --tun=userspace-networking, so this host's own stack cannot reach tailnet addresses, yet
+# the WSL resolver answers the Funnel hostname with the node's tailnet IP (100.x). Probing
+# that address timed out every time, a false "public path down", and the "repair" (restarting
+# tailscaled) dropped the real Funnel. The probe must go to the PUBLIC Funnel address.
+# Approach: resolve with dig against public resolvers (1.1.1.1, then 8.8.8.8) and pass the
+# answer to curl with --resolve host:port:ip. Chosen over curl --doh-url (this curl, 7.81,
+# does support it) because with DoH curl picks the address itself, so the log could not say
+# which IP was probed and a private answer could not be rejected before connecting.
+# Explicit resolution also makes the target stubbable in tests (WATCHDOG_DIG).
+DIG="${WATCHDOG_DIG:-dig}"
+PUBLIC_RESOLVERS="${WATCHDOG_RESOLVERS:-1.1.1.1 8.8.8.8}"
+
+# is_public_ipv4 ADDR: true only for a routable unicast IPv4. Rejects tailnet/CGNAT
+# (100.64.0.0/10), loopback, RFC1918, link-local, 0/8, multicast and reserved.
+is_public_ipv4() {
+  local a b c d
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]})); c=$((10#${BASH_REMATCH[3]})); d=$((10#${BASH_REMATCH[4]}))
+  [ "$a" -le 255 ] && [ "$b" -le 255 ] && [ "$c" -le 255 ] && [ "$d" -le 255 ] || return 1
+  [ "$a" -eq 0 ] || [ "$a" -eq 10 ] || [ "$a" -eq 127 ] && return 1
+  [ "$a" -ge 224 ] && return 1
+  [ "$a" -eq 100 ] && [ "$b" -ge 64 ] && [ "$b" -le 127 ] && return 1
+  [ "$a" -eq 169 ] && [ "$b" -eq 254 ] && return 1
+  [ "$a" -eq 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 1
+  [ "$a" -eq 192 ] && [ "$b" -eq 168 ] && return 1
+  return 0
+}
+
+# resolve_public HOST -> sets RESOLVED_IP to one public IPv4 and returns 0, or returns 1.
+# (Globals, not a subshell, so RESOLVE_NOTE survives for the log.)
+# Each public resolver is tried in turn; non-public answers are skipped (and noted in RESOLVE_NOTE).
+resolve_public() {
+  local host="$1" r ip
+  RESOLVE_NOTE=""; RESOLVED_IP=""
+  for r in $PUBLIC_RESOLVERS; do
+    for ip in $("$DIG" +short +time=3 +tries=1 A "$host" "@$r" 2>/dev/null); do
+      if is_public_ipv4 "$ip"; then RESOLVED_IP="$ip"; return 0; fi
+      case "$ip" in *[!0-9.]*) ;; *) RESOLVE_NOTE="$RESOLVE_NOTE rejected-non-public:$ip@$r";; esac
+    done
+  done
+  return 1
+}
+
+# public_probe: one fetch through the relay, exactly as a browser does, aimed at the public IP.
+# Three outcomes: UP (any HTTP status), DOWN (public IP resolved, no answer) and UNKNOWN
+# (could not get a public IP, so nothing was probed). UNKNOWN never counts toward the failure
+# threshold and never restarts tailscaled. It also leaves PUBLIC_FAILS untouched rather than
+# resetting it: a blind probe is no evidence the path recovered, and resetting would let flaky
+# DNS hide a genuine outage that is already 1-2 failures in.
 public_probe() {
   [ -n "$PUBLIC_URL" ] || return 0
-  local code now
-  # The gate answers 200 with its login page to a browser-shaped request. Any HTTP status
-  # means the path works; "000" (no answer, or TLS that never completed) is the failure.
-  code=$("$CURL" -s -o /dev/null -w '%{http_code}' -m 25 -H 'Accept: text/html' "$PUBLIC_URL/" 2>/dev/null)
-  if [ -n "$code" ] && [ "$code" != "000" ]; then
-    [ "$PUBLIC_FAILS" -gt 0 ] && echo "$(date -Is) public path answering again (HTTP $code)" >> "$LOG"
+  local code now hostport host port ip
+  hostport=${PUBLIC_URL#*://}; hostport=${hostport%%/*}
+  host=${hostport%%:*}; port=443
+  case "$hostport" in *:*) port=${hostport##*:};; esac
+  if ! resolve_public "$host"; then
+    echo "$(date -Is) public probe UNKNOWN: no public address for $host (not counted, fails stay ${PUBLIC_FAILS}x)${RESOLVE_NOTE}" >> "$LOG"
+    return 0
+  fi
+  ip="$RESOLVED_IP"
+  # The gate answers 200 with its login page to a browser-shaped request (401 to a bare
+  # one). Any non-5xx HTTP status means the path works; "000" (no answer, or TLS that never
+  # completed) and 5xx are the failure.
+  code=$("$CURL" -s -o /dev/null -w '%{http_code}' -m 25 -H 'Accept: text/html' \
+    --resolve "$host:$port:$ip" "$PUBLIC_URL/" 2>/dev/null)
+  if [ -n "$code" ] && [ "$code" != "000" ] && [ "${code:0:1}" != "5" ]; then
+    [ "$PUBLIC_FAILS" -gt 0 ] && echo "$(date -Is) public path answering again (HTTP $code, probed $ip)" >> "$LOG"
     PUBLIC_FAILS=0
     return 0
   fi
   PUBLIC_FAILS=$((PUBLIC_FAILS + 1))
-  echo "$(date -Is) public probe failed (${PUBLIC_FAILS}x in a row) $PUBLIC_URL" >> "$LOG"
+  echo "$(date -Is) public probe failed (${PUBLIC_FAILS}x in a row) $PUBLIC_URL probed $ip HTTP ${code:-000}" >> "$LOG"
   [ "$PUBLIC_FAILS" -ge "$PUBLIC_MIN_FAILS" ] || return 0
   now=$(date +%s)
   if [ $((now - PUBLIC_REPAIRED_AT)) -lt "$PUBLIC_REPAIR_GAP" ]; then
@@ -230,7 +289,11 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   repair_tunnel() { echo called >> "$REPAIR_LOG"; }
   # CURL is a command NAME held in a variable, so the stub has to be pointed at by it;
   # defining a function called CURL alone leaves "$CURL" still running the real thing.
-  stubcurl() { printf '%s' "$PUBCODE"; }
+  stubcurl() { echo "$*" >> "$CURL_ARGS"; printf '%s' "$PUBCODE"; }
+  # DIG is likewise a command name: the stub answers DIGOUT (one address per line) and never
+  # touches the network. An empty DIGOUT is a DNS failure.
+  stubdig() { printf '%s' "$DIGOUT"; }
+  CURL_ARGS="$(mktemp)"; DIGOUT="209.177.145.137"; DIG=stubdig
   CURL_SAVED="$CURL"; CURL=stubcurl
   PUBLIC_URL="https://example.invalid:8443"; PUBLIC_MIN_FAILS=3; PUBLIC_FAILS=0; PUBLIC_REPAIRED_AT=0
   PUBCODE="200"; public_probe
@@ -248,7 +311,31 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   PUBCODE="200"; public_probe
   echo "recovered:  fails=$PUBLIC_FAILS (want 0)"
   [ "$PUBLIC_FAILS" = "0" ] || { echo "self-test: the failure count did not reset on recovery"; exit 1; }
-  CURL="$CURL_SAVED"; rm -f "$REPAIR_LOG"
+  grep -q -- '--resolve example.invalid:8443:209.177.145.137' "$CURL_ARGS" || { echo "self-test: curl was not pinned to the public IP"; exit 1; }
+  echo "probe target: pinned to 209.177.145.137 (want yes)"
+  grep -q 'probed 209.177.145.137 HTTP 000' "$LOG" || { echo "self-test: failure line lacks the probed IP"; exit 1; }
+  echo "log has probed ip: yes"
+  # 401 (the gate login) counts as up.
+  PUBLIC_FAILS=2; PUBCODE="401"; public_probe
+  echo "401 is up:  fails=$PUBLIC_FAILS (want 0)"
+  # 5xx is down.
+  PUBCODE="502"; : > "$REPAIR_LOG"; PUBLIC_REPAIRED_AT=0; public_probe; public_probe; public_probe
+  echo "5xx x3:     repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want yes)"
+  # Tailnet answer: never probed, never counted, never repaired.
+  : > "$CURL_ARGS"; : > "$REPAIR_LOG"; PUBLIC_REPAIRED_AT=0; PUBLIC_FAILS=0; PUBCODE="000"
+  DIGOUT=$'100.78.153.68\n10.0.0.5\n192.168.1.9\n127.0.0.1'
+  public_probe; public_probe; public_probe; public_probe
+  echo "tailnet-only: curl calls=$(wc -l < "$CURL_ARGS" | tr -d ' ') (want 0) fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  grep -q 'UNKNOWN' "$LOG" || { echo "self-test: unknown was not logged"; exit 1; }
+  # DNS failure: unknown, no restart, counter left alone.
+  DIGOUT=""; PUBLIC_FAILS=2; public_probe; public_probe; public_probe
+  echo "dns failure: fails=$PUBLIC_FAILS (want 2, unchanged) curl calls=$(wc -l < "$CURL_ARGS" | tr -d ' ') (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  # Tailnet answer from one resolver does not stop a public one from the next being used.
+  stubdig() { case "$*" in *@1.1.1.1*) printf '100.78.153.68\n';; *) printf '209.177.145.137\n';; esac; }
+  PUBLIC_FAILS=0; PUBCODE="200"; public_probe
+  grep -q -- '--resolve example.invalid:8443:209.177.145.137' "$CURL_ARGS" || { echo "self-test: fallback resolver not used"; exit 1; }
+  echo "fallback resolver: used (want yes)"
+  CURL="$CURL_SAVED"; rm -f "$REPAIR_LOG" "$CURL_ARGS"
   echo "--- wedged recovery (owned stub listener; never the live dashboard)"
   DASH_PORT=$((20000 + RANDOM % 20000)); START_ALL="echo start-all-called"
   before=$(pgrep -fc "^bash $HERE/watchdog.sh$" 2>/dev/null || true)

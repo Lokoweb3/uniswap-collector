@@ -129,3 +129,17 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 - Left: optional full snapshot test for the old breakdown columns (the implementer's report claimed it, but it is not in the commit); "(chain down or loading)" wording; mixed priced/unpriced reward test; info notes I1-I3; spec test 26 (manual live check).
 
 - Merged into master as 3aac9e3 (SPEC sections kept side by side). Full suite on merged master: 137/138 (smoke.js only); eslint clean.
+
+---
+
+# Base sweep fix round (85d311a → 93d7351)
+
+| Commit | What |
+|---|---|
+| 638de14 | maxUnswappedValueUsdc enforced in preflight ("fees stay in the NFT"); readSweepState rejects duplicate collect.tx / leg tokens; outRaw capped at the swap receipt, every swap hash recorded; Transfer-log proof when block-tagged reads fail; a lost broadcast collect becomes unattributed (blocks new collects); VAULT_IMPLEMENTATIONS frozen with a test hook; redundant transfer-target check removed |
+| 93d7351 | Proceeds cache keyed on swap hashes; swap hashes unique ledger-wide and never equal to a collect.tx; unswapped delivery capped at run time or held; no-mid legs valued at amount × own USD price, else refused; recovery needs a balance proof or Transfer log; receipts missing to/from refused; removed logs skipped; vault implementations fail closed; SPEC D3/D9/D10 and test 22 updated |
+
+- Verdicts: 638de14 reviewer APPROVE WITH FIXES, security PASS WITH FIXES (4 Low) → 93d7351 reviewer APPROVE, security PASS WITH FIXES (2 Low, 3 Info; no Critical/High/Medium).
+- Tests (main session, 93d7351): 138/139 pass (smoke.js needs settings.json); eslint clean; Robinhood collector files and golden test unchanged since 85d311a.
+- Left: L-1 readSweepState doesn't validate job.priceUsd/token0/token1 (tampered ledger could slip a no-mid leg under the cap; still bounded by the Collect receipt and the verified owner). L-2 pending op:"swap" hash not in the uniqueness set; recovery doesn't check a new hash against other legs (double credit within one run, bounded by operator USDC; next run flags the ledger corrupt). Info: skip removed logs in swapOut/Collect parse, pin tokenDecimals on the job, prefer the log proof over the balance-fall proof. Reviewer nits: README.md:975 wording; a balance-fall-only test; stale comment/regex in the security test.
+- Behaviour notes: a position with an unpriced token is refused before collect (spot-price cap is best effort); a lost collect blocks new collects until resolved.

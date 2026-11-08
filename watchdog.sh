@@ -187,14 +187,15 @@ resolve_public() {
 GATE_PORT="${WATCHDOG_GATE_PORT:-8790}"
 gate_listening() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${GATE_PORT}\$"; }
 
-# Consecutive UNKNOWN probes (no public IP, or a TLS/cert mismatch). Visible, never a restart.
+# Consecutive UNKNOWN probes (no public IP, or a cert verification failure). Visible, never a restart.
 UNKNOWN_STREAK=0
 UNKNOWN_NOTIFY_AT="${WATCHDOG_UNKNOWN_STREAK:-6}"   # 6 x 5 min = ~30 min
-# note_unknown WHY: log is written by the caller; this counts and alerts once per cooldown.
+# note_unknown WHY: log is written by the caller; this counts, and alerts once per streak
+# (when the streak first reaches UNKNOWN_NOTIFY_AT; a counted result resets it and re-arms).
 note_unknown() {
   local now; now=$(date +%s)
   UNKNOWN_STREAK=$((UNKNOWN_STREAK + 1))
-  [ "$UNKNOWN_STREAK" -ge "$UNKNOWN_NOTIFY_AT" ] || return 0
+  [ "$UNKNOWN_STREAK" -eq "$UNKNOWN_NOTIFY_AT" ] || return 0
   read_state
   if [ $((now - PROBE_ALERTED_AT)) -ge "$ALERT_COOLDOWN" ]; then
     notify "⚠️ public probe has been UNKNOWN ${UNKNOWN_STREAK} times in a row ($1) — nothing restarted; check DNS/dig and the Funnel cert"
@@ -212,12 +213,13 @@ warn_missing_dig() {
 
 # public_probe: one fetch through the relay, exactly as a browser does, aimed at the public IP.
 # Outcomes: UP (any status except 000/502/503/504), DOWN (public IP resolved; curl code 000 or
-# empty, or 502/503/504 with lp-gate listening) and UNKNOWN (no public IP, a TLS/cert mismatch
-# at the pinned IP -- curl rc 35/51/60 -- or a 502/503/504 while lp-gate itself is down).
+# empty, including a generic TLS handshake failure, curl rc 35, which counts like 000; or
+# 502/503/504 with lp-gate listening) and UNKNOWN (no public IP, a peer cert / CA verification
+# failure at the pinned IP -- curl rc 51/60 only -- or a 502/503/504 while lp-gate itself is down).
 # UNKNOWN never counts toward the failure threshold and never restarts tailscaled. It also
 # leaves PUBLIC_FAILS untouched rather than resetting it: a blind probe is no evidence the
 # path recovered, and resetting would let flaky DNS hide a genuine outage that is already 1-2
-# failures in. Six UNKNOWNs in a row raise one notify; a definitive up/down resets the streak.
+# failures in. Six UNKNOWNs in a row raise one notify per streak; a definitive up/down resets the streak.
 public_probe() {
   [ -n "$PUBLIC_URL" ] || return 0
   local code rc now hostport host port ip
@@ -233,9 +235,9 @@ public_probe() {
   # The gate answers 200 with its login page to a browser-shaped request (401 to a bare one).
   code=$("$CURL" -s -o /dev/null -w '%{http_code}' -m 25 -H 'Accept: text/html' \
     --resolve "$host:$port:$ip" "$PUBLIC_URL/" 2>/dev/null); rc=$?
-  case "$rc" in 35|51|60)
-    echo "$(date -Is) public probe UNKNOWN: cert/TLS mismatch at $ip (curl rc $rc) (not counted, fails stay ${PUBLIC_FAILS}x)" >> "$LOG"
-    note_unknown "cert/TLS mismatch at $ip"
+  case "$rc" in 51|60)   # cert verification only; rc 35 (handshake failure) falls through as DOWN
+    echo "$(date -Is) public probe UNKNOWN: cert verification failed at $ip (curl rc $rc) (not counted, fails stay ${PUBLIC_FAILS}x)" >> "$LOG"
+    note_unknown "cert verification failed at $ip"
     return 0;;
   esac
   case "${code:-000}" in
@@ -328,6 +330,19 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   # A temp file, not /dev/stdout: under a pipe (the test runner) that device cannot be
   # opened and every log line became a "No such device or address" error instead.
   LOG="$(mktemp)"; SELFTEST_LOG="$LOG"
+  # Stubs first: --self-test must never send a real Telegram message or touch real state,
+  # even with WATCHDOG_CURL=curl and a real .env present.
+  REPAIR_LOG="$(mktemp)"
+  repair_tunnel() { echo called >> "$REPAIR_LOG"; }
+  # CURL is a command NAME held in a variable, so the stub has to be pointed at by it;
+  # defining a function called CURL alone leaves "$CURL" still running the real thing.
+  # PUBRC is the exit status the stub reports (default 0); PUBCODE the printed HTTP code.
+  stubcurl() { echo "$*" >> "$CURL_ARGS"; printf '%s' "$PUBCODE"; return "${PUBRC:-0}"; }
+  # Nothing may reach Telegram or the real port table: notify and the gate check are stubs.
+  NOTIFY_LOG="$(mktemp)"; GATE_UP=1; CURL_ARGS="$(mktemp)"
+  notify() { echo "$1" >> "$NOTIFY_LOG"; }
+  gate_listening() { [ "$GATE_UP" = "1" ]; }
+  CURL_SAVED="$CURL"; CURL=stubcurl   # nothing below this line can reach the network
   record_restart; read_state; echo "after 1: count=$COUNT alertedAt=$ALERTED_AT"
   record_restart; read_state; echo "after 2: count=$COUNT alerted=$([ "$ALERTED_AT" -gt 0 ] && echo yes || echo no)"
   record_restart; read_state; echo "after 3: count=$COUNT (cooldown holds, no second alert)"
@@ -341,16 +356,6 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   check_probe 0 "$HEALTHY"; echo "healthy again: stale=$PROBE_STALE"
   check_probe 28 ""; echo "timeout 1: restart=$RESTART_NOW"; check_probe 28 ""; echo "timeout 2: restart=$RESTART_NOW (cooldown holds the message, restart still requested)"
   echo "--- public probe (nothing real is touched: repair_tunnel and curl are stubbed)"
-  REPAIR_LOG="$(mktemp)"
-  repair_tunnel() { echo called >> "$REPAIR_LOG"; }
-  # CURL is a command NAME held in a variable, so the stub has to be pointed at by it;
-  # defining a function called CURL alone leaves "$CURL" still running the real thing.
-  # PUBRC is the exit status the stub reports (default 0); PUBCODE the printed HTTP code.
-  stubcurl() { echo "$*" >> "$CURL_ARGS"; printf '%s' "$PUBCODE"; return "${PUBRC:-0}"; }
-  # Nothing may reach Telegram or the real port table: notify and the gate check are stubs.
-  NOTIFY_LOG="$(mktemp)"; GATE_UP=1
-  notify() { echo "$1" >> "$NOTIFY_LOG"; }
-  gate_listening() { [ "$GATE_UP" = "1" ]; }
   nrepairs() { wc -l < "$REPAIR_LOG" | tr -d ' '; }
   nnotify() { wc -l < "$NOTIFY_LOG" | tr -d ' '; }
   reset_alert() { read_state; PROBE_ALERTED_AT=0; write_state; }
@@ -360,8 +365,7 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   # DIG is likewise a command name: the stub answers DIGOUT (one address per line) and never
   # touches the network. An empty DIGOUT is a DNS failure.
   stubdig() { printf '%s' "$DIGOUT"; }
-  CURL_ARGS="$(mktemp)"; DIGOUT="209.177.145.137"; DIG=stubdig
-  CURL_SAVED="$CURL"; CURL=stubcurl
+  DIGOUT="209.177.145.137"; DIG=stubdig
   PUBLIC_URL="https://example.invalid:8443"; PUBLIC_MIN_FAILS=3; PUBLIC_FAILS=0; PUBLIC_REPAIRED_AT=0
   PUBCODE="200"; public_probe
   echo "answering:  fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
@@ -408,7 +412,26 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   public_probe; public_probe; public_probe
   echo "curl rc 60: fails=$PUBLIC_FAILS (want 2, unchanged) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
   expect "rc60 fails" "$PUBLIC_FAILS" 2; expect "rc60 repairs" "$(nrepairs)" 0
-  grep -q 'cert/TLS mismatch at 209.177.145.137 (curl rc 60)' "$LOG" || { echo "self-test: TLS mismatch was not logged"; exit 1; }
+  grep -q 'cert verification failed at 209.177.145.137 (curl rc 60)' "$LOG" || { echo "self-test: TLS mismatch was not logged"; exit 1; }
+  # curl rc 51 (peer cert) is unknown as well.
+  PUBRC=51; PUBLIC_FAILS=2; : > "$REPAIR_LOG"; UNKNOWN_STREAK=0
+  public_probe; public_probe; public_probe
+  echo "curl rc 51: fails=$PUBLIC_FAILS (want 2, unchanged) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "rc51 fails" "$PUBLIC_FAILS" 2; expect "rc51 repairs" "$(nrepairs)" 0
+  # A counted DOWN resets the UNKNOWN streak: 3 unknowns, one down, 2 unknowns => streak 2.
+  PUBLIC_FAILS=0; PUBLIC_REPAIRED_AT=0; UNKNOWN_STREAK=0
+  public_probe; public_probe; public_probe
+  expect "streak before down" "$UNKNOWN_STREAK" 3
+  PUBRC=0; PUBCODE="000"; public_probe
+  expect "streak after counted down" "$UNKNOWN_STREAK" 0; expect "down counted" "$PUBLIC_FAILS" 1
+  PUBRC=51; public_probe; public_probe
+  expect "streak restarted from 0" "$UNKNOWN_STREAK" 2
+  echo "streak reset by down: streak=$UNKNOWN_STREAK (want 2, restarted from 0)"
+  # curl rc 35 (generic TLS handshake failure) is DOWN like 000: three of them repair once.
+  PUBRC=35; PUBCODE="000"; PUBLIC_FAILS=0; PUBLIC_REPAIRED_AT=0; UNKNOWN_STREAK=0; GATE_UP=1; : > "$REPAIR_LOG"
+  public_probe; public_probe; public_probe
+  echo "curl rc 35 x3: repairs=$(nrepairs) (want 1)"
+  expect "rc35 repairs" "$(nrepairs)" 1
   PUBRC=0
   # Tailnet answer: never probed, never counted, never repaired.
   : > "$CURL_ARGS"; : > "$REPAIR_LOG"; PUBLIC_REPAIRED_AT=0; PUBLIC_FAILS=0; PUBCODE="000"; UNKNOWN_STREAK=0
@@ -428,6 +451,12 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   public_probe; public_probe
   echo "unknown x7: notifies=$(nnotify) (want 1) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
   expect "6+ unknowns notifies" "$(nnotify)" 1; expect "unknowns repairs" "$(nrepairs)" 0
+  # The alert is once per streak: 14 UNKNOWNs with the cooldown not blocking give exactly 1 notify.
+  : > "$NOTIFY_LOG"; reset_alert; UNKNOWN_STREAK=0; SAVED_COOLDOWN=$ALERT_COOLDOWN; ALERT_COOLDOWN=0
+  for i in $(seq 1 14); do public_probe; done
+  ALERT_COOLDOWN=$SAVED_COOLDOWN
+  echo "unknown x14: notifies=$(nnotify) (want 1, once per streak)"
+  expect "once per streak notifies" "$(nnotify)" 1
   DIGOUT="209.177.145.137"; PUBCODE="200"; public_probe
   expect "streak reset by up" "$UNKNOWN_STREAK" 0
   # Glob-like CNAME line: read line by line, so "*" never expands against the working directory.

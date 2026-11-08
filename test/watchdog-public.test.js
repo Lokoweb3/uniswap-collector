@@ -48,6 +48,14 @@ assert.match(out, /gate down: +fails=0 \(want 0\) repaired=no \(want no\) notifi
   "502 with lp-gate not listening is not counted, never restarts tailscaled, notifies once");
 assert.match(out, /curl rc 60: +fails=2 \(want 2, unchanged\) repaired=no/,
   "a TLS/cert mismatch at the pinned IP is unknown: fails unchanged, no repair");
+assert.match(out, /curl rc 51: +fails=2 \(want 2, unchanged\) repaired=no/,
+  "a peer-cert failure (rc 51) is unknown: fails unchanged, no repair");
+assert.match(out, /streak reset by down: streak=2 \(want 2, restarted from 0\)/,
+  "a counted DOWN resets the UNKNOWN streak");
+assert.match(out, /curl rc 35 x3: repairs=1 \(want 1\)/,
+  "a generic TLS handshake failure (rc 35) counts as DOWN and restarts the tunnel once");
+assert.match(out, /unknown x14: notifies=1 \(want 1, once per streak\)/,
+  "the UNKNOWN alert fires once per streak, not on every probe after the threshold");
 assert.match(out, /unknown x7: notifies=1 \(want 1\) repaired=no/, "six UNKNOWNs in a row give one alert and no repair");
 assert.match(out, /glob cname: rc=0 ip=209\.177\.145\.137/, "a glob-like CNAME line is never expanded");
 assert.match(out, /reserved 198\.18\.0\.1: rejected/, "reserved-range answers are rejected");

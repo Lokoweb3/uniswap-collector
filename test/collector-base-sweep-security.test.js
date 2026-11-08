@@ -45,7 +45,8 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
       const S = mk(); S.noBalanceMove = true;
       const cfg = withVault ? S.vault({}) : undefined;
       const sweep = withVault ? { vault: cfg } : undefined;
-      const r1 = await S.run({ sweep });
+      // the receipt logs are unavailable here, so the balance fall alone is the proof (with the Transfer log present it is the proof instead)
+      const r1 = await S.run({ sweep, signer: S.signer({ receiptTweak: (rc, p) => (kindOf(p) === "transfer" ? { ...rc, logs: [] } : rc) }) });
       assert.strictEqual(transfers(S).length, 1, `one transfer in the first run (vault ${withVault})\n${r1.text}`);
       assert.strictEqual(leg0(S).unattributed, true); assert.strictEqual(leg0(S).phase, "held"); assert.strictEqual(exitCodeOf(r1.res), 1);
       assert.ok(/UNATTRIBUTED WETH of #79371151/.test(r1.text) && r1.res.sweep.report.unattributed.length === 1);
@@ -126,7 +127,14 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
     edit(T, (j) => { j.jobs[0].legs[0].token = OTHER; });
     T.setBalance(OTHER, OP, AMT);
     const t2 = await T.run({ signer: T.signer() });
-    assert.strictEqual(t2.signer.sent.length, 0, t2.text); assert.ok(/is not a token of position/.test(t2.text));
+    assert.strictEqual(t2.signer.sent.length, 0, t2.text); assert.ok(/sweep-state\.json is unreadable/.test(t2.text) && /is not token0 or token1 of the position/.test(t2.text), t2.text);
+    // ...and a self-consistent ledger (job tokens and leg token all changed) is refused against the position's real tokens
+    const T3 = mk();
+    await T3.run({ signer: T3.signer({ maxSigns: 1 }) });
+    edit(T3, (j) => { j.jobs[0].token0 = OTHER; j.jobs[0].legs[0].token = OTHER; });
+    T3.setBalance(OTHER, OP, AMT);
+    const t3 = await T3.run({ signer: T3.signer() });
+    assert.strictEqual(t3.signer.sent.length, 0, t3.text); assert.ok(/are not the tokens of position/.test(t3.text), t3.text);
     // an unreadable collect receipt fails closed
     const U = mk();
     await U.run({ signer: U.signer({ maxSigns: 1 }) });
@@ -152,10 +160,10 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
     const w = await W.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
     assert.deepStrictEqual(names(w.signer), [], w.text); assert.ok(/WETH value .* above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(w.text), w.text);
     assert.strictEqual(W.balance(WETH, OP), 0n, "the declined WETH leg was not collected");
-    // a token with no price and no route is capped by the position fee value: over the cap refused, under it delivered
+    // a token with no pool price and no route is capped by its OWN raw amount times its per-side USD price (5 x 1800 = 9000 over the cap, 5 x 10 = 50 under it); the position fee value is not consulted
     const N = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 9000, usd1: 1800 });
     const n = await N.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
-    assert.deepStrictEqual(names(n.signer), [], n.text); assert.ok(/no price and no safe route to USDC|above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(n.text), n.text);
+    assert.deepStrictEqual(names(n.signer), [], n.text); assert.ok(/above maxUnswappedValueUsdc 1000; the fees stay in the NFT/.test(n.text), n.text);
     const M = mk([{ id: ID_A, mgr: MGR_A, t0: USDC, t1: OTHER, a0: 0n, a1: 5n * E18 }], { feesUsd: 50, usd1: 10 });
     assert.deepStrictEqual(names((await M.run({ sweep: { maxUnswappedValueUsdc: 1000 } })).signer), ["collect", "transfer"]);
     // ...and with no per-side price it is refused; the position-wide fee value is no longer consulted (preflight directly)

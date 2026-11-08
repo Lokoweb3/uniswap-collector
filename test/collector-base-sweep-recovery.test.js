@@ -230,7 +230,7 @@ const leg0 = (S) => S.ledger().jobs[0].legs[0];
   // ---- the ledger itself fails closed (D9)
   {
     const f = path.join(fs.mkdtempSync(path.join(X.TMP, "lg-")), "sweep-state.json");
-    const good = { id: "j", tokenId: "1", manager: MGR_A, owner: OWNER, collect: { status: "mined" }, createdAt: 1, pending: null, legs: [{ token: WETH, owedRaw: "5", doneRaw: "0", phase: "collected", attempts: 0, pending: null }] };
+    const good = { id: "j", tokenId: "1", manager: MGR_A, owner: OWNER, token0: WETH, token1: USDC, collect: { status: "mined" }, createdAt: 1, pending: null, legs: [{ token: WETH, owedRaw: "5", doneRaw: "0", phase: "collected", attempts: 0, pending: null }] };
     const t = (mutate) => { const j = JSON.parse(JSON.stringify(good)); mutate(j); fs.writeFileSync(f, JSON.stringify({ version: 1, jobs: [j] })); return SL.readSweepState(f); };
     assert.ok(t(() => {}).ok);
     for (const [name, m] of [["bad phase", (j) => { j.legs[0].phase = "nope"; }], ["manager not allowlisted", (j) => { j.manager = USDC; }], ["done > owed", (j) => { j.legs[0].doneRaw = "6"; }],

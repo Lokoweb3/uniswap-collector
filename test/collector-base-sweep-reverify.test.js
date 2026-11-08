@@ -135,7 +135,7 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
       const sg = S.signer({ receiptTweak: (rc, p) => (kindOf(p) === "transfer" ? { ...rc, logs: mut(rc.logs[0]) } : rc) });
       const r = await S.run({ signer: sg });
       const l = leg0(S);
-      assert.strictEqual(l.phase, "held", name); assert.strictEqual(l.unattributed, true, name); assert.ok(/neither the block balances nor a matching Transfer log/.test(l.reason), `${name}: ${l.reason}`);
+      assert.strictEqual(l.phase, "held", name); assert.strictEqual(l.unattributed, true, name); assert.ok(/matching Transfer log/.test(l.reason), `${name}: ${l.reason}`);
       assert.strictEqual(exitCodeOf(r.res), 1, name);
       const r2 = await S.run({ signer: S.signer() });
       assert.ok(!decodeSent(r2.signer).some((t) => t.name === "transfer"), `${name}: never resent`);
@@ -268,9 +268,11 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
     assert.strictEqual(leg0(S).unattributed, true, r2.text); assert.strictEqual(leg0(S).phase, "held"); assert.strictEqual(leg0(S).outDone === undefined || leg0(S).outDone === "0", true);
     assert.ok(!decodeSent(r2.signer).some((t) => t.name === "transfer")); assert.strictEqual(exitCodeOf(r2.res), 1);
     // with the matching Transfer log (balances unprovable) the same recovery credits it
-    const T = await run1();
+    const T = await run1(); const tp = leg0(T).pending;
     await T.run({ signer: T.signer() });
     assert.notStrictEqual(leg0(T).unattributed, true, "a transfer with its log is credited");
+    assert.strictEqual(leg0(T).outDone, tp.raw, "the proceeds are credited with the recovered amount"); assert.strictEqual(leg0(T).deliver.tx, tp.tx, "deliver records the recovered tx");
+    assert.strictEqual(leg0(T).doneRaw, leg0(T).owedRaw, "the whole attributed amount is done"); assert.strictEqual(leg0(T).deliver.raw, tp.raw);
   }
 
   // ---- review fix 6. hardening

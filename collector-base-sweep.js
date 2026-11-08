@@ -149,6 +149,7 @@ function create(env) {
   // The ERC-6551 implementation allowlist: the frozen code constant, unless a caller (tests) injects its own list. Never from settings.
   const vaultImplementations = Array.isArray(env.vaultImplementations) ? Object.freeze([...env.vaultImplementations]) : S.VAULT_IMPLEMENTATIONS;
   const ownerConfigured = (a) => owners.some((o) => eq(o, a));
+  const sideDecimals = new Map(); // same key -> [dec0, dec1] read at plan time, pinned on the job at newJob
   const sidePrices = new Map(); // `${manager}:${tokenId}` (lowercase) -> [usd0, usd1] seen at plan time, copied to the job at the collect intent
   const collectChecks = new Map(); // job.id -> { amounts, tokens } read back from the chain this run
   let ledger = { jobs: [] };
@@ -265,23 +266,10 @@ function create(env) {
     const r = await sendOp(leg, "transfer", { to: token, data: S.calldata.transfer(to, amount), label: `#${job.tokenId} transfer ${fmt(token, amount)} to ${to}` }, { token, legTokens: [token], amount, recipients, operator }, { raw: amount.toString(), to, kind }, whenSigned);
     if (r.outcome === "ok") {
       clearPending(leg);
-      // The balances are read AT the receipt's block (before = the block before it), so a lagging RPC "latest" cannot fake a failure.
-      const bn = r.receipt && Number.isSafeInteger(Number(r.receipt.blockNumber)) && Number(r.receipt.blockNumber) > 0 ? Number(r.receipt.blockNumber) : null;
-      let before = null, after = null;
-      if (bn !== null) {
-        try { before = await erc20(token).balanceOf(operator, { blockTag: bn - 1 }); after = await erc20(token).balanceOf(operator, { blockTag: bn }); } catch { before = null; after = null; }
-      }
-      if (before === null || after === null) {
-        // The block-tagged balances could not be read, so the balance proof is unavailable. Require the token contract's own
-        // Transfer(operator -> to, amount) log in the receipt; without it nothing shows the amount moved, so the leg is held and unattributed.
-        if (!hasTransferLog(r.receipt, token, to, amount)) {
-          log(`  ! transfer of ${fmt(token, amount)} to ${to} (tx ${r.hash}): block balances unreadable and the receipt has no matching ${symbolOf(token)} Transfer log`);
-          return { unattributed: true, hash: r.hash, reason: `transfer ${r.hash} mined but neither the block balances nor a matching Transfer log could confirm it` };
-        }
-      } else if (after > before - amount) {
-        // Mined successfully but the balance did not fall: NOT a revert, NOT retried. The leg is held and unattributed; nothing is resent.
-        log(`  ! transfer of ${fmt(token, amount)} to ${to} (tx ${r.hash}) was mined but the operator balance did not fall by the amount at block ${bn} (${before} -> ${after})`);
-        return { unattributed: true, hash: r.hash, reason: `transfer ${r.hash} mined but the operator balance did not fall by the amount` };
+      const pr = await transferProof(r.receipt, token, to, amount);
+      if (!pr.ok) {
+        log(`  ! transfer of ${fmt(token, amount)} to ${to} (tx ${r.hash}): ${pr.log}`);
+        return { unattributed: true, hash: r.hash, reason: `transfer ${r.hash} ${pr.reason}` };
       }
       leg.deliver = { to, raw: amount.toString(), tx: r.hash };
       return { ok: true, hash: r.hash };
@@ -359,6 +347,21 @@ function create(env) {
   const outstanding = (leg) => BigInt(leg.owedRaw) - BigInt(leg.doneRaw);
   const proceedsLeft = (leg) => BigInt((leg.swap && leg.swap.outRaw) || "0") - BigInt(leg.outDone || "0");
 
+  /**
+   * True when `hash` is already on record anywhere else in the ledger: any job's collect.tx, any other leg's swap hashes or pending swap
+   * hash, or a swap hash this leg has already been credited with. A recovered receipt for such a hash must not be credited again.
+   */
+  function hashCollision(leg, hash) {
+    for (const j of ledger.jobs) {
+      if (j.collect && typeof j.collect.tx === "string" && eq(j.collect.tx, hash)) return true;
+      for (const l of j.legs) {
+        if (swapTxs(l).some((h) => eq(h, hash))) return true;
+        if (l !== leg && l.pending && l.pending.op === "swap" && typeof l.pending.tx === "string" && eq(l.pending.tx, hash)) return true;
+      }
+    }
+    return false;
+  }
+
   /** True when the receipt holds `token`'s own Transfer(operator -> to, amount) log. */
   function hasTransferLog(receipt, token, to, amount) {
     for (const l of (receipt && receipt.logs) || []) {
@@ -371,10 +374,33 @@ function create(env) {
     return false;
   }
 
+  /**
+   * Proof that a mined transfer moved `amount` of `token` from the operator to `to`. When the receipt's logs are available (a non-empty
+   * list: a successful ERC-20 transfer always emits one) the token's own Transfer(operator -> to, amount) log is REQUIRED, because another
+   * outflow of the operator in the same block could satisfy a balance fall. Only when the logs are unavailable is the balance fall at the
+   * receipt's block (before = the block before) accepted. { ok:true } | { ok:false, reason, log }.
+   */
+  async function transferProof(receipt, token, to, amount) {
+    const logs = receipt && receipt.logs;
+    if (Array.isArray(logs) && logs.length > 0) {
+      if (hasTransferLog(receipt, token, to, amount)) return { ok: true };
+      return { ok: false, reason: "mined but the receipt has no matching Transfer log", log: `the receipt has no matching ${symbolOf(token)} Transfer log` };
+    }
+    const bn = receipt && Number.isSafeInteger(Number(receipt.blockNumber)) && Number(receipt.blockNumber) > 0 ? Number(receipt.blockNumber) : null;
+    let before = null, after = null;
+    if (bn !== null) {
+      try { before = await erc20(token).balanceOf(operator, { blockTag: bn - 1 }); after = await erc20(token).balanceOf(operator, { blockTag: bn }); } catch { before = null; after = null; }
+    }
+    if (before === null || after === null) return { ok: false, reason: "mined but neither the block balances nor a matching Transfer log could confirm it", log: `receipt logs unavailable and block balances unreadable` };
+    if (after > before - BigInt(amount)) return { ok: false, reason: "mined but the operator balance did not fall by the amount", log: `receipt logs unavailable and the operator balance did not fall by the amount at block ${bn} (${before} -> ${after})` };
+    return { ok: true };
+  }
+
   /** The USDC the swap receipt paid to the operator (pool -> operator), 0 when none is found. */
   function swapOut(receipt, route) {
     let total = 0n;
     for (const l of (receipt && receipt.logs) || []) {
+      if (l.removed === true) continue;
       if (!eq(l.address, S.USDC) || !l.topics || l.topics[0] !== TRANSFER_TOPIC || l.topics.length !== 3) continue;
       if (!eq(ethers.getAddress(ethers.dataSlice(l.topics[1], 12)), route.pool) || !eq(ethers.getAddress(ethers.dataSlice(l.topics[2], 12)), operator)) continue;
       total += BigInt(l.data);
@@ -475,7 +501,11 @@ function create(env) {
       }
       if (value === null) {
         const i = eq(leg.token, job.token0) ? 0 : (eq(leg.token, job.token1) ? 1 : -1);
-        const dec = await tokenDecimals(leg.token);
+        // The decimals pinned on the job at creation are used; the live read must agree (a token that changes decimals() is refused).
+        const pinned = i >= 0 && Array.isArray(job.tokenDecimals) ? job.tokenDecimals[i] : null;
+        const live = Number.isInteger(pinned) ? await tokenDecimals(leg.token) : null;
+        if (Number.isInteger(pinned) && live !== null && live !== pinned) return hold(job, leg, `decimals() of ${symbolOf(leg.token)} is ${live} now but ${pinned} was pinned on the job; refusing`);
+        const dec = Number.isInteger(pinned) ? pinned : null;
         value = i < 0 ? null : sideValue(amount, Array.isArray(job.priceUsd) ? job.priceUsd[i] : null, dec);
       }
       if (value === null) return hold(job, leg, `${symbolOf(leg.token)} would be delivered unswapped (${d.reason}) but no value can be established (no pool mid price, no per-side USD price), so maxUnswappedValueUsdc cannot be applied`);
@@ -562,6 +592,7 @@ function create(env) {
       } catch (err) { return `the ledger amounts cannot be checked against the collect receipt (${short(err)}); refusing`; }
       collectChecks.set(job.id, c);
     }
+    if (!eq(job.token0, c.tokens[0]) || !eq(job.token1, c.tokens[1])) return `the ledger tokens ${job.token0}/${job.token1} are not the tokens of position #${job.tokenId}; tampered ledger, refusing`;
     const i = c.tokens.findIndex((t) => eq(t, leg.token));
     if (i < 0) return `${leg.token} is not a token of position #${job.tokenId}; refusing`;
     // Token0 and token1 are distinct for a pool; the cap is the Collect amount of this token.
@@ -594,7 +625,8 @@ function create(env) {
   // ---- jobs --------------------------------------------------------------------------------------------------------
   /** A new job for a position about to be collected. Not in the ledger until `collectIntent` runs (after signing). */
   function newJob({ manager, tokenId, owner, token0, token1, amounts }) {
-    return { id: `${manager}:${tokenId}:${now()}`, tokenId: String(tokenId), manager, owner, token0, token1, expect: { a0: String(amounts[0]), a1: String(amounts[1]) }, collect: { tx: null, nonce: null, status: "intent" }, pending: null, legs: [], createdAt: now() };
+    const dec = sideDecimals.get(`${manager}:${tokenId}`.toLowerCase());
+    return { id: `${manager}:${tokenId}:${now()}`, tokenId: String(tokenId), manager, owner, token0, token1, tokenDecimals: Array.isArray(dec) ? [...dec] : [null, null], expect: { a0: String(amounts[0]), a1: String(amounts[1]) }, collect: { tx: null, nonce: null, status: "intent" }, pending: null, legs: [], createdAt: now() };
   }
   /** The onSigned hook of the collect: the pending intent goes to the ledger before the gas reservation. */
   function collectIntent(job) {
@@ -609,6 +641,7 @@ function create(env) {
   /** The Collect event of a validated receipt: [amount0, amount1] or null. */
   function parseCollect(receipt, job) {
     for (const l of (receipt && receipt.logs) || []) {
+      if (l.removed === true) continue;
       if (!eq(l.address, job.manager) || !l.topics || !COLLECT_TOPICS.includes(l.topics[0]) || l.topics.length !== 2) continue;
       if (BigInt(l.topics[1]) !== BigInt(job.tokenId)) continue;
       try {
@@ -714,6 +747,7 @@ function create(env) {
       const raw = BigInt(p.raw || "0");
       if (p.op === "approve") { if (ok) leg.phase = "approved"; else leg.attempts++; }
       else if (p.op === "swap") {
+        if (ok && hashCollision(leg, p.tx)) { unattribute(job, leg, `recovered swap ${p.tx} is already recorded for another leg or job (or is a collect transaction); not credited`); continue; }
         if (ok) {
           const route = S.routeFor(sw, leg.token) || Object.values(S.ROUTES).find((x) => eq(x.token, leg.token));
           const out = route ? swapOut(r.receipt, route) : 0n;
@@ -725,15 +759,10 @@ function create(env) {
         } else { leg.attempts++; leg.phase = "collected"; }
       } else if (p.op === "transfer") {
         if (ok) {
-          // A mined transfer is credited only with proof: the operator balance fell by the amount at the receipt's block, or the token's
-          // own Transfer(operator -> to, amount) log is in the receipt. USDC for proceeds, the leg's token otherwise.
+          // A mined transfer is credited only with proof: the token's own Transfer(operator -> to, amount) log when the receipt logs are
+          // available, else the operator balance fall at the receipt's block. USDC for proceeds, the leg's token otherwise.
           const ptoken = p.kind === "proceeds" ? S.USDC : leg.token;
-          let proven = false;
-          const bn = Number(r.receipt.blockNumber);
-          if (Number.isSafeInteger(bn) && bn > 0) {
-            try { const before = await erc20(ptoken).balanceOf(operator, { blockTag: bn - 1 }); const after = await erc20(ptoken).balanceOf(operator, { blockTag: bn }); proven = after <= before - raw; } catch { proven = false; }
-          }
-          if (!proven && !hasTransferLog(r.receipt, ptoken, p.to, raw)) { unattribute(job, leg, `recovered transfer ${p.tx} is mined but neither the block balances nor a matching Transfer log prove it`); continue; }
+          if (!(await transferProof(r.receipt, ptoken, p.to, raw)).ok) { unattribute(job, leg, `recovered transfer ${p.tx} is mined but neither the block balances nor a matching Transfer log prove it`); continue; }
           if (p.kind === "proceeds") leg.outDone = (BigInt(leg.outDone || "0") + raw).toString();
           else leg.doneRaw = (BigInt(leg.doneRaw) + raw).toString();
           leg.deliver = { to: p.to, raw: raw.toString(), tx: p.tx };
@@ -774,12 +803,15 @@ function create(env) {
     const legs = [];
     const px = [0, 1].map((i) => (Array.isArray(usd) && typeof usd[i] === "number" && Number.isFinite(usd[i]) && usd[i] > 0 ? usd[i] : null));
     sidePrices.set(`${manager}:${tokenId}`.toLowerCase(), px);
+    const pinDec = [];
+    for (const t of [t0, t1]) pinDec.push(await tokenDecimals(t));
+    sideDecimals.set(`${manager}:${tokenId}`.toLowerCase(), pinDec);
     for (const [i, [token, amt]] of [[t0, amounts[0]], [t1, amounts[1]]].entries()) {
       if (BigInt(amt) <= 0n) continue;
       const d = await decideLeg(provider, sw, token, BigInt(amt));
       // the per-side USD price and decimals, read only for a leg that has no pool mid price (see unswappedProblem)
       const unpriced = !d.usdc && typeof d.mid !== "bigint";
-      legs.push({ token, amount: BigInt(amt), d, usd: px[i], decimals: unpriced ? await tokenDecimals(token) : null });
+      legs.push({ token, amount: BigInt(amt), d, usd: px[i], decimals: unpriced ? pinDec[i] : null });
     }
     const vault = await verifyVault(provider, sw, { operator, owners, tokens: [t0, t1], implementations: vaultImplementations });
     let owner = null;

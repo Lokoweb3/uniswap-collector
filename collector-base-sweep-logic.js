@@ -336,11 +336,21 @@ function jobProblem(j) {
   if (!isAddr(j.manager) || !base.ALLOWED_MANAGERS.some((m) => eq(m, j.manager))) return "manager is not an allowlisted manager";
   if (!isAddr(j.owner)) return "owner is not an address";
   if (!Array.isArray(j.legs)) return "legs is not an array";
+  if (!isAddr(j.token0)) return "token0 is not an address";
+  if (!isAddr(j.token1)) return "token1 is not an address";
+  if (eq(j.token0, j.token1)) return "token0 equals token1";
+  // priceUsd (per-side USD price at plan time) is optional: absent, or a pair of null / finite non-negative numbers.
+  if (j.priceUsd !== undefined && j.priceUsd !== null && !(Array.isArray(j.priceUsd) && j.priceUsd.length === 2 && j.priceUsd.every((x) => x === null || (typeof x === "number" && Number.isFinite(x) && x >= 0)))) return "priceUsd is not a pair of null or finite non-negative numbers";
+  // tokenDecimals (pinned at job creation) is optional for older ledgers: absent, or a pair of null / integers 0..36.
+  if (j.tokenDecimals !== undefined && j.tokenDecimals !== null && !(Array.isArray(j.tokenDecimals) && j.tokenDecimals.length === 2 && j.tokenDecimals.every((x) => x === null || (Number.isInteger(x) && x >= 0 && x <= 36)))) return "tokenDecimals is not a pair of null or integers 0..36";
   if (!j.collect || typeof j.collect !== "object" || !["intent", "mined", "voided", "reverted", "unattributed"].includes(j.collect.status)) return "collect.status is unknown";
   if (!(typeof j.createdAt === "number" && Number.isFinite(j.createdAt))) return "createdAt is not a timestamp";
   const p = pendingProblem(j.pending);
   if (p) return p;
-  for (const [i, l] of j.legs.entries()) { const m = legProblem(l); if (m) return `legs[${i}].${m}`; }
+  for (const [i, l] of j.legs.entries()) {
+    const m = legProblem(l); if (m) return `legs[${i}].${m}`;
+    if (!eq(l.token, j.token0) && !eq(l.token, j.token1)) return `legs[${i}].token ${l.token} is not token0 or token1 of the position`;
+  }
   return null;
 }
 
@@ -369,8 +379,9 @@ function readSweepState(file, fsm = fs) {
   }
   for (const [i, job] of j.jobs.entries()) {
     for (const [k, l] of job.legs.entries()) {
-      if (!l.swap) continue;
-      const own = new Set([...(Array.isArray(l.swap.txs) ? l.swap.txs : []), ...(l.swap.tx ? [l.swap.tx] : [])].map((h) => h.toLowerCase()));
+      // every swap hash of the leg, including a pending op:"swap" hash (it becomes a recorded swap hash once resolved)
+      const pend = l.pending && l.pending.op === "swap" && typeof l.pending.tx === "string" ? [l.pending.tx] : [];
+      const own = new Set([...(l.swap && Array.isArray(l.swap.txs) ? l.swap.txs : []), ...(l.swap && l.swap.tx ? [l.swap.tx] : []), ...pend].map((h) => h.toLowerCase()));
       for (const h of own) {
         if (collectTxs.has(h)) return corrupt(`jobs[${i}].legs[${k}] swap hash ${h} equals a collect transaction`);
         if (swapHashes.has(h)) return corrupt(`jobs[${i}].legs[${k}] swap hash ${h} is already recorded for another leg`);

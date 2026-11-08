@@ -143,3 +143,17 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 - Tests (main session, 93d7351): 138/139 pass (smoke.js needs settings.json); eslint clean; Robinhood collector files and golden test unchanged since 85d311a.
 - Left: L-1 readSweepState doesn't validate job.priceUsd/token0/token1 (tampered ledger could slip a no-mid leg under the cap; still bounded by the Collect receipt and the verified owner). L-2 pending op:"swap" hash not in the uniqueness set; recovery doesn't check a new hash against other legs (double credit within one run, bounded by operator USDC; next run flags the ledger corrupt). Info: skip removed logs in swapOut/Collect parse, pin tokenDecimals on the job, prefer the log proof over the balance-fall proof. Reviewer nits: README.md:975 wording; a balance-fall-only test; stale comment/regex in the security test.
 - Behaviour notes: a position with an unpriced token is refused before collect (spot-price cap is best effort); a lost collect blocks new collects until resolved.
+
+---
+
+# Base sweep hardening round (4a2b63a → 08afeee)
+
+| Commit | What |
+|---|---|
+| 68bc662 | Ledger validation (token0/token1 distinct and matching positions(), leg tokens among them, priceUsd null or finite ≥ 0, tokenDecimals pinned); pending op:"swap" hashes in the ledger-wide uniqueness set, hash-collision check before recovery credits; removed logs skipped; Transfer log required as proof when logs are present; reviewer nits; new collector-base-sweep-hardening.test.js; SPEC D3/D9/D10 |
+| 08afeee | Reviewer's 5 fixes; M-1 (older code) a duplicate job.id could reuse another job's cached Collect check and pay the same fees twice: now a corrupt ledger, cache keyed by manager:tokenId:collect.tx; hold when live decimals differ from pinned; empty logs on USDC/route tokens never count as proof |
+
+- Verdicts: 68bc662 reviewer APPROVE WITH FIXES, security PASS WITH FIXES (M-1 Medium, L-1..L-3 Low). 08afeee reviewer APPROVE, security PASS.
+- Tests (main session, 08afeee): 139/140 pass (smoke.js needs settings.json); eslint clean; Robinhood collector files and golden test unchanged since 4a2b63a. v4-pinned.test.js failed once under load in an agent's chunked run and passed alone.
+- Left: security L-1 (older code) pruned-job receipt replay: a tampered ledger could point at a real older operator receipt from a pruned job (bounded by operator balance, paid only to a verified owner). Suggested fix: swap receipt blockNumber ≥ the job's collect block, plus a retired-hash list. Reviewer nit: when both decimals and price are missing, only one hold reason is listed. Info: verifyAgainstCollect checks to/from only when present; duplicate pending transfer hashes unchecked (under-delivery only); fee-on-transfer tokens now held when logs are present (fails closed).
+- Process: two of the implementer's test chunks went past the tool's 120 s default and were backgrounded by the harness; both finished and were read. 08afeee ran fully in the foreground.

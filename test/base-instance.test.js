@@ -258,7 +258,9 @@ const upstream = (key, port) => new Promise((resolve) => {
     };
     walk(ROOT);
     const senders = shipped.filter((f) => /eth_sendTransaction/.test(fs.readFileSync(path.join(ROOT, f), "utf8")) && f !== "rpc.js");
-    assert.deepStrictEqual(senders, ["claim-fees.js"], "eth_sendTransaction appears in exactly one shipped file");
+    // tools/base-vault/flow.js is the second (and only other) sender: the Base LOKOVault signing page, served by tools/base-vault-serve.js on 127.0.0.1 only
+    // and pinned by test/base-vault-flow.test.js (chain, account, order and code-hash guards). Nothing else may add one.
+    assert.deepStrictEqual(senders, ["claim-fees.js", "tools/base-vault/flow.js"], "eth_sendTransaction appears in exactly the two known shipped files");
     assert.ok(/SENDS = new Set\(\[[^\]]*eth_sendTransaction/.test(fs.readFileSync(path.join(ROOT, "rpc.js"), "utf8")), "rpc.js only names it in its deny set");
     const cf = fs.readFileSync(path.join(ROOT, "claim-fees.js"), "utf8");
     const fetches = [...cf.matchAll(/\bfetch\(([^)]{0,60})/g)].map((m) => m[1]);

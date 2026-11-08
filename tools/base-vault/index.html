@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Base LOKOVault: create</title>
+<style>
+body { font: 15px/1.45 system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; color: #111; }
+.mono { font-family: ui-monospace, monospace; word-break: break-all; }
+.step { border: 1px solid #bbb; border-radius: 6px; padding: .6rem .9rem; margin: .7rem 0; }
+.verified { border-color: #1a7f37; background: #eefbf1; }
+.failed { border-color: #b3261e; background: #fdeceb; }
+.pending { border-color: #b08900; background: #fff8e1; }
+.warn { color: #b3261e; font-weight: 600; }
+button { font: inherit; padding: .35rem .8rem; }
+</style>
+</head>
+<body>
+<h1>Create the LOKOVault on Base</h1>
+<p>This page asks your wallet to send up to four transactions from <span class="mono" id="main"></span> on Base (chain 8453).
+It signs nothing else and checks each step on chain before enabling the next. Review each transaction in the wallet before confirming.</p>
+<p><button type="button" id="connect">Connect wallet</button> <button type="button" id="switch" hidden>Switch wallet to Base</button> <button type="button" id="refresh">Re-check chain</button></p>
+<p id="status" role="status"></p>
+<p id="warning" class="warn"></p>
+<div id="steps"></div>
+<div id="final"></div>
+<script src="/ethers.umd.min.js"></script>
+<script src="/flow.js"></script>
+<script src="/page.js"></script>
+</body>
+</html>

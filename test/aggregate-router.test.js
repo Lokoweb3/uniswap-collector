@@ -108,6 +108,8 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     assert.ok(j.chains.every((c) => c.status === "ok" && !("port" in c)), "ok, and no port in the output: " + JSON.stringify(j.chains.map((c) => [c.status, c.problems])));
     // robinhood: lp 100 + fees 2 + 50 + reward 1.5 + 10 token; arc: M again (different label) lp 200 + token 10; base: O3
     assert.strictEqual(j.totals.rewardsUsd, 3, "two chains' rewards");
+    assert.ok(Array.isArray(j.rates) && j.rates.every((r) => typeof r.chain === "string" && typeof r.wallet === "string"), "rates ride along");
+    assert.ok(j.breakdown.feesByChain && j.breakdown.feesByWallet && typeof j.totals.feesUncountedCount === "number");
     assert.ok(j.totals.grandUsd > 0);
   }
 
@@ -122,6 +124,7 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     await call(rport, "/api/aggregate?refresh=1");
     assert.strictEqual(rh.hits.filter((h) => h.url === "/api/watch").length, 2, "a second forced round within 5 s is refused");
     assert.ok(all.every((s) => s.hits.every((h) => !/fresh=1/.test(h.url))));
+    assert.ok(all.every((s) => s.hits.every((h) => !/\/api\/daily/.test(h.url))), "the fee rate comes from the four existing paths, never /api/daily");
   }
 
   // ---- 3. read-only: other methods, HEAD

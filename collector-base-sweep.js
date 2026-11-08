@@ -152,7 +152,7 @@ function create(env) {
   const sideDecimals = new Map(); // same key -> [dec0, dec1] read at plan time, pinned on the job at newJob
   const sidePrices = new Map(); // `${manager}:${tokenId}` (lowercase) -> [usd0, usd1] seen at plan time, copied to the job at the collect intent
   const collectChecks = new Map(); // manager:tokenId:collect.tx (lowercased) -> { amounts, tokens } read back from the chain this run
-  let ledger = { jobs: [] };
+  let ledger = { jobs: [], retired: S.emptyRetired() };
   let ledgerBroken = false;
   const report = { positions: 0, deliveredUsdcRaw: 0n, unswapped: [], stuck: [], held: [], unattributed: [], vault: [], pending: 0, refused: null, txs: 0 };
   const erc20 = (a) => new ethers.Contract(a, ERC20_ABI, provider);
@@ -166,6 +166,9 @@ function create(env) {
       return false;
     }
   }
+  /** Notes the highest block a job has a receipt in (the retired list keeps it when the job is pruned). */
+  const noteBlock = (job, rc) => { const b = Number(rc && rc.blockNumber); if (Number.isSafeInteger(b) && b > 0 && !(job.maxBlock >= b)) job.maxBlock = b; };
+  const addTransferTx = (leg, hash) => { const t = Array.isArray(leg.transferTxs) ? leg.transferTxs : []; if (typeof hash === "string" && !t.some((h) => eq(h, hash))) t.push(hash); leg.transferTxs = t.slice(-100); };
   const mark = (job) => { if (S.jobTerminal(job) && job.finishedAt === undefined) job.finishedAt = now(); };
 
   /** Validate the settings and load the ledger. { ok:true } | { ok:false, reason }. Nothing is written. */
@@ -272,6 +275,7 @@ function create(env) {
         return { unattributed: true, hash: r.hash, reason: `transfer ${r.hash} ${pr.reason}` };
       }
       leg.deliver = { to, raw: amount.toString(), tx: r.hash };
+      addTransferTx(leg, r.hash); noteBlock(job, r.receipt);
       return { ok: true, hash: r.hash };
     }
     if (r.outcome === "reverted") { clearPending(leg); save(); return { reverted: true }; }
@@ -352,6 +356,7 @@ function create(env) {
    * hash, or a swap hash this leg has already been credited with. A recovered receipt for such a hash must not be credited again.
    */
   function hashCollision(leg, hash) {
+    if (S.retiredHas(ledger.retired, hash)) return true;
     for (const j of ledger.jobs) {
       if (j.collect && typeof j.collect.tx === "string" && eq(j.collect.tx, hash)) return true;
       for (const l of j.legs) {
@@ -447,7 +452,7 @@ function create(env) {
       try { const b = await balanceOf(S.USDC); if (out > b) out = b; } catch { /* the receipt amount stands */ }
       leg.doneRaw = (BigInt(leg.doneRaw) + amount).toString();
       leg.swap.outRaw = (BigInt(leg.swap.outRaw) + out).toString();
-      leg.swap.tx = r.hash; addSwapTx(leg, r.hash);
+      leg.swap.tx = r.hash; addSwapTx(leg, r.hash); noteBlock(job, r.receipt);
       log(`  swapped: received ${S.fmtUsdc(out)} USDC (tx ${r.hash})`);
       if (halted()) { save(); return false; }
       if (out === 0n) { leg.phase = "held"; leg.heldFrom = "collected"; leg.unattributed = true; leg.reason = "swap receipt has no USDC transfer to the operator"; report.unattributed.push(`#${job.tokenId} ${symbolOf(leg.token)} swap output`); save(); log(`  ! ${leg.reason}; nothing is delivered for it`); return false; }
@@ -512,7 +517,8 @@ function create(env) {
         const px = i >= 0 && Array.isArray(job.priceUsd) ? job.priceUsd[i] : null;
         value = i < 0 ? null : sideValue(amount, px, dec);
         if (value === null) {
-          const why = i < 0 ? "the token is not token0/token1 of the job" : (dec === null ? "no pinned decimals" : "no per-side USD price");
+          // BOTH missing facts are listed, not just the first
+          const why = i < 0 ? "the token is not token0/token1 of the job" : [dec === null ? "no pinned decimals" : null, !(typeof px === "number" && Number.isFinite(px) && px > 0) ? "no per-side USD price" : null].filter(Boolean).join(" and ");
           return hold(job, leg, `${symbolOf(leg.token)} would be delivered unswapped (${d.reason}) but no value can be established (no pool mid price, ${why}), so maxUnswappedValueUsdc cannot be applied`);
         }
       }
@@ -548,6 +554,8 @@ function create(env) {
         try {
           const rc = await provider.getTransactionReceipt(h);
           if (!rc) return `the swap receipt ${h} cannot be found; proceeds are not delivered unchecked`;
+          const replay = S.receiptReplayProblem(ledger.retired, h, rc.blockNumber, job.collect.block);
+          if (replay) return `the swap receipt ${replay}; refusing`;
           if (rc.status === 0) return `the swap receipt ${h} shows a revert; refusing`;
           if (!rc.to || !eq(rc.to, S.ROUTER)) return `the swap receipt ${h} target ${rc.to} is not the router; refusing`;
           if (!rc.from || !eq(rc.from, operator)) return `the swap receipt ${h} sender ${rc.from} is not the operator; refusing`;
@@ -596,10 +604,17 @@ function create(env) {
         if (rc.from && !eq(rc.from, operator)) throw new Error(`the collect receipt sender ${rc.from} is not the operator`);
         const amounts = parseCollect(rc, job);
         if (!amounts) throw new Error("the collect receipt has no Collect event for this position paying the operator");
-        c = { amounts, tokens: await positionTokens(job.manager, job.tokenId) };
+        const block = Number(rc.blockNumber);
+        if (!Number.isSafeInteger(block) || block <= 0) throw new Error("the collect receipt has no block number");
+        c = { amounts, tokens: await positionTokens(job.manager, job.tokenId), block };
       } catch (err) { return `the ledger amounts cannot be checked against the collect receipt (${short(err)}); refusing`; }
       collectChecks.set(ckey, c);
     }
+    // The block comes from the chain, never the ledger. A collect that is a retired job's, or not newer than a retired collect of this
+    // position, is a replayed receipt (security L-1): refused.
+    const replay = S.collectReplayProblem(ledger.retired, job.collect.tx, c.block, job.manager, job.tokenId);
+    if (replay) return `${replay} (replayed receipt of a pruned job, or a tampered ledger)`;
+    if (job.collect.block !== c.block) job.collect.block = c.block;
     if (!eq(job.token0, c.tokens[0]) || !eq(job.token1, c.tokens[1])) return `the ledger tokens ${job.token0}/${job.token1} are not the tokens of position #${job.tokenId}; tampered ledger, refusing`;
     const i = c.tokens.findIndex((t) => eq(t, leg.token));
     if (i < 0) return `${leg.token} is not a token of position #${job.tokenId}; refusing`;
@@ -665,6 +680,7 @@ function create(env) {
     const how = "Collect event";
     if (!amounts) { job.collect.status = "unattributed"; job.pending = null; log(`  ! #${job.tokenId}: the collected amounts cannot be attributed; nothing is sent, reported`); return save(); }
     job.collect.status = "mined"; job.pending = null; job.legs = [];
+    { const b = Number(receipt && receipt.blockNumber); if (Number.isSafeInteger(b) && b > 0) { job.collect.block = b; noteBlock(job, receipt); } }
     [[job.token0, amounts[0]], [job.token1, amounts[1]]].forEach(([token, amt]) => {
       if (amt > 0n) job.legs.push({ token, owedRaw: amt.toString(), doneRaw: "0", phase: "collected", attempts: 0, pending: null, swap: { amountIn: null, quoteRaw: null, minOutRaw: null, outRaw: "0", tx: null }, deliver: null });
     });
@@ -751,6 +767,13 @@ function create(env) {
         leg.pending = null; save(); log(`  recovery: ${p.op} intent of ${symbolOf(leg.token)} (#${job.tokenId}) voided (${r.why}); re-evaluated from balances`); continue;
       }
       const ok = r.receipt.status !== 0;
+      if (ok && (p.op === "swap" || p.op === "transfer")) {
+        // A mined receipt is credited only if it is not a retired job's and is not older than this job's own verified collect (L-1).
+        const bad = await verifyAgainstCollect(job, leg);
+        if (bad) { log(`  recovery: ${p.op} ${p.tx} of ${symbolOf(leg.token)} (#${job.tokenId}) is not credited yet: ${bad}`); continue; }
+        const replay = S.receiptReplayProblem(ledger.retired, p.tx, r.receipt.blockNumber, job.collect.block);
+        if (replay) { unattribute(job, leg, `recovered ${p.op} ${replay}; not credited`); continue; }
+      }
       leg.pending = null;
       const raw = BigInt(p.raw || "0");
       if (p.op === "approve") { if (ok) leg.phase = "approved"; else leg.attempts++; }
@@ -761,7 +784,7 @@ function create(env) {
           const out = route ? swapOut(r.receipt, route) : 0n;
           leg.doneRaw = (BigInt(leg.doneRaw) + raw).toString();
           leg.swap = { ...(leg.swap || {}), txs: swapTxs(leg), outRaw: (BigInt((leg.swap && leg.swap.outRaw) || "0") + out).toString(), tx: p.tx };
-          addSwapTx(leg, p.tx);
+          addSwapTx(leg, p.tx); noteBlock(job, r.receipt);
           leg.phase = out > 0n ? "swapped" : "held";
           if (out === 0n) { leg.heldFrom = "collected"; leg.unattributed = true; leg.reason = "swap receipt has no USDC transfer to the operator"; report.unattributed.push(`#${job.tokenId} ${symbolOf(leg.token)} swap output`); }
         } else { leg.attempts++; leg.phase = "collected"; }
@@ -774,6 +797,7 @@ function create(env) {
           if (p.kind === "proceeds") leg.outDone = (BigInt(leg.outDone || "0") + raw).toString();
           else leg.doneRaw = (BigInt(leg.doneRaw) + raw).toString();
           leg.deliver = { to: p.to, raw: raw.toString(), tx: p.tx };
+          addTransferTx(leg, p.tx); noteBlock(job, r.receipt);
         } else if (eq(p.to, job.owner)) leg.tAttempts = (leg.tAttempts || 0) + 1;
         else if (leg.vault === undefined || (leg.vault && !leg.vault.tx)) leg.vault = { to: p.to, raw: "0", failed: true };
       }

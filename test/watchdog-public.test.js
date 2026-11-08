@@ -43,6 +43,15 @@ assert.match(out, /tailnet-only: curl calls=0 \(want 0\) fails=0 \(want 0\) repa
   "tailnet/private answers are never probed, never counted, never restart tailscaled");
 assert.match(out, /dns failure: fails=2 \(want 2, unchanged\) curl calls=0 \(want 0\) repaired=no/,
   "a DNS failure is unknown: no restart and the failure counter is left alone");
+assert.match(out, /500 is up: +fails=0 \(want 0\) repaired=no/, "a 500 is the app answering: up, no repair");
+assert.match(out, /gate down: +fails=0 \(want 0\) repaired=no \(want no\) notifies=1/,
+  "502 with lp-gate not listening is not counted, never restarts tailscaled, notifies once");
+assert.match(out, /curl rc 60: +fails=2 \(want 2, unchanged\) repaired=no/,
+  "a TLS/cert mismatch at the pinned IP is unknown: fails unchanged, no repair");
+assert.match(out, /unknown x7: notifies=1 \(want 1\) repaired=no/, "six UNKNOWNs in a row give one alert and no repair");
+assert.match(out, /glob cname: rc=0 ip=209\.177\.145\.137/, "a glob-like CNAME line is never expanded");
+assert.match(out, /reserved 198\.18\.0\.1: rejected/, "reserved-range answers are rejected");
+assert.match(out, /missing dig: logged and notified/, "a missing dig is loud at startup");
 assert.match(out, /fallback resolver: used/, "a non-public answer from one resolver falls through to the next");
 
 // The other halves of the self-test must keep passing too.

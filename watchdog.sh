@@ -145,7 +145,8 @@ DIG="${WATCHDOG_DIG:-dig}"
 PUBLIC_RESOLVERS="${WATCHDOG_RESOLVERS:-1.1.1.1 8.8.8.8}"
 
 # is_public_ipv4 ADDR: true only for a routable unicast IPv4. Rejects tailnet/CGNAT
-# (100.64.0.0/10), loopback, RFC1918, link-local, 0/8, multicast and reserved.
+# (100.64.0.0/10), loopback, RFC1918, link-local, 0/8, multicast, reserved and documentation/
+# benchmarking ranges.
 is_public_ipv4() {
   local a b c d
   [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
@@ -157,6 +158,11 @@ is_public_ipv4() {
   [ "$a" -eq 169 ] && [ "$b" -eq 254 ] && return 1
   [ "$a" -eq 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 1
   [ "$a" -eq 192 ] && [ "$b" -eq 168 ] && return 1
+  [ "$a" -eq 192 ] && [ "$b" -eq 0 ] && [ "$c" -eq 0 ] && return 1     # 192.0.0.0/24 IETF protocol
+  [ "$a" -eq 192 ] && [ "$b" -eq 0 ] && [ "$c" -eq 2 ] && return 1     # 192.0.2.0/24 TEST-NET-1
+  [ "$a" -eq 198 ] && { [ "$b" -eq 18 ] || [ "$b" -eq 19 ]; } && return 1  # 198.18.0.0/15 benchmarking
+  [ "$a" -eq 198 ] && [ "$b" -eq 51 ] && [ "$c" -eq 100 ] && return 1  # 198.51.100.0/24 TEST-NET-2
+  [ "$a" -eq 203 ] && [ "$b" -eq 0 ] && [ "$c" -eq 113 ] && return 1   # 203.0.113.0/24 TEST-NET-3
   return 0
 }
 
@@ -167,45 +173,95 @@ resolve_public() {
   local host="$1" r ip
   RESOLVE_NOTE=""; RESOLVED_IP=""
   for r in $PUBLIC_RESOLVERS; do
-    for ip in $("$DIG" +short +time=3 +tries=1 A "$host" "@$r" 2>/dev/null); do
+    # Line by line, never word-split: a CNAME line such as "*.x." must not glob against cwd.
+    while IFS= read -r ip || [ -n "$ip" ]; do
       if is_public_ipv4 "$ip"; then RESOLVED_IP="$ip"; return 0; fi
-      case "$ip" in *[!0-9.]*) ;; *) RESOLVE_NOTE="$RESOLVE_NOTE rejected-non-public:$ip@$r";; esac
-    done
+      case "$ip" in *[!0-9.]*|"") ;; *) RESOLVE_NOTE="$RESOLVE_NOTE rejected-non-public:$ip@$r";; esac
+    done < <("$DIG" +short +time=3 +tries=1 A "$host" "@$r" 2>/dev/null)
   done
   return 1
 }
 
+# gate_listening: is lp-gate (127.0.0.1:8790, see lp-gate.mjs and run-tailscale.sh) accepting
+# connections? Same local-port check the main loop uses. Tests replace this function.
+GATE_PORT="${WATCHDOG_GATE_PORT:-8790}"
+gate_listening() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${GATE_PORT}\$"; }
+
+# Consecutive UNKNOWN probes (no public IP, or a TLS/cert mismatch). Visible, never a restart.
+UNKNOWN_STREAK=0
+UNKNOWN_NOTIFY_AT="${WATCHDOG_UNKNOWN_STREAK:-6}"   # 6 x 5 min = ~30 min
+# note_unknown WHY: log is written by the caller; this counts and alerts once per cooldown.
+note_unknown() {
+  local now; now=$(date +%s)
+  UNKNOWN_STREAK=$((UNKNOWN_STREAK + 1))
+  [ "$UNKNOWN_STREAK" -ge "$UNKNOWN_NOTIFY_AT" ] || return 0
+  read_state
+  if [ $((now - PROBE_ALERTED_AT)) -ge "$ALERT_COOLDOWN" ]; then
+    notify "⚠️ public probe has been UNKNOWN ${UNKNOWN_STREAK} times in a row ($1) — nothing restarted; check DNS/dig and the Funnel cert"
+    PROBE_ALERTED_AT=$now; write_state
+  fi
+}
+
+# Startup check: without dig the public probe can only ever be UNKNOWN. Say so, loudly, once.
+warn_missing_dig() {
+  command -v "$DIG" >/dev/null 2>&1 && return 0
+  echo "$(date -Is) public probe disabled: $DIG not found (install dnsutils)" >> "$LOG"
+  notify "⚠️ watchdog: public probe disabled: $DIG not found (install dnsutils)"
+  return 1
+}
+
 # public_probe: one fetch through the relay, exactly as a browser does, aimed at the public IP.
-# Three outcomes: UP (any HTTP status), DOWN (public IP resolved, no answer) and UNKNOWN
-# (could not get a public IP, so nothing was probed). UNKNOWN never counts toward the failure
-# threshold and never restarts tailscaled. It also leaves PUBLIC_FAILS untouched rather than
-# resetting it: a blind probe is no evidence the path recovered, and resetting would let flaky
-# DNS hide a genuine outage that is already 1-2 failures in.
+# Outcomes: UP (any status except 000/502/503/504), DOWN (public IP resolved; curl code 000 or
+# empty, or 502/503/504 with lp-gate listening) and UNKNOWN (no public IP, a TLS/cert mismatch
+# at the pinned IP -- curl rc 35/51/60 -- or a 502/503/504 while lp-gate itself is down).
+# UNKNOWN never counts toward the failure threshold and never restarts tailscaled. It also
+# leaves PUBLIC_FAILS untouched rather than resetting it: a blind probe is no evidence the
+# path recovered, and resetting would let flaky DNS hide a genuine outage that is already 1-2
+# failures in. Six UNKNOWNs in a row raise one notify; a definitive up/down resets the streak.
 public_probe() {
   [ -n "$PUBLIC_URL" ] || return 0
-  local code now hostport host port ip
+  local code rc now hostport host port ip
   hostport=${PUBLIC_URL#*://}; hostport=${hostport%%/*}
   host=${hostport%%:*}; port=443
   case "$hostport" in *:*) port=${hostport##*:};; esac
   if ! resolve_public "$host"; then
     echo "$(date -Is) public probe UNKNOWN: no public address for $host (not counted, fails stay ${PUBLIC_FAILS}x)${RESOLVE_NOTE}" >> "$LOG"
+    note_unknown "no public address"
     return 0
   fi
   ip="$RESOLVED_IP"
-  # The gate answers 200 with its login page to a browser-shaped request (401 to a bare
-  # one). Any non-5xx HTTP status means the path works; "000" (no answer, or TLS that never
-  # completed) and 5xx are the failure.
+  # The gate answers 200 with its login page to a browser-shaped request (401 to a bare one).
   code=$("$CURL" -s -o /dev/null -w '%{http_code}' -m 25 -H 'Accept: text/html' \
-    --resolve "$host:$port:$ip" "$PUBLIC_URL/" 2>/dev/null)
-  if [ -n "$code" ] && [ "$code" != "000" ] && [ "${code:0:1}" != "5" ]; then
-    [ "$PUBLIC_FAILS" -gt 0 ] && echo "$(date -Is) public path answering again (HTTP $code, probed $ip)" >> "$LOG"
-    PUBLIC_FAILS=0
-    return 0
-  fi
+    --resolve "$host:$port:$ip" "$PUBLIC_URL/" 2>/dev/null); rc=$?
+  case "$rc" in 35|51|60)
+    echo "$(date -Is) public probe UNKNOWN: cert/TLS mismatch at $ip (curl rc $rc) (not counted, fails stay ${PUBLIC_FAILS}x)" >> "$LOG"
+    note_unknown "cert/TLS mismatch at $ip"
+    return 0;;
+  esac
+  case "${code:-000}" in
+    000|502|503|504) ;;   # candidate failure, below
+    *)
+      UNKNOWN_STREAK=0
+      [ "$PUBLIC_FAILS" -gt 0 ] && echo "$(date -Is) public path answering again (HTTP $code, probed $ip)" >> "$LOG"
+      PUBLIC_FAILS=0
+      return 0;;
+  esac
+  now=$(date +%s)
+  case "${code:-000}" in 502|503|504)
+    if ! gate_listening; then
+      echo "$(date -Is) gate down (HTTP $code via $ip): lp-gate not listening on 127.0.0.1:${GATE_PORT}; not counted, tunnel left alone" >> "$LOG"
+      read_state
+      if [ $((now - PROBE_ALERTED_AT)) -ge "$ALERT_COOLDOWN" ]; then
+        notify "⚠️ lp-gate is not listening on 127.0.0.1:${GATE_PORT} (public HTTP $code) — the tunnel is fine, restart the gate"
+        PROBE_ALERTED_AT=$now; write_state
+      fi
+      return 0
+    fi;;
+  esac
+  UNKNOWN_STREAK=0
   PUBLIC_FAILS=$((PUBLIC_FAILS + 1))
   echo "$(date -Is) public probe failed (${PUBLIC_FAILS}x in a row) $PUBLIC_URL probed $ip HTTP ${code:-000}" >> "$LOG"
   [ "$PUBLIC_FAILS" -ge "$PUBLIC_MIN_FAILS" ] || return 0
-  now=$(date +%s)
   if [ $((now - PUBLIC_REPAIRED_AT)) -lt "$PUBLIC_REPAIR_GAP" ]; then
     echo "$(date -Is) public path still down, but the tunnel was restarted recently; leaving it" >> "$LOG"
     PUBLIC_FAILS=0
@@ -289,7 +345,18 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   repair_tunnel() { echo called >> "$REPAIR_LOG"; }
   # CURL is a command NAME held in a variable, so the stub has to be pointed at by it;
   # defining a function called CURL alone leaves "$CURL" still running the real thing.
-  stubcurl() { echo "$*" >> "$CURL_ARGS"; printf '%s' "$PUBCODE"; }
+  # PUBRC is the exit status the stub reports (default 0); PUBCODE the printed HTTP code.
+  stubcurl() { echo "$*" >> "$CURL_ARGS"; printf '%s' "$PUBCODE"; return "${PUBRC:-0}"; }
+  # Nothing may reach Telegram or the real port table: notify and the gate check are stubs.
+  NOTIFY_LOG="$(mktemp)"; GATE_UP=1
+  notify() { echo "$1" >> "$NOTIFY_LOG"; }
+  gate_listening() { [ "$GATE_UP" = "1" ]; }
+  nrepairs() { wc -l < "$REPAIR_LOG" | tr -d ' '; }
+  nnotify() { wc -l < "$NOTIFY_LOG" | tr -d ' '; }
+  reset_alert() { read_state; PROBE_ALERTED_AT=0; write_state; }
+  expect() {  # expect LABEL ACTUAL WANT
+    [ "$2" = "$3" ] || { echo "self-test: $1: got '$2', want '$3'"; exit 1; }
+  }
   # DIG is likewise a command name: the stub answers DIGOUT (one address per line) and never
   # touches the network. An empty DIGOUT is a DNS failure.
   stubdig() { printf '%s' "$DIGOUT"; }
@@ -298,8 +365,10 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   PUBLIC_URL="https://example.invalid:8443"; PUBLIC_MIN_FAILS=3; PUBLIC_FAILS=0; PUBLIC_REPAIRED_AT=0
   PUBCODE="200"; public_probe
   echo "answering:  fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "answering fails" "$PUBLIC_FAILS" 0; [ -s "$REPAIR_LOG" ] && { echo "self-test: repaired while answering"; exit 1; }
   PUBCODE="000"; public_probe; public_probe
   echo "down x2:    fails=$PUBLIC_FAILS (want 2) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "down x2 fails" "$PUBLIC_FAILS" 2; [ -s "$REPAIR_LOG" ] && { echo "self-test: repaired after only 2 failures"; exit 1; }
   public_probe
   echo "down x3:    fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want yes)"
   [ -s "$REPAIR_LOG" ] || { echo "self-test: the tunnel was not repaired after $PUBLIC_MIN_FAILS failures"; exit 1; }
@@ -318,24 +387,78 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
   # 401 (the gate login) counts as up.
   PUBLIC_FAILS=2; PUBCODE="401"; public_probe
   echo "401 is up:  fails=$PUBLIC_FAILS (want 0)"
-  # 5xx is down.
-  PUBCODE="502"; : > "$REPAIR_LOG"; PUBLIC_REPAIRED_AT=0; public_probe; public_probe; public_probe
+  expect "401 fails" "$PUBLIC_FAILS" 0
+  # 500 is the app talking, so the path works: up, not a failure.
+  PUBLIC_FAILS=2; PUBCODE="500"; : > "$REPAIR_LOG"; public_probe
+  echo "500 is up:  fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "500 fails" "$PUBLIC_FAILS" 0; expect "500 repairs" "$(nrepairs)" 0
+  # 502 x3 with the gate listening: a real down.
+  PUBCODE="502"; GATE_UP=1; : > "$REPAIR_LOG"; PUBLIC_REPAIRED_AT=0; PUBLIC_FAILS=0; public_probe; public_probe; public_probe
   echo "5xx x3:     repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want yes)"
+  expect "5xx x3 repairs" "$(nrepairs)" 1
+  # 502 x3 with the gate NOT listening: the gate is the fault, not the tunnel.
+  GATE_UP=0; : > "$REPAIR_LOG"; : > "$NOTIFY_LOG"; reset_alert; PUBLIC_REPAIRED_AT=0; PUBLIC_FAILS=0
+  public_probe; public_probe; public_probe
+  echo "gate down:  fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no) notifies=$(nnotify) (want 1)"
+  expect "gate down fails" "$PUBLIC_FAILS" 0; expect "gate down repairs" "$(nrepairs)" 0; expect "gate down notifies" "$(nnotify)" 1
+  grep -q 'gate down (HTTP 502 via 209.177.145.137)' "$LOG" || { echo "self-test: gate down was not logged"; exit 1; }
+  GATE_UP=1
+  # curl rc 60 (cert mismatch at the pinned IP): unknown, fails unchanged, never a restart.
+  PUBCODE="000"; PUBRC=60; PUBLIC_FAILS=2; : > "$REPAIR_LOG"; UNKNOWN_STREAK=0
+  public_probe; public_probe; public_probe
+  echo "curl rc 60: fails=$PUBLIC_FAILS (want 2, unchanged) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "rc60 fails" "$PUBLIC_FAILS" 2; expect "rc60 repairs" "$(nrepairs)" 0
+  grep -q 'cert/TLS mismatch at 209.177.145.137 (curl rc 60)' "$LOG" || { echo "self-test: TLS mismatch was not logged"; exit 1; }
+  PUBRC=0
   # Tailnet answer: never probed, never counted, never repaired.
-  : > "$CURL_ARGS"; : > "$REPAIR_LOG"; PUBLIC_REPAIRED_AT=0; PUBLIC_FAILS=0; PUBCODE="000"
+  : > "$CURL_ARGS"; : > "$REPAIR_LOG"; PUBLIC_REPAIRED_AT=0; PUBLIC_FAILS=0; PUBCODE="000"; UNKNOWN_STREAK=0
   DIGOUT=$'100.78.153.68\n10.0.0.5\n192.168.1.9\n127.0.0.1'
   public_probe; public_probe; public_probe; public_probe
   echo "tailnet-only: curl calls=$(wc -l < "$CURL_ARGS" | tr -d ' ') (want 0) fails=$PUBLIC_FAILS (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "tailnet curl calls" "$(wc -l < "$CURL_ARGS" | tr -d ' ')" 0; expect "tailnet fails" "$PUBLIC_FAILS" 0; expect "tailnet repairs" "$(nrepairs)" 0
   grep -q 'UNKNOWN' "$LOG" || { echo "self-test: unknown was not logged"; exit 1; }
   # DNS failure: unknown, no restart, counter left alone.
-  DIGOUT=""; PUBLIC_FAILS=2; public_probe; public_probe; public_probe
+  DIGOUT=""; PUBLIC_FAILS=2; UNKNOWN_STREAK=0; public_probe; public_probe; public_probe
   echo "dns failure: fails=$PUBLIC_FAILS (want 2, unchanged) curl calls=$(wc -l < "$CURL_ARGS" | tr -d ' ') (want 0) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "dns fails" "$PUBLIC_FAILS" 2; expect "dns curl calls" "$(wc -l < "$CURL_ARGS" | tr -d ' ')" 0; expect "dns repairs" "$(nrepairs)" 0
+  # Six consecutive UNKNOWNs: one alert, no repair. A definitive result resets the streak.
+  : > "$NOTIFY_LOG"; : > "$REPAIR_LOG"; reset_alert; UNKNOWN_STREAK=0; PUBLIC_FAILS=0; DIGOUT=""
+  public_probe; public_probe; public_probe; public_probe; public_probe
+  expect "5 unknowns notifies" "$(nnotify)" 0
+  public_probe; public_probe
+  echo "unknown x7: notifies=$(nnotify) (want 1) repaired=$([ -s "$REPAIR_LOG" ] && echo yes || echo no) (want no)"
+  expect "6+ unknowns notifies" "$(nnotify)" 1; expect "unknowns repairs" "$(nrepairs)" 0
+  DIGOUT="209.177.145.137"; PUBCODE="200"; public_probe
+  expect "streak reset by up" "$UNKNOWN_STREAK" 0
+  # Glob-like CNAME line: read line by line, so "*" never expands against the working directory.
+  # A file named like a public IP sits in cwd; word-splitting would have resolved to it.
+  gdir="$(mktemp -d)"; : > "$gdir/8.8.4.4"; pushd "$gdir" >/dev/null
+  stubdig() { printf '%s\n' '*.attacker.' '*' '209.177.145.137'; }
+  resolve_public example.invalid; grc=$?
+  popd >/dev/null; rm -rf "$gdir"
+  echo "glob cname: rc=$grc ip=$RESOLVED_IP (want 209.177.145.137, no glob expansion)"
+  expect "glob rc" "$grc" 0; expect "glob ip" "$RESOLVED_IP" 209.177.145.137
+  # Reserved ranges are rejected (198.18.0.1 benchmarking, plus the documentation blocks).
+  for bad in 198.18.0.1 198.19.255.255 192.0.0.1 192.0.2.1 198.51.100.7 203.0.113.9; do
+    is_public_ipv4 "$bad" && { echo "self-test: $bad accepted as public"; exit 1; }
+  done
+  is_public_ipv4 198.20.0.1 && is_public_ipv4 209.177.145.137 || { echo "self-test: a public address was rejected"; exit 1; }
+  stubdig() { printf '198.18.0.1\n'; }
+  resolve_public example.invalid && { echo "self-test: 198.18.0.1 answer accepted"; exit 1; }
+  echo "reserved 198.18.0.1: rejected (want yes)"
   # Tailnet answer from one resolver does not stop a public one from the next being used.
   stubdig() { case "$*" in *@1.1.1.1*) printf '100.78.153.68\n';; *) printf '209.177.145.137\n';; esac; }
   PUBLIC_FAILS=0; PUBCODE="200"; public_probe
   grep -q -- '--resolve example.invalid:8443:209.177.145.137' "$CURL_ARGS" || { echo "self-test: fallback resolver not used"; exit 1; }
   echo "fallback resolver: used (want yes)"
-  CURL="$CURL_SAVED"; rm -f "$REPAIR_LOG" "$CURL_ARGS"
+  # Missing dig: one log line and one notify at startup.
+  : > "$NOTIFY_LOG"; DIG=definitely-no-such-dig-binary
+  warn_missing_dig && { echo "self-test: missing dig not detected"; exit 1; }
+  grep -q 'public probe disabled: definitely-no-such-dig-binary not found (install dnsutils)' "$LOG" || { echo "self-test: missing dig not logged"; exit 1; }
+  expect "missing dig notifies" "$(nnotify)" 1
+  echo "missing dig: logged and notified (want yes)"
+  DIG=stubdig
+  CURL="$CURL_SAVED"; rm -f "$REPAIR_LOG" "$CURL_ARGS" "$NOTIFY_LOG"
   echo "--- wedged recovery (owned stub listener; never the live dashboard)"
   DASH_PORT=$((20000 + RANDOM % 20000)); START_ALL="echo start-all-called"
   before=$(pgrep -fc "^bash $HERE/watchdog.sh$" 2>/dev/null || true)
@@ -353,6 +476,7 @@ if [ "${1:-}" = "--self-test" ]; then   # exercise the counters with a stub curl
 fi
 
 echo "$(date -Is) watchdog started (pid $$)" >> "$LOG"
+warn_missing_dig
 discover_public_url
 CYCLE=0
 while true; do

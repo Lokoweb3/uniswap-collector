@@ -44,7 +44,7 @@ function rewindToPendingTransfer(j2, tx, to, raw) {
 function pruned(led, id) {
   const l = clone(led);
   const j = byToken(l, id); j.finishedAt = Date.now() - 40 * DAY;
-  return JSON.parse(SL.serializeSweepState(l, Date.now()));
+  return JSON.parse(SL.serializeSweepState(l, Date.now(), 1e9));
 }
 const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
 
@@ -61,9 +61,9 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     assert.ok(out.retired.hashes.every((e) => e.block === Math.max(j1.collect.block, j1.maxBlock)));
     // idempotent: saving again from the loaded ledger gives the same text
     const l2 = clone(led); byToken(l2, ID_A).finishedAt = Date.now() - 40 * DAY;
-    assert.strictEqual(SL.serializeSweepState(l2, Date.now()), SL.serializeSweepState(l2, Date.now()));
+    assert.strictEqual(SL.serializeSweepState(l2, Date.now(), 1e9), SL.serializeSweepState(l2, Date.now(), 1e9));
     // a live-only ledger carries no retired block (the file is as before the list existed)
-    assert.ok(!("retired" in JSON.parse(SL.serializeSweepState(clone(led), Date.now()))));
+    assert.ok(!("retired" in JSON.parse(SL.serializeSweepState(clone(led), Date.now(), 1e9))));
     // the pruned ledger reads and keeps its list
     const f = require("path").join(require("os").tmpdir(), `sweep-retired-${process.pid}.json`);
     fs.writeFileSync(f, JSON.stringify(out));
@@ -117,6 +117,7 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     assert.strictEqual(r1.signer.sent.length, 0, r1.text);
     assert.strictEqual(leg().unattributed, true, r1.text); assert.strictEqual(leg().phase, "held");
     assert.ok(/before the job's collect in block/.test(leg().reason), leg().reason);
+    assert.ok(leg().reason.includes(j1.legs[0].swap.tx), "the recovery fatal reason names the mined hash: " + leg().reason);
     assert.strictEqual(leg().doneRaw, "0", "nothing credited"); assert.strictEqual(leg().swap.outRaw, "0");
     // 4b. transfer
     const b = clone(led); b.jobs = b.jobs.filter((j) => j.tokenId !== String(ID_A));
@@ -218,7 +219,7 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     const mkJob = (n, block, fin) => ({ id: `j${n}`, tokenId: String(n), manager: MGR_A, owner: OWNER, token0: WETH, token1: USDC, collect: { tx: hex(100000 + n), status: "mined", block }, maxBlock: block + 3, pending: null, createdAt: fin, finishedAt: fin, legs: [] });
     const old = { hashes: Array.from({ length: SL.MAX_RETIRED_HASHES }, (_, i) => ({ hash: hex(i + 1), block: 100 + i })), floor: 0, collectBlock: { [key]: 5000 } };
     const ledger = { jobs: [mkJob(1, 9000, 1), mkJob(2, 9100, 2)], retired: old };
-    const out = JSON.parse(SL.serializeSweepState(ledger, Date.now()));
+    const out = JSON.parse(SL.serializeSweepState(ledger, Date.now(), 1e9));
     assert.strictEqual(out.jobs.length, 0, "both finished jobs were pruned");
     assert.strictEqual(out.retired.hashes.length, SL.MAX_RETIRED_HASHES, "the list stays at the bound");
     assert.strictEqual(out.retired.floor, 100 + 1, "the two oldest entries (blocks 100, 101) were evicted; the floor is the highest evicted block");
@@ -232,10 +233,10 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     assert.strictEqual(SL.receiptReplayProblem(out.retired, hex(999999), 102, 50), null, "above the floor and the collect block");
     // the collect high-water for a position is never lowered by pruning an older job of the same position
     const l2 = { jobs: [mkJob(1, 40, 1)], retired: { hashes: [], floor: 0, collectBlock: { [`${MGR_A}:1`.toLowerCase()]: 9000 } } };
-    assert.strictEqual(JSON.parse(SL.serializeSweepState(l2, Date.now())).retired.collectBlock[`${MGR_A}:1`.toLowerCase()], 9000);
+    assert.strictEqual(JSON.parse(SL.serializeSweepState(l2, Date.now(), 1e9)).retired.collectBlock[`${MGR_A}:1`.toLowerCase()], 9000);
     // reading what was written back works, and a job that is not terminal or not old stays
     const keepLedger = { jobs: [{ ...mkJob(3, 10, Date.now()), finishedAt: Date.now() }, { ...mkJob(4, 10, 1), collect: { tx: hex(9), status: "intent" }, legs: [] }], retired: SL.emptyRetired() };
-    assert.strictEqual(JSON.parse(SL.serializeSweepState(keepLedger, Date.now())).jobs.length, 2);
+    assert.strictEqual(JSON.parse(SL.serializeSweepState(keepLedger, Date.now(), 1e9)).jobs.length, 2);
     // the rule for a receipt below the job's own collect block
     assert.ok(/before the job's collect in block 50/.test(SL.receiptReplayProblem(SL.emptyRetired(), hex(5), 49, 50)));
     assert.strictEqual(SL.receiptReplayProblem(SL.emptyRetired(), hex(5), 50, 50), null, "the collect block itself is allowed");
@@ -258,7 +259,7 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
       legs: [{ token: WETH, phase: "delivered", owedRaw: "1", doneRaw: "1", attempts: 0, swap: { tx: hex(310000 + n), txs: [hex(310000 + n)] }, deliver: { tx: hex(320000 + n) } }] }); // no maxBlock, no collect.block
     assert.strictEqual(SL.jobProblem(legacyJob(1, 1)), null, "the legacy shape is a valid job");
     const known = Array.from({ length: SL.MAX_RETIRED_HASHES - 1 }, (_, i) => ({ hash: hex(i + 1), block: 100 + i }));
-    const out = JSON.parse(SL.serializeSweepState({ jobs: [legacyJob(1, 1)], retired: { hashes: known, floor: 0, collectBlock: {} } }, Date.now()));
+    const out = JSON.parse(SL.serializeSweepState({ jobs: [legacyJob(1, 1)], retired: { hashes: known, floor: 0, collectBlock: {} } }, Date.now(), 1e9));
     assert.strictEqual(out.retired.hashes.length, SL.MAX_RETIRED_HASHES);
     for (const h of [hex(300001), hex(310001), hex(320001)]) {
       const e = out.retired.hashes.find((x) => x.hash === h); assert.ok(e && e.block === 0, `${h} kept with an unknown block`);
@@ -268,10 +269,10 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     assert.strictEqual(out.retired.floor, 101);
     // only unknown-block entries over the bound: fail closed (the write throws; save() stops the run)
     const unknown = Array.from({ length: SL.MAX_RETIRED_HASHES }, (_, i) => ({ hash: hex(i + 1), block: 0 }));
-    assert.throws(() => SL.serializeSweepState({ jobs: [legacyJob(2, 1)], retired: { hashes: unknown, floor: 0, collectBlock: {} } }, Date.now()), /cannot be evicted safely/);
+    assert.throws(() => SL.serializeSweepState({ jobs: [legacyJob(2, 1)], retired: { hashes: unknown, floor: 0, collectBlock: {} } }, Date.now(), 1e9), /cannot be evicted safely/);
     // a job WITH maxBlock but pruned is known-block; a reverted collect (only its collect hash) uses its collect block
     const rev = { ...legacyJob(3, 1), legs: [], collect: { tx: hex(330003), status: "reverted", block: 77 } };
-    assert.strictEqual(JSON.parse(SL.serializeSweepState({ jobs: [rev] }, Date.now())).retired.hashes[0].block, 77);
+    assert.strictEqual(JSON.parse(SL.serializeSweepState({ jobs: [rev] }, Date.now(), 1e9)).retired.hashes[0].block, 77);
     // end to end: the save inside a run reports the failure and sends nothing more
     const S = sweepScene({ positions: [posA()] }); S.init();
     const led = { version: 1, jobs: [legacyJob(4, 1)], retired: { hashes: unknown, floor: 0, collectBlock: {} } };
@@ -372,11 +373,12 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
       "maxBlock": (l, v) => { l.jobs[0].maxBlock = v; },
     };
     for (const [name, mut] of Object.entries(variants)) {
-      const bad = clone(base); mut(bad, HEAD + 1); write(S, bad);
+      const bad = clone(base); mut(bad, HEAD + SL.HEAD_SLACK_BLOCKS + 1); write(S, bad);
       run = await S.run({ signer: S.signer() });
       assert.strictEqual(run.signer.sent.length, 0, `${name}: ${run.text}`); assert.ok(new RegExp(`unreadable .*${name.replace(/[[\]]/g, ".").replace(/\.\./, ".")}.* above the chain head`).test(run.text) || /unreadable .*above the chain head/.test(run.text), `${name}: ${run.text}`);
-      const ok = clone(base); mut(ok, HEAD); write(S, ok);
-      assert.strictEqual(SL.ledgerAheadProblem(SL.readSweepState(S.file).ledger, HEAD), null, `${name} at the head is fine`);
+      const ok = clone(base); mut(ok, HEAD + SL.HEAD_SLACK_BLOCKS); write(S, ok);
+      assert.strictEqual(SL.ledgerAheadProblem(SL.readSweepState(S.file).ledger, HEAD), null, `${name} at head + slack is fine`);
+      assert.ok(SL.ledgerAheadProblem(SL.readSweepState(S.file).ledger, HEAD - 1), `${name} at head + slack + 1 is refused`);
     }
   }
 
@@ -398,16 +400,18 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     S.addPosition({ id: ID_B, mgr: MGR_B, t0: CBBTC, t1: USDC, a0: 100_000n, a1: 0n });
     S.w.head = 9_000_000;
     const run = await S.run({ signer: S.signer() });
-    assert.strictEqual(run.signer.sent.length, 0, "nothing sent, and the second position is NOT collected: " + run.text);
     const after = S.ledger(); const leg = after.jobs[0].legs[0];
-    assert.strictEqual(leg.phase, "held"); assert.strictEqual(leg.unattributed, true, "refusal is unattributed, not just held");
+    assert.strictEqual(leg.phase, "held"); assert.ok(!leg.unattributed, "an old collect is held and reported, NOT unattributed");
     assert.ok(/more than 1166400 blocks/.test(leg.reason), leg.reason);
-    assert.strictEqual(after.jobs.length, 1, "no new job: unattributed blocks new collects");
-    assert.ok(/UNATTRIBUTED WETH of #\d+/.test(run.text) && /new collects are blocked/.test(run.text), run.text);
+    assert.ok(/HELD WETH of #\d+/.test(run.text) && !/UNATTRIBUTED/.test(run.text), run.text);
+    assert.strictEqual(after.jobs.length, 2, "the old held leg does not block the new collect: " + run.text);
+    assert.strictEqual(after.jobs[1].tokenId, String(ID_B), "the new position was collected");
+    assert.ok(names(run.signer).length > 0, "the new collect was sent");
+    assert.strictEqual(after.jobs[0].legs[0].phase, "held", "the old leg stays held on later runs");
     // a replay refusal (high-water) is unattributed too, and the next run still refuses new collects
     S.w.head = 1_000_000;
-    const l2 = S.ledger(); l2.retired = { hashes: [], floor: 0, collectBlock: { [key]: l2.jobs[0].collect.block + 5 } };
-    const lg2 = l2.jobs[0].legs[0]; delete lg2.unattributed; lg2.phase = "collected"; delete lg2.reason; write(S, l2);
+    const l2 = S.ledger(); l2.jobs = l2.jobs.slice(0, 1); l2.retired = { hashes: [], floor: 0, collectBlock: { [key]: l2.jobs[0].collect.block + 5 } };
+    const lg2 = l2.jobs[0].legs[0]; delete lg2.unattributed; delete lg2.agedAt; lg2.phase = "collected"; delete lg2.reason; write(S, l2); // agedAt cleared by hand: the head is back at 1M, below the sticky hold
     const r2 = await S.run({ signer: S.signer() });
     assert.strictEqual(r2.signer.sent.length, 0, r2.text);
     const a2 = S.ledger(); assert.strictEqual(a2.jobs[0].legs[0].unattributed, true, r2.text); assert.ok(/not newer than the retired collect/.test(a2.jobs[0].legs[0].reason));

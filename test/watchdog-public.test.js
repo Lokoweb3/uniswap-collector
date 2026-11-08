@@ -32,6 +32,36 @@ assert.match(out, /down x3: +fails=0 \(want 0\) repaired=yes/, "three consecutiv
 assert.match(out, /inside gap: repaired again=no/, "and it will not restart the tunnel again straight away");
 assert.match(out, /recovered: +fails=0/, "recovery clears the counter");
 
+// The probe targets the PUBLIC Funnel address (tailscaled runs in userspace-networking, so the
+// tailnet IP the WSL resolver returns can never be reached from this host). All resolution and
+// curl calls are stubs; nothing here touches the network.
+assert.match(out, /probe target: pinned to 209\.177\.145\.137/, "curl is pinned to the public IP with --resolve");
+assert.match(out, /log has probed ip: yes/, "the probed IP and HTTP code are in the log line");
+assert.match(out, /401 is up: +fails=0/, "the gate's 401 counts as up");
+assert.match(out, /5xx x3: +repaired=yes/, "a real down (public IP, 5xx/000) still restarts after the threshold");
+assert.match(out, /tailnet-only: curl calls=0 \(want 0\) fails=0 \(want 0\) repaired=no/,
+  "tailnet/private answers are never probed, never counted, never restart tailscaled");
+assert.match(out, /dns failure: fails=2 \(want 2, unchanged\) curl calls=0 \(want 0\) repaired=no/,
+  "a DNS failure is unknown: no restart and the failure counter is left alone");
+assert.match(out, /500 is up: +fails=0 \(want 0\) repaired=no/, "a 500 is the app answering: up, no repair");
+assert.match(out, /gate down: +fails=0 \(want 0\) repaired=no \(want no\) notifies=1/,
+  "502 with lp-gate not listening is not counted, never restarts tailscaled, notifies once");
+assert.match(out, /curl rc 60: +fails=2 \(want 2, unchanged\) repaired=no/,
+  "a TLS/cert mismatch at the pinned IP is unknown: fails unchanged, no repair");
+assert.match(out, /curl rc 51: +fails=2 \(want 2, unchanged\) repaired=no/,
+  "a peer-cert failure (rc 51) is unknown: fails unchanged, no repair");
+assert.match(out, /streak reset by down: streak=2 \(want 2, restarted from 0\)/,
+  "a counted DOWN resets the UNKNOWN streak");
+assert.match(out, /curl rc 35 x3: repairs=1 \(want 1\)/,
+  "a generic TLS handshake failure (rc 35) counts as DOWN and restarts the tunnel once");
+assert.match(out, /unknown x14: notifies=1 \(want 1, once per streak\)/,
+  "the UNKNOWN alert fires once per streak, not on every probe after the threshold");
+assert.match(out, /unknown x7: notifies=1 \(want 1\) repaired=no/, "six UNKNOWNs in a row give one alert and no repair");
+assert.match(out, /glob cname: rc=0 ip=209\.177\.145\.137/, "a glob-like CNAME line is never expanded");
+assert.match(out, /reserved 198\.18\.0\.1: rejected/, "reserved-range answers are rejected");
+assert.match(out, /missing dig: logged and notified/, "a missing dig is loud at startup");
+assert.match(out, /fallback resolver: used/, "a non-public answer from one resolver falls through to the next");
+
 // The other halves of the self-test must keep passing too.
 assert.match(out, /wedged recovery:.*alive=no.*port free=yes.*start called=yes/,
   "a wedged dashboard is still stopped and started");

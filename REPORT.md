@@ -178,3 +178,35 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 5. The head check has no slack for a lagging RPC; allow ~64 blocks.
 6. Pruning trusts the ledger's finishedAt and the local clock; validate finishedAt and require chain age (security Low-2).
 7. Residual: anyone who can write sweep-state.json can reset terminal legs (the deferred operator-guard item).
+
+# Base sweep final hardening round (22be4bf → e1fade9)
+
+| Commit | What |
+|---|---|
+| 650656b | Previous Left to do items 1-6: a collect older than COLLECT_MAX_AGE_BLOCKS holds that leg and reports it (not unattributed, does not block other collects; replay refusals stay fatal); warning from day 20 (COLLECT_WARN_BLOCKS 864,000) in log and Telegram; recovery fatal reason includes the mined hash; README covers head check, age hold, 99/100 transfer hold and throwing saves; RPC failure at start is kind "rpc"; HEAD_SLACK_BLOCKS 64; jobProblem validates finishedAt; pruning needs clock age and chain age ≥1,296,000 blocks (no known head: nothing pruned); SPEC D8/D10 |
+| e1fade9 | Review fixes: sticky leg.agedAt (validated, covered by slack check); future finishedAt clamped to now for pruning, with clock-skew warning instead of corrupt refusal; aged-hold reason no longer contains the head (ledger no longer rewritten each run); short() in collector-base-sweep.js redacts URLs; stale M-2 comment fixed; test for pending tx on recovery path of aged job; retired test section 14 deletes agedAt before lowering head |
+
+- Verdicts: 650656b reviewer APPROVE WITH FIXES, security PASS WITH FIXES (Low-1 age hold not sticky, Low-2 clock step-back refuses ledger, Low-3 stale comment, plus Info). All applied in e1fade9 except the Info items on ledger-trusted block numbers, slack window and block-0 retired bound. e1fade9 reviewer APPROVE, security PASS WITH FIXES (Low and Info only); no fail-open, no replay regression.
+- Tests: eslint clean; 141/141 test/*.test.js pass (re-reviewers re-ran agehold, retired, recovery, docs, security and golden files). test/smoke.js fails only because settings.json is missing from this checkout (test/smoke.js:74). Robinhood collector files and golden test byte-identical to 22be4bf.
+
+## Left to do
+1. Low (security): one lagging RPC read can refuse the whole ledger as corrupt when the head is more than 64 blocks below agedAt (agedAt comes from a mid-run head read). Fix: record min(run-start head, current head), or hold only that leg.
+2. Low (security): collector-base.js short() (~:52) does not redact, so a keyed RPC URL in an error can reach collector.log and console (not Telegram). Fix: endpoint.redactText or the same URL regex.
+3. Low (reviewer): agedAt is stored per leg; a sibling leg that skipped the first-hold run could be judged not aged within 64 blocks. Fix: set agedAt on all non-terminal legs, or store job.agedAt.
+4. Docs: README "within 64 blocks of the head" (~:991) should say "not more than 64 above"; comment at collector-base-sweep.js:646 says "refused" where it should say "held"; README "do not hand-edit" conflicts with the aged-hold clear (removing agedAt), which should be documented.
+5. Info: sweep URL regex misses ws/wss, JSON-escaped https:\/\/ and hosts without a scheme; a far-future finishedAt is kept and warns until the clock passes it; block-0 retired entries are never evicted (save throws above 2000); pruning trusts the ledger's block numbers.
+6. Deferred: anyone who can write sweep-state.json can reset terminal legs or delete agedAt (operator-guard item).
+
+---
+
+# Watchdog public-probe fix (branch watchdog-probe, merged as 1a796e5)
+
+- Root cause: the public probe curled the Funnel hostname from WSL, where the resolver returns the tailnet IP 100.78.153.68. That address can't be reached under userspace-networking tailscaled, so curl gave 000 and the watchdog restarted tailscaled every 25-45 min, which really dropped the Funnel each time.
+- Commits:
+  - 79d143c: resolve via `dig +short A @1.1.1.1` (falls back to @8.8.8.8), reject private/CGNAT/loopback/reserved answers, pin curl with --resolve, no public IP = UNKNOWN (no restart), log the probed IP.
+  - bbc6961: down only on 000/502/503/504; lp-gate down = no restart, one notify; dig output read line by line; warning if dig is missing; self-test guards.
+  - e7613be: curl rc 35 counts as down (rc 51/60 stay UNKNOWN); tests for rc 35×3 → one repair, rc 51, streak reset; notify stubbed before the early self-test phases; UNKNOWN alert once per streak.
+- Verdicts: reviewer APPROVE (e7613be), security PASS WITH FIXES (nothing blocking).
+- Tests: watchdog-public.test.js and `watchdog.sh --self-test` pass; merged master 141/142 (smoke.js needs settings.json); eslint clean.
+- Deployed 2026-11-08 by copying watchdog.sh into live and restarting only the watchdog. Live holds this as a local edit until the next pull.
+- Left: N1, the shared alert cooldown can mute the once-per-streak UNKNOWN alert (logged, never restarts). Fix: a flag set only when the notify actually runs.

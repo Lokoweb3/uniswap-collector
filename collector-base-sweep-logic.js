@@ -35,6 +35,9 @@ const PHASES = Object.freeze(["collected", "approved", "swapped", "delivered", "
 const TERMINAL_PHASES = Object.freeze(["delivered", "delivered-unswapped"]);
 const SWEEP_STATE_VERSION = 1;
 const KEEP_TERMINAL_MS = 30 * 24 * 60 * 60 * 1000;
+const FINISHED_SKEW_MS = 10 * 60 * 1000; // tolerated clock skew for a finishedAt that is "now"
+/** A lagging RPC may report a head a little below the newest block the ledger saw: ledger blocks up to head + this are accepted. */
+const HEAD_SLACK_BLOCKS = 64;
 const MAX_UINT256 = (1n << 256n) - 1n;
 
 const eq = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
@@ -332,6 +335,8 @@ function legProblem(l) {
   if (l.outDone !== undefined && !(typeof l.outDone === "string" && DEC.test(l.outDone))) return "outDone is not a decimal string";
   // transferTxs (every transfer hash of the leg, kept so a retired job's transfers can be refused as proof later) is optional for older ledgers.
   if (l.transferTxs !== undefined && !(Array.isArray(l.transferTxs) && l.transferTxs.length <= MAX_TRANSFERS_PER_LEG && l.transferTxs.every((h) => typeof h === "string" && HASH.test(h)) && new Set(l.transferTxs.map((h) => h.toLowerCase())).size === l.transferTxs.length)) return "transferTxs is not a list of distinct hashes";
+  // agedAt (the chain head when the age hold was first applied) makes the age hold sticky: absent, or a positive safe integer.
+  if (l.agedAt !== undefined && !(Number.isSafeInteger(l.agedAt) && l.agedAt > 0)) return "agedAt is not a positive integer";
   return pendingProblem(l.pending);
 }
 function jobProblem(j) {
@@ -353,6 +358,9 @@ function jobProblem(j) {
   if (j.collect.block !== undefined && !(Number.isSafeInteger(j.collect.block) && j.collect.block > 0)) return "collect.block is not a positive integer";
   if (j.maxBlock !== undefined && !(Number.isSafeInteger(j.maxBlock) && j.maxBlock > 0)) return "maxBlock is not a positive integer";
   if (!(typeof j.createdAt === "number" && Number.isFinite(j.createdAt))) return "createdAt is not a timestamp";
+  // finishedAt (set when the job turns terminal) decides pruning: absent, or a positive finite timestamp. A future value (a clock that stepped
+  // back) is NOT corrupt: it counts as "now" for pruning, so the job is never pruned early (fail safe); readSweepState warns (security S2).
+  if (j.finishedAt !== undefined && !(typeof j.finishedAt === "number" && Number.isFinite(j.finishedAt) && j.finishedAt > 0)) return "finishedAt is not a positive timestamp";
   const p = pendingProblem(j.pending);
   if (p) return p;
   for (const [i, l] of j.legs.entries()) {
@@ -421,17 +429,18 @@ function retiredProblem(r) {
  * Security M-1: every block number the ledger carries must exist. A tampered floor / collect block / maxBlock far above the chain head
  * would refuse every legitimate receipt (holding all jobs) while the sweep keeps collecting. First problem text, or null.
  */
-function ledgerAheadProblem(ledger, head) {
+function ledgerAheadProblem(ledger, head, slack = HEAD_SLACK_BLOCKS) {
   const h = Number(head);
   if (!Number.isSafeInteger(h) || h <= 0) return `the chain head ${String(head)} is not usable`;
   const r = ledger.retired;
-  const over = (what, v) => (Number.isFinite(Number(v)) && Number(v) > h ? `${what} ${v} is above the chain head ${h}` : null);
+  const over = (what, v) => (Number.isFinite(Number(v)) && Number(v) > h + slack ? `${what} ${v} is above the chain head ${h} (slack ${slack})` : null);
   let m = r && over("retired.floor", r.floor); if (m) return m;
   for (const [k, v] of Object.entries((r && r.collectBlock) || {})) { m = over(`retired.collectBlock[${k}]`, v); if (m) return m; }
   for (const [i, e] of ((r && r.hashes) || []).entries()) { m = over(`retired.hashes[${i}].block`, e.block); if (m) return m; }
   for (const [i, j] of (ledger.jobs || []).entries()) {
     m = over(`jobs[${i}].collect.block`, j.collect && j.collect.block) || over(`jobs[${i}].maxBlock`, j.maxBlock);
     if (m) return m;
+    for (const [k, l] of (j.legs || []).entries()) { m = over(`jobs[${i}].legs[${k}].agedAt`, l && l.agedAt); if (m) return m; }
   }
   return null;
 }
@@ -441,14 +450,27 @@ function ledgerAheadProblem(ledger, head) {
  * is at least KEEP_TERMINAL_MS old. Base makes a block every 2 s: 30 days = 1,296,000 blocks. A collect is accepted only if it is younger than
  * that minus a 10% safety margin (129,600 blocks, about 3 days, which covers block times up to about 2.2 s): the accepted window
  * (about 27 days) then lies strictly inside the 30 days, so no pruned job's collect can ever pass, even if the whole retired block was
- * deleted from the file. A legitimately long-open job (a collect older than that) is refused: unattributed, needs operator resolution.
+ * deleted from the file. A legitimately long-open job (a collect older than that) is HELD and reported (not unattributed, and it does not block other collects); an operator resolves it.
+ * The hold is sticky (security S1): the first time it applies, leg.agedAt records the head, and from then on the leg stays held whatever head a later run sees.
  */
 const BASE_BLOCK_MS = 2000;
+const KEEP_TERMINAL_BLOCKS = Math.ceil(KEEP_TERMINAL_MS / BASE_BLOCK_MS);
 const COLLECT_MAX_AGE_BLOCKS = Math.ceil(KEEP_TERMINAL_MS / BASE_BLOCK_MS) - Math.ceil(Math.ceil(KEEP_TERMINAL_MS / BASE_BLOCK_MS) * 0.1);
-function collectAgeProblem(head, blockNumber) {
+/** Days of collect age from which a warning is logged and sent (the hold comes at about day 27). */
+const COLLECT_WARN_BLOCKS = 20 * 86400 * 1000 / BASE_BLOCK_MS;
+function collectAgeWarning(head, blockNumber) {
   const h = Number(head), b = Number(blockNumber);
-  if (!Number.isSafeInteger(h) || h <= 0) return `the chain head ${String(head)} is not usable`;
-  if (b < h - COLLECT_MAX_AGE_BLOCKS) return `collect is in block ${b}, more than ${COLLECT_MAX_AGE_BLOCKS} blocks (about 27 days) before the head ${h}; it is as old as a job that may already have been pruned, so it cannot be told from a replayed receipt; an operator must resolve it`;
+  if (!Number.isSafeInteger(h) || h <= 0 || !Number.isSafeInteger(b)) return null;
+  if (b < h - COLLECT_MAX_AGE_BLOCKS) return null; // already held by collectAgeProblem
+  if (b < h - COLLECT_WARN_BLOCKS) return `collect block ${b} is about ${Math.floor((h - b) * BASE_BLOCK_MS / 86400000)} days old; at about day 27 the leg is held (never swept) until an operator resolves it`;
+  return null;
+}
+function collectAgeProblem(head, blockNumber, agedAt) {
+  const h = Number(head), b = Number(blockNumber);
+  const sticky = Number.isSafeInteger(agedAt) && agedAt > 0; // already held once: a lower head now never lifts it
+  if (!sticky && (!Number.isSafeInteger(h) || h <= 0)) return `the chain head ${String(head)} is not usable`;
+  // The stored reason carries no head (it would change every run and rewrite the ledger every run); the head is logged separately.
+  if (sticky || b < h - COLLECT_MAX_AGE_BLOCKS) return `collect is in block ${b}, more than ${COLLECT_MAX_AGE_BLOCKS} blocks (about 27 days) before the chain head; it is as old as a job that may already have been pruned, so it cannot be told from a replayed receipt; the leg is held and reported (not unattributed, other collects go on) until an operator resolves it`;
   return null;
 }
 
@@ -564,7 +586,9 @@ function readSweepState(file, fsm = fs) {
     const hit = jobHashes(job).find((h) => retiredHas(retired, h));
     if (hit) return corrupt(`jobs[${i}] uses ${hit}, a hash retired with a pruned job`);
   }
-  return { ok: true, ledger: { jobs: j.jobs, retired } };
+  const future = j.jobs.filter((job) => typeof job.finishedAt === "number" && job.finishedAt > Date.now() + FINISHED_SKEW_MS).length;
+  const warnings = future ? [`clock skew: ${future} job(s) have a finishedAt more than 10 minutes in the future (the clock stepped back?); they count as finished now and are not pruned early`] : [];
+  return { ok: true, ledger: { jobs: j.jobs, retired }, warnings };
 }
 
 const legTerminal = (l) => TERMINAL_PHASES.includes(l.phase);
@@ -578,13 +602,18 @@ function jobTerminal(job) {
  * collect block raises retired.collectBlock for its position, and the list is cut to MAX_RETIRED_HASHES (oldest first, raising retired.floor).
  * Pure and idempotent: it starts from ledger.retired as loaded, so saving the same in-memory ledger twice gives the same text.
  */
-function serializeSweepState(ledger, nowMs = Date.now()) {
+function serializeSweepState(ledger, nowMs = Date.now(), head = null) {
   const all = ledger.jobs || [];
-  const keep = (j) => !jobTerminal(j) || (j.finishedAt ?? j.createdAt) > nowMs - KEEP_TERMINAL_MS;
+  // Low-2: pruning needs the clock AND the chain to agree. Without a known head nothing is pruned (fail closed); a job whose end block is
+  // unknown (nothing mined to replay) is judged by the clock alone.
+  const h = Number(head);
+  const chainOld = (j) => { if (!Number.isSafeInteger(h) || h <= 0) return false; const b = jobEndBlock(j); return b > 0 ? h - b >= KEEP_TERMINAL_BLOCKS : true; };
+  const endedAt = (j) => Math.min(j.finishedAt ?? j.createdAt, nowMs); // a future finishedAt counts as now: never pruned early
+  const keep = (j) => !jobTerminal(j) || endedAt(j) > nowMs - KEEP_TERMINAL_MS || !chainOld(j);
   const jobs = all.filter(keep);
   const r = normRetired(ledger.retired);
   const known = new Set(r.hashes.map((e) => e.hash));
-  const pruned = all.filter((j) => !keep(j)).sort((a, b) => (a.finishedAt ?? a.createdAt) - (b.finishedAt ?? b.createdAt));
+  const pruned = all.filter((j) => !keep(j)).sort((a, b) => endedAt(a) - endedAt(b));
   for (const j of pruned) {
     const block = jobEndBlock(j);
     for (const h of jobHashes(j)) if (!known.has(h)) { known.add(h); r.hashes.push({ hash: h, block }); }
@@ -621,6 +650,6 @@ function initSweepStateFile(file, fsm = fs) {
 module.exports = {
   CHAIN_ID, ERC6551_REGISTRY, VAULT_IMPLEMENTATIONS, USDC, USDC_DECIMALS, ROUTER, QUOTER, FACTORY, ROUTES, OPS, PHASES, TERMINAL_PHASES, GAS_CEILINGS, NUMBERS, SWEEP_STATE_VERSION, MAX_UINT256, ERC20_IFACE, ROUTER_IFACE,
   config, limitOverrides, routeFor, midOut, afterFee, impactBps, minOutOf, usdcRaw, fmtUsdc, decideSwap, twapTick, split, vaultPct, calldata, assertSignableSweep,
-  MAX_RETIRED_HASHES, MAX_RETIRED_POSITIONS, MAX_TRANSFERS_PER_LEG, COLLECT_MAX_AGE_BLOCKS, ledgerAheadProblem, collectAgeProblem, emptyRetired, posKey, retiredHas, jobHashes, receiptReplayProblem, collectReplayProblem,
+  MAX_RETIRED_HASHES, MAX_RETIRED_POSITIONS, MAX_TRANSFERS_PER_LEG, COLLECT_MAX_AGE_BLOCKS, COLLECT_WARN_BLOCKS, KEEP_TERMINAL_BLOCKS, HEAD_SLACK_BLOCKS, FINISHED_SKEW_MS, ledgerAheadProblem, collectAgeProblem, collectAgeWarning, emptyRetired, posKey, retiredHas, jobHashes, receiptReplayProblem, collectReplayProblem,
   opCount24h, txCapCheck, readSweepState, serializeSweepState, initSweepStateFile, jobTerminal, legTerminal, jobProblem, eq, addr,
 };

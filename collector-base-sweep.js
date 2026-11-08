@@ -26,7 +26,7 @@ const MGR_ABI = ["function ownerOf(uint256) view returns (address)", "function p
 const REGISTRY_ABI = ["function account(address implementation, bytes32 salt, uint256 chainId, address tokenContract, uint256 tokenId) view returns (address)"];
 const TBA_ABI = ["function token() view returns (uint256, address, uint256)", "function owner() view returns (address)"];
 const NFT_ABI = ["function ownerOf(uint256) view returns (address)"];
-const COLLECT_TOPICS = [ethers.id("Collect(uint256,address,uint256,uint256)"), ethers.id("Collect(uint256,address,uint128,uint128)")];
+const COLLECT_TOPICS = [ethers.id("Collect(uint256,address,uint256,uint256)")];
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 const COLLECT_ID = ethers.AbiCoder.defaultAbiCoder();
 
@@ -282,12 +282,18 @@ function create(env) {
       if (!save()) return false;
       const r = await sendTransfer(job, leg, token, vaultTba, toVault, recipients, kind);
       if (r.ok) { credit(toVault); amount -= toVault; leg.vault = { to: vaultTba, raw: toVault.toString(), tx: r.hash }; report.deliveredUsdcRaw += toVault; log(`  delivered ${fmt(token, toVault)} to the vault ${vaultTba} (tx ${r.hash})`); save(); }
-      else {
+      else if (r.reverted) {
         leg.vault = { to: vaultTba, raw: "0", failed: true };
-        log(`  VAULT transfer failed (${r.reverted ? "reverted" : r.reason || "not mined"}); the owner gets the full remaining amount`);
+        log("  VAULT transfer failed (reverted); the owner gets the full remaining amount");
         report.vault.push("vault transfer failed; owner received everything");
-        if (r.blocked && halted()) return false;
         save();
+      } else {
+        // Blocked or unknown (no receipt): the vault transfer may still land. Nothing more is sent for this leg; the pending
+        // intent (if one was signed) is resolved from the chain at the next run start, and the owner gets only the remainder.
+        log(`  VAULT transfer not confirmed (${r.reason || "no receipt"}); nothing more is sent for this leg this run, resolved at the next run start`);
+        report.vault.push("vault transfer unconfirmed; resolved next run");
+        save();
+        return false;
       }
       if (halted()) return false;
     }
@@ -398,6 +404,8 @@ function create(env) {
     if (halted()) return false;
     if (d.swap) return trySwap(job, leg, amount, d);
     if (!d.usdc) {
+      if (leg.phase === "approved" && !(await resetAllowance(job, leg, "no swap"))) return false;
+      if (leg.phase === "approved") { leg.phase = "collected"; if (!save()) return false; }
       log(`  ${symbolOf(leg.token)} ${fmt(leg.token, amount)} delivered unswapped: ${d.reason}`);
       report.unswapped.push({ token: symbolOf(leg.token), reason: d.reason });
     }
@@ -496,16 +504,23 @@ function create(env) {
 
   // ---- recovery (D10) -------------------------------------------------------------------------------------------------
   /** What became of a pending tx: { state:"mined", receipt } | { state:"void", why } | { state:"waiting", why }. */
-  async function resolve(p) {
-    const entry = p.tx ? env.findGasEntry(p.tx) : null;
-    if (!p.tx || !entry) return { state: "void", why: "the intent has no gas reservation: it was never broadcast" };
+  async function resolve(p, expectTo) {
+    if (!p.tx) return { state: "void", why: "the intent has no transaction hash: it was never signed" };
+    const entry = env.findGasEntry(p.tx);
+    // The receipt is asked for first, whether or not the gas entry still exists (entries are pruned after 7 days).
     let rc = null;
     try { rc = (await provider.getTransactionReceipt(p.tx)) || null; } catch (err) { return { state: "waiting", why: `receipt lookup failed (${short(err)})` }; }
     if (rc) {
-      const bad = base.checkReceipt(rc, { hash: p.tx, operator, entry, allowedTo: [entry.to] });
+      if (entry && expectTo && !eq(entry.to, expectTo)) return { state: "waiting", why: `receipt rejected (the recorded target ${entry.to} is not the expected ${expectTo})` };
+      const target = entry ? entry.to : expectTo;
+      if (!target) return { state: "waiting", why: "receipt rejected (no expected target to check it against)" };
+      // Without a gas entry the receipt is checked against the operator and the op's target, with the Base block gas limit as the bound.
+      const ref = entry || { from: operator, to: target, gasLimit: "30000000" };
+      const bad = base.checkReceipt(rc, { hash: p.tx, operator, entry: ref, allowedTo: [target] });
       if (bad) return { state: "waiting", why: `receipt rejected (${bad})` };
       return { state: "mined", receipt: rc };
     }
+    if (!entry) return { state: "void", why: "the intent has no gas reservation: it was never broadcast" };
     try {
       const latest = Number(await provider.getTransactionCount(operator, "latest"));
       if (latest > p.nonce) return { state: "void", why: `nonce ${p.nonce} is used by another transaction and there is no receipt` };
@@ -516,7 +531,7 @@ function create(env) {
   async function recoverJob(job) {
     if (job.collect.status === "unattributed") { report.unattributed.push(`#${job.tokenId}`); return; }
     if (job.pending) {
-      const r = await resolve(job.pending);
+      const r = await resolve(job.pending, job.manager);
       if (r.state === "mined") {
         if (r.receipt.status === 0) { job.pending = null; job.collect.status = "reverted"; mark(job); save(); log(`  recovery: collect of #${job.tokenId} reverted`); }
         else { log(`  recovery: collect of #${job.tokenId} was mined; attributing from its receipt`); await attribute(job, r.receipt); }
@@ -527,7 +542,7 @@ function create(env) {
     for (const leg of job.legs) {
       if (!leg.pending) continue;
       const p = leg.pending;
-      const r = await resolve(p);
+      const r = await resolve(p, p.op === "swap" ? S.ROUTER : (p.op === "transfer" && p.kind === "proceeds" ? S.USDC : leg.token));
       if (r.state === "waiting") { log(`  recovery: ${p.op} of ${symbolOf(leg.token)} (#${job.tokenId}) waits (${r.why}); the leg is skipped this run`); continue; }
       if (r.state === "void") { leg.pending = null; save(); log(`  recovery: ${p.op} intent of ${symbolOf(leg.token)} (#${job.tokenId}) voided (${r.why}); re-evaluated from balances`); continue; }
       const ok = r.receipt.status !== 0;
@@ -549,6 +564,7 @@ function create(env) {
           else leg.doneRaw = (BigInt(leg.doneRaw) + raw).toString();
           leg.deliver = { to: p.to, raw: raw.toString(), tx: p.tx };
         } else if (eq(p.to, job.owner)) leg.tAttempts = (leg.tAttempts || 0) + 1;
+        else if (leg.vault === undefined || (leg.vault && !leg.vault.tx)) leg.vault = { to: p.to, raw: "0", failed: true };
       }
       save();
       log(`  recovery: ${p.op} of ${symbolOf(leg.token)} (#${job.tokenId}) ${ok ? "succeeded" : "reverted"}; leg is ${leg.phase}`);
@@ -593,7 +609,9 @@ function create(env) {
     const withVault = vault.ok && vault.pct > 0 ? 1 : 0;
     const ops = [];
     for (const l of legs) {
-      if (l.d.swap) ops.push("approve-reset", "approve", "swap", "approve-reset", "transfer", ...(withVault ? ["transfer"] : []));
+      // Budgeted for the whole chain whenever a route exists and is enabled: the decision can flip between the plan and the collect.
+      const routeOpen = !l.d.usdc && !!(l.d.swap || (l.d.route && S.routeFor(sw, l.token)));
+      if (routeOpen) ops.push("approve-reset", "approve", "swap", "approve-reset", "transfer", ...(withVault ? ["transfer"] : []));
       else ops.push("transfer");
     }
     return { tokens: [t0, t1], legs, vault, owner, ops };

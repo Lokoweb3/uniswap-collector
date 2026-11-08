@@ -967,11 +967,11 @@ outside the hard bounds are clamped and logged): `slippageBps` (50, max 100), `m
 active; `maxGasPriceGwei` and the tip cap stay as in `baseCollect`), `maxGasLimitByOp` (collect 500000, approve 100000, swap 350000, transfer 120000; settings can only lower them),
 and `routes.<WETH|cbBTC|LAPTOP>.enabled` (may only be set to `false`). `maxCollectsPerRun` still counts collects only. A gas estimate above an op's ceiling means skip, never clamp.
 - **held**: the on-chain owner is not the owner recorded at collect time (sold, staked into a gauge, transferred), is the operator or is the zero address, or the operator
-  balance is lower than the attributed amount. Nothing is sent, the leg is reported (log, Telegram, exit code 1) and retried every run; it resumes when the owner is back.
+  balance of the token is 0 while an amount is still attributed (a smaller non-zero balance delivers min(owed, balance) and the rest follows when it arrives). Nothing is sent, the leg is reported (log, Telegram, exit code 1) and retried every run; it resumes when the owner is back.
 - **stuck**: the transfer to the owner reverted `maxAttemptsPerLeg` times. Reported every run (Telegram, exit code 1), never redirected to anyone else, and new collects are blocked
   until you resolve it. After `maxAttemptsPerLeg` reverting swaps the token is delivered unswapped instead.
 - **unattributed**: the collect mined but its amounts cannot be read from the receipt or the pre-signing simulation: nothing is sent and no new collect starts.
-- **pending**: a transaction without a receipt and with an unused nonce waits; with a used nonce and no receipt (or an intent that was never reserved) it is voided and the leg is
+- **pending**: a transaction without a receipt and with an unused nonce waits; with a used nonce and no receipt (or an intent that was never reserved and has no receipt) it is voided and the leg is
   re-evaluated from the balance, clamped to the attributed amount. Recovery runs before any new collect, also when `enabled` was turned off in the meantime (no new job starts).
   `sweep-state.json` terminal jobs are kept 30 days. Do not hand-edit it.
 

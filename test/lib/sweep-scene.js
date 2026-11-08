@@ -99,6 +99,7 @@ function sweepScene(o = {}) {
   w.receipts = (hash) => S.mined.get(hash) || null;
 
   // ---- the chain's reaction to a broadcast
+  S.reveal = (hash) => { S.mined.set(hash, S.hidden.get(hash)); };
   S.txs = []; // every mined tx, decoded
   S.hooks = []; // fn(parsed, result) called after every mined tx took effect
   S.effect = (parsed) => { const r = S.rawEffect(parsed); for (const h of S.hooks) h(parsed, r); return r; };
@@ -157,6 +158,10 @@ function sweepScene(o = {}) {
       const rc = { hash: parsed.hash, from: parsed.from, to: parsed.to, blockNumber: 5, status, gasUsed: (parsed.gasLimit * 4n) / 5n, gasPrice: 50_000_000n, logs };
       S.mined.set(parsed.hash, rc);
       S.txs.push({ ...s.sent[s.sent.length - 1], status });
+      if (opt.revertNoReceipt && opt.revertNoReceipt(parsed)) { // the wait fails revert-class and the receipt cannot be found now; S.mined gets it when S.reveal(hash) runs
+        S.mined.delete(parsed.hash); S.hidden = S.hidden || new Map(); S.hidden.set(parsed.hash, rc);
+        return { hash: parsed.hash, wait: async () => { const e = new Error("execution reverted"); e.code = "CALL_EXCEPTION"; throw e; } };
+      }
       if (opt.dropReceipt && opt.dropReceipt(parsed)) return { hash: parsed.hash, wait: () => new Promise(() => {}) }; // mined, but the process never saw it
       return { hash: parsed.hash, wait: async () => (opt.receiptTweak ? opt.receiptTweak(rc, parsed) || rc : rc) };
     };

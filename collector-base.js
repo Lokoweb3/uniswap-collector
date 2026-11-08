@@ -18,8 +18,11 @@
  *      gas per run, rolling 24 h, all against the worst case signed), re-read ownerOf, reserve the worst case in
  *      state.json, then sign, record the hash and nonce, and only then broadcast
  *      collect({tokenId, recipient: owner, amount0Max: MAX, amount1Max: MAX}).
- * Collect only. The recipient is always the NFT's owner. Nothing in this file requests, sets or changes an
- * approval, moves an NFT or touches a token balance; the manager ABI below has exactly three functions (plus one read-only oracle fragment).
+ * The collect is the only call this file builds against a position manager. With baseSweep.enabled false (the default) the
+ * recipient is always the NFT's owner. With baseSweep.enabled true the collect recipient is the OPERATOR and the fees are then
+ * converted and delivered to the owner by collector-base-sweep.js (its own allowlisted calls and ledger, sweep-state.json);
+ * nothing in this file requests or changes an approval of the NFT or moves an NFT. The manager ABI below has exactly three
+ * functions (plus one read-only oracle fragment).
  *
  * simulate: reads only. No signer is created and no keystore is decrypted (the operator address comes from the
  * keystore's public `address` field, as server.js does). collect: the keystore is decrypted only when the first
@@ -169,7 +172,8 @@ async function runPass(deps) {
   for (const o of all) if (!o.enabled) log(`- ${o.label} (${o.address}): collect is not enabled (collect:false); skipped, nothing read or sent`);
   const { used: managers, refused } = logic.managers(cfg);
   for (const r of refused) log(`- manager ${r} is not on the allowlist; ignored`);
-  if (!enabled.length) {
+  // With a sweep ledger on disk the open legs of earlier jobs are still finished, even if no wallet collects any more.
+  if (!enabled.length && !(deps.sweepIo && deps.sweepIo.exists())) {
     log("no wallet has collect:true; nothing to do");
     log(`=== base done: 0 collected, 0 skipped, gas 0.0 ETH ===`);
     return result;
@@ -239,17 +243,15 @@ async function runPass(deps) {
     }
   }
 
-  let feeData = {};
-  try { feeData = (await provider.getFeeData()) || {}; } catch { /* the tip hint is optional */ }
-  log(`Fee policy: signed maxFeePerGas = min(${lim.maxGasPriceGwei} gwei, 2 x block base fee + tip), tip <= ${lim.maxPriorityFeeGwei} gwei, gasLimit <= ${lim.maxGasLimit}`);
-  const ethUsd = await deps.getEthUsd();
-  if (!(ethUsd > 0)) {
-    log("ETH/USD is unavailable; every position is skipped (fail closed)");
+  if (!enabled.length && !(sweep && sweepActive)) {
+    log("no wallet has collect:true; nothing to do");
     log(`=== base done: 0 collected, 0 skipped, gas 0.0 ETH ===`);
     return result;
   }
 
-  const readers = deps.readers || makeReaders(deps);
+  let feeData = {};
+  try { feeData = (await provider.getFeeData()) || {}; } catch { /* the tip hint is optional */ }
+  log(`Fee policy: signed maxFeePerGas = min(${lim.maxGasPriceGwei} gwei, 2 x block base fee + tip), tip <= ${lim.maxPriorityFeeGwei} gwei, gasLimit <= ${lim.maxGasLimit}`);
   const contracts = new Map(managers.map((m) => [m.positionManager, new ethers.Contract(m.positionManager, MANAGER_ABI, provider)]));
   const oracle = new ethers.Contract(logic.L1_ORACLE, ORACLE_ABI, provider);
   let signer = null, signerError = null;
@@ -262,6 +264,13 @@ async function runPass(deps) {
 
   let txCount = 0;
   const stopRun = (msg) => { log(`STOP: ${msg}; nothing more is sent this run`); result.aborted = true; };
+
+  const finishSweep = async () => {
+    if (!(sweep && sweepActive)) return;
+    log(sweep.summaryLine(result.spentWei));
+    result.sweep = { problems: sweep.problems(), report: sweep.report };
+    await notifySafe(sweep.summaryText(result.spentWei, result.aborted));
+  };
 
   /**
    * Every transaction of this pass goes through here: the last look (assertSignable for the collect, assertSignableSweep for the
@@ -443,10 +452,20 @@ async function runPass(deps) {
 
   // Recovery first: finish the legs of earlier jobs from the ledger and the chain, before any new collect (also when the flag was turned off since).
   if (sweep && sweepActive && !simulate) {
-    await sweep.recover({ resetAllowances: swCfg.enabled });
+    await sweep.recover({ resetAllowances: true });
   } else if (sweep && sweepActive && simulate) {
     for (const j of sweep.openJobs()) for (const l of j.legs) log(`sweep resume plan: #${j.tokenId} ${sweepMod.symbolOf(l.token)} is ${l.phase}${l.pending ? ` (pending ${l.pending.op} ${l.pending.tx || ""})` : ""}; the next collect run continues it`);
   }
+
+  // ETH/USD is needed to price a collect, not to finish earlier legs; the check sits after the recovery.
+  const ethUsd = await deps.getEthUsd();
+  if (!(ethUsd > 0)) {
+    log("ETH/USD is unavailable; every position is skipped (fail closed)");
+    await finishSweep();
+    log(`=== base done: 0 collected, 0 skipped, gas 0.0 ETH ===`);
+    return result;
+  }
+  const readers = deps.readers || makeReaders(deps);
 
   outer:
   if (!result.aborted) for (const owner of enabled) {
@@ -496,7 +515,8 @@ async function runPass(deps) {
         } catch (err) { skip(null, `gas estimate failed (${short(err)})`); continue; }
         if (typeof units !== "bigint") { skip(null, "gas estimate is not a number (fail closed)"); continue; }
         if (!(units > 0n)) units = GAS_UNITS_FALLBACK;
-        const maxGasLimit = BigInt(lim.maxGasLimit);
+        // With the sweep active the collect is also held to its own per-operation ceiling (settings.baseSweep.maxGasLimitByOp.collect).
+        const maxGasLimit = BigInt(sweepActive && lim.maxGasLimitByOp && lim.maxGasLimitByOp.collect ? Math.min(Number(lim.maxGasLimit), Number(lim.maxGasLimitByOp.collect)) : lim.maxGasLimit);
         if (units > maxGasLimit) { skip(null, `gas estimate ${units} exceeds maxGasLimit ${maxGasLimit}`); continue; }
         const scaled = (units * 125n) / 100n;
         const gasLimit = scaled < maxGasLimit ? scaled : maxGasLimit;
@@ -566,11 +586,7 @@ async function runPass(deps) {
       }
     }
   }
-  if (sweep && sweepActive) {
-    log(sweep.summaryLine(result.spentWei));
-    result.sweep = { problems: sweep.problems(), report: sweep.report };
-    await notifySafe(sweep.summaryText(result.spentWei, result.aborted));
-  }
+  await finishSweep();
   done();
   return result;
 }

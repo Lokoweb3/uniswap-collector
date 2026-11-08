@@ -165,6 +165,23 @@ const url = (q = "") => new URL(`http://x/page${q}`);
     assert.strictEqual(get.status, 200, "a cross-site GET is still served");
   }
 
+  // ---- the ?chain= redirect never leaves the origin ---------------------------
+  {
+    const rawGet = (path) => new Promise((res) => {
+      http.get({ host: "127.0.0.1", port, path }, (r) => { r.resume(); res({ status: r.statusCode, loc: r.headers.location }); });
+    });
+    for (const p of ["/.//evil.example?chain=robinhood", "//evil?chain=arc", "/\\evil?chain=arc", "/.//\\evil?chain=arc",
+      "/%2Fevil?chain=arc", "/%5Cevil?chain=arc", "/.//%2Fevil?chain=arc", "/%2F%5Cevil?chain=arc", "/./\\/evil.example?chain=arc&x=1"]) {
+      const r = await rawGet(p);
+      assert.strictEqual(r.status, 302, p);
+      assert.ok(typeof r.loc === "string" && r.loc.startsWith("/") && !/^\/[/\\]/.test(r.loc), `${p} -> ${r.loc}`);
+      assert.ok(!r.loc.includes("chain="), `${p} -> ${r.loc}`);
+    }
+    assert.strictEqual((await rawGet("/.//evil.example?chain=robinhood")).loc, "/evil.example");
+    assert.strictEqual((await rawGet("/.//evil.example?chain=arc&x=1")).loc, "/evil.example?x=1");
+    assert.strictEqual((await rawGet("/page?chain=arc&y=2")).loc, "/page?y=2", "ordinary redirects are unchanged");
+  }
+
   // ---- every chain's vault, side by side, never summed ------------------------
   {
     const all = await get("/api/vaults");

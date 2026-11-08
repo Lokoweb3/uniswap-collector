@@ -359,7 +359,10 @@ const server = http.createServer((req, res) => {
     url.searchParams.delete("chain");
     res.writeHead(302, {
       "Set-Cookie": `${COOKIE}=${chain.key}; Path=/; SameSite=Lax`,
-      Location: url.pathname + (url.search || ""),
+      // Same-origin path only: dot-segment removal turns "/.//evil.example" into
+      // "//evil.example", which a browser follows to another site. Strip every leading
+      // slash and backslash, then put back exactly one.
+      Location: "/" + url.pathname.replace(/^[/\\]+/, "") + (url.search || ""),
     });
     return res.end();
   }

@@ -106,8 +106,12 @@ async function verifyVault(provider, sw, ctx = {}) {
   if (v.tba === null) return no("vault.tba not set", false);
   const tba = S.addr(v.tba);
   if (!tba) return no("vault.tba is not an address");
-  const need = { nft: S.addr(v.nft), implementation: S.addr(v.implementation), registry: S.addr(v.registry), expectedOwner: S.addr(v.expectedOwner) };
+  // The registry is the hard-coded canonical ERC-6551 registry; a settings value that differs is refused, never used.
+  if (v.registry !== null && v.registry !== undefined && v.registry !== "" && !eq(v.registry, S.ERC6551_REGISTRY)) return no(`vault.registry ${v.registry} is not the canonical ERC-6551 registry ${S.ERC6551_REGISTRY}`);
+  const need = { nft: S.addr(v.nft), implementation: S.addr(v.implementation), registry: S.ERC6551_REGISTRY, expectedOwner: S.addr(v.expectedOwner) };
   for (const [k, a] of Object.entries(need)) if (!a) return no(`vault.${k} is not an address`);
+  if (!S.VAULT_IMPLEMENTATIONS.some((i) => eq(i, need.implementation))) return no(`vault.implementation ${need.implementation} is not in the code allowlist of ERC-6551 implementations (empty by default); the vault cannot verify`);
+  if (!(ctx.owners || []).some((o) => eq(o, need.expectedOwner))) return no(`vault.expectedOwner ${need.expectedOwner} is not one of the configured owner addresses`);
   let tokenId;
   try { tokenId = BigInt(v.tokenId); if (tokenId < 0n) throw new Error("negative"); } catch { return no("vault.tokenId is not a non-negative integer"); }
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(v.salt))) return no("vault.salt is not a bytes32");
@@ -135,12 +139,15 @@ async function verifyVault(provider, sw, ctx = {}) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 /**
- * env = { sw, provider, operator, log, now, io:{exists,read,save}|null, send(op, {to,data,label}, expect, onSigned) -> {outcome,receipt,hash,reason,kind},
+ * env = { sw, provider, operator, log, now, io:{exists,read,save}|null, owners:[configured owner address addresses], send(op, {to,data,label}, expect, onSigned) -> {outcome,receipt,hash,reason,kind},
  *         halted() -> bool, findGasEntry(hash) -> entry|null, notify|null }
  * send outcomes: "ok" | "reverted" | "skip" (nothing broadcast; kind "cap" for a cap) | "unknown" (broadcast, outcome unknown) | "stop".
  */
 function create(env) {
   const { sw, provider, operator, log, now, io } = env;
+  const owners = Array.isArray(env.owners) ? env.owners : [];
+  const ownerConfigured = (a) => owners.some((o) => eq(o, a));
+  const collectChecks = new Map(); // job.id -> { amounts, tokens } read back from the chain this run
   let ledger = { jobs: [] };
   let ledgerBroken = false;
   const report = { positions: 0, deliveredUsdcRaw: 0n, unswapped: [], stuck: [], held: [], unattributed: [], vault: [], pending: 0, refused: null, txs: 0 };
@@ -184,6 +191,7 @@ function create(env) {
   /** Why no new collect may start, or null. */
   function blocker() {
     for (const j of ledger.jobs) {
+      if (!S.jobTerminal(j) && !ownerConfigured(j.owner)) return `job ${j.id} names an owner that is not a configured owner address`;
       if (j.collect.status === "unattributed") return `job ${j.id} is unattributed`;
       if (j.legs.some((l) => l.phase === "stuck")) return `job ${j.id} has a stuck leg`;
       if (j.legs.some((l) => l.unattributed)) return `job ${j.id} has an unattributed leg`;
@@ -193,6 +201,7 @@ function create(env) {
 
   // ---- reading helpers -------------------------------------------------------------------------------------------
   async function ownerCheck(job) {
+    if (!ownerConfigured(job.owner)) return { ok: false, reason: `the ledger owner ${job.owner} is not a configured owner address (tampered or stale ledger)` };
     try {
       const o = await new ethers.Contract(job.manager, MGR_ABI, provider).ownerOf(BigInt(job.tokenId));
       if (!o || eq(o, ZERO)) return { ok: false, reason: "ownerOf is the zero address" };
@@ -210,8 +219,9 @@ function create(env) {
 
   // ---- transactions ----------------------------------------------------------------------------------------------
   /** Send one sweep tx; the pending intent goes to the ledger between signing and the gas reservation. */
-  async function sendOp(holder, op, spec, expect, extra = {}) {
+  async function sendOp(holder, op, spec, expect, extra = {}, whenSigned = null) {
     const onSigned = ({ hash, nonce }) => {
+      if (whenSigned) whenSigned();
       holder.pending = { op, tx: hash, nonce, ...extra };
       if (!save()) { holder.pending = null; throw new Error("the sweep ledger cannot be written"); }
     };
@@ -230,6 +240,16 @@ function create(env) {
     return false;
   }
 
+  /** A leg whose outcome cannot be established from the chain: held and unattributed. It blocks new collects and is never resent. */
+  function unattribute(job, leg, reason) {
+    if (leg.phase !== "held") leg.heldFrom = leg.phase;
+    leg.phase = "held"; leg.unattributed = true; leg.reason = reason; leg.pending = null;
+    report.unattributed.push(`#${job.tokenId} ${symbolOf(leg.token)}: ${reason}`);
+    log(`  UNATTRIBUTED ${symbolOf(leg.token)} of #${job.tokenId}: ${reason}; nothing is resent`);
+    save();
+    return false;
+  }
+
   async function releaseHeld(job, leg) {
     const o = await ownerCheck(job);
     if (!o.ok) { log(`  HELD ${symbolOf(leg.token)} of #${job.tokenId}: ${o.reason}; still nothing sent`); report.held.push(`#${job.tokenId} ${symbolOf(leg.token)}: ${o.reason}`); return false; }
@@ -238,18 +258,20 @@ function create(env) {
   }
 
   /** transfer(to, amount) of `token` to a verified recipient; credits nothing (the caller does). { ok } | { reverted } | { blocked }. */
-  async function sendTransfer(job, leg, token, to, amount, recipients, kind) {
-    let before = null;
-    try { before = await balanceOf(token); } catch { before = null; }
-    const r = await sendOp(leg, "transfer", { to: token, data: S.calldata.transfer(to, amount), label: `#${job.tokenId} transfer ${fmt(token, amount)} to ${to}` }, { token, legTokens: [token], amount, recipients, operator }, { raw: amount.toString(), to, kind });
+  async function sendTransfer(job, leg, token, to, amount, recipients, kind, whenSigned = null) {
+    const r = await sendOp(leg, "transfer", { to: token, data: S.calldata.transfer(to, amount), label: `#${job.tokenId} transfer ${fmt(token, amount)} to ${to}` }, { token, legTokens: [token], amount, recipients, operator }, { raw: amount.toString(), to, kind }, whenSigned);
     if (r.outcome === "ok") {
-      let after = null;
-      try { after = await balanceOf(token); } catch { after = null; }
       clearPending(leg);
+      // The balances are read AT the receipt's block (before = the block before it), so a lagging RPC "latest" cannot fake a failure.
+      const bn = r.receipt && Number.isSafeInteger(Number(r.receipt.blockNumber)) && Number(r.receipt.blockNumber) > 0 ? Number(r.receipt.blockNumber) : null;
+      let before = null, after = null;
+      if (bn !== null) {
+        try { before = await erc20(token).balanceOf(operator, { blockTag: bn - 1 }); after = await erc20(token).balanceOf(operator, { blockTag: bn }); } catch { before = null; after = null; }
+      }
       if (before !== null && after !== null && after > before - amount) {
-        log(`  ! transfer of ${fmt(token, amount)} to ${to} was mined but the operator balance did not fall by the amount (${before} -> ${after}); not counted as delivered`);
-        save();
-        return { reverted: true };
+        // Mined successfully but the balance did not fall: NOT a revert, NOT retried. The leg is held and unattributed; nothing is resent.
+        log(`  ! transfer of ${fmt(token, amount)} to ${to} (tx ${r.hash}) was mined but the operator balance did not fall by the amount at block ${bn} (${before} -> ${after})`);
+        return { unattributed: true, hash: r.hash, reason: `transfer ${r.hash} mined but the operator balance did not fall by the amount` };
       }
       leg.deliver = { to, raw: amount.toString(), tx: r.hash };
       return { ok: true, hash: r.hash };
@@ -272,15 +294,15 @@ function create(env) {
     if (amount <= 0n) return hold(job, leg, `operator balance of ${symbolOf(token)} is 0 but ${wanted} raw remain attributed`);
     let vaultTba = null, toVault = 0n;
     if (splitAllowed && !leg.vaultTried) {
-      const v = await verifyVault(provider, sw, { operator, tokens: [leg.token] });
+      const v = await verifyVault(provider, sw, { operator, owners, tokens: [leg.token] });
       if (v.configured && !v.ok) { log(`  VAULT split refused: ${v.reason}; 100% goes to the owner`); report.vault.push(v.reason); }
       if (v.ok && v.pct > 0) { vaultTba = v.tba; toVault = S.split(amount, v.pct).toVault; }
     }
     const recipients = [o.owner, vaultTba].filter(Boolean);
     if (toVault > 0n) {
-      leg.vaultTried = true;
-      if (!save()) return false;
-      const r = await sendTransfer(job, leg, token, vaultTba, toVault, recipients, kind);
+      // vaultTried is set only once a signed intent exists (in onSigned): a transfer skipped before signing is retried next run.
+      const r = await sendTransfer(job, leg, token, vaultTba, toVault, recipients, kind, () => { leg.vaultTried = true; });
+      if (r.unattributed) return unattribute(job, leg, r.reason);
       if (r.ok) { credit(toVault); amount -= toVault; leg.vault = { to: vaultTba, raw: toVault.toString(), tx: r.hash }; report.deliveredUsdcRaw += toVault; log(`  delivered ${fmt(token, toVault)} to the vault ${vaultTba} (tx ${r.hash})`); save(); }
       else if (r.reverted) {
         leg.vault = { to: vaultTba, raw: "0", failed: true };
@@ -299,6 +321,7 @@ function create(env) {
     }
     if (amount <= 0n) return true;
     const r = await sendTransfer(job, leg, token, o.owner, amount, recipients, kind);
+    if (r.unattributed) return unattribute(job, leg, r.reason);
     if (r.ok) {
       credit(amount);
       if (S.eq(token, S.USDC)) report.deliveredUsdcRaw += amount;
@@ -403,6 +426,12 @@ function create(env) {
     else d = await decideLeg(provider, sw, leg.token, amount);
     if (halted()) return false;
     if (d.swap) return trySwap(job, leg, amount, d);
+    {
+      // Unswapped delivery is value-capped too. USDC is valued 1:1; a routed token by the pool mid price when the decision read one.
+      // A token with no price (no route) is capped only by the Collect receipt amount (owedRaw <= Collect event, checked before the first send).
+      const value = d.usdc ? amount : (typeof d.mid === "bigint" ? d.mid : null);
+      if (value !== null && value > S.usdcRaw(sw.maxUnswappedValueUsdc)) return hold(job, leg, `unswapped value ${S.fmtUsdc(value)} USDC is above maxUnswappedValueUsdc ${sw.maxUnswappedValueUsdc}`);
+    }
     if (!d.usdc) {
       if (leg.phase === "approved" && !(await resetAllowance(job, leg, "no swap"))) return false;
       if (leg.phase === "approved") { leg.phase = "collected"; if (!save()) return false; }
@@ -422,12 +451,43 @@ function create(env) {
     return ok && leg.phase !== "held" && leg.phase !== "stuck";
   }
 
+  /**
+   * The ledger is not trusted: before a leg's first send its owed amount must not exceed what the job's own Collect receipt paid to the
+   * operator for that token (manager, topic, tokenId and recipient parsed from the chain), and the token must be one of the position's.
+   * Returns a reason string (refuse, fail closed) or null. Read once per job per run.
+   */
+  async function verifyAgainstCollect(job, leg) {
+    if (!ownerConfigured(job.owner)) return `the ledger owner ${job.owner} is not a configured owner address (tampered ledger)`;
+    let c = collectChecks.get(job.id);
+    if (!c) {
+      try {
+        if (!job.collect || typeof job.collect.tx !== "string") throw new Error("the job has no collect transaction");
+        const rc = await provider.getTransactionReceipt(job.collect.tx);
+        if (!rc) throw new Error("the collect receipt cannot be found");
+        if (rc.status === 0) throw new Error("the collect receipt shows a revert");
+        if (rc.to && !eq(rc.to, job.manager)) throw new Error(`the collect receipt target ${rc.to} is not the manager`);
+        if (rc.from && !eq(rc.from, operator)) throw new Error(`the collect receipt sender ${rc.from} is not the operator`);
+        const amounts = parseCollect(rc, job);
+        if (!amounts) throw new Error("the collect receipt has no Collect event for this position paying the operator");
+        c = { amounts, tokens: await positionTokens(job.manager, job.tokenId) };
+      } catch (err) { return `the ledger amounts cannot be checked against the collect receipt (${short(err)}); refusing`; }
+      collectChecks.set(job.id, c);
+    }
+    const i = c.tokens.findIndex((t) => eq(t, leg.token));
+    if (i < 0) return `${leg.token} is not a token of position #${job.tokenId}; refusing`;
+    // Token0 and token1 are distinct for a pool; the cap is the Collect amount of this token.
+    if (BigInt(leg.owedRaw) > c.amounts[i]) return `ledger owes ${leg.owedRaw} raw ${symbolOf(leg.token)} but the Collect receipt paid ${c.amounts[i]}; tampered ledger, refusing`;
+    return null;
+  }
+
   async function advanceLeg(job, leg) {
     for (let i = 0; i < 40 && !halted(); i++) {
       if (leg.pending) { report.pending++; return; }
       if (leg.unattributed) { report.unattributed.push(`#${job.tokenId} ${symbolOf(leg.token)} swap output`); log(`  UNATTRIBUTED ${symbolOf(leg.token)} of #${job.tokenId}: the swap output is unknown; nothing is sent`); return; }
       if (S.legTerminal(leg)) return;
       if (leg.phase === "stuck") { report.stuck.push(`#${job.tokenId} ${symbolOf(leg.token)}`); log(`  STUCK ${symbolOf(leg.token)} of #${job.tokenId}: transfer failed repeatedly; reported, never redirected`); return; }
+      const bad = await verifyAgainstCollect(job, leg);
+      if (bad) { if (leg.phase !== "held" || leg.reason !== bad) hold(job, leg, bad); else { report.held.push(`#${job.tokenId} ${symbolOf(leg.token)}: ${bad}`); log(`  HELD ${symbolOf(leg.token)} of #${job.tokenId}: ${bad}`); } return; }
       let go;
       if (leg.phase === "held") go = await releaseHeld(job, leg);
       else if (leg.phase === "swapped") go = await stepProceeds(job, leg);
@@ -468,18 +528,10 @@ function create(env) {
     }
     return null;
   }
-  /** Legs from the receipt's Collect event, else from the pre-signing amounts clamped to the operator balance, else unattributed. */
+  /** Legs from the receipt's Collect event; with no such event the job is unattributed (no fallback to simulated amounts). */
   async function attribute(job, receipt) {
-    let amounts = parseCollect(receipt, job);
-    let how = "Collect event";
-    if (!amounts) {
-      how = "simulated amounts clamped to the operator balance";
-      try {
-        const want = [BigInt(job.expect.a0), BigInt(job.expect.a1)];
-        const have = [await balanceOf(job.token0), await balanceOf(job.token1)];
-        amounts = [minB(want[0], have[0]), minB(want[1], have[1])];
-      } catch { amounts = null; }
-    }
+    const amounts = parseCollect(receipt, job);
+    const how = "Collect event";
     if (!amounts) { job.collect.status = "unattributed"; job.pending = null; log(`  ! #${job.tokenId}: the collected amounts cannot be attributed; nothing is sent, reported`); return save(); }
     job.collect.status = "mined"; job.pending = null; job.legs = [];
     [[job.token0, amounts[0]], [job.token1, amounts[1]]].forEach(([token, amt]) => {
@@ -505,7 +557,7 @@ function create(env) {
   // ---- recovery (D10) -------------------------------------------------------------------------------------------------
   /** What became of a pending tx: { state:"mined", receipt } | { state:"void", why } | { state:"waiting", why }. */
   async function resolve(p, expectTo) {
-    if (!p.tx) return { state: "void", why: "the intent has no transaction hash: it was never signed" };
+    if (!p.tx) return { state: "void", safe: true, why: "the intent has no transaction hash: it was never signed" };
     const entry = env.findGasEntry(p.tx);
     // The receipt is asked for first, whether or not the gas entry still exists (entries are pruned after 7 days).
     let rc = null;
@@ -520,15 +572,27 @@ function create(env) {
       if (bad) return { state: "waiting", why: `receipt rejected (${bad})` };
       return { state: "mined", receipt: rc };
     }
-    if (!entry) return { state: "void", why: "the intent has no gas reservation: it was never broadcast" };
+    if (!entry) return { state: "void", safe: true, why: "the intent has no gas reservation: it was never broadcast" };
     try {
       const latest = Number(await provider.getTransactionCount(operator, "latest"));
-      if (latest > p.nonce) return { state: "void", why: `nonce ${p.nonce} is used by another transaction and there is no receipt` };
+      if (latest > p.nonce) {
+        // A used nonce with no receipt is not proof of replacement: a lagging RPC may simply not have the receipt yet. Ask for the
+        // transaction itself; void only when neither the receipt nor the transaction is found on two separate runs.
+        if (typeof provider.getTransaction !== "function") return { state: "waiting", why: "the provider cannot look up transactions; waiting" };
+        let tx;
+        try { tx = (await provider.getTransaction(p.tx)) || null; } catch (err) { return { state: "waiting", why: `transaction lookup failed (${short(err)})` }; }
+        if (tx) { p.notFoundRuns = 0; return { state: "waiting", why: `nonce ${p.nonce} is used and transaction ${p.tx} is known to the node but its receipt is not available yet` }; }
+        p.notFoundRuns = (Number.isSafeInteger(p.notFoundRuns) ? p.notFoundRuns : 0) + 1;
+        save();
+        if (p.notFoundRuns >= 2) return { state: "void", why: `nonce ${p.nonce} is used by another transaction; neither a receipt nor the transaction was found on ${p.notFoundRuns} runs` };
+        return { state: "waiting", why: `nonce ${p.nonce} is used but neither a receipt nor the transaction was found (run ${p.notFoundRuns} of 2); waiting` };
+      }
     } catch (err) { return { state: "waiting", why: `nonce lookup failed (${short(err)})` }; }
     return { state: "waiting", why: `nonce ${p.nonce} is not used yet; the transaction is still pending` };
   }
 
   async function recoverJob(job) {
+    if (!ownerConfigured(job.owner)) { const m = `job ${job.id} names owner ${job.owner}, which is not a configured owner address (tampered or stale ledger)`; log(`  REFUSED: ${m}; nothing is sent for it`); report.held.push(m); return; }
     if (job.collect.status === "unattributed") { report.unattributed.push(`#${job.tokenId}`); return; }
     if (job.pending) {
       const r = await resolve(job.pending, job.manager);
@@ -544,7 +608,12 @@ function create(env) {
       const p = leg.pending;
       const r = await resolve(p, p.op === "swap" ? S.ROUTER : (p.op === "transfer" && p.kind === "proceeds" ? S.USDC : leg.token));
       if (r.state === "waiting") { log(`  recovery: ${p.op} of ${symbolOf(leg.token)} (#${job.tokenId}) waits (${r.why}); the leg is skipped this run`); continue; }
-      if (r.state === "void") { leg.pending = null; save(); log(`  recovery: ${p.op} intent of ${symbolOf(leg.token)} (#${job.tokenId}) voided (${r.why}); re-evaluated from balances`); continue; }
+      if (r.state === "void") {
+        // Never signed / never broadcast: nothing can have happened, re-evaluate. A swap or transfer that WAS broadcast but cannot be found
+        // is held + unattributed instead of being re-evaluated from balances (it might still land or already have landed).
+        if (!r.safe && (p.op === "swap" || p.op === "transfer")) { unattribute(job, leg, `${p.op} ${p.tx} has no receipt and is not found on the node (${r.why})`); continue; }
+        leg.pending = null; save(); log(`  recovery: ${p.op} intent of ${symbolOf(leg.token)} (#${job.tokenId}) voided (${r.why}); re-evaluated from balances`); continue;
+      }
       const ok = r.receipt.status !== 0;
       leg.pending = null;
       const raw = BigInt(p.raw || "0");
@@ -590,7 +659,7 @@ function create(env) {
   async function recover({ resetAllowances }) {
     for (const job of openJobs()) { if (halted()) return; await recoverJob(job); }
     if (resetAllowances) await resetStale();
-    for (const job of openJobs()) { if (halted()) return; await advanceJob(job); }
+    for (const job of openJobs()) { if (halted()) return; if (!ownerConfigured(job.owner)) continue; await advanceJob(job); }
   }
 
   // ---- plan (simulate and preflight) --------------------------------------------------------------------------------
@@ -603,7 +672,7 @@ function create(env) {
       const d = await decideLeg(provider, sw, token, BigInt(amt));
       legs.push({ token, amount: BigInt(amt), d });
     }
-    const vault = await verifyVault(provider, sw, { operator, tokens: [t0, t1] });
+    const vault = await verifyVault(provider, sw, { operator, owners, tokens: [t0, t1] });
     let owner = null;
     try { owner = await new ethers.Contract(manager, MGR_ABI, provider).ownerOf(BigInt(tokenId)); } catch { owner = null; }
     const withVault = vault.ok && vault.pct > 0 ? 1 : 0;

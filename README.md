@@ -961,7 +961,7 @@ all off. If a run is cut off after the collect, the next run finishes the job fr
 
 **Caps and what stuck / held means.** Every transaction (collect, approve, swap, approve-reset, transfer) goes through the same sign-first path as the collect: last
 look at the exact calldata, sign, record the intent in `sweep-state.json`, write the gas reservation to `state.json`, only then broadcast. Settings (all optional, values
-outside the hard bounds are clamped and logged): `slippageBps` (50, max 100), `maxPriceImpactBps` (100, max 300), `maxSwapValueUsdc` (250, max 1000), `minSwapValueUsdc` (1),
+outside the hard bounds are clamped and logged): `slippageBps` (50, max 100), `maxPriceImpactBps` (100, max 300), `maxSwapValueUsdc` (250, max 1000), `maxUnswappedValueUsdc` (5000, max 50000; the value cap of an unswapped delivery: USDC at 1:1, a routed token at the pool mid price; a token with no price is bounded only by the Collect receipt amount), `minSwapValueUsdc` (1),
 `minPoolUsdc` (2000), `maxPoolShareBps` (300), `twapSeconds` (1800), `twapMaxDeviationBps` (200), `minOperatorEthReserve` (0.0005), `maxAttemptsPerLeg` (3), `maxTxPerRun` (20),
 `dailyTxCap` (40, trailing 24 h), `maxGasPerTxEth` (0.0007), `maxGasPerRunEth` (0.002), `dailyGasCapEth` (0.004) (these three replace the `baseCollect` values while the sweep is
 active; `maxGasPriceGwei` and the tip cap stay as in `baseCollect`), `maxGasLimitByOp` (collect 500000, approve 100000, swap 350000, transfer 120000; settings can only lower them),
@@ -970,10 +970,11 @@ and `routes.<WETH|cbBTC|LAPTOP>.enabled` (may only be set to `false`). `maxColle
   balance of the token is 0 while an amount is still attributed (a smaller non-zero balance delivers min(owed, balance) and the rest follows when it arrives). Nothing is sent, the leg is reported (log, Telegram, exit code 1) and retried every run; it resumes when the owner is back.
 - **stuck**: the transfer to the owner reverted `maxAttemptsPerLeg` times. Reported every run (Telegram, exit code 1), never redirected to anyone else, and new collects are blocked
   until you resolve it. After `maxAttemptsPerLeg` reverting swaps the token is delivered unswapped instead.
-- **unattributed**: the collect mined but its amounts cannot be read from the receipt or the pre-signing simulation: nothing is sent and no new collect starts.
-- **pending**: a transaction without a receipt and with an unused nonce waits; with a used nonce and no receipt (or an intent that was never reserved and has no receipt) it is voided and the leg is
-  re-evaluated from the balance, clamped to the attributed amount. Recovery runs before any new collect, also when `enabled` was turned off in the meantime (no new job starts).
-  `sweep-state.json` terminal jobs are kept 30 days. Do not hand-edit it.
+- **unattributed**: the collect mined but its `Collect` event is not in the receipt (there is no fallback to the simulated amounts), or a swap/transfer was mined/broadcast but its effect cannot be established (a transfer whose balance did not fall at the receipt block; a pending swap or transfer whose receipt and transaction are both unknown on two runs): nothing is sent, nothing is ever resent for it, and no new collect starts.
+- **pending**: a transaction without a receipt and with an unused nonce waits; with a used nonce and no receipt the node is asked for the transaction itself, and the intent is voided only when
+  neither the receipt nor the transaction is found on two separate runs (otherwise it waits). A voided collect is simply re-collected; a swap or transfer that cannot be found becomes **unattributed** instead of being re-evaluated from balances. An intent that was never signed or never reserved is voided at once and the leg re-evaluated from the balance, clamped to the attributed amount. Recovery runs before any new collect, also when `enabled` was turned off in the meantime (no new job starts).
+  `sweep-state.json` terminal jobs are kept 30 days. Do not hand-edit it: the ledger is not trusted. Every job's owner must be one of the configured owner wallets, and before a leg's first send its owed amount
+  must not exceed the amount of the job's own `Collect` receipt (re-read from the chain); a tampered ledger is refused, reported and held.
 
 **How to verify.** `node tools/verify-base-sweep.js` is read-only (no key, only `eth_call`): it proves the code at the router, quoter and factory, the three pools against the factory, a probe quote,
 the TWAP the guard needs (a pool with too little oracle cardinality would always go unswapped), and the vault when configured; one `ok` / `FAIL` line each. Run it, then
@@ -982,9 +983,13 @@ cap verdict; it signs, writes and sends nothing). A Telegram summary and the clo
 at the end of a `collect` run.
 
 **Vault later.** Today `baseSweep.vault.tba` is `null` and the split is 0%. To enable it: deploy a Base vault (an ERC-6551 token-bound account on a vault NFT), put `tba`, `nft`, `tokenId`,
-`implementation`, `registry`, `salt` and `expectedOwner` into `baseSweep.vault`, run `node tools/verify-base-sweep.js` until the vault block says verified, and only then set `splitPct` (capped by
+`implementation`, `salt` and `expectedOwner` (one of your configured owner wallets) into `baseSweep.vault`, run `node tools/verify-base-sweep.js` until the vault block says verified, and only then set `splitPct` (capped by
 `maxSplitPct`, hard maximum 20). The vault is verified on chain at every run (registry derivation, code, `token()`, `owner()`, `ownerOf`); if any check fails the whole amount goes to the
 owner and the reason is reported. Only swap proceeds are split.
+
+The registry is the canonical ERC-6551 registry `0x000000006551c19487814612e58FE06813775758`, compiled into the code: `baseSweep.vault.registry` is ignored if empty and refused if different. The account
+**implementation** must be in the allowlist constant `VAULT_IMPLEMENTATIONS` in `collector-base-sweep-logic.js`, which is **empty by default**: until a reviewed implementation address is added in code,
+the vault can never verify and 100% always goes to the owner.
 
 ## PulseChain (read-only instance): PulseX v1 and v2 liquidity
 

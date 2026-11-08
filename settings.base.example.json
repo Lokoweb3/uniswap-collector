@@ -81,6 +81,7 @@
     "slippageBps": 50,
     "maxPriceImpactBps": 100,
     "maxSwapValueUsdc": 250,
+    "maxUnswappedValueUsdc": 5000,
     "minSwapValueUsdc": 1,
     "minPoolUsdc": 2000,
     "maxPoolShareBps": 300,

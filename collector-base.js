@@ -173,7 +173,13 @@ async function runPass(deps) {
   const { used: managers, refused } = logic.managers(cfg);
   for (const r of refused) log(`- manager ${r} is not on the allowlist; ignored`);
   // With a sweep ledger on disk the open legs of earlier jobs are still finished, even if no wallet collects any more.
-  if (!enabled.length && !(deps.sweepIo && deps.sweepIo.exists())) {
+  // Only OPEN (non-terminal) jobs, or a ledger that cannot be read (fail closed), keep the pass going without a collecting wallet.
+  const ledgerNeedsPass = () => {
+    if (!(deps.sweepIo && deps.sweepIo.exists())) return false;
+    const r = deps.sweepIo.read();
+    return !r.ok || r.ledger.jobs.some((j) => !sweepLogic.jobTerminal(j));
+  };
+  if (!enabled.length && !ledgerNeedsPass()) {
     log("no wallet has collect:true; nothing to do");
     log(`=== base done: 0 collected, 0 skipped, gas 0.0 ETH ===`);
     return result;
@@ -226,7 +232,7 @@ async function runPass(deps) {
   if (!swCfg.enabled && !(sweepIo && sweepIo.exists())) log("sweep: disabled (baseSweep.enabled is not true)");
   else {
     sweep = sweepMod.create({
-      sw: swCfg, provider, operator, log, now, io: sweepIo, halted: () => result.aborted,
+      sw: swCfg, provider, operator, log, now, io: sweepIo, owners: all.map((o) => o.address), halted: () => result.aborted,
       findGasEntry: (hash) => state.gasSpends.find((e) => e && typeof e.tx === "string" && e.tx.toLowerCase() === String(hash).toLowerCase()) || null,
       send: (...a) => sweepTx(...a),
     });

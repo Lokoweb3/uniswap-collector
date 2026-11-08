@@ -53,7 +53,7 @@ function revert(msg = "reverted") { const e = new Error(msg); e.code = "CALL_EXC
 function world({ head = 1_000_000 } = {}) {
   const w = {
     head, chainId: 8453n, feeData: { maxFeePerGas: 100_000_000n, gasPrice: 50_000_000n, maxPriorityFeePerGas: 1_000_000n }, gasEstimate: 150_000n,
-    block: { baseFeePerGas: 30_000_000n }, l1Fee: 0n, ethBalance: 10n ** 18n, nonce: 7, receipts: [], receiptCalls: [], latestNonce: null, nonceCalls: [], broadcasts: [], onBroadcast: null, handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
+    block: { baseFeePerGas: 30_000_000n }, l1Fee: 0n, ethBalance: 10n ** 18n, nonce: 7, receipts: [], receiptCalls: [], txLookups: [], getTx: null, latestNonce: null, nonceCalls: [], broadcasts: [], onBroadcast: null, handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
     on(addr, name, fn) { (w.handlers[lc(addr)] = w.handlers[lc(addr)] || {})[name] = fn; return w; },
     contract(addr, code = "0x6080") { w.code[lc(addr)] = code; return w; },
     /** the provider-like runner the readers are given */
@@ -91,6 +91,13 @@ function world({ head = 1_000_000 } = {}) {
         if (w.onBroadcast) return w.onBroadcast(raw);
         if (typeof w.nonce === "number") w.nonce++;
         return { hash: ethers.Transaction.from(raw).hash, wait: async () => ({ status: 1, gasUsed: 120_000n, gasPrice: 50_000_000n }) };
+      },
+      // The node's view of a transaction by hash (null = unknown). Default unknown; a test sets w.getTx(hash) to a function.
+      async getTransaction(hash) {
+        w.txLookups.push(hash);
+        const r = typeof w.getTx === "function" ? w.getTx(hash) : null;
+        if (r instanceof Error) throw r;
+        return r || null;
       },
       async getTransactionReceipt(hash) {
         w.receiptCalls.push(hash);

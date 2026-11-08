@@ -12,7 +12,7 @@ const sweep = require("../collector-base-sweep");
 const PROBE = { WETH: 10n ** 15n, cbBTC: 100_000n, LAPTOP: 100n * 10n ** 18n }; // about 2, 60 and 5 USDC
 
 /** Runs every check against `provider`; `out(line)` receives each line. -> { bad, lines } */
-async function run(provider, { vault = null, out = () => {} } = {}) {
+async function run(provider, { vault = null, owners = [], out = () => {} } = {}) {
   const lines = [];
   let bad = 0;
   const emit = (line) => { lines.push(line); out(line); };
@@ -56,7 +56,7 @@ async function run(provider, { vault = null, out = () => {} } = {}) {
   emit("\nvault");
   if (!vault || vault.tba === null || vault.tba === undefined || vault.tba === "") emit("  ok    vault.tba is null: the split is 0% and no vault address is ever used (gated off)");
   else {
-    const v = await sweep.verifyVault(provider, sw, { operator: null });
+    const v = await sweep.verifyVault(provider, sw, { operator: null, owners });
     check(v.ok, v.ok ? `vault ${v.tba} verified; effective split ${v.pct}%` : `vault refused: ${v.reason}`);
   }
   emit(`\n${bad ? `${bad} CHECK(S) FAILED` : "All checks passed."}`);
@@ -67,9 +67,10 @@ async function main() {
   const rpc = process.env.LP_BASE_RPC_URL || "https://mainnet.base.org";
   const provider = new ethers.JsonRpcProvider(rpc, S.CHAIN_ID, { staticNetwork: true });
   let vault = null;
-  try { vault = (require("../settings").load({ fresh: true }).baseSweep || {}).vault || null; } catch { vault = null; }
+  let owners = [];
+  try { const cfg = require("../settings").load({ fresh: true }); vault = (cfg.baseSweep || {}).vault || null; owners = require("../collector-base-logic").owners(cfg).map((o) => o.address); } catch { vault = null; }
   console.log(`Base ${(await provider.getNetwork()).chainId} at block ${await provider.getBlockNumber()}\n`);
-  const { bad } = await run(provider, { vault, out: (l) => console.log(l) });
+  const { bad } = await run(provider, { vault, owners, out: (l) => console.log(l) });
   process.exit(bad ? 1 : 0);
 }
 

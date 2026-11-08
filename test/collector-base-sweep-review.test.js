@@ -35,7 +35,8 @@ const toVault = (p) => kindOf(p) === "transfer" && lc(p.data).includes(lc(VAULT.
     assert.strictEqual(S.balance(USDC, VAULT.tba), vaultAmt); assert.strictEqual(S.balance(USDC, OWNER), out - vaultAmt, "no double pay");
     assert.strictEqual(leg0(S).phase, "delivered"); assert.strictEqual(S.balance(USDC, OP), 0n);
 
-    // it was not mined and its nonce was used by someone else: voided, the owner gets the whole proceeds
+    // it was not mined and its nonce was used: no receipt and no transaction on the node. First run waits (nothing sent), the second finds
+    // nothing again and the leg becomes held + unattributed. The owner is NEVER paid the whole proceeds on a guess (M2).
     const N = mk(); const nc = N.vault({});
     const n1 = await N.run({ sweep: { vault: nc }, signer: N.signer({ revertNoReceipt: toVault }) });
     N.hidden = new Map(); // never mined: the effect is undone
@@ -43,9 +44,10 @@ const toVault = (p) => kindOf(p) === "transfer" && lc(p.data).includes(lc(VAULT.
     N.add(USDC, OP, vamt); N.add(USDC, VAULT.tba, -vamt);
     assert.ok(n1.res.aborted === false); N.w.latestNonce = pend.nonce + 1;
     const n2 = await N.run({ sweep: { vault: nc }, signer: N.signer() });
-    const nout = BigInt(leg0(N).swap.outRaw);
-    assert.deepStrictEqual(names(n2.signer), ["transfer"]); assert.strictEqual(N.balance(USDC, OWNER), nout); assert.strictEqual(N.balance(USDC, VAULT.tba), 0n);
-    assert.strictEqual(leg0(N).phase, "delivered");
+    assert.deepStrictEqual(names(n2.signer), [], "first run: waiting, nothing sent"); assert.strictEqual(leg0(N).pending.notFoundRuns, 1);
+    const n3 = await N.run({ sweep: { vault: nc }, signer: N.signer() });
+    assert.deepStrictEqual(names(n3.signer), [], "second run: unattributed, still nothing sent"); assert.strictEqual(leg0(N).unattributed, true); assert.strictEqual(leg0(N).phase, "held");
+    assert.strictEqual(N.balance(USDC, OWNER), 0n); assert.strictEqual(N.balance(USDC, VAULT.tba), 0n);
 
     // a recovered, reverted vault transfer is recorded as failed
     const F = mk(); const fc = F.vault({});

@@ -7,6 +7,7 @@
 const fs = require("fs");
 const { ethers } = require("ethers");
 const base = require("./collector-base-logic");
+const u = require("./univ3");
 
 const CHAIN_ID = 8453;
 const USDC = ethers.getAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
@@ -20,6 +21,13 @@ const ROUTES = Object.freeze({
   cbBTC: Object.freeze({ symbol: "cbBTC", token: ethers.getAddress("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"), decimals: 8, pool: ethers.getAddress("0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"), fee: 500 }),
   LAPTOP: Object.freeze({ symbol: "LAPTOP", token: ethers.getAddress("0xB095274743941e953c746F9C228DA9c18Bb6ec29"), decimals: 18, pool: ethers.getAddress("0x7702411B3893ea4F6Ab96C50231cFEc65448AB9F"), fee: 10000 }),
 });
+/** The canonical ERC-6551 registry. Hard-coded: settings cannot change it (D7). */
+const ERC6551_REGISTRY = ethers.getAddress("0x000000006551c19487814612e58FE06813775758");
+/**
+ * Allowlisted ERC-6551 account implementations for the vault split (D7). EMPTY by default: until a reviewed implementation address
+ * is added here, in code, the vault can never verify and 100% goes to the owner. Settings cannot add to it. (Tests push to it.)
+ */
+const VAULT_IMPLEMENTATIONS = [];
 const OPS = Object.freeze(["collect", "approve", "approve-reset", "swap", "transfer"]);
 const PHASES = Object.freeze(["collected", "approved", "swapped", "delivered", "delivered-unswapped", "held", "stuck"]);
 const TERMINAL_PHASES = Object.freeze(["delivered", "delivered-unswapped"]);
@@ -38,6 +46,7 @@ const NUMBERS = Object.freeze({
   slippageBps: { def: 50, min: 1, max: 100, int: true },
   maxPriceImpactBps: { def: 100, min: 1, max: 300, int: true },
   maxSwapValueUsdc: { def: 250, min: 1, max: 1000 },
+  maxUnswappedValueUsdc: { def: 5000, min: 1, max: 50000 },
   minSwapValueUsdc: { def: 1, min: 0.01, max: 1000 },
   minPoolUsdc: { def: 2000, min: 2000, max: 1e9 },
   maxPoolShareBps: { def: 300, min: 1, max: 1000, int: true },
@@ -157,7 +166,10 @@ function decideSwap(sw, f) {
   if (f.twapTick === null || f.twapTick === undefined || !Number.isFinite(Number(f.twapTick))) return no("no usable TWAP (observe failed): fail closed", num);
   const dev = Math.abs(Number(f.tick) - Number(f.twapTick));
   if (dev > sw.twapMaxDeviationBps) return no(`spot tick ${f.tick} differs from the ${sw.twapSeconds} s TWAP tick ${f.twapTick} by ${dev} > twapMaxDeviationBps ${sw.twapMaxDeviationBps}`, num);
-  const minOut = minOutOf(quote, sw.slippageBps);
+  // L2: the floor is the lower of the quoter and the TWAP-priced output after fee, so a skewed quote cannot raise it.
+  let ref = quote;
+  try { const tw = afterFee(midOut({ sqrtPriceX96: u.getSqrtRatioAtTick(Math.round(Number(f.twapTick))), amountIn: f.amountIn, tokenIn: f.route.token, token0 }), f.route.fee); if (tw > 0n && tw < ref) ref = tw; } catch { /* the quote stands */ }
+  const minOut = minOutOf(ref, sw.slippageBps);
   if (minOut <= 0n) return no("minOut would be 0", num);
   return { swap: true, ...num, minOut };
 }
@@ -248,7 +260,10 @@ function assertSignableSweep(tx, lim, op, expect) {
     return;
   }
   if (!tx.to || !legTokens.some((t) => eq(t, tx.to)) || !eq(tx.to, expect.token)) bad(`to ${tx.to} is not a token of the active leg`);
+  const routeToken = Object.values(ROUTES).some((r) => eq(r.token, tx.to));
   if (op === "approve" || op === "approve-reset") {
+    if (op === "approve" && !routeToken) bad(`approve target ${tx.to} is not a swap-route token`);
+    if (op === "approve-reset" && !routeToken && !eq(tx.to, USDC)) bad(`approve-reset target ${tx.to} is not a route token or USDC`);
     const [spender, amount] = exact(ERC20_IFACE, "approve");
     if (!eq(spender, ROUTER)) bad(`approve spender ${spender} is not the router`);
     const want = op === "approve-reset" ? 0n : BigInt(expect.amount);
@@ -257,6 +272,8 @@ function assertSignableSweep(tx, lim, op, expect) {
     if (op === "approve" && want <= 0n) bad("approve of 0 is a reset");
     return;
   }
+  // transfer: a route token, USDC, or a token of the (chain-verified) active leg -- already established by the legTokens check above.
+  if (!routeToken && !eq(tx.to, USDC) && !legTokens.some((t) => eq(t, tx.to))) bad(`transfer target ${tx.to} is not a route token, USDC or a validated leg token`);
   const [to, amount] = exact(ERC20_IFACE, "transfer");
   if (!(expect.recipients || []).some((r) => eq(r, to)) || eq(to, expect.operator)) bad(`transfer recipient ${to} is not a verified owner or vault`);
   if (BigInt(amount) !== BigInt(expect.amount) || BigInt(amount) <= 0n) bad(`transfer amount ${amount} is not the attributed ${expect.amount}`);
@@ -367,7 +384,7 @@ function initSweepStateFile(file, fsm = fs) {
 }
 
 module.exports = {
-  CHAIN_ID, USDC, USDC_DECIMALS, ROUTER, QUOTER, FACTORY, ROUTES, OPS, PHASES, TERMINAL_PHASES, GAS_CEILINGS, NUMBERS, SWEEP_STATE_VERSION, MAX_UINT256, ERC20_IFACE, ROUTER_IFACE,
+  CHAIN_ID, ERC6551_REGISTRY, VAULT_IMPLEMENTATIONS, USDC, USDC_DECIMALS, ROUTER, QUOTER, FACTORY, ROUTES, OPS, PHASES, TERMINAL_PHASES, GAS_CEILINGS, NUMBERS, SWEEP_STATE_VERSION, MAX_UINT256, ERC20_IFACE, ROUTER_IFACE,
   config, limitOverrides, routeFor, midOut, afterFee, impactBps, minOutOf, usdcRaw, fmtUsdc, decideSwap, twapTick, split, vaultPct, calldata, assertSignableSweep,
   opCount24h, txCapCheck, readSweepState, serializeSweepState, initSweepStateFile, jobTerminal, legTerminal, jobProblem, eq, addr,
 };

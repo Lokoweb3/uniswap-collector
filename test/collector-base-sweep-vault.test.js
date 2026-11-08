@@ -57,7 +57,7 @@ const noVaultTx = (r, tba) => assert.ok(!targets(r.signer).includes(lc(tba)) && 
       ["tba is a token (WETH)", {}, { tba: WETH }, /tba equals a token/],
       ["tba is a pool", {}, { tba: SL.ROUTES.WETH.pool }, /tba equals a pool/],
       ["no tokenId", {}, { tokenId: null }, /vault\.tokenId is not a non-negative integer/],
-      ["no registry", {}, { registry: null }, /vault\.registry is not an address/],
+      ["registry is not the canonical one", {}, { registry: "0x00000000000000000000000000000000000000ee" }, /is not the canonical ERC-6551 registry/],
     ];
     for (const [name, v, cfgOver, why] of cases) {
       const S = mk(); S.setBalance(WETH, OP, 0n);

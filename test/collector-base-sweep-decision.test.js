@@ -109,7 +109,7 @@ const AMT = 2n * E18 / 100n;
       ["pool USDC below minPoolUsdc", { poolUsdc: 1000n * 10n ** 6n }, null, AMT, /pool holds 1000\.0 USDC, below minPoolUsdc 2000/],
       ["quote above maxPoolShareBps", { poolUsdc: 5000n * 10n ** 6n }, null, 10n * E18 / 100n, /exceeds maxPoolShareBps 300 of the pool's USDC/],
       ["liquidity 0", { liquidity: 0n }, null, AMT, /in-range liquidity is 0/],
-      ["leg value above maxSwapValueUsdc", {}, null, 1n * E18, /above maxSwapValueUsdc 250/],
+      ["leg value above maxSwapValueUsdc", {}, null, 4n * E18 / 10n, /above maxSwapValueUsdc 250/],
       ["spot/TWAP deviation", {}, (S) => { S.pools.WETH.twapTick += 300; }, AMT, /differs from the 1800 s TWAP tick .* by 300 > twapMaxDeviationBps 200/],
       ["observe reverts", {}, (S) => { S.pools.WETH.observeFails = true; }, AMT, /no usable TWAP \(observe failed\): fail closed/],
       ["leg value below minSwapValueUsdc", {}, null, E18 / 10000n, /below minSwapValueUsdc 1/],

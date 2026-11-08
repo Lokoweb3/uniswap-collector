@@ -168,8 +168,14 @@ const entry = (o = {}) => ({ t: NOW - 3600_000, wei: "1000", kind: "settled", tx
         assert.ok(/is pending: nonce \d+ not used yet; its worst case/.test(w2.text), label);
         T.w.latestNonce = open[0].nonce + 1; // something else used the nonce
       }
+      if (mode !== "bad receipt") await T.run({ signer: T.signer() }); // run 1 of 2: no receipt and no transaction on the node yet -> the leg waits (M2)
       const t2 = await T.run({ signer: T.signer() });
       assert.ok(t2.state.gasSpends.every((e) => e.kind === "settled"), `${label}: settled at the next start\n${t2.text}`);
+      if (op !== "approve" && mode !== "bad receipt") { // a swap / transfer that cannot be found is held + unattributed, never re-sent (M2)
+        assert.strictEqual(T.ledger().jobs[0].legs[0].unattributed, true, label); assert.ok(decodeSent(t2.signer).every((t) => t.name === "approve"), `${label}: no swap or transfer re-sent`);
+        assert.strictEqual(T.txs.filter((x) => lc(x.to) === lc(SL.ROUTER)).length <= 1, true, label);
+        continue;
+      }
       assert.strictEqual(T.ledger().jobs[0].legs[0].phase, "delivered", `${label}: ${t2.text}`);
       assert.strictEqual(T.balance(WETH, OP), 0n, label); assert.strictEqual(T.balance(USDC, OP), 0n, label);
       assert.strictEqual(T.txs.filter((x) => lc(x.to) === lc(MGR_A)).length, 1, `${label}: one collect`);

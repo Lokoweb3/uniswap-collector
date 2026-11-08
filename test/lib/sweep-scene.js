@@ -39,7 +39,7 @@ function priceOf(route, usd) {
  */
 function sweepScene(o = {}) {
   const w = world();
-  const S = { w, ev: [], bal: new Map(), allow: new Map(), mined: new Map(), owners: {}, pos: {}, quoteFor: {}, swapOut: {}, failNext: [], pools: {}, estimateFail: new Set(), mintedSwaps: 0 };
+  const S = { w, ev: [], bal: new Map(), allow: new Map(), mined: new Map(), owners: {}, pos: {}, quoteFor: {}, swapOut: {}, failNext: [], pools: {}, estimateFail: new Set(), mintedSwaps: 0, block: 4, hist: new Map() };
   const key = (t, a) => `${lc(t)}|${lc(a)}`;
   S.balance = (t, a) => S.bal.get(key(t, a)) || 0n;
   S.setBalance = (t, a, v) => { S.bal.set(key(t, a), BigInt(v)); return S; };
@@ -61,7 +61,13 @@ function sweepScene(o = {}) {
   // ---- code and handlers
   for (const a of [ROUTER, QUOTER, FACTORY, USDC, OTHER, B.MGR_A, B.MGR_B, ...Object.values(ROUTES).flatMap((r) => [r.token, r.pool])]) w.contract(a);
   for (const t of [USDC, WETH, CBBTC, LAPTOP, OTHER]) {
-    w.on(t, "balanceOf", (who) => [S.balance(t, who)]).on(t, "allowance", (own, sp) => [S.allowance(t, own, sp)]);
+    // balanceOf honours a numeric blockTag from the per-block snapshots taken around every mined tx (S.hist); no tag / a later tag = now.
+    w.on(t, "balanceOf", (who, tx) => {
+      const tag = tx && tx.blockTag !== undefined && tx.blockTag !== "latest" ? Number(tx.blockTag) : null;
+      if (tag === null || !Number.isFinite(tag) || tag >= S.block + 1 || !S.hist.size) return [S.balance(t, who)];
+      for (let b = tag; b >= 0; b--) if (S.hist.has(b)) return [S.hist.get(b).get(key(t, who)) || 0n];
+      return [S.balance(t, who)];
+    }).on(t, "allowance", (own, sp) => [S.allowance(t, own, sp)]);
     w.on(t, "decimals", () => [t === USDC ? (o.usdcDecimals ?? 6) : lc(t) === lc(CBBTC) ? 8 : 18]);
   }
   w.on(FACTORY, "getPool", (a, b, fee) => {
@@ -154,8 +160,10 @@ function sweepScene(o = {}) {
       if (typeof w.nonce === "number") w.nonce++;
       s.sent.push({ from: parsed.from, to: parsed.to, data: parsed.data, value: parsed.value, nonce: parsed.nonce, gasLimit: parsed.gasLimit, maxFeePerGas: parsed.maxFeePerGas, maxPriorityFeePerGas: parsed.maxPriorityFeePerGas, hash: parsed.hash });
       if (opt.neverMined && opt.neverMined(parsed)) return { hash: parsed.hash, wait: () => new Promise(() => {}) }; // accepted by the node, not mined
+      const prev = new Map(S.bal);
       const { status, logs } = S.effect(parsed);
-      const rc = { hash: parsed.hash, from: parsed.from, to: parsed.to, blockNumber: 5, status, gasUsed: (parsed.gasLimit * 4n) / 5n, gasPrice: 50_000_000n, logs };
+      const bn = ++S.block; S.hist.set(bn - 1, prev); S.hist.set(bn, new Map(S.bal));
+      const rc = { hash: parsed.hash, from: parsed.from, to: parsed.to, blockNumber: bn, status, gasUsed: (parsed.gasLimit * 4n) / 5n, gasPrice: 50_000_000n, logs };
       S.mined.set(parsed.hash, rc);
       S.txs.push({ ...s.sent[s.sent.length - 1], status });
       if (opt.revertNoReceipt && opt.revertNoReceipt(parsed)) { // the wait fails revert-class and the receipt cannot be found now; S.mined gets it when S.reveal(hash) runs
@@ -171,6 +179,8 @@ function sweepScene(o = {}) {
   S.vault = (v = {}) => {
     const cfg = { tba: VAULT.tba, nft: VAULT.nft, tokenId: 7, implementation: VAULT.impl, registry: VAULT.reg, salt: ethers.ZeroHash, expectedOwner: OWNER, splitPct: 10, maxSplitPct: 20, ...(v.cfg || {}) };
     w.contract(VAULT.reg).contract(VAULT.nft);
+    // The allowlist is empty in code; tests that need a verifiable vault add the mock implementation (v.allowImpl === false keeps it empty).
+    if (v.allowImpl !== false && !SL.VAULT_IMPLEMENTATIONS.some((i) => lc(i) === lc(VAULT.impl))) SL.VAULT_IMPLEMENTATIONS.push(VAULT.impl);
     if (v.tbaCode !== false) w.contract(VAULT.tba);
     w.on(VAULT.reg, "account", () => { if (v.revertAccount) throw revert("account"); return [v.accountResult || VAULT.tba]; });
     w.on(VAULT.tba, "token", () => { if (v.revertToken) throw revert("token"); return [BigInt(v.chainId ?? 8453), v.nftBound || VAULT.nft, BigInt(v.tokenId ?? 7)]; });

@@ -116,12 +116,12 @@ const sha = (f) => crypto.createHash("sha256").update(fs.readFileSync(path.join(
     }
     // the vault block: a verified vault is ok, a broken one FAIL, the Robinhood TBA (no code) FAIL
     const V = sweepScene({ positions: [] }); const vcfg = V.vault({});
-    const vr = await run(V.w.runner, { vault: vcfg });
+    const vr = await run(V.w.runner, { vault: vcfg, owners: [vcfg.expectedOwner] });
     assert.strictEqual(vr.bad, 0, vr.lines.join("\n")); assert.ok(vr.lines.join("\n").includes(`vault ${VAULT.tba} verified; effective split 10%`));
     const V2 = sweepScene({ positions: [] }); const v2 = V2.vault({ tbaOwner: "0x00000000000000000000000000000000000000ee" });
-    const vr2 = await run(V2.w.runner, { vault: v2 }); assert.ok(vr2.bad === 1 && /FAIL {2}vault refused: tba\.owner\(\) is/.test(vr2.lines.join("\n")));
+    const vr2 = await run(V2.w.runner, { vault: v2, owners: [v2.expectedOwner] }); assert.ok(vr2.bad === 1 && /FAIL {2}vault refused: tba\.owner\(\) is/.test(vr2.lines.join("\n")));
     const V3 = sweepScene({ positions: [] }); const v3 = V3.vault({ cfg: { tba: "0x4941943B0a3860f07767d8918Cce50D8451b340B" }, tbaCode: false });
-    const vr3 = await run(V3.w.runner, { vault: v3 }); assert.ok(vr3.bad === 1 && /FAIL {2}vault refused: tba 0x4941943B0a3860f07767d8918Cce50D8451b340B has no code/.test(vr3.lines.join("\n")));
+    const vr3 = await run(V3.w.runner, { vault: v3, owners: [v3.expectedOwner] }); assert.ok(vr3.bad === 1 && /FAIL {2}vault refused: tba 0x4941943B0a3860f07767d8918Cce50D8451b340B has no code/.test(vr3.lines.join("\n")));
     // the CLI is not run here (it would use the network); it exits through main() only when executed directly
     assert.ok(/require\.main === module/.test(src));
   }

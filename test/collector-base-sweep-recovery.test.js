@@ -32,14 +32,13 @@ const leg0 = (S) => S.ledger().jobs[0].legs[0];
     assert.ok(/attributed \(Collect event\): 0\.02 WETH/.test(r2.text));
     assert.strictEqual(S.ledger().jobs.length, 1); assert.strictEqual(leg0(S).phase, "delivered"); assert.strictEqual(S.balance(WETH, OP), 0n);
     assert.ok(S.balance(USDC, OWNER) > 39_000_000n); assert.ok(r2.state.gasSpends.every((e) => e.kind === "settled"));
-    // no Collect event in the receipt: the pre-signing amounts, clamped to the operator balance
+    // no Collect event in the receipt: unattributed (L3), no fallback to the simulated amounts, nothing swept from balances
     const N = mk(wethPos(), { noCollectEvent: true });
     const n1 = await N.run({ baseCollect: SHORT, signer: N.signer({ dropReceipt: (p) => kindOf(p) === "collect" }) });
     assert.strictEqual(n1.res.aborted, true);
-    N.setBalance(WETH, OP, AMT / 2n); // only half is really there
     const n2 = await N.run({ signer: N.signer() });
-    assert.ok(/attributed \(simulated amounts clamped to the operator balance\): 0\.01 WETH/.test(n2.text), n2.text);
-    assert.strictEqual(decodeSent(n2.signer).find((t) => t.name === "approve").args[1], AMT / 2n);
+    assert.strictEqual(n2.signer.sent.length, 0, n2.text); assert.strictEqual(N.ledger().jobs[0].collect.status, "unattributed");
+    assert.strictEqual(N.balance(WETH, OP), AMT, "the fees stay on the operator, untouched");
     // neither usable: unattributed, nothing sent, reported, exit 1, new collects blocked
     const U = mk(wethPos(), { noCollectEvent: true });
     const u1 = await U.run({ baseCollect: SHORT, signer: U.signer({ dropReceipt: (p) => kindOf(p) === "collect" }) });
@@ -120,14 +119,17 @@ const leg0 = (S) => S.ledger().jobs[0].legs[0];
       assert.strictEqual(leg0(S).pending.op, "swap"); assert.strictEqual(r2.res.sweep.report.pending, 1);
       assert.strictEqual(exitCodeOf(r2.res), 0, "waiting is not an error");
     }
-    // used nonce and no receipt: the intent is voided, the leg is re-evaluated from balances
+    // used nonce, no receipt, and the node does not know the tx: run 1 waits, run 2 holds the leg as unattributed; NO second swap (M2)
     {
       const { S, nonce } = await stall();
       S.w.latestNonce = nonce + 1;
       const r2 = await S.run({ signer: S.signer() });
-      assert.ok(/recovery: swap intent of WETH \(#79371151\) voided \(nonce \d+ is used by another transaction and there is no receipt\)/.test(r2.text), r2.text);
-      assert.deepStrictEqual(names(r2.signer), ["exactInputSingle", "transfer"], "approved already: swap again, then deliver");
-      assert.strictEqual(leg0(S).phase, "delivered"); assert.strictEqual(S.balance(WETH, OP), 0n);
+      assert.ok(/recovery: swap of WETH \(#79371151\) waits \(nonce \d+ is used but neither a receipt nor the transaction was found \(run 1 of 2\)/.test(r2.text), r2.text);
+      assert.ok(!decodeSent(r2.signer).some((t) => t.name === "exactInputSingle"));
+      const r3 = await S.run({ signer: S.signer() });
+      assert.ok(/UNATTRIBUTED WETH of #79371151: swap .* has no receipt and is not found/.test(r3.text), r3.text);
+      assert.ok(!decodeSent(r3.signer).some((t) => t.name === "exactInputSingle" || t.name === "transfer"), "no second swap, no transfer");
+      assert.strictEqual(leg0(S).unattributed, true); assert.strictEqual(leg0(S).phase, "held"); assert.strictEqual(exitCodeOf(r3.res), 1);
     }
     // an intent that was never reserved (the budget file could not be written): voided at the next start
     {

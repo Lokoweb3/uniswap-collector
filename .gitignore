@@ -3,6 +3,7 @@ node_modules/
 *.log
 state.json
 sweep-state.json
+sweep-state.json.*.tmp
 
 # --- secrets: never commit key material or env files ---
 .env

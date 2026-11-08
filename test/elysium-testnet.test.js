@@ -184,7 +184,7 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
     eth = mock(Object.assign(new Error("x"), { code: 4902 }));
     await assert.rejects(walletChain.switchOrAdd(eth, { ...verified, nativeCurrency: null }), /Add it by hand.*will not guess/);
     assert.deepStrictEqual(eth.calls.map((c) => c.method), ["wallet_switchEthereumChain"]);
-    // the page uses it, and still carries no chain of its own (test/chain-identity.test.js stays green, unmodified)
+    // the page uses it, and still carries no chain of its own (test/chain-identity.test.js still passes; it was updated to allow the shared wallet-chain.js module)
     const html = read("wallet.html");
     assert.ok(/<script src="\/wallet-chain\.js"><\/script>/.test(html));
     assert.strictEqual((html.match(/window\.WalletChain\.switchOrAdd\(window\.ethereum,/g) || []).length, 2, "switchChain and connectWallet both run the tested switchOrAdd");
@@ -359,26 +359,14 @@ async function startServer(dir, env = {}, { readonly = true } = {}) {
     } finally { await srv3.stop(); }
   }
 
-  // ---- approve-serve.js (npm run approve) serves the browser module the Wallet page needs ----------------------------
+  // ---- approve-serve.js (npm run approve) reads a keystore and answers approval state: it refuses a testnet ----------
   {
-    const port = await freePort(), dir = mkDir();
-    const out = [];
-    const child = spawn(process.execPath, ["--require", PRELOAD, "--require", STUB, path.join(ROOT, "approve-serve.js")], {
-      cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: dir, PORT: String(port), LP_BIND: "127.0.0.1" }),
+    const dir = mkDir();
+    const r = spawnSync(process.execPath, ["--require", PRELOAD, "--require", STUB, path.join(ROOT, "approve-serve.js")], {
+      cwd: hermeticCwd(), env: hermeticEnv({ LP_DATA_DIR: dir, PORT: String(await freePort()), LP_BIND: "127.0.0.1" }), encoding: "utf8", timeout: 30000,
     });
-    child.stdout.on("data", (d) => out.push(String(d))); child.stderr.on("data", (d) => out.push(String(d)));
-    try {
-      const t0 = Date.now();
-      while (!out.join("").includes("/wallet#approvals")) {
-        if (child.exitCode != null) throw new Error("approve-serve exited: " + out.join(""));
-        if (Date.now() - t0 > 30000) throw new Error("approve-serve did not start");
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      const r = await request(port, "/wallet-chain.js");
-      assert.strictEqual(r.status, 200); assert.ok(/javascript/.test(r.headers["content-type"]) && r.body.includes("switchOrAdd"), "approve-serve serves /wallet-chain.js");
-      const c = JSON.parse((await request(port, "/api/chain")).body);
-      assert.strictEqual(c.chainId, 99801); assert.strictEqual(c.nativeSymbol, "HYPE"); assert.strictEqual(c.nativeDecimalsUnverified, true); assert.strictEqual(c.nativeCurrency, null);
-    } finally { child.kill("SIGTERM"); await new Promise((res) => (child.exitCode != null ? res() : child.once("exit", res))); }
+    assert.strictEqual(r.status, 1, "approve-serve exits at startup for the testnet");
+    assert.ok(/Refusing to start: approve-serve\.js is not available for chain 99801/.test(r.stderr), r.stderr);
   }
 
   // ---- 20. 21. start-all.sh / stop-all.sh under a stub harness ------------------------------------------------

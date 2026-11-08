@@ -204,7 +204,7 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     // so any edit after the reviewed commit, committed or not, trips it. To change one of these files on
     // purpose: update PINNED with `git hash-object <file>` in the same commit. Skipped when the
     // baseline commit is absent (no git, shallow clone).
-    const PINNED = { "server.js": "b20e37de8eabc60b69e2d9795c50397cb61a8108", "portfolio.js": "a887d6636928f1340eaf4d9656ae4c458a03583e", "wallet.html": "6bde6acf6d194e65ab6630b834e725469a09c52e", "dashboard.js": "1d7105a7dfeaf43239207c885197fe7a0845992e" };
+    const PINNED = { "server.js": "8919e0dadb01d9faf28fd34f15d0a02c11396898", "portfolio.js": "a887d6636928f1340eaf4d9656ae4c458a03583e", "wallet.html": "33f3ea0f0f8e6d83af5ff56af47368f53dbd60ce", "dashboard.js": "1d7105a7dfeaf43239207c885197fe7a0845992e" };
     let have = true;
     try { execFileSync("git", ["cat-file", "-e", "4f3fd88^{commit}"], { cwd: ROOT, stdio: "ignore" }); } catch { have = false; }
     if (have) {

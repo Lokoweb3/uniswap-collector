@@ -83,9 +83,12 @@ const READONLY = process.env.LP_READONLY === "1";
 // absent, it is true for the strict, new chains (Base 8453, PulseChain 369) only.
 // LP_READONLY alone does NOT imply it: the Arc viewer and the Robinhood VM are read-only
 // but legitimately serve calldata for Sell/Mint and show the real collector operator.
-const NO_TX = typeof cfg.noTransactionData === "boolean"
-  ? cfg.noTransactionData
-  : settings.STRICT_CHAINS.has(Number(cfg.chainId));
+// A testnet (and chain 99801) is always no-tx: the setting cannot turn that off, and false is refused.
+let NO_TX;
+try { NO_TX = elysiumPages.resolveNoTx(cfg, settings.STRICT_CHAINS); } catch (err) {
+  console.error(`Refusing to start: ${err.message}.`);
+  process.exit(1);
+}
 // A no-transaction-data instance must also be read-only: it has no keystore, so nothing on it may
 // arm, unlock or collect. Refuse to start rather than run half-guarded.
 if (NO_TX && !READONLY) {
@@ -3141,7 +3144,7 @@ async function handleRequest(req, res) {
       }
       // Price at read time, not cache time — prices arrive with the first build.
       const priced = balCache.data.map((r) => {
-        const price = r.native ? lastPrices[WETH] : lastPrices[r.address.toLowerCase()];
+        const price = r.native ? (!cfg.testnet ? lastPrices[WETH] : null) : lastPrices[r.address.toLowerCase()];
         return { ...r, usd: price != null && r.balance != null ? r.balance * price : null };
       });
       priced.sort((a, b) => (b.usd || 0) - (a.usd || 0));
@@ -4063,7 +4066,7 @@ if (SERVICES) {
 if (process.env.LP_RESTARTED_BY === "watchdog" && LOOPS) {
   setTimeout(() => { alerts.send(`♻️ Dashboard restarted by the watchdog after it exited (${process.env.LP_RESTART_REASON || "process gone"}). Check server.log for the cause.`).catch(() => {}); }, 20000);
 }
-server.listen(PORT, HOST, () => {
+const onListening = () => {
   if (claimScanner) {
     // After the listener is up, so the first requests are never behind it.
     setTimeout(() => { claimScanner.start(); priceAllClaims().catch(() => {}); }, Number(process.env.LP_CLAIM_SCAN_DELAY_MS || 15000)).unref();
@@ -4078,4 +4081,9 @@ server.listen(PORT, HOST, () => {
   console.log(`Watching ${cfg.ownerAddress} on chain ${cfg.chainId}`);
   console.log("Reads are key-free. The Collect button runs run-collector.sh on this machine;");
   console.log("it needs a live unlock window (./unlock.sh) and no key ever reaches the browser.");
-});
+};
+// A testnet instance first checks that its primary RPC really is the chain it names; a mismatch refuses to start.
+elysiumPages.assertRpcChain(cfg, require("./rpc").chainIdOf).then(
+  () => server.listen(PORT, HOST, onListening),
+  (err) => { console.error(`Refusing to start: ${endpoint.redactText(err.message)}.`); process.exit(1); },
+);

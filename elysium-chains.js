@@ -72,7 +72,39 @@ function injectBanner(html, name, chainId) {
   const text = String(html);
   if (text.includes('id="lp-testnet-banner"')) return text;
   const tag = bannerHtml(name, chainId);
-  return text.includes("</body>") ? text.replace("</body>", `${tag}</body>`) : text + tag;
+  // A function replacer: a string replacement would expand "$&" / "$`" patterns found in the tag (the chain name).
+  return text.includes("</body>") ? text.replace("</body>", () => tag + "</body>") : text + tag;
 }
 
-module.exports = { bannerHtml, injectBanner, CHAINS, requireEnabled, isMainnetId, MAINNET_DISABLED_MESSAGE };
+/** Chain ids that never get transaction data or a keystore, whatever settings say. */
+const NO_TX_CHAIN_IDS = new Set([99801]);
+
+/**
+ * Whether an instance serves no transaction data. A testnet, or chain 99801, is ALWAYS no-tx: an explicit
+ * "noTransactionData": false in its settings is refused (throws), not honoured. Other chains keep the
+ * explicit setting, else `strictChains` (settings.STRICT_CHAINS).
+ */
+function resolveNoTx(cfg, strictChains) {
+  const forced = cfg.testnet === true || NO_TX_CHAIN_IDS.has(Number(cfg.chainId));
+  if (forced && cfg.noTransactionData === false) {
+    throw new Error("noTransactionData: false is not allowed on a testnet or chain 99801: it never serves transaction data or reads a keystore");
+  }
+  if (forced) return true;
+  return typeof cfg.noTransactionData === "boolean" ? cfg.noTransactionData : strictChains.has(Number(cfg.chainId));
+}
+
+/**
+ * A testnet instance must be talking to the chain it says it is. `chainIdOf(url)` resolves to a number or null
+ * (unreachable). A different id throws; an unreachable RPC does not (the instance then shows itself as down).
+ * Returns the id seen (or null).
+ */
+async function assertRpcChain(cfg, chainIdOf) {
+  if (cfg.testnet !== true) return null;
+  const seen = await chainIdOf(cfg.rpcUrl);
+  if (seen != null && seen !== Number(cfg.chainId)) {
+    throw new Error(`the primary RPC answers chain id ${seen}, settings say ${Number(cfg.chainId)}`);
+  }
+  return seen;
+}
+
+module.exports = { resolveNoTx, assertRpcChain, NO_TX_CHAIN_IDS, bannerHtml, injectBanner, CHAINS, requireEnabled, isMainnetId, MAINNET_DISABLED_MESSAGE };

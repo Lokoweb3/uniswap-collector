@@ -43,7 +43,9 @@ async function run(mode, { log = console.log } = {}) {
     out("INFO", "native decimals", Number.isInteger(dec) ? `settings state ${dec} (proven only if VERIFICATION-elysium.md says so)` : "18 NOT independently proven; settings omit decimals, balances are shown raw");
     let id;
     try { id = await rpcCall("eth_chainId"); } catch (err) { out("FAIL", "eth_chainId", redactText(err.shortMessage || err.message)); return 1; }
-    if (String(id).toLowerCase() === T.chainIdHex) out("PASS", `eth_chainId ${id} (${T.chainId})`); else out("FAIL", `eth_chainId ${id}`, `expected ${T.chainIdHex}`);
+    // The answer comes from a remote endpoint: print it only if it looks like a hex quantity.
+    const shownId = /^0x[0-9a-fA-F]{1,16}$/.test(String(id)) ? String(id) : "<not a hex quantity>";
+    if (String(id).toLowerCase() === T.chainIdHex) out("PASS", `eth_chainId ${shownId} (${T.chainId})`); else out("FAIL", `eth_chainId ${shownId}`, `expected ${T.chainIdHex}`);
     if (fails) return 1;
     try { out("INFO", "eth_blockNumber", String(BigInt(await rpcCall("eth_blockNumber")))); } catch (err) { out("FAIL", "eth_blockNumber", redactText(err.shortMessage || err.message)); }
     try {

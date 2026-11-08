@@ -49,6 +49,12 @@ async function readFees(provider) {
  */
 async function estimateGas(provider, { to, data = "0x", from, value } = {}, { headroomPct = 25 } = {}) {
   if (!ethers.isAddress(to)) throw new Error("estimateGas: `to` is not an address");
+  if (typeof data !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(data)) throw new Error("estimateGas: `data` is not hex bytes");
+  if (value != null) {
+    let v;
+    try { v = BigInt(value); } catch { throw new Error("estimateGas: `value` is not an integer"); }
+    if (v < 0n) throw new Error("estimateGas: `value` is negative");
+  }
   const tx = { to, data };
   if (from) tx.from = from;
   if (value != null) tx.value = "0x" + BigInt(value).toString(16); // JSON-RPC quantity: no leading zeros

@@ -1462,7 +1462,7 @@ const initApprove = ((root, VERSION) => {
         chainId: cfg.chainId, chainName: cfg.chainName, rpc: cfg.rpc,
         nativeCurrency: cfg.nativeCurrency, nativeSymbol: cfg.nativeSymbol, explorer: cfg.explorer,
       });
-    } catch (e) { status(window.WalletChain.isUnknownChain(e) ? e.message : `Could not switch network: ${e.message}`, 'warn'); return; }
+    } catch (e) { status(e && e.manual ? e.message : `Could not switch network: ${e.message}`, 'warn'); return; }
     await checkChain();
     status(chainOk ? `On ${cfg.chainName}.` : 'Still on the wrong network.', chainOk ? 'ok' : 'warn');
   }
@@ -1667,7 +1667,7 @@ async function connectWallet() {
           chainId: CHAIN_ID, chainName: CHAIN_NAME, rpc: RPC_URL,
           nativeCurrency: NATIVE_CURRENCY, nativeSymbol: NATIVE_SYMBOL, explorer: EXPLORER,
         });
-      } catch(e) { alert('Could not switch network: ' + (e.message || e)); throw e; }
+      } catch(e) { alert(e && e.manual ? String(e.message) : 'Could not switch network: ' + (e.message || e)); throw e; }
     }
 
     signer = await provider.getSigner();

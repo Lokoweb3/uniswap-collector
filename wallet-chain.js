@@ -53,7 +53,7 @@
     } catch (e) {
       if (!isUnknownChain(e)) throw e;
       const params = walletChainParams(chain);
-      if (!params) throw new Error(manualAddMessage(chain));
+      if (!params) throw Object.assign(new Error(manualAddMessage(chain)), { manual: true }); // a by-hand instruction, shown as is
       await ethereum.request({ method: "wallet_addEthereumChain", params: [params] });
       return "added";
     }

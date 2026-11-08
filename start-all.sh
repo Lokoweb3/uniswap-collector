@@ -88,6 +88,24 @@ start_pulse() {
 }
 start_pulse
 
+# Elysium TESTNET (an Arbitrum Orbit chain), the same way: read-only, its own data directory and
+# port, no loops, no companion services, native balances only. Opt-in: nothing starts unless
+# $dir/settings.json exists (copy settings.elysium-testnet.example.json there). The mainnet is
+# disabled (awaiting verification) and has no variables here. LP_ELYSIUM_TESTNET_RPC_URL, when
+# wanted, comes from ./.env above.
+start_elysium_testnet() {
+  local dir="${LP_ELYSIUM_TESTNET_DATA_DIR:-$HOME/elysium-testnet-data}" port="${LP_ELYSIUM_TESTNET_PORT:-8794}"
+  [ -f "$dir/settings.json" ] || return 0
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then
+    echo "elysium testnet viewer: already running on :${port}"
+    return 0
+  fi
+  LP_READONLY=1 nohup node server.js --data-dir="$dir" --port="$port" --no-loops --no-services \
+    >> "$dir/server.log" 2>&1 < /dev/null &
+  echo "elysium testnet viewer: started (pid $!) on :${port} — TESTNET, read-only, logs in $dir/server.log"
+}
+start_elysium_testnet
+
 # One URL for every chain: the router proxies to each chain's dashboard, namespaces
 # their cookies so a session on one is never presented to the other, and injects the
 # chain picker. The public gate (lp-gate.mjs) fronts this rather than a single
@@ -95,13 +113,15 @@ start_pulse
 # running when there is a second chain to switch to.
 start_router() {
   local port="${LP_ROUTER_PORT:-8800}" chains="robinhood,arc"
-  local arc_on=0 base_on=0 pulse_on=0
+  local arc_on=0 base_on=0 pulse_on=0 elysium_on=0
   [ -f "${LP_ARC_DATA_DIR:-$HOME/arc-data}/settings.json" ] && arc_on=1
   [ -f "${LP_BASE_DATA_DIR:-$HOME/base-data}/settings.json" ] && base_on=1
   [ -f "${LP_PULSE_DATA_DIR:-$HOME/pulse-data}/settings.json" ] && pulse_on=1
-  [ "$arc_on" = 1 ] || [ "$base_on" = 1 ] || [ "$pulse_on" = 1 ] || return 0
+  [ -f "${LP_ELYSIUM_TESTNET_DATA_DIR:-$HOME/elysium-testnet-data}/settings.json" ] && elysium_on=1
+  [ "$arc_on" = 1 ] || [ "$base_on" = 1 ] || [ "$pulse_on" = 1 ] || [ "$elysium_on" = 1 ] || return 0
   [ "$base_on" = 1 ] && chains="robinhood,arc,base"
   [ "$pulse_on" = 1 ] && chains="${chains},pulsechain"
+  [ "$elysium_on" = 1 ] && chains="${chains},elysium-testnet"
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then
     echo "chain router: already running on :${port}"
     return 0

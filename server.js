@@ -39,10 +39,14 @@ const bs = require("./blockscout");        // one Blockscout client; PRO key whe
 const vaultMeta = require("./vault-metadata");
 const cl = require("./collector-logic");   // native-currency naming, shared with the collector
 const cfg = settings.load();
+const elysiumPages = require("./elysium-chains");
+const TESTNET = cfg.testnet === true;
+// A test network says so on every page it serves: a persistent banner naming the chain.
+const markPage = (html) => (TESTNET ? elysiumPages.injectBanner(html.toString("utf8"), chainDisplayName(), cfg.chainId) : html);
 // The chain's name for anything a wallet will show a person. It was hardcoded to
 // "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
 // network and would have added chain 5042 to their wallet under that name.
-const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc" };
+const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc", 99801: "Elysium Testnet" };
 // Token symbols reach innerHTML templates: strip markup characters, and fall back to a short address when nothing is left.
 function cleanSymbol(sym, address) {
   const c = String(sym || "").replace(/[^A-Za-z0-9 ._$+-]/g, "").slice(0, 16).trim();
@@ -2215,7 +2219,7 @@ async function handleRequest(req, res) {
       // what made a corrected vault page still read "493.293396 ETH".
       res.staticAsset = true;
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
-      return res.end(html);
+      return res.end(markPage(html));
     } catch {
       res.writeHead(404, { "Content-Type": "text/plain" });
       return res.end("wallet.html not found");
@@ -2364,6 +2368,7 @@ async function handleRequest(req, res) {
     return res.end(JSON.stringify({
       ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
       rpc: RPC_SHOWN, explorer: EXPLORER_URL, readOnly: READONLY, noTx: NO_TX,
+      ...(TESTNET ? { testnet: true } : {}),
       // Null unless settings verify it: a wallet told the wrong native asset keeps
       // showing gas under the wrong ticker.
       nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
@@ -2680,7 +2685,7 @@ async function handleRequest(req, res) {
     res.setHeader("Content-Type", "application/json");
     try {
       const ts = treasuryLedger.settings(cfg);
-      const out = { ok: true, nft: cfg.treasuryNFT || null, tba: ts.tba, pct: ts.pct, max: ts.max, owner: null, admin: null, paused: null, balances: [], publicHost: publicHost() };
+      const out = { ok: true, ...(TESTNET ? { testnet: true } : {}), nft: cfg.treasuryNFT || null, tba: ts.tba, pct: ts.pct, max: ts.max, owner: null, admin: null, paused: null, balances: [], publicHost: publicHost() };
       if (cfg.treasuryNFT) {
         const nft = new ethers.Contract(cfg.treasuryNFT, ["function ownerOf(uint256) view returns (address)", "function owner() view returns (address)", "function feeSplitPct() view returns (uint256)", "function paused() view returns (bool)"], provider);
         const [o, a, p, pz] = await Promise.all([nft.ownerOf(1).catch(() => null), nft.owner().catch(() => null), nft.feeSplitPct().catch(() => null), nft.paused().catch(() => null)]);
@@ -2718,6 +2723,7 @@ async function handleRequest(req, res) {
         // token from the current contract takes its id from block.chainid and cannot
         // be wrong about that, but its name is chosen at deployment and can be.
         try {
+          if (TESTNET && !cfg.treasuryNFT) throw new Error("no vault on this chain");
           const uri = await new ethers.Contract(cfg.treasuryNFT, ["function tokenURI(uint256) view returns (string)"], provider).tokenURI(1);
           if (uri.startsWith("data:application/json;base64,")) {
             const meta = JSON.parse(Buffer.from(uri.split(",")[1], "base64").toString("utf8"));
@@ -2728,7 +2734,7 @@ async function handleRequest(req, res) {
               ...vaultMeta.chainClaim(meta, cfg.chainId, chainDisplayName()),
             };
           }
-        } catch (err) { out.artError = err.shortMessage || err.message; }
+        } catch (err) { if (!(TESTNET && !cfg.treasuryNFT)) out.artError = err.shortMessage || err.message; } // a test network with no vault has nothing to report
         out.chain = { id: Number(cfg.chainId), name: chainDisplayName() };
       res.writeHead(200);
       return res.end(JSON.stringify(out));
@@ -2737,7 +2743,7 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
     }
   }
-  if (url.pathname === "/claim-fees.js" || url.pathname === "/claim-fees-core.js") {
+  if (url.pathname === "/claim-fees.js" || url.pathname === "/claim-fees-core.js" || url.pathname === "/wallet-chain.js") {
     try {
       const file = url.pathname.slice(1);
       res.staticAsset = true;
@@ -3427,7 +3433,7 @@ async function handleRequest(req, res) {
     res.staticAsset = true;
     // Nothing in this repo frames the dashboard; refuse framing by other origins (clickjacking over the Claim fees button).
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache", "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "DENY" });
-    return res.end(html);
+    return res.end(markPage(html));
   }
 
   res.writeHead(404, { "Content-Type": "text/plain" });

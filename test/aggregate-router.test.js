@@ -189,8 +189,10 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     assert.strictEqual(doc.rows[0].symbol, "ETH"); assert.ok(!("chains" in doc) && !("items" in doc), "a proxied /api/portfolio is the instance's, not the aggregator's");
     assert.ok(arc.hits.some((h) => h.url === "/api/portfolio" && h.host === `127.0.0.1:${arc.port}`));
     let diff = "";
-    const untouched = ["server", "watch", "portfolio", "slipstream", "v2lp", "staking", "dashboard", "dashboard", "dashboard", "wallet", "lp-gate"]
-      .map((n, i) => `${n}${[".js", ".js", ".js", ".js", ".js", ".js", ".html", ".js", ".css", ".html", ".mjs"][i]}`);
+    // server.js, portfolio.js and wallet.html left this list when the Elysium testnet was added (SPEC-elysium-testnet.md
+    // changes all three on purpose: the testnet flag, the raw-wei native row, the wallet add/switch flow).
+    const untouched = ["watch", "slipstream", "v2lp", "staking", "dashboard", "dashboard", "dashboard", "lp-gate"]
+      .map((n, i) => `${n}${[".js", ".js", ".js", ".js", ".html", ".js", ".css", ".mjs"][i]}`);
     try {
       diff = execFileSync("git", ["diff", "e2b5ac0", "--stat", "--", ...untouched], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     } catch { diff = ""; /* no git here: nothing to compare */ }

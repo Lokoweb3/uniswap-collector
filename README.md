@@ -1061,6 +1061,49 @@ node tools/verify-pulsechain-wallets.js       # what each wallet holds right now
 - Loose wallet tokens are priced by the portfolio from their PulseX v2 pairs (`contracts.v2Factory`); a wallet
   with hundreds of spam tokens makes that read slow.
 
+## Elysium Testnet (read-only instance)
+
+A fourth read-only dashboard, for the **Elysium Testnet** (an Arbitrum Orbit chain, chain ID 99801 / `0x185d9`, gas
+currency HYPE, settling to HyperEVM testnet 998), started and fronted like Base and PulseChain: its own data
+directory and port, `LP_READONLY=1 ... --no-loops --no-services`, `"noTransactionData": true`, view calls only. It
+shows the native HYPE balance of the configured wallets. **Testnet only, no transactions**: it serves no calldata,
+reads no keystore, and sends, signs, deploys, bridges and trades nothing. No DEX, NPM or other contract address is
+known on this chain, so positions and LP readers stay empty and none is invented. `collector-base*.js` and
+`claim-fees*.js` (Base-only) are never reached.
+
+```
+mkdir -p ~/elysium-testnet-data && cp settings.elysium-testnet.example.json ~/elysium-testnet-data/settings.json   # edit wallets
+./start-all.sh        # starts :8794 (LP_ELYSIUM_TESTNET_PORT) and adds Elysium Testnet to the router (--chains=...,elysium-testnet)
+./stop-all.sh         # stops it by its port only, and only if it is that server.js with that --data-dir
+node tools/verify-onchain.js elysium-testnet   # read-only: chain id, fees, NodeInterface (PASS / FAIL / INFO)
+```
+
+- Data dir `${LP_ELYSIUM_TESTNET_DATA_DIR:-$HOME/elysium-testnet-data}`, port `${LP_ELYSIUM_TESTNET_PORT:-8794}`
+  (router flag `--elysium-testnet-port`); nothing starts unless `settings.json` exists there. A keyed RPC goes in
+  `.env` as `LP_ELYSIUM_TESTNET_RPC_URL` (validated, shown to pages as an origin only, never logged).
+- Marked as a testnet everywhere: `/api/chain` and `/api/vault-info` carry `"testnet": true`, every page the
+  instance serves has a persistent TESTNET banner naming "Elysium Testnet", and the router's picker tab and the
+  `/portfolio` tab carry a TESTNET tag.
+- **Native decimals: 18 is NOT independently proven.** The Elysium docs name the symbol HYPE but state no decimals,
+  and no second source (wallet metadata, Orbit config, explorer API) was reachable; `eth_getBalance` alone proves
+  nothing. So `nativeCurrency.decimals` is left out of the example settings: balances are shown as the raw wei
+  value labelled "decimals unverified", and the Wallet page tells you to add the network by hand instead of
+  guessing. Add `"decimals": 18` to `chain.nativeCurrency` only once it is confirmed (see `VERIFICATION-elysium.md`).
+- The Wallet page's network switch uses `wallet-chain.js`: `wallet_switchEthereumChain` first, then
+  `wallet_addEthereumChain` only on error 4902 (unknown chain), never after a rejection, and never with an
+  unverified native currency. The wallet chain is 99801; the settlement chain 998 is metadata only.
+- **Portfolio policy: testnets are excluded from every total.** On `/portfolio` the Elysium Testnet is listed
+  in its own "Testnets (not counted)" section with no USD figure; it adds nothing to the grand total, any
+  breakdown, any wallet figure or any rate. A testnet that is down is shown as down, never as $0, and does not make
+  the real total incomplete.
+- **Mainnet (99901 / `0x1863d`, settlement 999) is disabled: awaiting verification** of its RPC, explorer and
+  native decimals. It is in `elysium-chains.js` with null RPC, explorer and decimals; `settings.load`,
+  `chain-router.js --chains=...elysium-mainnet` and `tools/verify-onchain.js elysium-mainnet` refuse it, and
+  `start-all.sh` has no mainnet variables.
+- `orbit-fees.js` is a read-only fee helper (`eth_gasPrice`, the latest block's `baseFeePerGas`, `eth_feeHistory`;
+  gas through the NodeInterface at `0x...C8` by `eth_call`, falling back to `eth_estimateGas`). Nothing sends a
+  transaction, so nothing uses it yet beyond `tools/verify-onchain.js`.
+
 ## Blockscout API key
 
 Every Blockscout call goes through `blockscout.js`. Put a free PRO key (https://dev.blockscout.com, value

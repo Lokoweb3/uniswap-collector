@@ -1001,6 +1001,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 </div></div>
 </section>
 </div>
+<script src="/wallet-chain.js"></script>
 <script src="/qr.js"></script>
 <script>
 (() => {
@@ -1464,10 +1465,10 @@ const initApprove = ((root, VERSION) => {
           status(`${cfg.chainName} is not in your wallet. Add it by hand (chain id ${cfg.chainId}, RPC ${cfg.rpc}) — this page will not guess the chain's native currency.`, 'warn');
           return;
         }
-        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{
-          chainId: hex, chainName: cfg.chainName, rpcUrls: [cfg.rpc],
-          nativeCurrency: cfg.nativeCurrency, blockExplorerUrls: cfg.explorer ? [cfg.explorer] : [],
-        }] });
+        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [WalletChain.walletChainParams({
+          chainId: cfg.chainId, chainName: cfg.chainName, rpc: cfg.rpc,
+          nativeCurrency: cfg.nativeCurrency, explorer: cfg.explorer,
+        })] });
       } else { status(`Could not switch network: ${e.message}`, 'bad'); return; }
     }
     await checkChain();
@@ -1668,17 +1669,19 @@ async function connectWallet() {
       try {
         await provider.send('wallet_switchEthereumChain', [{ chainId: '0x' + CHAIN_ID.toString(16) }]);
       } catch(e) {
+        // Only an unknown chain (4902 / "unrecognized") may add it; a rejection (4001) or anything else stops here, visibly.
+        if (!WalletChain.isUnknownChain(e)) { alert('Could not switch network: ' + (e.message || e)); throw e; }
         // Never hardcode another chain's identity here: this page is served by
         // whichever instance is running, and adding a network under the wrong name
         // or the wrong native currency misleads the wallet from then on.
         if (!NATIVE_CURRENCY) throw new Error(`${CHAIN_NAME} is not in your wallet. Add it by hand: chain id ${CHAIN_ID}, RPC ${RPC_URL}.`);
-        await provider.send('wallet_addEthereumChain', [{
-          chainId: '0x' + CHAIN_ID.toString(16),
+        await provider.send('wallet_addEthereumChain', [WalletChain.walletChainParams({
+          chainId: CHAIN_ID,
           chainName: CHAIN_NAME,
-          rpcUrls: [RPC_URL],
+          rpc: RPC_URL,
           nativeCurrency: NATIVE_CURRENCY,
-          blockExplorerUrls: EXPLORER ? [EXPLORER] : [],
-        }]);
+          explorer: EXPLORER,
+        })]);
       }
     }
 

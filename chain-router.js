@@ -28,6 +28,7 @@
  *   node chain-router.js                  # 8800, Robinhood + Arc
  *   node chain-router.js --chains=robinhood,arc,base   # also Base (:8796)
  *   node chain-router.js --chains=robinhood,arc,pulsechain   # also PulseChain (:8795)
+ *   node chain-router.js --chains=robinhood,arc,elysium-testnet   # also the Elysium TESTNET (:8794), never counted in a total
  *
  * Not 8799: test/smoke.js starts its own dashboard there, and a router squatting on
  * that port makes the whole smoke suite fail with "fetch failed".
@@ -39,6 +40,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const csrf = require("./csrf");
+const elysium = require("./elysium-chains");
 const aggregate = require("./aggregate");
 const { URL } = require("url");
 
@@ -64,12 +66,19 @@ const KNOWN_CHAINS = [
   { key: "arc", label: "Arc", accent: "#38bdf8", port: Number(arg("arc-port", 8797)) },
   { key: "base", label: "Base", accent: "#0052ff", port: Number(arg("base-port", 8796)) },
   { key: "pulsechain", label: "PulseChain", accent: "#c026d3", port: Number(arg("pulsechain-port", 8795)) },
+  // A test network: tagged TESTNET in the picker and the Portfolio tabs, and never counted in any total (aggregate.js).
+  { key: "elysium-testnet", label: "Elysium Testnet", accent: "#f59e0b", port: Number(arg("elysium-testnet-port", 8794)), testnet: true },
 ];
 // Which of the known chains this router fronts: --chains=robinhood,arc,base,pulsechain or LP_ROUTER_CHAINS.
 // The default is exactly the list it has always had, so nothing changes unless a chain is
 // named. An unknown name is ignored (a request still cannot name a target), and the list
 // keeps the order given, so the picker reads the way the operator wrote it.
 const WANTED = String(arg("chains", process.env.LP_ROUTER_CHAINS || "robinhood,arc")).split(",").map((k) => k.trim()).filter(Boolean);
+// The Elysium mainnet is prepared but disabled. Naming it is an explicit error, not the silent "unknown name" path.
+if (WANTED.includes("elysium-mainnet")) {
+  console.error(`[chain-router] ${elysium.MAINNET_DISABLED_MESSAGE}`);
+  process.exit(1);
+}
 const CHAINS = [...new Set(WANTED)].map((k) => KNOWN_CHAINS.find((c) => c.key === k)).filter(Boolean);
 if (!CHAINS.length) CHAINS.push(KNOWN_CHAINS[0]);
 const DEFAULT = arg("default", "robinhood");
@@ -113,6 +122,8 @@ function restoreCookieHeader(raw, key) {
 }
 
 const PICKER_ID = "lp-chain-picker";
+// The visible mark on a test network's tab. Static markup, same in the picker and the Portfolio tabs.
+const TESTNET_TAG = '<span class="testnet-tag" style="font-size:9px;font-weight:800;letter-spacing:.8px;border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-left:2px">TESTNET</span>';
 // Methods a browser may send cross-site without the guard mattering; everything else
 // is checked before it is forwarded.
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -134,7 +145,7 @@ function pickerHtml(current) {
       color:${here ? "#0b1220" : "#cbd5e1"};background:${here ? c.accent : "transparent"};
       border:1px solid ${here ? c.accent : "rgba(148,163,184,.3)"}">
       <span style="width:7px;height:7px;border-radius:50%;background:${here ? "#0b1220" : c.accent};opacity:${here ? 0.75 : 1}"></span>
-      ${c.label}</a>`;
+      ${c.label}${c.testnet ? TESTNET_TAG : ""}</a>`;
   }).join("");
   // The cross-chain page is not a chain, so it has no data-chain: the click handler below
   // only reacts to a[data-chain] and leaves this a plain link.
@@ -267,7 +278,7 @@ function aggregateCss(themeDir = AGG_THEME_DIR) {
 
 /** The page shell. No inline script and no upstream data: the view script fills it in. */
 function portfolioHtml() {
-  const tabs = CHAINS.map((c) => `<a class="chain-tab" href="/?chain=${encodeURIComponent(c.key)}" data-key="${c.key}" style="--accent:${c.accent}"><span class="dot"></span>${c.label}</a>`).join("");
+  const tabs = CHAINS.map((c) => `<a class="chain-tab" href="/?chain=${encodeURIComponent(c.key)}" data-key="${c.key}" style="--accent:${c.accent}"><span class="dot"></span>${c.label}${c.testnet ? TESTNET_TAG : ""}</a>`).join("");
   return `<!doctype html>
 <html lang="en">
 <head>

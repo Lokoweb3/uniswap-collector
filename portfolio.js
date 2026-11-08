@@ -348,8 +348,13 @@ function create({ provider, factory, cfg, explorerApi }) {
     // precise of the two, and skip that token in the scan.
     const native = await provider.getBalance(address).catch(() => null);
     if (native != null) {
-      const bal = Number(ethers.formatEther(native)); // native: 18 decimals, always
-      if (bal > 0) rows.push({ symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : (cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "ETH", address: null, native: true, amount: bal, price: UNIT.nativeSameAsErc20 ? (UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd) : wethUsd });
+      if (cfg.testnet && !(cfg.nativeCurrency && Number.isInteger(cfg.nativeCurrency.decimals))) {
+        // A test network whose native decimals are unverified: the raw wei, never scaled by a guess, never priced.
+        if (native > 0n) rows.push({ symbol: cfg.nativeSymbol || (cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "native", address: null, native: true, amount: null, amountRaw: native.toString(), decimalsUnverified: true, price: null });
+      } else {
+      const bal = Number(ethers.formatUnits(native, cfg.testnet ? cfg.nativeCurrency.decimals : 18)); // native: 18 decimals everywhere but a verified testnet
+      if (bal > 0) rows.push({ symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : (cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "ETH", address: null, native: true, amount: bal, price: cfg.testnet ? null : UNIT.nativeSameAsErc20 ? (UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd) : wethUsd });
+      }
     }
     if (UNIT.nativeSameAsErc20 && WETH) addrs.delete(WETH); // same balance, already counted natively
     const held = await mapLimit([...addrs], CONCURRENCY, async (addr) => {
@@ -542,12 +547,15 @@ function create({ provider, factory, cfg, explorerApi }) {
     // whole balance, so the matching ERC-20 is dropped from the scan below
     // rather than counted a second time.
     const native = await provider.getBalance(owner).catch(() => null);
-    if (native != null) {
-      const bal = Number(ethers.formatEther(native)); // native: 18 decimals, always
+    if (native != null && cfg.testnet && !(cfg.nativeCurrency && Number.isInteger(cfg.nativeCurrency.decimals))) {
+      // Test network, native decimals unverified: raw wei, labelled, never scaled by a guess and never priced.
+      rows.push({ symbol: cfg.nativeSymbol || (cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "native", address: null, native: true, wallet: null, walletRaw: native.toString(), decimalsUnverified: true, pools: 0, fees: 0, price: null, source: "wallet" });
+    } else if (native != null) {
+      const bal = Number(ethers.formatUnits(native, cfg.testnet ? cfg.nativeCurrency.decimals : 18)); // native: 18 decimals everywhere but a verified testnet
       rows.push({
         symbol: UNIT.nativeSameAsErc20 ? UNIT.symbol : (cfg.nativeCurrency && cfg.nativeCurrency.symbol) || "ETH",
         address: null, native: true, wallet: bal, pools: 0, fees: 0,
-        price: UNIT.nativeSameAsErc20 && UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd,
+        price: cfg.testnet ? null : UNIT.nativeSameAsErc20 && UNIT.usdRate != null ? Number(UNIT.usdRate) : wethUsd,
         source: "wallet",
       });
     }

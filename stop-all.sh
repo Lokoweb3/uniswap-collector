@@ -36,6 +36,18 @@ if [ -n "$pulsepid" ]; then
   esac
 fi
 
+# And the Elysium TESTNET viewer, the same way: its own port only, and only a process that really is it.
+elysiumport="${LP_ELYSIUM_TESTNET_PORT:-8794}"
+elysiumdir="${LP_ELYSIUM_TESTNET_DATA_DIR:-$HOME/elysium-testnet-data}"
+elysiumpid=$(ss -ltnp 2>/dev/null | awk -v p=":${elysiumport} " 'index($0, p) { print $NF }' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
+if [ -n "$elysiumpid" ]; then
+  elysiumcmd=$(tr "\0" " " 2>/dev/null < "$PROC_ROOT/$elysiumpid/cmdline") || elysiumcmd=""
+  case " $elysiumcmd" in
+    *"server.js"*" --data-dir=$elysiumdir "*) kill "$elysiumpid" 2>/dev/null && echo "elysium testnet viewer: stopped (pid $elysiumpid)" ;;
+    *) echo "elysium testnet viewer: port $elysiumport is held by pid $elysiumpid, which is not the Elysium testnet viewer (server.js --data-dir=$elysiumdir); left running" ;;
+  esac
+fi
+
 pid=$(ss -ltnp 2>/dev/null | awk '/:8787 /{print $NF}' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
 if [ -z "$pid" ]; then echo "dashboard: not running"; exit 0; fi
 kill "$pid" && echo "dashboard: stopped (pid $pid)"

@@ -7,6 +7,7 @@
  *
  *   node tools/verify-onchain.js base
  *   node tools/verify-onchain.js pulse
+ *   node tools/verify-onchain.js elysium-testnet   # read-only chain id / fee / NodeInterface checks (tools/verify-elysium.js)
  *   PULSE_RPC=https://rpc.pulsechain.com          node tools/verify-onchain.js pulse  # (or LP_PULSE_RPC_URL; shown as an origin only)
  *   EXAMPLE=/path/settings.pulsechain.example.json node tools/verify-onchain.js pulse
  *   BASE_RPC=https://mainnet.base.org            node tools/verify-onchain.js base   # calls (default)
@@ -26,8 +27,13 @@ const { ethers } = require("ethers");
 const { validateEndpoint, redactUrl, redactText, registerEndpoint } = require("../endpoint");
 
 const mode = process.argv[2];
+if (mode === "elysium-testnet" || mode === "elysium-mainnet") {
+  // Its own read-only routine; the mainnet is refused there before any network call.
+  require("./verify-elysium").run(mode).then((code) => process.exit(code), (err) => { console.error(redactText(String(err && err.message))); process.exit(1); });
+  return;
+}
 if (mode !== "base" && mode !== "pulse") {
-  console.error("usage: node tools/verify-onchain.js base|pulse");
+  console.error("usage: node tools/verify-onchain.js base|pulse|elysium-testnet");
   process.exit(2);
 }
 const PULSE = mode === "pulse";

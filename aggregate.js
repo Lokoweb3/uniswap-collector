@@ -148,6 +148,8 @@ function ingestToken(t) {
     thin: t.thin === true,
     assumed: t.assumed === true,
     unavailable: !!t.unavailable,
+    // A native balance whose decimals are unverified (a test network): the raw wei as a digit string, never scaled.
+    ...(t.decimalsUnverified === true && typeof t.amountRaw === "string" && /^[0-9]{1,40}$/.test(t.amountRaw) ? { amountRaw: t.amountRaw, decimalsUnverified: true } : {}),
   };
 }
 
@@ -204,6 +206,7 @@ function ingest(name, raw) {
       tokens.push({
         symbol: str(r.symbol, 40), address, native: r.native === true || !address,
         amount, price, usd, thin: r.thin === true, assumed: r.assumed === true, unavailable: !!r.unavailable,
+        ...(r.decimalsUnverified === true && typeof r.walletRaw === "string" && /^[0-9]{1,40}$/.test(r.walletRaw) ? { amountRaw: r.walletRaw, decimalsUnverified: true } : {}),
       });
     }
     return { at, data: { owner: addrOf(raw.owner), tokens } };
@@ -385,6 +388,7 @@ function compose(state, now) {
     for (const t of tokens) {
       let reason = null, counted = false, valueUsd = null;
       if (t.unavailable) reason = "decimals-unverified";
+      else if (t.decimalsUnverified === true && t.amountRaw && t.amountRaw !== "0") reason = "decimals-unverified";
       else if (!(t.amount > 0)) continue;
       else if (!t.native && t.address && pairSet.has(t.address)) reason = "duplicate-of-holdings";
       else if (t.usd === null) reason = "unpriced";
@@ -400,6 +404,7 @@ function compose(state, now) {
         counted, reason,
         flags: { thin: t.thin, assumed: t.assumed, staked: false, killedGauge: false, feesUnavailable: false, stale, staking: false },
         inRange: null, amount: t.amount, price: t.price, asOf, source, link,
+        ...(t.decimalsUnverified === true ? { amountRaw: t.amountRaw, decimalsUnverified: true } : {}),
         _addr: t.address, _native: t.native,
       });
     }
@@ -507,7 +512,32 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
   const incompleteList = [];
   const add = (obj, k, v) => { obj[k] = (obj[k] || 0) + v; };
 
+  // Test networks (chain.testnet): EXCLUDED from every total and reported on their own. Test tokens have no market
+  // value, and a priced figure (a misconfigured or assumed price) would silently inflate the grand total. Their items
+  // keep their native amount but carry no USD figure, and they touch no total, breakdown, rate or wallet figure.
+  const testnetItems = [];
+  const testnetChains = [];
   for (const c of composed) {
+    if (c.chain.testnet === true) {
+      testnetChains.push(c.chain.key);
+      for (const it of c.items) {
+        it.testnet = true; it.counted = false; it.reason = "testnet";
+        it.valueUsd = null; it.feesUsd = null; it.rewardsUsd = null; it.rewardsCounted = false; it.rewardsReason = null; it._feesCounted = false; it._contrib = 0;
+        if (it.price !== undefined) it.price = null;
+        testnetItems.push(it);
+      }
+      // A testnet that is down, stale or partial is shown as such, with its own code; it never changes the real total's honesty.
+      if (c.status !== "ok") incompleteList.push({ chain: c.chain.key, code: `testnet-${c.status}`, testnet: true });
+      for (const p of c.problems) incompleteList.push({ chain: c.chain.key, ...(p.part ? { part: p.part } : { wallet: p.wallet }), code: p.code, testnet: true });
+      const ref = c.status === "stale" ? c.lastGoodAt : (c.dataAt || c.fetchedAt);
+      chainsOut.push({
+        key: c.chain.key, label: c.chain.label, accent: c.chain.accent, status: c.status, testnet: true,
+        fetchedAt: c.fetchedAt, dataAt: c.dataAt, lastGoodAt: c.lastGoodAt, ageMs: ref ? Math.max(0, now - ref) : null,
+        problems: c.problems.map((p) => ({ ...p })), notes: (c.notes || []).map((n) => ({ ...n })), parts: c.parts,
+        totals: { countedUsd: null, uncountedUsd: null, staleUsd: null },
+      });
+      continue;
+    }
     const cTotals = { countedUsd: 0, uncountedUsd: 0, staleUsd: 0 };
     for (const w of c.wallets) {
       let m = walletMap.get(w.key);
@@ -600,14 +630,24 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
     for (const k of Object.keys(it)) if (!k.startsWith("_")) out[k] = it[k];
     items.push(out);
   }
+  // Testnet items follow the real ones, capped per kind on their own so they never push a real item out.
+  const tPerKind = {};
+  for (const it of testnetItems) {
+    tPerKind[it.kind] = (tPerKind[it.kind] || 0) + 1;
+    if (tPerKind[it.kind] > MAX_ITEMS_PER_KIND) continue;
+    const out = {};
+    for (const k of Object.keys(it)) if (!k.startsWith("_")) out[k] = it[k];
+    items.push(out);
+  }
 
   return {
     ok: true, at: now, ttlMs,
     chains: chainsOut, wallets: walletsOut, items, totals,
     breakdown: { byChain, byWallet, byProtocol, feesByChain, feesByWallet },
     rates,
-    incomplete: composed.some((c) => c.status !== "ok") || incompleteList.length > 0,
+    incomplete: composed.some((c) => c.status !== "ok" && c.chain.testnet !== true) || incompleteList.some((e) => e.testnet !== true),
     incompleteList, truncated,
+    testnet: { chains: testnetChains, items: testnetItems.length },
   };
 }
 

@@ -11,6 +11,7 @@
  *   risk       memecoins [ rule blocks ], defaults, discovery, autoCollect, sell
  *   alerts     telegramChat (group), fallbackChat (personal), treasuryChat, dailySummary
  *   baseCollect  Base fee-collect pass (collector-base.js): minFeesUsd, minFeesToGasRatio, maxGasPerRunEth, maxGasPriceGwei, maxCollectsPerRun, dailyGasCapEth
+ *   baseSweep  Base sweep to USDC (collector-base-sweep.js): enabled (ships false), caps, vault (ships tba null)
  *   dashboard  port, collectMode
  *   portfolio, staking
  *
@@ -152,6 +153,8 @@ function toLegacy(raw) {
     ownerV4Ids: Array.isArray(main.v4Ids) ? main.v4Ids : [],
     // Top-level "baseCollect": thresholds and gas caps of that pass. Carried only when present.
     ...(s.baseCollect && typeof s.baseCollect === "object" ? { baseCollect: s.baseCollect } : {}),
+    // Top-level "baseSweep": the Base sweep (swap fee tokens to USDC, deliver to the owner). Carried only when present; ships enabled:false.
+    ...(s.baseSweep && typeof s.baseSweep === "object" ? { baseSweep: s.baseSweep } : {}),
     sweepDestination: col.sweepDestination || main.address,
     contracts: { ...(s.contracts || {}), weth: tokens.WETH || (s.contracts || {}).weth },
     thresholds: col.thresholds || {},
@@ -268,6 +271,7 @@ function fromLegacy(c, w = null, chats = {}) {
     },
     launchScanner: strip(c.launchScanner || {}),
     ...(c.baseCollect && typeof c.baseCollect === "object" ? { baseCollect: strip(c.baseCollect) } : {}),
+    ...(c.baseSweep && typeof c.baseSweep === "object" ? { baseSweep: strip(c.baseSweep) } : {}),
     dashboard: strip(c.dashboard || {}),
     portfolio: strip(c.portfolio || {}),
     staking: strip(c.staking || {}),

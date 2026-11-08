@@ -135,7 +135,8 @@ function buildFees({ baseFeeWei, rpcPriorityWei, lim }) {
 
 /**
  * The last look before signing. Throws unless the transaction is exactly what this pass is allowed to send.
- * `expect` = { tokenId, owner, manager }: `to` must be exactly `manager` (and allowlisted); the calldata must decode to collect(tokenId, owner, MAX, MAX).
+ * `expect` = { tokenId, owner, manager, recipient? }: `to` must be exactly `manager` (and allowlisted); the calldata must decode to
+ * collect(tokenId, recipient, MAX, MAX). `recipient` defaults to `owner`; the sweep passes the operator there.
  */
 function assertSignable(tx, lim, expect) {
   const bad = (m) => { throw new Error(`refusing to sign: ${m}`); };
@@ -159,7 +160,8 @@ function assertSignable(tx, lim, expect) {
   if (!d || d.name !== "collect") bad("calldata is not collect");
   const a = d.args[0];
   if (BigInt(a.tokenId) !== BigInt(expect.tokenId)) bad(`calldata tokenId ${a.tokenId} is not ${expect.tokenId}`);
-  if (String(a.recipient).toLowerCase() !== String(expect.owner).toLowerCase()) bad(`calldata recipient ${a.recipient} is not the checked owner ${expect.owner}`);
+  const wantRecipient = expect.recipient !== undefined && expect.recipient !== null ? expect.recipient : expect.owner;
+  if (String(a.recipient).toLowerCase() !== String(wantRecipient).toLowerCase()) bad(`calldata recipient ${a.recipient} is not the checked ${expect.recipient ? "recipient" : "owner"} ${wantRecipient}`);
   if (BigInt(a.amount0Max) !== MAX128 || BigInt(a.amount1Max) !== MAX128) bad("calldata amounts are not the uint128 maximum");
 }
 
@@ -202,15 +204,17 @@ const MIN_TX_GAS = 21000n;
 /**
  * Is `rc` the receipt of the transaction recorded in `entry`? null when it is, else the name of the first failed check.
  * `hash` is the hash the receipt must carry; `txGasLimit` (optional) bounds gasUsed instead of entry.gasLimit.
+ * `allowedTo` (optional) replaces the managers as the set of addresses the receipt's `to` may be (the sweep's targets).
  */
-function checkReceipt(rc, { hash, operator, entry, txGasLimit }) {
+function checkReceipt(rc, { hash, operator, entry, txGasLimit, allowedTo }) {
   if (!rc || typeof rc !== "object") return "receipt is not an object";
   const rh = rc.hash !== undefined ? rc.hash : rc.transactionHash;
   if (!sameHex(rh, hash)) return `hash mismatch (receipt ${rh}, expected ${hash})`;
   if (!sameHex(rc.from, operator)) return `from ${rc.from} is not the operator`;
   if (entry.from != null && !sameHex(rc.from, entry.from)) return `from ${rc.from} is not the recorded sender`;
-  if (typeof rc.to !== "string" || !ALLOWED_MANAGERS.some((a) => sameHex(a, rc.to))) return `to ${rc.to} is not an allowlisted manager`;
-  if (entry.to != null && !sameHex(rc.to, entry.to)) return `to ${rc.to} is not the recorded manager ${entry.to}`;
+  const okTo = Array.isArray(allowedTo) ? allowedTo : ALLOWED_MANAGERS;
+  if (typeof rc.to !== "string" || !okTo.some((a) => sameHex(a, rc.to))) return `to ${rc.to} is not ${Array.isArray(allowedTo) ? "an allowed target of this entry" : "an allowlisted manager"}`;
+  if (entry.to != null && !sameHex(rc.to, entry.to)) return `to ${rc.to} is not the recorded ${Array.isArray(allowedTo) ? "target" : "manager"} ${entry.to}`;
   if (rc.blockNumber == null || rc.blockNumber === "") return "no blockNumber";
   {
     const bn = rc.blockNumber;
@@ -289,6 +293,7 @@ function entryProblem(e) {
   for (const k of ["gasLimit", "maxFeePerGas", "l1"]) if (has(k) && !(typeof e[k] === "string" && /^\d{1,40}$/.test(e[k]))) return `${k} is not a decimal string`;
   if (has("maxPriorityFeePerGas") && !(typeof e.maxPriorityFeePerGas === "string" && /^\d{1,40}$/.test(e.maxPriorityFeePerGas))) return "maxPriorityFeePerGas is not a decimal string";
   for (const k of ["from", "to"]) if (has(k) && !(typeof e[k] === "string" && ethers.isAddress(e[k]))) return `${k} is not an address`;
+  if (has("op") && !require("./collector-base-sweep-logic").OPS.includes(e.op)) return "op is not a known sweep op";
   if (has("closed") && !(typeof e.closed === "string" && e.closed.length <= 40)) return "closed is not a short string";
   return null;
 }

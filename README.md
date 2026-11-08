@@ -919,6 +919,73 @@ its Read tab; all four must read `false` after revocation.
 **Schedule.** The task runs `run-collector.sh` as before; the Base pass rides on it. Register it for 8:00 with
 `windows-task.ps1 -At 8am` (the script defaults to 9am). Nothing changes in how the task is registered.
 
+
+## Sweep on Base
+
+An optional second step for the Base collect pass (`collector-base.js`): instead of paying the collected fee tokens to the owner as they come, the pass
+collects them to the **operator**, swaps every WETH / cbBTC / LAPTOP fee into native Base USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`, 6 decimals)
+through one fixed Uniswap v3 pool each, and delivers **100%** to the NFT's on-chain owner (`ownerOf`, re-read at every send; never taken from settings
+or a client). It ships **off** (`baseSweep.enabled: false` in `settings.base.example.json`) and is independent of `collect: true`.
+A vault split is written but **gated off**: there is no Base vault yet (`vault.tba` is `null`, `splitPct` 0).
+
+**What it does.** Per position the pass runs today's gates (operator approved, not staked, priced, `ownerOf` is the configured owner, thresholds), then a
+preflight: it only collects when the operator has the gas for the whole planned chain (collect, per token reset / approve / swap / reset / transfer, one
+transfer per unswapped token) plus `minOperatorEthReserve`, when every cap below allows that whole chain and when every swappable leg passes its checks.
+Then: collect with `recipient` = the operator, swap, deliver. The fixed facts are compiled into `collector-base-sweep-logic.js` and settings can only
+disable entries: SwapRouter02 `0x2626664c2603336E57B271c5C0b26F421741e481`, QuoterV2 `0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a`, factory
+`0x33128a8fC17869897dcE68Ed026d694621f6FDfD`; single-hop `exactInputSingle` only: WETH `0x4200000000000000000000000000000000000006` (pool
+`0xd0b53D9277642d899DF5C87A3966A349A798F224`, fee 500), cbBTC `0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf` (pool `0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef`, fee 500),
+LAPTOP `0xB095274743941e953c746F9C228DA9c18Bb6ec29` (pool `0x7702411B3893ea4F6Ab96C50231cFEc65448AB9F`, fee 10000). A USDC fee leg is sent as is. Any other token, or a
+token whose route fails a check, is delivered **unswapped** to the owner and reported; nothing is left with the operator. Per token the checks are: pool
+address equals the constant and `factory.getPool`, pool `factory()`, `token0/token1` and `fee()` agree, router and quoter have code, USDC `decimals()` is 6, a
+`QuoterV2` quote that is above 0 and not above the fee-adjusted mid price by more than 0.1%, price impact (against the mid price after the pool fee: the pool fee is
+not impact) within `maxPriceImpactBps`, leg value between `minSwapValueUsdc` and `maxSwapValueUsdc`, in-range liquidity, pool USDC at least `minPoolUsdc`, the quote
+at most `maxPoolShareBps` of the pool's USDC, and the spot tick within `twapMaxDeviationBps` of the `twapSeconds` TWAP (an `observe` that reverts fails closed).
+`minOut = quote x (10000 - slippageBps) / 10000`. Approvals are exact, only to the router, reset to 0 after every swap (and any stale non-zero allowance is reset
+at run start). Only the amounts recorded in `sweep-state.json` for a job are ever moved (the `Collect` event of the validated receipt); extra balances and native
+ETH are never touched, no transaction carries a value, and there is no wrap or unwrap. USDC fee legs and unswapped tokens are never split to a vault.
+
+**How to enable it.** (1) The normal Base setup above must already work: `wallets.main.collect: true` (or a watched wallet) and the operator approved with
+`setApprovalForAll` on **both** Aerodrome managers (`0x827922686190790b37229fd06084350E74485b72`, `0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53`); that is still required.
+(2) Create the ledger once: `LP_DATA_DIR=$HOME/base-data node collector-base.js --init-state` (creates `state.json` and `sweep-state.json`, mode 0600, never overwrites).
+(3) Run `node collector-base.js --mode=simulate` and read the plan. (4) Set `baseSweep.enabled` to the boolean `true` in `$HOME/base-data/settings.json`; the string
+`"true"`, `1` and every other value leave it off. There is no CLI flag or environment variable: the sweep is switched only by settings. With the key off the pass
+prints `sweep: disabled (baseSweep.enabled is not true)` and behaves exactly as before. `baseSweep.targetToken`, when given, must be the Base USDC or the sweep refuses
+to start (the legacy `tokens.USDG` alias is never consulted). A missing `sweep-state.json` refuses everything and logs the `--init-state` command; a corrupt one refuses
+everything too (the funds are not lost, they stay attributed on chain).
+
+**RISK.** While the sweep is on, the **operator key briefly holds the collected tokens and the swap proceeds** (between the collect and the delivery, normally
+one run, minutes), and the standing `setApprovalForAll` still lets the operator key act on **every** approved NFT. The operator keystore is therefore
+worth more than before: keep the operator ETH at the gas level only, keep the caps low, and revoke the approvals (README: Auto-collect on Base) to switch it
+all off. If a run is cut off after the collect, the next run finishes the job from `sweep-state.json` and the chain; nothing is guessed from balances.
+
+**Caps and what stuck / held means.** Every transaction (collect, approve, swap, approve-reset, transfer) goes through the same sign-first path as the collect: last
+look at the exact calldata, sign, record the intent in `sweep-state.json`, write the gas reservation to `state.json`, only then broadcast. Settings (all optional, values
+outside the hard bounds are clamped and logged): `slippageBps` (50, max 100), `maxPriceImpactBps` (100, max 300), `maxSwapValueUsdc` (250, max 1000), `minSwapValueUsdc` (1),
+`minPoolUsdc` (2000), `maxPoolShareBps` (300), `twapSeconds` (1800), `twapMaxDeviationBps` (200), `minOperatorEthReserve` (0.0005), `maxAttemptsPerLeg` (3), `maxTxPerRun` (20),
+`dailyTxCap` (40, trailing 24 h), `maxGasPerTxEth` (0.0007), `maxGasPerRunEth` (0.002), `dailyGasCapEth` (0.004) (these three replace the `baseCollect` values while the sweep is
+active; `maxGasPriceGwei` and the tip cap stay as in `baseCollect`), `maxGasLimitByOp` (collect 500000, approve 100000, swap 350000, transfer 120000; settings can only lower them),
+and `routes.<WETH|cbBTC|LAPTOP>.enabled` (may only be set to `false`). `maxCollectsPerRun` still counts collects only. A gas estimate above an op's ceiling means skip, never clamp.
+- **held**: the on-chain owner is not the owner recorded at collect time (sold, staked into a gauge, transferred), is the operator or is the zero address, or the operator
+  balance is lower than the attributed amount. Nothing is sent, the leg is reported (log, Telegram, exit code 1) and retried every run; it resumes when the owner is back.
+- **stuck**: the transfer to the owner reverted `maxAttemptsPerLeg` times. Reported every run (Telegram, exit code 1), never redirected to anyone else, and new collects are blocked
+  until you resolve it. After `maxAttemptsPerLeg` reverting swaps the token is delivered unswapped instead.
+- **unattributed**: the collect mined but its amounts cannot be read from the receipt or the pre-signing simulation: nothing is sent and no new collect starts.
+- **pending**: a transaction without a receipt and with an unused nonce waits; with a used nonce and no receipt (or an intent that was never reserved) it is voided and the leg is
+  re-evaluated from the balance, clamped to the attributed amount. Recovery runs before any new collect, also when `enabled` was turned off in the meantime (no new job starts).
+  `sweep-state.json` terminal jobs are kept 30 days. Do not hand-edit it.
+
+**How to verify.** `node tools/verify-base-sweep.js` is read-only (no key, only `eth_call`): it proves the code at the router, quoter and factory, the three pools against the factory, a probe quote,
+the TWAP the guard needs (a pool with too little oracle cardinality would always go unswapped), and the vault when configured; one `ok` / `FAIL` line each. Run it, then
+`node collector-base.js --mode=simulate` (prints, per position, the collect, per token the route, proof, quote, mid, impact, `minOut` and decision, the split, the owner and the
+cap verdict; it signs, writes and sends nothing). A Telegram summary and the closing line `=== base sweep: N positions, delivered X USDC, Y tokens unswapped, Z stuck, gas G ETH ===` come
+at the end of a `collect` run.
+
+**Vault later.** Today `baseSweep.vault.tba` is `null` and the split is 0%. To enable it: deploy a Base vault (an ERC-6551 token-bound account on a vault NFT), put `tba`, `nft`, `tokenId`,
+`implementation`, `registry`, `salt` and `expectedOwner` into `baseSweep.vault`, run `node tools/verify-base-sweep.js` until the vault block says verified, and only then set `splitPct` (capped by
+`maxSplitPct`, hard maximum 20). The vault is verified on chain at every run (registry derivation, code, `token()`, `owner()`, `ownerOf`); if any check fails the whole amount goes to the
+owner and the reason is reported. Only swap proceeds are split.
+
 ## PulseChain (read-only instance): PulseX v1 and v2 liquidity
 
 A third read-only dashboard, for PulseChain (chain 369), started and fronted exactly like Base: its own data

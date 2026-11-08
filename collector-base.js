@@ -30,6 +30,8 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const logic = require("./collector-base-logic");
+const sweepLogic = require("./collector-base-sweep-logic");
+const sweepMod = require("./collector-base-sweep");
 
 const MAX128 = (1n << 128n) - 1n;
 /** Exactly these three. Anything else is a bug. */
@@ -72,6 +74,9 @@ const big = (v) => BigInt(v);
  * A receipt is used only when it is provably this transaction; no receipt and the nonce used means replaced or dropped
  * (closed once at the worst case); no receipt and the nonce unused means still pending (stays counted).
  */
+/** The `to` a receipt of this entry may carry: the managers for a collect, else exactly the target recorded when it was signed. */
+const targetsOf = (e) => (e && e.op && e.op !== "collect" && typeof e.to === "string" ? [e.to] : undefined);
+
 async function settleEarlier(e, { provider, operator, log, now, findByNonce }) {
   const label = e.tx || "(no hash)";
   const hasHash = typeof e.tx === "string" && /^0x[0-9a-fA-F]{64}$/.test(e.tx);
@@ -97,7 +102,7 @@ async function settleEarlier(e, { provider, operator, log, now, findByNonce }) {
   }
   if (rc) {
     if (!complete) return hasNonce ? (log(`  earlier transaction ${label} lacks gasLimit/maxFeePerGas/l1; it stays counted`), false) : closeAt("legacy-unsettled", "has a receipt but no recorded limits");
-    const bad = logic.checkReceipt(rc, { hash: e.tx, operator, entry: e });
+    const bad = logic.checkReceipt(rc, { hash: e.tx, operator, entry: e, allowedTo: targetsOf(e) });
     if (bad) {
       const was = e.kind; e.kind = "unknown";
       log(`  earlier transaction ${label}: receipt rejected (${bad}); the worst case ${ethers.formatEther(worst)} ETH stays counted`);
@@ -122,7 +127,7 @@ async function settleEarlier(e, { provider, operator, log, now, findByNonce }) {
     if (!found.tx.hash || String(found.tx.nonce) !== String(e.nonce)) bad = "replacement nonce does not match";
     else if (!eq(found.tx.from, operator)) bad = "replacement is not from the operator";
     else if (typeof found.tx.gasLimit !== "bigint" && !(typeof found.tx.gasLimit === "string" && /^\d{1,30}$/.test(found.tx.gasLimit)) && !(Number.isSafeInteger(found.tx.gasLimit) && found.tx.gasLimit >= 0)) bad = "replacement has no gasLimit";
-    else bad = logic.checkReceipt(found.receipt, { hash: found.tx.hash, operator, entry: e, txGasLimit: found.tx.gasLimit });
+    else bad = logic.checkReceipt(found.receipt, { hash: found.tx.hash, operator, entry: e, txGasLimit: found.tx.gasLimit, allowedTo: targetsOf(e) });
     if (!bad) return settleAt(found.receipt, `at the replacing transaction ${found.tx.hash}`);
     log(`  earlier transaction ${label}: replacement rejected (${bad})`);
   }
@@ -157,7 +162,8 @@ async function runPass(deps) {
 
   // Always shown, even when nothing is enabled: this is the address to approve (README: Auto-collect on Base).
   log(operatorAddress ? `Operator: ${ethers.getAddress(operatorAddress)}` : "Operator: unknown (no keystore with a public address was found)");
-  const lim = logic.limits(cfg.baseCollect);
+  let lim = logic.limits(cfg.baseCollect);
+  const swCfg = sweepLogic.config(cfg.baseSweep);
   const all = logic.owners(cfg);
   const enabled = all.filter((o) => o.enabled);
   for (const o of all) if (!o.enabled) log(`- ${o.label} (${o.address}): collect is not enabled (collect:false); skipped, nothing read or sent`);
@@ -206,6 +212,33 @@ async function runPass(deps) {
     }
   }
 
+  // The sweep (settings.baseSweep) ships off. Off and no ledger on disk: nothing below is entered.
+  const sweepIo = deps.sweepIo || null;
+  const notifySafe = async (text) => {
+    if (simulate || typeof deps.notify !== "function") return;
+    try { await deps.notify(text); } catch (err) { log(`  note: the Telegram summary could not be sent (${short(err)})`); }
+  };
+  let sweep = null, sweepRefusal = null, sweepActive = false;
+  if (!swCfg.enabled && !(sweepIo && sweepIo.exists())) log("sweep: disabled (baseSweep.enabled is not true)");
+  else {
+    sweep = sweepMod.create({
+      sw: swCfg, provider, operator, log, now, io: sweepIo, halted: () => result.aborted,
+      findGasEntry: (hash) => state.gasSpends.find((e) => e && typeof e.tx === "string" && e.tx.toLowerCase() === String(hash).toLowerCase()) || null,
+      send: (...a) => sweepTx(...a),
+    });
+    const sr = await sweep.start({ simulate });
+    if (!sr.ok) {
+      sweepRefusal = sr.reason;
+      log(`SWEEP REFUSED: ${sr.reason}`);
+      if (!simulate) { result.aborted = true; await notifySafe(`base sweep REFUSED: ${sr.reason}`); done(); return result; }
+      sweep = null;
+    } else if (sr.active === false || (!swCfg.enabled && !sweep.openJobs().length)) { sweep = null; log("sweep: disabled (baseSweep.enabled is not true)"); } else {
+      if (!swCfg.enabled) log("sweep: disabled (baseSweep.enabled is not true); finishing the open legs of earlier jobs, no new job starts");
+      sweepActive = true;
+      lim = { ...lim, ...sweepLogic.limitOverrides(swCfg), maxGasLimitByOp: swCfg.maxGasLimitByOp };
+    }
+  }
+
   let feeData = {};
   try { feeData = (await provider.getFeeData()) || {}; } catch { /* the tip hint is optional */ }
   log(`Fee policy: signed maxFeePerGas = min(${lim.maxGasPriceGwei} gwei, 2 x block base fee + tip), tip <= ${lim.maxPriorityFeeGwei} gwei, gasLimit <= ${lim.maxGasLimit}`);
@@ -227,8 +260,196 @@ async function runPass(deps) {
     try { saveState(state); return true; } catch (err) { log(`  ! state.json could not be saved (${what}: ${short(err)})`); return false; }
   };
 
+  let txCount = 0;
+  const stopRun = (msg) => { log(`STOP: ${msg}; nothing more is sent this run`); result.aborted = true; };
+
+  /**
+   * Every transaction of this pass goes through here: the last look (assertSignable for the collect, assertSignableSweep for the
+   * rest), sign, check the signed bytes field by field, the ledger intent hook, the gas reservation on disk, and only then broadcast;
+   * then receipt validation and settlement. meta = { label, to, gasLimit, fees, nonce, worstCaseWei, l1AllowanceWei, recordOp, onSigned }.
+   * -> { outcome: "ok"|"reverted"|"skip"|"unknown"|"stop", receipt, hash, paid, reason }.
+   */
+  async function sendTracked(op, txFields, expect, meta) {
+    const { label, gasLimit, fees, nonce, worstCaseWei, l1AllowanceWei } = meta;
+    const isCollect = op === "collect";
+    const what = isCollect ? `${label} collect` : label;
+    const skipped = () => { if (isCollect) result.skipped++; };
+    const stop = (reason) => { skipped(); return { outcome: "stop", reason }; };
+    try {
+      if (signerError) throw signerError;
+      if (!signer) {
+        try {
+          signer = await getSigner();
+          if (!signer || !eq(signer.address, operator)) throw new Error("the unlocked key is not the operator whose approval was checked");
+        } catch (err) { signer = null; signerError = err; throw err; }
+      }
+      if (deps.tweakTxFields) txFields = deps.tweakTxFields({ ...txFields }, isCollect ? { manager: meta.manager, tokenId: expect.tokenId } : { op, ...expect });
+      if (isCollect) logic.assertSignable(txFields, lim, { tokenId: expect.tokenId, owner: expect.owner, manager: expect.manager, recipient: expect.recipient });
+      else sweepLogic.assertSignableSweep(txFields, lim, op, expect);
+    } catch (err) {
+      log(`  ! ${what} failed: ${short(err)}; continuing`);
+      skipped();
+      return { outcome: "skip", reason: short(err), kind: "assert" };
+    }
+
+    // Sign first: the hash is known before anything leaves the process, and what was signed is checked field by field.
+    let raw, hash;
+    try {
+      raw = await signer.signTransaction(txFields);
+      const parsed = ethers.Transaction.from(raw);
+      const mismatch = [
+        ["from", eq(parsed.from, operator)], ["to", eq(parsed.to, meta.to)], ["nonce", parsed.nonce === nonce],
+        ["gasLimit", parsed.gasLimit === gasLimit], ["maxFeePerGas", parsed.maxFeePerGas === fees.maxFeePerGas], ["maxPriorityFeePerGas", parsed.maxPriorityFeePerGas === fees.maxPriorityFeePerGas],
+        ["value", parsed.value === 0n], ["data", parsed.data === txFields.data], ["chainId", parsed.chainId === BigInt(logic.BASE_CHAIN_ID)], ["type", parsed.type === 2],
+        ["accessList", !parsed.accessList || parsed.accessList.length === 0],
+      ].filter(([, ok]) => !ok).map(([k]) => k);
+      if (mismatch.length) throw new Error(`the signed transaction differs from the one asked for (${mismatch.join(", ")}); nothing recorded, nothing broadcast`);
+      hash = parsed.hash;
+    } catch (err) {
+      log(`  ! ${label} signing refused: ${short(err)}; continuing`);
+      skipped();
+      return { outcome: "skip", reason: short(err), kind: "sign" };
+    }
+
+    // The sweep ledger records its intent (hash, nonce) first; if that cannot be written nothing is reserved or broadcast.
+    if (meta.onSigned) {
+      try { meta.onSigned({ hash, nonce }); } catch (err) {
+        log(`STOP: the sweep ledger cannot record ${label} (${short(err)}); nothing is broadcast, nothing more is sent this run`);
+        result.aborted = true;
+        return stop("ledger");
+      }
+    }
+
+    // Record the worst case, hash and nonce on disk BEFORE broadcasting; no durable reservation, no broadcast.
+    const entry = { t: now(), wei: worstCaseWei.toString(), kind: "reserved", tx: hash, nonce, from: operator, to: meta.to, gasLimit: gasLimit.toString(), maxFeePerGas: fees.maxFeePerGas.toString(), maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(), l1: l1AllowanceWei.toString() };
+    if (meta.recordOp) entry.op = op;
+    state.gasSpends.push(entry);
+    if (!persist("reservation")) {
+      state.gasSpends.splice(state.gasSpends.indexOf(entry), 1);
+      log(`STOP: the budget cannot be recorded, nothing more is sent this run`);
+      result.aborted = true;
+      return stop("reservation");
+    }
+    const noRecord = () => { log("STOP: the budget cannot be recorded; nothing more is sent this run"); result.aborted = true; };
+    const keepUnknown = (why) => {
+      entry.kind = "unknown";
+      spentRun += worstCaseWei; result.spentWei += worstCaseWei;
+      const saved = persist("unknown outcome");
+      log(`  ! ${label} outcome unknown (${why}); the worst case ${ethers.formatEther(worstCaseWei)} ETH stays counted until the transaction is settled`);
+      if (!saved) noRecord();
+    };
+    /** Replace the reservation by what the receipt says it cost. false when that cannot be saved. */
+    const settle = (receipt) => {
+      const paid = logic.settledWei({ gasUsed: receipt.gasUsed, price: receipt.gasPrice ?? receipt.effectiveGasPrice, gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas, l1AllowanceWei, worstCaseWei });
+      entry.kind = "settled"; entry.wei = paid.toString();
+      spentRun += paid; result.spentWei += paid;
+      return { paid, saved: persist("settlement") };
+    };
+
+    let tx;
+    try {
+      tx = await provider.broadcastTransaction(raw);
+    } catch (err) {
+      // The broadcast may have reached the network: the reservation stays on disk and is settled at the next run start.
+      txCount++; if (isCollect) sent++;
+      spentRun += worstCaseWei; result.spentWei += worstCaseWei;
+      log(`  ! ${label} broadcast failed (${short(err)}); not ruled out that it was sent; the reservation of tx ${hash} stays and is settled next run`);
+      stopRun("a broadcast of unknown outcome");
+      return stop("broadcast");
+    }
+    txCount++; if (isCollect) sent++;
+    if (!tx || typeof tx.hash !== "string" || !eq(tx.hash, hash)) {
+      keepUnknown(`broadcast returned ${!tx || typeof tx.hash !== "string" ? "no hash" : `hash ${tx.hash}`}, signed hash ${hash}`);
+      stopRun("broadcast returned no/mismatching hash");
+      return stop("hash");
+    }
+    if (!persist("transaction hash")) { noRecord(); return stop("record"); }
+
+    let receipt = null, revertedErr = null;
+    try {
+      receipt = await withTimeout(tx.wait(1, lim.waitTimeoutSec * 1000), lim.waitTimeoutSec * 1000);
+    } catch (err) {
+      if (isTimeout(err)) {
+        keepUnknown(`no receipt within ${lim.waitTimeoutSec} s, tx ${tx.hash}`);
+        stopRun("a transaction is unconfirmed");
+        return stop("timeout");
+      }
+      if (err && err.code === "TRANSACTION_REPLACED") {
+        // Never settle at the replacement's receipt here; the next run start settles it by nonce.
+        keepUnknown(`transaction replaced or cancelled, tx ${tx.hash}`);
+        stopRun("a transaction was replaced");
+        return stop("replaced");
+      }
+      if (err && err.receipt) { receipt = err.receipt; revertedErr = err; }
+      else if (isRevertClass(err)) {
+        for (let n = 0; n < REFETCH_TRIES && !receipt; n++) {
+          if (n > 0) await sleep(2000);
+          try { receipt = (await provider.getTransactionReceipt(tx.hash)) || null; } catch { receipt = null; }
+        }
+        if (!receipt) { keepUnknown(`reverted, receipt not found, tx ${hash}`); skipped(); return result.aborted ? { outcome: "stop" } : { outcome: "unknown", reason: "reverted, receipt not found" }; }
+        revertedErr = err;
+      } else {
+        keepUnknown(`${short(err)}, tx ${tx.hash}`);
+        stopRun("a broadcast transaction failed in an unknown way");
+        return stop("unknown");
+      }
+    }
+    if (!receipt || receipt.gasUsed == null) {
+      keepUnknown(`receipt without gasUsed, tx ${tx.hash}`);
+      stopRun("a receipt without gasUsed");
+      return stop("receipt");
+    }
+    const badReceipt = logic.checkReceipt(receipt, isCollect ? { hash, operator, entry } : { hash, operator, entry, allowedTo: [meta.to] });
+    if (badReceipt) {
+      keepUnknown(`receipt rejected: ${badReceipt}, tx ${tx.hash}`);
+      stopRun("a receipt failed validation");
+      return stop("receipt");
+    }
+    const { paid, saved } = settle(receipt);
+    if (!saved) { stopRun("the budget cannot be recorded"); return stop("settle"); }
+    if (receipt.status === 0 || revertedErr) { log(`  ! ${what} reverted on-chain: tx ${tx.hash}, gas used ${receipt.gasUsed}, counted ${ethers.formatEther(paid)} ETH`); skipped(); return { outcome: "reverted", receipt, hash, paid }; }
+    return { outcome: "ok", receipt, hash, paid };
+  }
+
+  /** One sweep transaction: estimate, fees, nonce, L1 fee, caps, then sendTracked. */
+  async function sweepTx(op, spec, expect, onSigned) {
+    const skipTx = (reason, kind) => { log(`  ! ${spec.label}: ${reason}; skipped`); return { outcome: "skip", reason, kind }; };
+    const ceiling = BigInt(lim.maxGasLimitByOp[op]);
+    let units;
+    try { units = await provider.estimateGas({ from: operator, to: spec.to, data: spec.data, value: 0n }); } catch (err) { return skipTx(`gas estimate failed (${short(err)})`, "estimate"); }
+    if (typeof units !== "bigint" || !(units > 0n)) return skipTx("gas estimate is not a number (fail closed)", "estimate");
+    if (units > ceiling) return skipTx(`gas estimate ${units} exceeds the ${op} ceiling ${ceiling}`, "ceiling");
+    const scaled = (units * 125n) / 100n;
+    const gasLimit = scaled < ceiling ? scaled : ceiling;
+    let block;
+    try { block = await provider.getBlock("latest"); } catch (err) { return skipTx(`latest block could not be read (${short(err)})`, "fee"); }
+    const fees = buildFees({ baseFeeWei: block && block.baseFeePerGas, rpcPriorityWei: feeData.maxPriorityFeePerGas, lim });
+    if (!fees.ok) return skipTx(fees.reason, "fee");
+    let nonce;
+    try { nonce = await provider.getTransactionCount(operator, "pending"); } catch (err) { return skipTx(`nonce unreadable (${short(err)})`, "fee"); }
+    const txFields = { type: 2, chainId: logic.BASE_CHAIN_ID, to: spec.to, data: spec.data, value: 0n, nonce, gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas };
+    let l1FeeWei;
+    try {
+      if (!Number.isSafeInteger(nonce) || nonce < 0) throw new Error("nonce is not a non-negative integer");
+      l1FeeWei = await oracle.getL1Fee(ethers.Transaction.from(txFields).unsignedSerialized);
+      if (typeof l1FeeWei !== "bigint" || l1FeeWei < 0n) throw new Error("not a number");
+    } catch (err) { return skipTx(`L1 fee unreadable (${short(err)})`, "fee"); }
+    const l1AllowanceWei = logic.l1Allowance(l1FeeWei, lim);
+    const worstCaseWei = gasLimit * fees.maxFeePerGas + l1AllowanceWei;
+    const cap = sweepLogic.txCapCheck({ lim, sw: swCfg, worstCaseWei, txCount, dayTxCount: sweepLogic.opCount24h(state, now()), spentRunWei: spentRun, spent24hWei: logic.spentWindowWei(state, now()) });
+    if (!cap.ok) return skipTx(cap.reason, "cap");
+    return sendTracked(op, txFields, expect, { label: spec.label, to: spec.to, gasLimit, fees, nonce, worstCaseWei, l1AllowanceWei, recordOp: true, onSigned });
+  }
+
+  // Recovery first: finish the legs of earlier jobs from the ledger and the chain, before any new collect (also when the flag was turned off since).
+  if (sweep && sweepActive && !simulate) {
+    await sweep.recover({ resetAllowances: swCfg.enabled });
+  } else if (sweep && sweepActive && simulate) {
+    for (const j of sweep.openJobs()) for (const l of j.legs) log(`sweep resume plan: #${j.tokenId} ${sweepMod.symbolOf(l.token)} is ${l.phase}${l.pending ? ` (pending ${l.pending.op} ${l.pending.tx || ""})` : ""}; the next collect run continues it`);
+  }
+
   outer:
-  for (const owner of enabled) {
+  if (!result.aborted) for (const owner of enabled) {
     log(`--- ${owner.label} (${owner.address}) ---`);
     for (const manager of managers) {
       const mgr = contracts.get(manager.positionManager);
@@ -263,7 +484,9 @@ async function runPass(deps) {
         try { onChainOwner = await mgr.ownerOf(id); } catch (err) { skip(null, `ownerOf failed (${short(err)})`); continue; }
         if (!eq(onChainOwner, owner.address)) { skip(null, `ownerOf is ${onChainOwner}, not the configured owner ${owner.address}`); continue; }
 
-        const params = { tokenId: id, recipient: owner.address, amount0Max: MAX128, amount1Max: MAX128 };
+        // Sweep on: the fees are collected to the operator (and delivered by the sweep); otherwise to the owner, as always.
+        const sweepOn = !!(sweep && sweepActive && swCfg.enabled);
+        const params = { tokenId: id, recipient: sweepOn ? operator : owner.address, amount0Max: MAX128, amount1Max: MAX128 };
         let amounts, units;
         try {
           amounts = await mgr.collect.staticCall(params, { from: operator });
@@ -306,6 +529,22 @@ async function runPass(deps) {
         const cap = logic.capCheck({ lim, worstCaseWei, sentCount: sent, spentRunWei: spentRun, spent24hWei: logic.spentWindowWei(state, now()) });
         if (!cap.ok) { skip(gasUsd, cap.reason); continue; }
 
+        let swPlan = null;
+        if (sweepOn) {
+          const blocked = sweep.blocker();
+          if (blocked) { skip(gasUsd, `sweep: new collects are blocked (${blocked})`); continue; }
+          if (sweep.hasOpenJob(manager.positionManager, id)) { skip(gasUsd, "an earlier sweep job of this position is still open; resumed from the ledger, no new collect"); continue; }
+          try { swPlan = await sweep.plan({ manager: manager.positionManager, tokenId: id, amounts: [amounts[0], amounts[1]] }); } catch (err) { skip(gasUsd, `sweep plan failed (${short(err)})`); continue; }
+          const perOpWei = (op) => BigInt(lim.maxGasLimitByOp[op]) * fees.maxFeePerGas + l1AllowanceWei;
+          const pf = await sweep.preflight(swPlan, { collectWorstWei: worstCaseWei, perOpWei, run: { txCount, dayTxCount: sweepLogic.opCount24h(state, now()), spentRunWei: spentRun, spent24hWei: logic.spentWindowWei(state, now()), lim } });
+          if (simulate) {
+            line(gasUsd, "collect", `${d.reason}; not sent${stateRefusal ? ` (would be refused: ${stateRefusal})` : ""}`);
+            for (const l of sweep.describe(swPlan, id)) log(l);
+            log(`    caps: ${pf.ok ? `ok (planned worst case ${ethers.formatEther(pf.total)} ETH over ${pf.txs} transactions)` : `NOT ok, the collect would be skipped: ${pf.reason}`}`);
+            result.wouldCollect++; continue;
+          }
+          if (!pf.ok) { skip(gasUsd, `sweep preflight: ${pf.reason}; nothing collected, the fees stay in the NFT`); continue; }
+        }
         if (simulate) { line(gasUsd, "collect", `${d.reason}; not sent${stateRefusal ? ` (would be refused: ${stateRefusal})` : ""}`); result.wouldCollect++; continue; }
 
         // Last look before sending: the recipient is the owner as the chain says right now.
@@ -315,137 +554,29 @@ async function runPass(deps) {
         line(gasUsd, "collect", d.reason);
         log(`  sending #${id}: gasLimit ${gasLimit}, maxFeePerGas ${ethers.formatUnits(fees.maxFeePerGas, "gwei")} gwei, tip ${ethers.formatUnits(fees.maxPriorityFeePerGas, "gwei")} gwei, worst case ${ethers.formatEther(worstCaseWei)} ETH`);
 
-        try {
-          if (signerError) throw signerError;
-          if (!signer) {
-            try {
-              signer = await getSigner();
-              if (!signer || !eq(signer.address, operator)) throw new Error("the unlocked key is not the operator whose approval was checked");
-            } catch (err) { signer = null; signerError = err; throw err; }
-          }
-          if (deps.tweakTxFields) txFields = deps.tweakTxFields({ ...txFields }, { manager, tokenId: id });
-          logic.assertSignable(txFields, lim, { tokenId: id, owner: owner.address, manager: manager.positionManager });
-        } catch (err) {
-          log(`  ! #${id} collect failed: ${short(err)}; continuing`);
-          result.skipped++;
-          continue;
+        const job = sweepOn ? sweep.newJob({ manager: manager.positionManager, tokenId: id, owner: owner.address, token0: swPlan.tokens[0], token1: swPlan.tokens[1], amounts: [amounts[0], amounts[1]] }) : null;
+        const sent1 = await sendTracked("collect", txFields, { tokenId: id, owner: owner.address, manager: manager.positionManager, recipient: sweepOn ? operator : undefined },
+          { label: `#${id}`, manager, to: manager.positionManager, gasLimit, fees, nonce, worstCaseWei, l1AllowanceWei, recordOp: sweepOn, onSigned: job ? sweep.collectIntent(job) : null });
+        if (sent1.outcome === "ok") {
+          log(`  collected #${id} to ${sweepOn ? operator : recipient}: tx ${sent1.hash}, simulated amounts ${amounts[0]} / ${amounts[1]} (raw), gas used ${sent1.receipt.gasUsed}, paid ${ethers.formatEther(sent1.paid)} ETH`);
+          result.collected++;
         }
-
-        // Sign first: the hash is known before anything leaves the process, and what was signed is checked field by field.
-        let raw, hash;
-        try {
-          raw = await signer.signTransaction(txFields);
-          const parsed = ethers.Transaction.from(raw);
-          const mismatch = [
-            ["from", eq(parsed.from, operator)], ["to", eq(parsed.to, manager.positionManager)], ["nonce", parsed.nonce === nonce],
-            ["gasLimit", parsed.gasLimit === gasLimit], ["maxFeePerGas", parsed.maxFeePerGas === fees.maxFeePerGas], ["maxPriorityFeePerGas", parsed.maxPriorityFeePerGas === fees.maxPriorityFeePerGas],
-            ["value", parsed.value === 0n], ["data", parsed.data === txFields.data], ["chainId", parsed.chainId === BigInt(logic.BASE_CHAIN_ID)], ["type", parsed.type === 2],
-            ["accessList", !parsed.accessList || parsed.accessList.length === 0],
-          ].filter(([, ok]) => !ok).map(([k]) => k);
-          if (mismatch.length) throw new Error(`the signed transaction differs from the one asked for (${mismatch.join(", ")}); nothing recorded, nothing broadcast`);
-          hash = parsed.hash;
-        } catch (err) {
-          log(`  ! #${id} signing refused: ${short(err)}; continuing`);
-          result.skipped++;
-          continue;
-        }
-
-        // Record the worst case, hash and nonce on disk BEFORE broadcasting; no durable reservation, no broadcast.
-        const entry = { t: now(), wei: worstCaseWei.toString(), kind: "reserved", tx: hash, nonce, from: operator, to: manager.positionManager, gasLimit: gasLimit.toString(), maxFeePerGas: fees.maxFeePerGas.toString(), maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(), l1: l1AllowanceWei.toString() };
-        state.gasSpends.push(entry);
-        if (!persist("reservation")) {
-          state.gasSpends.splice(state.gasSpends.indexOf(entry), 1);
-          log(`STOP: the budget cannot be recorded, nothing more is sent this run`);
-          result.skipped++; result.aborted = true;
-          break outer;
-        }
-        const noRecord = () => { log("STOP: the budget cannot be recorded; nothing more is sent this run"); result.aborted = true; };
-        const keepUnknown = (why) => {
-          entry.kind = "unknown";
-          spentRun += worstCaseWei; result.spentWei += worstCaseWei;
-          const saved = persist("unknown outcome");
-          log(`  ! #${id} outcome unknown (${why}); the worst case ${ethers.formatEther(worstCaseWei)} ETH stays counted until the transaction is settled`);
-          if (!saved) noRecord();
-        };
-        /** Replace the reservation by what the receipt says it cost. false when that cannot be saved. */
-        const settle = (receipt) => {
-          const paid = logic.settledWei({ gasUsed: receipt.gasUsed, price: receipt.gasPrice ?? receipt.effectiveGasPrice, gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas, l1AllowanceWei, worstCaseWei });
-          entry.kind = "settled"; entry.wei = paid.toString();
-          spentRun += paid; result.spentWei += paid;
-          return { paid, saved: persist("settlement") };
-        };
-        const stopRun = (msg) => { log(`STOP: ${msg}; nothing more is sent this run`); result.aborted = true; };
-
-        let tx;
-        try {
-          tx = await provider.broadcastTransaction(raw);
-        } catch (err) {
-          // The broadcast may have reached the network: the reservation stays on disk and is settled at the next run start.
-          sent++;
-          spentRun += worstCaseWei; result.spentWei += worstCaseWei;
-          log(`  ! #${id} broadcast failed (${short(err)}); not ruled out that it was sent; the reservation of tx ${hash} stays and is settled next run`);
-          result.skipped++; stopRun("a broadcast of unknown outcome");
-          break outer;
-        }
-        sent++;
-        if (!tx || typeof tx.hash !== "string" || !eq(tx.hash, hash)) {
-          keepUnknown(`broadcast returned ${!tx || typeof tx.hash !== "string" ? "no hash" : `hash ${tx.hash}`}, signed hash ${hash}`);
-          result.skipped++; stopRun("broadcast returned no/mismatching hash");
-          break outer;
-        }
-        if (!persist("transaction hash")) { noRecord(); result.skipped++; break outer; }
-
-        let receipt = null, revertedErr = null;
-        try {
-          receipt = await withTimeout(tx.wait(1, lim.waitTimeoutSec * 1000), lim.waitTimeoutSec * 1000);
-        } catch (err) {
-          if (isTimeout(err)) {
-            keepUnknown(`no receipt within ${lim.waitTimeoutSec} s, tx ${tx.hash}`);
-            result.skipped++; stopRun("a transaction is unconfirmed");
-            break outer;
-          }
-          if (err && err.code === "TRANSACTION_REPLACED") {
-            // Never settle at the replacement's receipt here; the next run start settles it by nonce.
-            keepUnknown(`transaction replaced or cancelled, tx ${tx.hash}`);
-            result.skipped++; stopRun("a transaction was replaced");
-            break outer;
-          }
-          if (err && err.receipt) { receipt = err.receipt; revertedErr = err; }
-          else if (isRevertClass(err)) {
-            for (let n = 0; n < REFETCH_TRIES && !receipt; n++) {
-              if (n > 0) await sleep(2000);
-              try { receipt = (await provider.getTransactionReceipt(tx.hash)) || null; } catch { receipt = null; }
-            }
-            if (!receipt) { keepUnknown(`reverted, receipt not found, tx ${hash}`); result.skipped++; if (result.aborted) break outer; continue; }
-            revertedErr = err;
-          } else {
-            keepUnknown(`${short(err)}, tx ${tx.hash}`);
-            result.skipped++; stopRun("a broadcast transaction failed in an unknown way");
-            break outer;
-          }
-        }
-        if (!receipt || receipt.gasUsed == null) {
-          keepUnknown(`receipt without gasUsed, tx ${tx.hash}`);
-          result.skipped++; stopRun("a receipt without gasUsed");
-          break outer;
-        }
-        const badReceipt = logic.checkReceipt(receipt, { hash, operator, entry });
-        if (badReceipt) {
-          keepUnknown(`receipt rejected: ${badReceipt}, tx ${tx.hash}`);
-          result.skipped++; stopRun("a receipt failed validation");
-          break outer;
-        }
-        const { paid, saved } = settle(receipt);
-        if (!saved) { result.skipped++; stopRun("the budget cannot be recorded"); break outer; }
-        if (receipt.status === 0 || revertedErr) { log(`  ! #${id} collect reverted on-chain: tx ${tx.hash}, gas used ${receipt.gasUsed}, counted ${ethers.formatEther(paid)} ETH`); result.skipped++; continue; }
-        log(`  collected #${id} to ${recipient}: tx ${tx.hash}, simulated amounts ${amounts[0]} / ${amounts[1]} (raw), gas used ${receipt.gasUsed}, paid ${ethers.formatEther(paid)} ETH`);
-        result.collected++;
+        if (job) await sweep.afterCollect(job, sent1);
+        if (sent1.outcome === "stop" || result.aborted) break outer;
       }
     }
+  }
+  if (sweep && sweepActive) {
+    log(sweep.summaryLine(result.spentWei));
+    result.sweep = { problems: sweep.problems(), report: sweep.report };
+    await notifySafe(sweep.summaryText(result.spentWei, result.aborted));
   }
   done();
   return result;
 }
+
+/** The process exit code of a finished pass: 1 when aborted or a sweep leg is stuck, held or unattributed. */
+const exitCodeOf = (res) => (res && (res.aborted || (res.sweep && res.sweep.problems > 0)) ? 1 : 0);
 
 /** One Slipstream reader per allowed manager in settings (the same wiring watch.js uses). */
 function makeReaders({ cfg, provider, logsProvider = null, dataDir = null, log }) {
@@ -494,10 +625,20 @@ async function unlockSigner(provider, env = process.env) {
   }
 }
 
+/** Telegram through alerts.create, guarded as collector.js does it; null when no token is configured. A failure never changes the outcome. */
+function makeNotify() {
+  try {
+    const a = require("./alerts").create({ log: { log() {}, error() {} } });
+    if (a && a.enabled) return (text) => a.send(text);
+  } catch { /* alerts unavailable: the log line stands */ }
+  return null;
+}
+
 async function main() {
   const { dataPath } = require("./data-dir");
   const LOG_FILE = dataPath("collector.log");
   const STATE_FILE = dataPath("state.json");
+  const SWEEP_FILE = dataPath("sweep-state.json");
   const log = (msg) => {
     const line = `[${new Date().toISOString()}] ${msg}`;
     console.log(line);
@@ -507,6 +648,8 @@ async function main() {
     // No chain, no keystore: create the budget file once, never overwrite it.
     const r = logic.initStateFile(STATE_FILE);
     log(r === "created" ? `created ${STATE_FILE}` : `${STATE_FILE} already exists; left unchanged`);
+    const r2 = sweepLogic.initSweepStateFile(SWEEP_FILE);
+    log(r2 === "created" ? `created ${SWEEP_FILE}` : `${SWEEP_FILE} already exists; left unchanged`);
     return;
   }
   const mode = (process.argv.find((a) => a.startsWith("--mode=")) || "--mode=simulate").split("=")[1];
@@ -528,12 +671,18 @@ async function main() {
     cfg, mode, provider, logsProvider, dataDir: require("./data-dir").DATA_DIR, operatorAddress, getSigner,
     getEthUsd: () => getWethUsd(), readState: () => logic.readState(STATE_FILE),
     saveState: (s) => logic.writeFileAtomic(STATE_FILE, logic.serializeState(s)), log,
+    sweepIo: {
+      exists: () => fs.existsSync(SWEEP_FILE),
+      read: () => sweepLogic.readSweepState(SWEEP_FILE),
+      save: (l) => logic.writeFileAtomic(SWEEP_FILE, sweepLogic.serializeSweepState(l)),
+    },
+    notify: makeNotify(),
   });
-  if (res.aborted) process.exitCode = 1;
+  if (exitCodeOf(res)) process.exitCode = 1;
 }
 
 if (require.main === module) {
   main().catch((err) => { console.error(`FATAL: ${short(err)}`); process.exit(1); });
 }
 
-module.exports = { runPass, unlockSigner, skipLine, makeReaders, ethUsdOf, operatorFromKeystore, MANAGER_ABI, ORACLE_ABI, MAX128 };
+module.exports = { runPass, exitCodeOf, unlockSigner, skipLine, makeReaders, ethUsdOf, operatorFromKeystore, MANAGER_ABI, ORACLE_ABI, MAX128 };

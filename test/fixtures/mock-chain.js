@@ -28,6 +28,20 @@ const SIGS = [
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
   "function getL1Fee(bytes) view returns (uint256)",
+  // sweep (additive): ERC-20, Uniswap v3 pool / quoter / SwapRouter02, ERC-6551 registry and account
+  "function allowance(address,address) view returns (uint256)",
+  "function approve(address,uint256) returns (bool)",
+  "function transfer(address,uint256) returns (bool)",
+  "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)",
+  "function quoteExactInputSingle((address,address,uint256,uint24,uint160)) returns (uint256,uint160,uint32,uint256)",
+  "function liquidity() view returns (uint128)",
+  "function fee() view returns (uint24)",
+  "function factory() view returns (address)",
+  "function token1() view returns (address)",
+  "function observe(uint32[]) view returns (int56[],uint160[])",
+  "function account(address,bytes32,uint256,address,uint256) view returns (address)",
+  "function token() view returns (uint256,address,uint256)",
+  "function owner() view returns (address)",
 ];
 const iface = new ethers.Interface([...new Set(SIGS)]);
 const lc = (a) => String(a).toLowerCase();
@@ -39,7 +53,7 @@ function revert(msg = "reverted") { const e = new Error(msg); e.code = "CALL_EXC
 function world({ head = 1_000_000 } = {}) {
   const w = {
     head, chainId: 8453n, feeData: { maxFeePerGas: 100_000_000n, gasPrice: 50_000_000n, maxPriorityFeePerGas: 1_000_000n }, gasEstimate: 150_000n,
-    block: { baseFeePerGas: 30_000_000n }, l1Fee: 0n, nonce: 7, receipts: [], receiptCalls: [], latestNonce: null, nonceCalls: [], broadcasts: [], onBroadcast: null, handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
+    block: { baseFeePerGas: 30_000_000n }, l1Fee: 0n, ethBalance: 10n ** 18n, nonce: 7, receipts: [], receiptCalls: [], latestNonce: null, nonceCalls: [], broadcasts: [], onBroadcast: null, handlers: {}, code: {}, logs: [], calls: [], estimates: [], logCalls: [], failLogs: null, hangLogs: false,
     on(addr, name, fn) { (w.handlers[lc(addr)] = w.handlers[lc(addr)] || {})[name] = fn; return w; },
     contract(addr, code = "0x6080") { w.code[lc(addr)] = code; return w; },
     /** the provider-like runner the readers are given */
@@ -85,6 +99,7 @@ function world({ head = 1_000_000 } = {}) {
         return r || null;
       },
       async getCode(a) { return w.code[lc(a)] || "0x"; },
+      async getBalance() { return typeof w.ethBalance === "function" ? w.ethBalance() : w.ethBalance; },
       async getBlockNumber() { return w.head; },
       async getLogs(f) {
         w.logCalls.push({ fromBlock: Number(f.fromBlock), toBlock: Number(f.toBlock), topics: f.topics, address: f.address });

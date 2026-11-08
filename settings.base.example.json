@@ -74,6 +74,29 @@
     "waitTimeoutSec": 120,
     "minL1AllowanceEth": 0.00002
   },
+  "baseSweep": {
+    "_comment": "The Base sweep (collector-base-sweep.js, README: Sweep on Base). OFF: only the boolean true enables it, and only after node collector-base.js --init-state created sweep-state.json. When on, the fees are collected to the OPERATOR, every WETH / cbBTC / LAPTOP fee is swapped to native Base USDC through the fixed Uniswap v3 SwapRouter02 pools (addresses are compiled into the code, nothing here can add one), and 100% is delivered to the NFT's on-chain owner. Every number is optional, out-of-range values are clamped to the hard bounds in the code. routes.<WETH|cbBTC|LAPTOP>.enabled may only be set to false. vault: the split to a token-bound vault stays 0 until tba is set AND verified on chain at run time (node tools/verify-base-sweep.js); there is no Base vault yet, so tba is null.",
+    "enabled": false,
+    "targetToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "slippageBps": 50,
+    "maxPriceImpactBps": 100,
+    "maxSwapValueUsdc": 250,
+    "minSwapValueUsdc": 1,
+    "minPoolUsdc": 2000,
+    "maxPoolShareBps": 300,
+    "twapSeconds": 1800,
+    "twapMaxDeviationBps": 200,
+    "minOperatorEthReserve": 0.0005,
+    "maxAttemptsPerLeg": 3,
+    "maxTxPerRun": 20,
+    "dailyTxCap": 40,
+    "maxGasPerTxEth": 0.0007,
+    "maxGasPerRunEth": 0.002,
+    "dailyGasCapEth": 0.004,
+    "maxGasLimitByOp": { "collect": 500000, "approve": 100000, "swap": 350000, "transfer": 120000 },
+    "routes": { "WETH": { "enabled": true }, "cbBTC": { "enabled": true }, "LAPTOP": { "enabled": true } },
+    "vault": { "tba": null, "nft": null, "tokenId": null, "implementation": null, "registry": null, "salt": "0x0000000000000000000000000000000000000000000000000000000000000000", "expectedOwner": null, "splitPct": 0, "maxSplitPct": 20 }
+  },
   "portfolio": {},
   "dashboard": { "port": 8796 }
 }

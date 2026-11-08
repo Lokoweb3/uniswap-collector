@@ -252,5 +252,186 @@ const write = (S, obj) => fs.writeFileSync(S.file, JSON.stringify(obj));
     assert.ok(/no pinned decimals/.test(reason) && /no per-side USD price/.test(reason), reason);
     assert.ok(/no pinned decimals and no per-side USD price/.test(reason), reason);
   }
+  // ---- 9. security L-1 (fix round): unknown-block entries are never evicted; known-block ones go first; over the bound with only unknown ones the write fails closed
+  {
+    const legacyJob = (n, fin) => ({ id: `legacy${n}`, tokenId: String(n), manager: MGR_A, owner: OWNER, token0: WETH, token1: USDC, collect: { tx: hex(300000 + n), status: "mined" }, pending: null, createdAt: fin, finishedAt: fin,
+      legs: [{ token: WETH, phase: "delivered", owedRaw: "1", doneRaw: "1", attempts: 0, swap: { tx: hex(310000 + n), txs: [hex(310000 + n)] }, deliver: { tx: hex(320000 + n) } }] }); // no maxBlock, no collect.block
+    assert.strictEqual(SL.jobProblem(legacyJob(1, 1)), null, "the legacy shape is a valid job");
+    const known = Array.from({ length: SL.MAX_RETIRED_HASHES - 1 }, (_, i) => ({ hash: hex(i + 1), block: 100 + i }));
+    const out = JSON.parse(SL.serializeSweepState({ jobs: [legacyJob(1, 1)], retired: { hashes: known, floor: 0, collectBlock: {} } }, Date.now()));
+    assert.strictEqual(out.retired.hashes.length, SL.MAX_RETIRED_HASHES);
+    for (const h of [hex(300001), hex(310001), hex(320001)]) {
+      const e = out.retired.hashes.find((x) => x.hash === h); assert.ok(e && e.block === 0, `${h} kept with an unknown block`);
+      assert.ok(/retired job/.test(SL.receiptReplayProblem(out.retired, h, 10 ** 9, null)), "replay of the legacy receipt stays refused, at any block");
+    }
+    assert.ok(!out.retired.hashes.some((x) => x.hash === hex(1)) && !out.retired.hashes.some((x) => x.hash === hex(2)), "the two oldest KNOWN entries were evicted");
+    assert.strictEqual(out.retired.floor, 101);
+    // only unknown-block entries over the bound: fail closed (the write throws; save() stops the run)
+    const unknown = Array.from({ length: SL.MAX_RETIRED_HASHES }, (_, i) => ({ hash: hex(i + 1), block: 0 }));
+    assert.throws(() => SL.serializeSweepState({ jobs: [legacyJob(2, 1)], retired: { hashes: unknown, floor: 0, collectBlock: {} } }, Date.now()), /cannot be evicted safely/);
+    // a job WITH maxBlock but pruned is known-block; a reverted collect (only its collect hash) uses its collect block
+    const rev = { ...legacyJob(3, 1), legs: [], collect: { tx: hex(330003), status: "reverted", block: 77 } };
+    assert.strictEqual(JSON.parse(SL.serializeSweepState({ jobs: [rev] }, Date.now())).retired.hashes[0].block, 77);
+    // end to end: the save inside a run reports the failure and sends nothing more
+    const S = sweepScene({ positions: [posA()] }); S.init();
+    const led = { version: 1, jobs: [legacyJob(4, 1)], retired: { hashes: unknown, floor: 0, collectBlock: {} } };
+    write(S, led);
+    const run = await S.run({ signer: S.signer() });
+    assert.strictEqual(run.signer.sent.length, 0, run.text);
+  }
+
+  // ---- 10. security L-2: tokenId is canonical; the position key normalizes
+  {
+    assert.strictEqual(SL.posKey(MGR_A, "007"), SL.posKey(MGR_A, "7"));
+    assert.strictEqual(SL.posKey(MGR_A.toUpperCase().replace("0X", "0x"), "7"), `${MGR_A}:7`.toLowerCase());
+    const key7 = SL.posKey(MGR_A, "7");
+    assert.ok(/not newer than the retired collect/.test(SL.collectReplayProblem({ hashes: [], floor: 0, collectBlock: { [key7]: 50 } }, hex(9), 40, MGR_A, "007")), "007 is position 7");
+    const S = sweepScene({ positions: [posA()] }); S.init(); await S.run({});
+    for (const bad of ["007", "00", "01", "", "-1", "1e3", "+5", " 5", "1".repeat(61)]) {
+      const l = clone(S.ledger()); l.jobs[0].tokenId = bad; write(S, l);
+      const r = SL.readSweepState(S.file); assert.ok(!r.ok && /tokenId/.test(r.reason), `${JSON.stringify(bad)}: ${JSON.stringify(r)}`);
+    }
+    for (const good of ["0", "7", "1" + "0".repeat(59)]) { const l = clone(S.ledger()); l.jobs[0].tokenId = good; write(S, l); assert.ok(SL.readSweepState(S.file).ok, good); }
+  }
+
+  // ---- 11. security L-3: a transfer hash backs exactly one leg (read-time uniqueness, and a collision check in recovery)
+  {
+    const { S, led, j1 } = await twoJobs();
+    const d = j1.legs[0].deliver.tx;
+    const reads = (mut) => { const l = clone(led); mut(l); write(S, l); return SL.readSweepState(S.file); };
+    let r = reads((l) => { byToken(l, ID_B).legs[0].transferTxs.push(d); });
+    assert.ok(!r.ok && /transfer hash .* already recorded for another leg/.test(r.reason), JSON.stringify(r));
+    r = reads((l) => { byToken(l, ID_B).legs[0].deliver.tx = d; });
+    assert.ok(!r.ok && /already recorded for another leg/.test(r.reason), "deliver.tx");
+    r = reads((l) => { const lg = byToken(l, ID_B).legs[0]; lg.vault = { to: OWNER, raw: "1", tx: d }; });
+    assert.ok(!r.ok && /already recorded for another leg/.test(r.reason), "vault.tx");
+    r = reads((l) => { rewindToPendingTransfer(byToken(l, ID_B), d, OWNER, "1"); });
+    assert.ok(!r.ok && /already recorded for another leg/.test(r.reason), "pending transfer hash");
+    assert.ok(reads(() => {}).ok, "the untouched ledger reads");
+    // the same hash twice inside ONE leg (deliver.tx is also in transferTxs) is normal
+    assert.ok(byToken(led, ID_B).legs[0].transferTxs.includes(byToken(led, ID_B).legs[0].deliver.tx));
+    // recovery: a pending transfer whose receipt is already credited to the same leg is not credited twice
+    const c = clone(led); const lg = byToken(c, ID_B).legs[0]; const own = lg.deliver.tx; const before = lg.outDone;
+    lg.phase = "swapped"; lg.outDone = "0"; lg.pending = { op: "transfer", tx: own, nonce: 99, raw: lg.deliver.raw, to: lg.deliver.to, kind: "proceeds" };
+    write(S, c);
+    const run = await S.run({ signer: S.signer() });
+    assert.strictEqual(run.signer.sent.length, 0, run.text);
+    const after = byToken(S.ledger(), ID_B).legs[0];
+    assert.strictEqual(after.unattributed, true, run.text); assert.ok(/already recorded for another leg or job/.test(after.reason), after.reason);
+    assert.strictEqual(after.outDone, "0", `nothing credited (was ${before})`);
+  }
+
+  // ---- 12. security L-4: the writer enforces the position bound; a leg at the transfer limit is held, never truncated
+  {
+    const cb = {}; for (let i = 0; i <= SL.MAX_RETIRED_POSITIONS; i++) cb[`0x${i.toString(16).padStart(40, "0")}:1`] = 5;
+    assert.throws(() => SL.serializeSweepState({ jobs: [], retired: { hashes: [], floor: 0, collectBlock: cb } }), /positions, over the bound/);
+    delete cb[Object.keys(cb)[0]];
+    assert.doesNotThrow(() => SL.serializeSweepState({ jobs: [], retired: { hashes: [], floor: 0, collectBlock: cb } }), "exactly the bound is written");
+    const fakes = (n) => Array.from({ length: n }, (_, i) => hex(900000 + i));
+    for (const [n, held] of [[99, true], [98, false]]) {
+      const { S, led } = await twoJobs();
+      const c = clone(led); const lg = byToken(c, ID_B).legs[0];
+      lg.phase = "swapped"; lg.outDone = "0"; lg.deliver = null; lg.transferTxs = fakes(n); lg.doneRaw = lg.owedRaw;
+      write(S, c); S.add(USDC, X.OP, lg.swap.outRaw); // the proceeds are back at the operator
+      const run = await S.run({ signer: S.signer() });
+      const after = byToken(S.ledger(), ID_B).legs[0];
+      if (held) {
+        assert.strictEqual(run.signer.sent.length, 0, run.text); assert.strictEqual(after.phase, "held");
+        assert.ok(/recorded transfers \(limit 100\)/.test(after.reason), after.reason); assert.strictEqual(after.transferTxs.length, 99);
+      } else {
+        assert.strictEqual(run.signer.sent.length, 1, run.text); assert.strictEqual(after.transferTxs.length, 99, "98 + the new one, none dropped");
+        assert.strictEqual(after.transferTxs[0], fakes(1)[0], "the oldest hash is still there");
+      }
+    }
+  }
+
+  // ---- 13. security L-5 and M-1(1): odd numbers in the file, and block numbers above the chain head
+  {
+    const S = sweepScene({ positions: [posA()] }); S.init(); await S.run({});
+    const base = S.ledger(); const key = `${MGR_A}:${ID_A}`.toLowerCase();
+    const raw = (retiredText) => { fs.writeFileSync(S.file, `{"version":1,"jobs":[],"retired":${retiredText}}`); return SL.readSweepState(S.file); };
+    let r = raw('{"hashes":[],"floor":0,"collectBlock":{"__proto__":5}}');
+    assert.ok(!r.ok && r.kind === "corrupt" && /collectBlock key __proto__/.test(r.reason), JSON.stringify(r));
+    r = raw('{"hashes":[],"floor":9007199254740992,"collectBlock":{}}');
+    assert.ok(!r.ok && r.kind === "corrupt" && /retired\.floor/.test(r.reason), "2^53 is not a safe integer: " + JSON.stringify(r));
+    r = raw(`{"hashes":[],"floor":0,"collectBlock":{"${key}":9007199254740992}}`);
+    assert.ok(!r.ok && /collectBlock/.test(r.reason), "2^53 collect block");
+    // floor = MAX_SAFE_INTEGER is a valid file but not a valid chain: caught by the head check, in the pure function and at start
+    r = raw(`{"hashes":[],"floor":${Number.MAX_SAFE_INTEGER},"collectBlock":{}}`);
+    assert.ok(r.ok, "the reader alone cannot know the head");
+    assert.ok(/retired\.floor .* above the chain head 1000000/.test(SL.ledgerAheadProblem(r.ledger, 1000000)));
+    let run = await S.run({ signer: S.signer() });
+    assert.strictEqual(run.signer.sent.length, 0, run.text); assert.ok(/sweep-state\.json is unreadable/.test(run.text) && /above the chain head/.test(run.text), run.text);
+    // each carrier of a block number, one above the head, is refused at start; exactly the head is fine
+    const HEAD = 1000000;
+    const variants = {
+      "retired.floor": (l, v) => { l.retired = { hashes: [], floor: v, collectBlock: {} }; },
+      "retired.collectBlock": (l, v) => { l.retired = { hashes: [], floor: 0, collectBlock: { [key]: v } }; },
+      "retired.hashes[].block": (l, v) => { l.retired = { hashes: [{ hash: hex(5), block: v }], floor: 0, collectBlock: {} }; },
+      "collect.block": (l, v) => { l.jobs[0].collect.block = v; },
+      "maxBlock": (l, v) => { l.jobs[0].maxBlock = v; },
+    };
+    for (const [name, mut] of Object.entries(variants)) {
+      const bad = clone(base); mut(bad, HEAD + 1); write(S, bad);
+      run = await S.run({ signer: S.signer() });
+      assert.strictEqual(run.signer.sent.length, 0, `${name}: ${run.text}`); assert.ok(new RegExp(`unreadable .*${name.replace(/[[\]]/g, ".").replace(/\.\./, ".")}.* above the chain head`).test(run.text) || /unreadable .*above the chain head/.test(run.text), `${name}: ${run.text}`);
+      const ok = clone(base); mut(ok, HEAD); write(S, ok);
+      assert.strictEqual(SL.ledgerAheadProblem(SL.readSweepState(S.file).ledger, HEAD), null, `${name} at the head is fine`);
+    }
+  }
+
+  // ---- 14. security M-2 and M-1(2): an old collect is refused whatever the file says, and a refused replay is unattributed (blocks new collects)
+  {
+    assert.strictEqual(SL.COLLECT_MAX_AGE_BLOCKS, 1166400, "30 days of 2 s blocks less a 10% margin");
+    assert.ok(SL.COLLECT_MAX_AGE_BLOCKS < Math.ceil(30 * DAY / 2000));
+    const head = 5_000_000;
+    assert.strictEqual(SL.collectAgeProblem(head, head - SL.COLLECT_MAX_AGE_BLOCKS), null);
+    assert.ok(/more than 1166400 blocks/.test(SL.collectAgeProblem(head, head - SL.COLLECT_MAX_AGE_BLOCKS - 1)));
+    assert.ok(/not usable/.test(SL.collectAgeProblem(undefined, 5)));
+    // integration: the retired block is GONE from the file (attacker deleted it); the head moved on 30 days; the old collect cannot back a credit
+    const S = sweepScene({ positions: [posA()] }); S.init(); await S.run({});
+    const led = S.ledger(); const key = `${MGR_A}:${ID_A}`.toLowerCase();
+    delete led.retired;
+    const lg = led.jobs[0].legs[0];
+    lg.phase = "collected"; lg.doneRaw = "0"; lg.outDone = undefined; lg.deliver = null; lg.swap = { amountIn: null, quoteRaw: null, minOutRaw: null, outRaw: "0", tx: null };
+    write(S, led);
+    S.addPosition({ id: ID_B, mgr: MGR_B, t0: CBBTC, t1: USDC, a0: 100_000n, a1: 0n });
+    S.w.head = 9_000_000;
+    const run = await S.run({ signer: S.signer() });
+    assert.strictEqual(run.signer.sent.length, 0, "nothing sent, and the second position is NOT collected: " + run.text);
+    const after = S.ledger(); const leg = after.jobs[0].legs[0];
+    assert.strictEqual(leg.phase, "held"); assert.strictEqual(leg.unattributed, true, "refusal is unattributed, not just held");
+    assert.ok(/more than 1166400 blocks/.test(leg.reason), leg.reason);
+    assert.strictEqual(after.jobs.length, 1, "no new job: unattributed blocks new collects");
+    assert.ok(/UNATTRIBUTED WETH of #\d+/.test(run.text) && /new collects are blocked/.test(run.text), run.text);
+    // a replay refusal (high-water) is unattributed too, and the next run still refuses new collects
+    S.w.head = 1_000_000;
+    const l2 = S.ledger(); l2.retired = { hashes: [], floor: 0, collectBlock: { [key]: l2.jobs[0].collect.block + 5 } };
+    const lg2 = l2.jobs[0].legs[0]; delete lg2.unattributed; lg2.phase = "collected"; delete lg2.reason; write(S, l2);
+    const r2 = await S.run({ signer: S.signer() });
+    assert.strictEqual(r2.signer.sent.length, 0, r2.text);
+    const a2 = S.ledger(); assert.strictEqual(a2.jobs[0].legs[0].unattributed, true, r2.text); assert.ok(/not newer than the retired collect/.test(a2.jobs[0].legs[0].reason));
+    assert.strictEqual(a2.jobs.length, 1, "still no new collect");
+  }
+
+  // ---- 15. reviewer fixes 2 and 4
+  {
+    // fix 2: in recovery a failed verification shows up in the held report every run
+    const { S, led } = await twoJobs();
+    const c = clone(led); const j2 = byToken(c, ID_B); rewindToPendingSwap(j2, j2.legs[0].swap && led.jobs.find((j) => j.tokenId === String(ID_B)).legs[0].swap.tx);
+    j2.legs[0].owedRaw = (BigInt(j2.legs[0].owedRaw) * 1000n).toString();
+    write(S, c);
+    const run = await S.run({ signer: S.signer() });
+    assert.strictEqual(run.signer.sent.length, 0, run.text);
+    assert.ok(/HELD: #\d+ cbBTC: ledger owes .* Collect receipt paid/.test(S.notes.join("\n")), S.notes.join("\n"));
+    // fix 4: decimals and price valid but the value is not finite: the reason is not empty
+    const T = sweepScene({ positions: [otherPos()], feesUsd: 50, usd1: 10 }); T.init();
+    await T.run({ sweep: { maxUnswappedValueUsdc: 1000 }, signer: T.signer({ maxSigns: 1 }) });
+    const l = T.ledger(); l.jobs[0].tokenDecimals = [6, 18]; l.jobs[0].priceUsd = [null, 1e308]; write(T, l);
+    await T.run({ sweep: { maxUnswappedValueUsdc: 1000 }, signer: T.signer() });
+    const reason = T.ledger().jobs[0].legs[0].reason;
+    assert.ok(/no pool mid price, the value is not finite\)/.test(reason), reason);
+  }
+
   console.log("collector-base-sweep-retired tests passed");
 })().catch((e) => { console.error(e); process.exit(1); });

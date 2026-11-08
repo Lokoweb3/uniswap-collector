@@ -54,7 +54,7 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
     const base = S.ledger(); const swapHash = base.jobs[0].legs[0].swap.tx; const collectHash = base.jobs[0].collect.tx;
     const write = (b) => fs.writeFileSync(S.file, JSON.stringify(b));
     const pend = (tx) => ({ op: "swap", tx, nonce: 7 });
-    const second = (b, mut) => { const j2 = clone(b.jobs[0]); j2.id = "other:2:2"; j2.collect.tx = H1; j2.legs[0].swap = { amountIn: null, quoteRaw: null, minOutRaw: null, outRaw: "0", tx: null }; mut(j2); b.jobs.push(j2); return b; };
+    const second = (b, mut) => { const j2 = clone(b.jobs[0]); j2.id = "other:2:2"; j2.collect.tx = H1; j2.legs[0].swap = { amountIn: null, quoteRaw: null, minOutRaw: null, outRaw: "0", tx: null }; for (const l of j2.legs) { l.deliver = null; delete l.transferTxs; delete l.vault; } /* transfer hashes are unique per ledger now (L-3): the clone must not repeat them */ mut(j2); b.jobs.push(j2); return b; };
     // another job's pending swap equals a recorded swap hash (case does not hide it)
     for (const h of [swapHash, swapHash.toUpperCase().replace("0X", "0x")]) {
       const b = second(clone(base), (j) => { j.legs[0].pending = pend(h); }); write(b);

@@ -303,6 +303,9 @@ function txCapCheck({ lim, sw, worstCaseWei, txCount, dayTxCount, spentRunWei, s
 
 const DEC = /^\d{1,60}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
+const TOKEN_ID = /^(0|[1-9]\d{0,59})$/;
+/** A leg keeps at most this many transfer hashes (the validator's bound). payOut holds the leg before it could exceed it; nothing is ever dropped. */
+const MAX_TRANSFERS_PER_LEG = 100;
 const isAddr = (a) => typeof a === "string" && ethers.isAddress(a);
 
 /** The first problem of a pending intent / leg / job, or null. */
@@ -328,13 +331,14 @@ function legProblem(l) {
   if (l.swap && l.swap.txs !== undefined && !(Array.isArray(l.swap.txs) && l.swap.txs.every((h) => typeof h === "string" && HASH.test(h)) && new Set(l.swap.txs.map((h) => h.toLowerCase())).size === l.swap.txs.length)) return "swap.txs is not a list of distinct hashes";
   if (l.outDone !== undefined && !(typeof l.outDone === "string" && DEC.test(l.outDone))) return "outDone is not a decimal string";
   // transferTxs (every transfer hash of the leg, kept so a retired job's transfers can be refused as proof later) is optional for older ledgers.
-  if (l.transferTxs !== undefined && !(Array.isArray(l.transferTxs) && l.transferTxs.length <= 100 && l.transferTxs.every((h) => typeof h === "string" && HASH.test(h)) && new Set(l.transferTxs.map((h) => h.toLowerCase())).size === l.transferTxs.length)) return "transferTxs is not a list of distinct hashes";
+  if (l.transferTxs !== undefined && !(Array.isArray(l.transferTxs) && l.transferTxs.length <= MAX_TRANSFERS_PER_LEG && l.transferTxs.every((h) => typeof h === "string" && HASH.test(h)) && new Set(l.transferTxs.map((h) => h.toLowerCase())).size === l.transferTxs.length)) return "transferTxs is not a list of distinct hashes";
   return pendingProblem(l.pending);
 }
 function jobProblem(j) {
   if (!j || typeof j !== "object") return "job is not an object";
   if (typeof j.id !== "string" || !j.id) return "id is missing";
-  if (!(typeof j.tokenId === "string" && DEC.test(j.tokenId))) return "tokenId is not a decimal string";
+  // canonical decimal only ("007" would make a second spelling of position 7 and dodge the per-position high-water)
+  if (!(typeof j.tokenId === "string" && TOKEN_ID.test(j.tokenId))) return "tokenId is not a canonical decimal string";
   if (!isAddr(j.manager) || !base.ALLOWED_MANAGERS.some((m) => eq(m, j.manager))) return "manager is not an allowlisted manager";
   if (!isAddr(j.owner)) return "owner is not an address";
   if (!Array.isArray(j.legs)) return "legs is not an array";
@@ -371,17 +375,21 @@ function jobProblem(j) {
  *  - floor: the highest `block` of any hash evicted from `hashes`. No receipt at or below it is accepted as proof any more.
  * BOUND AND POLICY. MAX_RETIRED_HASHES = 2000 (about 200 KB of JSON). A job leaves 1 collect + about 2 swap/transfer hashes per leg, so
  * this is several hundred jobs, far more than the 30-day KEEP_TERMINAL_MS window can produce at dailyTxCap (hard max 100/day), so
- * eviction only ever drops hashes that have been retired for months. Eviction is FIFO, and an evicted hash is NOT forgotten: its job's block
- * raises `floor`, and the replay rules refuse every receipt with blockNumber <= floor, so a pruned list entry cannot re-open replay for any
- * receipt it covered (a receipt of a job cannot be above that job's own highest block). For the same position, the strictly-newer-collect
- * rule against collectBlock (never pruned) covers it too. The price is fail-closed: a job still open after 2000 later hashes whose
- * receipts sit at or below `floor` is held, not credited.
+ * eviction only ever drops hashes that have been retired for months. Eviction is FIFO among KNOWN-block entries (block > 0): an evicted
+ * hash is NOT forgotten, its job's block raises `floor`, and the replay rules refuse every receipt with blockNumber <= floor, so a pruned
+ * list entry cannot re-open replay for any receipt it covered (a receipt of a job cannot be above that job's own highest block).
+ * An entry whose block is UNKNOWN (0: a legacy job with no maxBlock, or one with receipts beyond a known collect block) can never be
+ * covered by the floor, so it is NEVER evicted. If only such entries remain over the bound, serializeSweepState throws and save() stops
+ * the run (fail closed); an operator must resolve it. For the same position, the strictly-newer-collect rule against collectBlock (never
+ * pruned) covers a replayed collect too. The price of the floor is fail-closed: a job still open after 2000 later hashes whose receipts
+ * sit at or below `floor` is held, not credited.
  */
 const MAX_RETIRED_HASHES = 2000;
 const MAX_RETIRED_POSITIONS = 10000;
 const POS_KEY = /^0x[0-9a-f]{40}:\d{1,60}$/;
 const emptyRetired = () => ({ hashes: [], floor: 0, collectBlock: {} });
-const posKey = (manager, tokenId) => `${manager}:${tokenId}`.toLowerCase();
+/** manager:tokenId, lowercase, tokenId normalized ("007" and "7" are the same position). */
+const posKey = (manager, tokenId) => { let id = String(tokenId); try { id = BigInt(id).toString(); } catch { /* not a number: the raw text, which no real position has */ } return `${manager}:${id}`.toLowerCase(); };
 
 /** The first problem of a retired block, or null. `r` undefined (older ledger) is fine and means empty. */
 function retiredProblem(r) {
@@ -409,6 +417,41 @@ function retiredProblem(r) {
   }
   return null;
 }
+/**
+ * Security M-1: every block number the ledger carries must exist. A tampered floor / collect block / maxBlock far above the chain head
+ * would refuse every legitimate receipt (holding all jobs) while the sweep keeps collecting. First problem text, or null.
+ */
+function ledgerAheadProblem(ledger, head) {
+  const h = Number(head);
+  if (!Number.isSafeInteger(h) || h <= 0) return `the chain head ${String(head)} is not usable`;
+  const r = ledger.retired;
+  const over = (what, v) => (Number.isFinite(Number(v)) && Number(v) > h ? `${what} ${v} is above the chain head ${h}` : null);
+  let m = r && over("retired.floor", r.floor); if (m) return m;
+  for (const [k, v] of Object.entries((r && r.collectBlock) || {})) { m = over(`retired.collectBlock[${k}]`, v); if (m) return m; }
+  for (const [i, e] of ((r && r.hashes) || []).entries()) { m = over(`retired.hashes[${i}].block`, e.block); if (m) return m; }
+  for (const [i, j] of (ledger.jobs || []).entries()) {
+    m = over(`jobs[${i}].collect.block`, j.collect && j.collect.block) || over(`jobs[${i}].maxBlock`, j.maxBlock);
+    if (m) return m;
+  }
+  return null;
+}
+
+/**
+ * Security M-2 (independent of the ledger file): pruning only happens KEEP_TERMINAL_MS after a job finishes, so every pruned job's collect
+ * is at least KEEP_TERMINAL_MS old. Base makes a block every 2 s: 30 days = 1,296,000 blocks. A collect is accepted only if it is younger than
+ * that minus a 10% safety margin (129,600 blocks, about 3 days, which covers block times up to about 2.2 s): the accepted window
+ * (about 27 days) then lies strictly inside the 30 days, so no pruned job's collect can ever pass, even if the whole retired block was
+ * deleted from the file. A legitimately long-open job (a collect older than that) is refused: unattributed, needs operator resolution.
+ */
+const BASE_BLOCK_MS = 2000;
+const COLLECT_MAX_AGE_BLOCKS = Math.ceil(KEEP_TERMINAL_MS / BASE_BLOCK_MS) - Math.ceil(Math.ceil(KEEP_TERMINAL_MS / BASE_BLOCK_MS) * 0.1);
+function collectAgeProblem(head, blockNumber) {
+  const h = Number(head), b = Number(blockNumber);
+  if (!Number.isSafeInteger(h) || h <= 0) return `the chain head ${String(head)} is not usable`;
+  if (b < h - COLLECT_MAX_AGE_BLOCKS) return `collect is in block ${b}, more than ${COLLECT_MAX_AGE_BLOCKS} blocks (about 27 days) before the head ${h}; it is as old as a job that may already have been pruned, so it cannot be told from a replayed receipt; an operator must resolve it`;
+  return null;
+}
+
 /** A normalized copy (hashes lowercased), or the empty retired block when `r` is absent. Call only after retiredProblem(r) === null. */
 function normRetired(r) {
   if (!r) return emptyRetired();
@@ -429,8 +472,18 @@ function jobHashes(job) {
   }
   return [...out];
 }
-/** The highest block a job is known to have receipts in. */
-const jobEndBlock = (job) => Math.max(Number.isSafeInteger(job.maxBlock) ? job.maxBlock : 0, Number.isSafeInteger(job.collect && job.collect.block) ? job.collect.block : 0);
+/**
+ * The highest block a job is known to have receipts in, or 0 when that is unknown. Known: job.maxBlock; or, for a job whose only hash is
+ * its collect (reverted collect), the collect block. A legacy job with other hashes and no maxBlock is UNKNOWN (0): its swap/transfer
+ * receipts may sit above its collect block, so its hashes must never be evicted into the floor.
+ */
+function jobEndBlock(job) {
+  const cb = Number.isSafeInteger(job.collect && job.collect.block) ? job.collect.block : 0;
+  if (Number.isSafeInteger(job.maxBlock) && job.maxBlock > 0) return Math.max(job.maxBlock, cb);
+  const hs = jobHashes(job);
+  const onlyCollect = hs.length === 0 || (hs.length === 1 && typeof job.collect.tx === "string" && hs[0] === job.collect.tx.toLowerCase());
+  return onlyCollect ? cb : 0;
+}
 
 /**
  * Why a receipt at `blockNumber` with `hash` cannot back a credit for a job whose verified collect is at `collectBlock`, or null.
@@ -495,6 +548,17 @@ function readSweepState(file, fsm = fs) {
       }
     }
   }
+  // Security L-3: one transfer receipt may back exactly one leg (deliver.tx, vault.tx, transferTxs, pending transfer); transfer against transfer here, the recovery path also checks collect and swap hashes.
+  const transferHashes = new Set();
+  for (const [i, job] of j.jobs.entries()) {
+    for (const [k, l] of job.legs.entries()) {
+      const own = new Set([l.deliver && l.deliver.tx, l.vault && l.vault.tx, ...(Array.isArray(l.transferTxs) ? l.transferTxs : []), ...(l.pending && l.pending.op === "transfer" ? [l.pending.tx] : [])].filter((h) => typeof h === "string" && HASH.test(h)).map((h) => h.toLowerCase()));
+      for (const h of own) {
+        if (transferHashes.has(h)) return corrupt(`jobs[${i}].legs[${k}] transfer hash ${h} is already recorded for another leg`);
+        transferHashes.add(h);
+      }
+    }
+  }
   // A live job never owns a retired hash: that is a pruned job's receipt pointed at a live leg (replay), so the ledger is corrupt.
   for (const [i, job] of j.jobs.entries()) {
     const hit = jobHashes(job).find((h) => retiredHas(retired, h));
@@ -527,7 +591,14 @@ function serializeSweepState(ledger, nowMs = Date.now()) {
     const cb = j.collect && j.collect.block;
     if (Number.isSafeInteger(cb) && cb > 0) { const k = posKey(j.manager, j.tokenId); r.collectBlock[k] = Math.max(r.collectBlock[k] || 0, cb); }
   }
-  while (r.hashes.length > MAX_RETIRED_HASHES) { const e = r.hashes.shift(); r.floor = Math.max(r.floor, e.block); }
+  // Evict oldest KNOWN-block entries only (their block raises the floor). An unknown-block entry is never dropped: fail closed instead.
+  while (r.hashes.length > MAX_RETIRED_HASHES) {
+    const at = r.hashes.findIndex((e) => e.block > 0);
+    if (at < 0) throw new Error(`retired.hashes holds ${r.hashes.length} entries with no known block, over the bound ${MAX_RETIRED_HASHES}; they cannot be evicted safely (an operator must resolve the legacy jobs)`);
+    const [e] = r.hashes.splice(at, 1); r.floor = Math.max(r.floor, e.block);
+  }
+  if (Object.keys(r.collectBlock).length > MAX_RETIRED_POSITIONS) throw new Error(`retired.collectBlock would hold ${Object.keys(r.collectBlock).length} positions, over the bound ${MAX_RETIRED_POSITIONS}`);
+  const bad = retiredProblem(r); if (bad) throw new Error(`the retired block would not read back: ${bad}`); // never write a file the reader rejects
   const empty = !r.hashes.length && r.floor === 0 && !Object.keys(r.collectBlock).length; // an empty list is omitted: the file stays as it was before the list existed
   return JSON.stringify(empty ? { version: SWEEP_STATE_VERSION, jobs } : { version: SWEEP_STATE_VERSION, jobs, retired: r }, null, 2) + "\n";
 }
@@ -550,6 +621,6 @@ function initSweepStateFile(file, fsm = fs) {
 module.exports = {
   CHAIN_ID, ERC6551_REGISTRY, VAULT_IMPLEMENTATIONS, USDC, USDC_DECIMALS, ROUTER, QUOTER, FACTORY, ROUTES, OPS, PHASES, TERMINAL_PHASES, GAS_CEILINGS, NUMBERS, SWEEP_STATE_VERSION, MAX_UINT256, ERC20_IFACE, ROUTER_IFACE,
   config, limitOverrides, routeFor, midOut, afterFee, impactBps, minOutOf, usdcRaw, fmtUsdc, decideSwap, twapTick, split, vaultPct, calldata, assertSignableSweep,
-  MAX_RETIRED_HASHES, MAX_RETIRED_POSITIONS, emptyRetired, posKey, retiredHas, jobHashes, receiptReplayProblem, collectReplayProblem,
+  MAX_RETIRED_HASHES, MAX_RETIRED_POSITIONS, MAX_TRANSFERS_PER_LEG, COLLECT_MAX_AGE_BLOCKS, ledgerAheadProblem, collectAgeProblem, emptyRetired, posKey, retiredHas, jobHashes, receiptReplayProblem, collectReplayProblem,
   opCount24h, txCapCheck, readSweepState, serializeSweepState, initSweepStateFile, jobTerminal, legTerminal, jobProblem, eq, addr,
 };

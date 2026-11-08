@@ -168,7 +168,7 @@ function create(env) {
   }
   /** Notes the highest block a job has a receipt in (the retired list keeps it when the job is pruned). */
   const noteBlock = (job, rc) => { const b = Number(rc && rc.blockNumber); if (Number.isSafeInteger(b) && b > 0 && !(job.maxBlock >= b)) job.maxBlock = b; };
-  const addTransferTx = (leg, hash) => { const t = Array.isArray(leg.transferTxs) ? leg.transferTxs : []; if (typeof hash === "string" && !t.some((h) => eq(h, hash))) t.push(hash); leg.transferTxs = t.slice(-100); };
+  const addTransferTx = (leg, hash) => { const t = Array.isArray(leg.transferTxs) ? leg.transferTxs : []; if (typeof hash === "string" && !t.some((h) => eq(h, hash))) t.push(hash); leg.transferTxs = t; }; // never truncated: payOut holds the leg before it can pass S.MAX_TRANSFERS_PER_LEG
   const mark = (job) => { if (S.jobTerminal(job) && job.finishedAt === undefined) job.finishedAt = now(); };
 
   /** Validate the settings and load the ledger. { ok:true } | { ok:false, reason }. Nothing is written. */
@@ -189,6 +189,11 @@ function create(env) {
       if (r.kind === "missing") return { ok: false, reason: `sweep-state.json is missing (${r.file}); refusing to send anything. Create it once with: LP_DATA_DIR=${require("path").dirname(r.file)} node collector-base.js --init-state`, kind: "missing" };
       return { ok: false, reason: `sweep-state.json is unreadable (${r.reason}); refusing everything (${r.file})`, kind: "corrupt" };
     }
+    // Security M-1: a block number above the chain head can only be a tamper (it would hold every job while new collects continue).
+    let head;
+    try { head = Number(await provider.getBlockNumber()); } catch (err) { return { ok: false, reason: `sweep-state.json cannot be checked against the chain head (${short(err)}); refusing everything (${r.file || "ledger"})`, kind: "corrupt" }; }
+    const ahead = S.ledgerAheadProblem(r.ledger, head);
+    if (ahead) return { ok: false, reason: `sweep-state.json is unreadable (${ahead}; tampered ledger); refusing everything`, kind: "corrupt" };
     ledger = r.ledger;
     return { ok: true, active: true };
   }
@@ -290,6 +295,8 @@ function create(env) {
   async function payOut(job, leg, token, wanted, { splitAllowed, credit, kind }) {
     const o = await ownerCheck(job);
     if (!o.ok) return hold(job, leg, o.reason);
+    // up to two transfers (vault share + owner) can be recorded in one call; no hash is ever dropped, so the leg stops here instead
+    if ((Array.isArray(leg.transferTxs) ? leg.transferTxs.length : 0) + 2 > S.MAX_TRANSFERS_PER_LEG) return hold(job, leg, `the leg already has ${leg.transferTxs.length} recorded transfers (limit ${S.MAX_TRANSFERS_PER_LEG}); an operator must resolve it`);
     let bal;
     try { bal = await balanceOf(token); } catch (err) { return hold(job, leg, `operator balance could not be read (${short(err)})`); }
     let amount = minB(wanted, bal);
@@ -355,6 +362,20 @@ function create(env) {
    * True when `hash` is already on record anywhere else in the ledger: any job's collect.tx, any other leg's swap hashes or pending swap
    * hash, or a swap hash this leg has already been credited with. A recovered receipt for such a hash must not be credited again.
    */
+  /** Security L-3: true when a transfer hash is already on record anywhere else (any collect, swap or transfer hash, retired or live). */
+  function transferCollision(leg, hash) {
+    if (S.retiredHas(ledger.retired, hash)) return true;
+    for (const j of ledger.jobs) {
+      if (j.collect && typeof j.collect.tx === "string" && eq(j.collect.tx, hash)) return true;
+      for (const l of j.legs) {
+        if (swapTxs(l).some((h) => eq(h, hash))) return true;
+        if (l.pending && l.pending.op === "swap" && typeof l.pending.tx === "string" && eq(l.pending.tx, hash)) return true;
+        if ([l.deliver && l.deliver.tx, l.vault && l.vault.tx, ...(Array.isArray(l.transferTxs) ? l.transferTxs : [])].some((h) => typeof h === "string" && eq(h, hash))) return true;
+        if (l !== leg && l.pending && l.pending.op === "transfer" && typeof l.pending.tx === "string" && eq(l.pending.tx, hash)) return true;
+      }
+    }
+    return false;
+  }
   function hashCollision(leg, hash) {
     if (S.retiredHas(ledger.retired, hash)) return true;
     for (const j of ledger.jobs) {
@@ -518,7 +539,7 @@ function create(env) {
         value = i < 0 ? null : sideValue(amount, px, dec);
         if (value === null) {
           // BOTH missing facts are listed, not just the first
-          const why = i < 0 ? "the token is not token0/token1 of the job" : [dec === null ? "no pinned decimals" : null, !(typeof px === "number" && Number.isFinite(px) && px > 0) ? "no per-side USD price" : null].filter(Boolean).join(" and ");
+          const why = i < 0 ? "the token is not token0/token1 of the job" : [dec === null ? "no pinned decimals" : null, !(typeof px === "number" && Number.isFinite(px) && px > 0) ? "no per-side USD price" : null].filter(Boolean).join(" and ") || "the value is not finite";
           return hold(job, leg, `${symbolOf(leg.token)} would be delivered unswapped (${d.reason}) but no value can be established (no pool mid price, ${why}), so maxUnswappedValueUsdc cannot be applied`);
         }
       }
@@ -588,10 +609,11 @@ function create(env) {
   /**
    * The ledger is not trusted: before a leg's first send its owed amount must not exceed what the job's own Collect receipt paid to the
    * operator for that token (manager, topic, tokenId and recipient parsed from the chain), and the token must be one of the position's.
-   * Returns a reason string (refuse, fail closed) or null. Read once per job per run.
+   * Returns null, or { reason, fatal }: fatal (a replay or too-old collect, security M-1/M-2) means the caller marks the leg
+   * UNATTRIBUTED (it blocks new collects); otherwise the leg is only held. Read once per job per run.
    */
   async function verifyAgainstCollect(job, leg) {
-    if (!ownerConfigured(job.owner)) return `the ledger owner ${job.owner} is not a configured owner address (tampered ledger)`;
+    if (!ownerConfigured(job.owner)) return { reason: `the ledger owner ${job.owner} is not a configured owner address (tampered ledger)` };
     const ckey = `${job.manager}:${job.tokenId}:${job.collect && job.collect.tx}`.toLowerCase();
     let c = collectChecks.get(ckey);
     if (!c) {
@@ -606,20 +628,24 @@ function create(env) {
         if (!amounts) throw new Error("the collect receipt has no Collect event for this position paying the operator");
         const block = Number(rc.blockNumber);
         if (!Number.isSafeInteger(block) || block <= 0) throw new Error("the collect receipt has no block number");
-        c = { amounts, tokens: await positionTokens(job.manager, job.tokenId), block };
-      } catch (err) { return `the ledger amounts cannot be checked against the collect receipt (${short(err)}); refusing`; }
+        const head = Number(await provider.getBlockNumber());
+        c = { amounts, tokens: await positionTokens(job.manager, job.tokenId), block, head };
+      } catch (err) { return { reason: `the ledger amounts cannot be checked against the collect receipt (${short(err)}); refusing` }; }
       collectChecks.set(ckey, c);
     }
     // The block comes from the chain, never the ledger. A collect that is a retired job's, or not newer than a retired collect of this
     // position, is a replayed receipt (security L-1): refused.
     const replay = S.collectReplayProblem(ledger.retired, job.collect.tx, c.block, job.manager, job.tokenId);
-    if (replay) return `${replay} (replayed receipt of a pruned job, or a tampered ledger)`;
+    if (replay) return { reason: `${replay} (replayed receipt of a pruned job, or a tampered ledger)`, fatal: true };
+    // M-2: independent of the ledger file, a collect as old as a possibly-pruned job's is refused too.
+    const aged = S.collectAgeProblem(c.head, c.block);
+    if (aged) return { reason: `collect ${job.collect.tx}: ${aged}`, fatal: true };
     if (job.collect.block !== c.block) job.collect.block = c.block;
-    if (!eq(job.token0, c.tokens[0]) || !eq(job.token1, c.tokens[1])) return `the ledger tokens ${job.token0}/${job.token1} are not the tokens of position #${job.tokenId}; tampered ledger, refusing`;
+    if (!eq(job.token0, c.tokens[0]) || !eq(job.token1, c.tokens[1])) return { reason: `the ledger tokens ${job.token0}/${job.token1} are not the tokens of position #${job.tokenId}; tampered ledger, refusing` };
     const i = c.tokens.findIndex((t) => eq(t, leg.token));
-    if (i < 0) return `${leg.token} is not a token of position #${job.tokenId}; refusing`;
+    if (i < 0) return { reason: `${leg.token} is not a token of position #${job.tokenId}; refusing` };
     // Token0 and token1 are distinct for a pool; the cap is the Collect amount of this token.
-    if (BigInt(leg.owedRaw) > c.amounts[i]) return `ledger owes ${leg.owedRaw} raw ${symbolOf(leg.token)} but the Collect receipt paid ${c.amounts[i]}; tampered ledger, refusing`;
+    if (BigInt(leg.owedRaw) > c.amounts[i]) return { reason: `ledger owes ${leg.owedRaw} raw ${symbolOf(leg.token)} but the Collect receipt paid ${c.amounts[i]}; tampered ledger, refusing` };
     return null;
   }
 
@@ -629,7 +655,9 @@ function create(env) {
       if (leg.unattributed) { report.unattributed.push(`#${job.tokenId} ${symbolOf(leg.token)} swap output`); log(`  UNATTRIBUTED ${symbolOf(leg.token)} of #${job.tokenId}: the swap output is unknown; nothing is sent`); return; }
       if (S.legTerminal(leg)) return;
       if (leg.phase === "stuck") { report.stuck.push(`#${job.tokenId} ${symbolOf(leg.token)}`); log(`  STUCK ${symbolOf(leg.token)} of #${job.tokenId}: transfer failed repeatedly; reported, never redirected`); return; }
-      const bad = await verifyAgainstCollect(job, leg);
+      const v = await verifyAgainstCollect(job, leg);
+      const bad = v && v.reason;
+      if (v && v.fatal) { unattribute(job, leg, bad); return; }
       if (bad) { if (leg.phase !== "held" || leg.reason !== bad) hold(job, leg, bad); else { report.held.push(`#${job.tokenId} ${symbolOf(leg.token)}: ${bad}`); log(`  HELD ${symbolOf(leg.token)} of #${job.tokenId}: ${bad}`); } return; }
       let go;
       if (leg.phase === "held") go = await releaseHeld(job, leg);
@@ -769,8 +797,9 @@ function create(env) {
       const ok = r.receipt.status !== 0;
       if (ok && (p.op === "swap" || p.op === "transfer")) {
         // A mined receipt is credited only if it is not a retired job's and is not older than this job's own verified collect (L-1).
-        const bad = await verifyAgainstCollect(job, leg);
-        if (bad) { log(`  recovery: ${p.op} ${p.tx} of ${symbolOf(leg.token)} (#${job.tokenId}) is not credited yet: ${bad}`); continue; }
+        const v = await verifyAgainstCollect(job, leg);
+        if (v && v.fatal) { unattribute(job, leg, v.reason); continue; }
+        if (v) { log(`  recovery: ${p.op} ${p.tx} of ${symbolOf(leg.token)} (#${job.tokenId}) is not credited yet: ${v.reason}`); report.held.push(`#${job.tokenId} ${symbolOf(leg.token)}: ${v.reason}`); continue; }
         const replay = S.receiptReplayProblem(ledger.retired, p.tx, r.receipt.blockNumber, job.collect.block);
         if (replay) { unattribute(job, leg, `recovered ${p.op} ${replay}; not credited`); continue; }
       }
@@ -793,6 +822,7 @@ function create(env) {
           // A mined transfer is credited only with proof: the token's own Transfer(operator -> to, amount) log when the receipt logs are
           // available, else the operator balance fall at the receipt's block. USDC for proceeds, the leg's token otherwise.
           const ptoken = p.kind === "proceeds" ? S.USDC : leg.token;
+          if (transferCollision(leg, p.tx)) { unattribute(job, leg, `recovered transfer ${p.tx} is already recorded for another leg or job (or is a collect or swap transaction); not credited`); continue; }
           if (!(await transferProof(r.receipt, ptoken, p.to, raw)).ok) { unattribute(job, leg, `recovered transfer ${p.tx} is mined but neither the block balances nor a matching Transfer log prove it`); continue; }
           if (p.kind === "proceeds") leg.outDone = (BigInt(leg.outDone || "0") + raw).toString();
           else leg.doneRaw = (BigInt(leg.doneRaw) + raw).toString();

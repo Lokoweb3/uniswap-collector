@@ -100,3 +100,32 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 - Before any push: the real arc pool id (prefix 0xebde8959) and real token symbols remain in history before 6288da0/b911557. A history rewrite needs user approval.
 - Root cause for holdings-unavailable (Blockscout token discovery blocked) is not addressed.
 - Cost: not measured; about 12 subagent runs, several cut off by forced hand-backs and resumed.
+
+---
+
+# Base sweep to USDC (3103487 → 4930f2a), ships disabled
+
+- Step 0 (read-only, 2026-11-07): USDG is not on Base; user chose native USDC 0x8335…2913. Routes: WETH/USDC 500 and cbBTC/USDC 500 ~0% impact; LAPTOP/USDC 10000 ~1.2% under mid for $60. Allowlist: Uniswap SwapRouter02 0x2626…e481 + QuoterV2 0x3d4e…B76a only (no Slipstream cl2, no multihop). LOKOVault TBA 0x4941…340B exists only on Robinhood (owner Main); no Base vault, so the user chose 100% to the NFT owner with the vault split written but gated (hard-coded ERC-6551 registry, empty implementation allowlist).
+- Commits: e6c8ba6 spec · 4273e36 implementation (collector-base-sweep*.js, tools/verify-base-sweep.js; every tx through sign-first reservations, nonce settlement and per-run/daily caps) · 587b2c9 review fixes · 4930f2a security fixes (block-tagged balances, two-run not-found rule, owner bound to configured owners, collect receipt re-verified, maxUnswappedValueUsdc, TWAP-bounded minOut).
+- Verdicts: reviewer APPROVE WITH FIXES (applied); security PASS WITH FIXES → re-review PASS WITH FIXES (no path found that loses funds, double-pays or misdirects).
+- Tests: 136/137 then (smoke.js only); eslint clean; npm audit 0; Robinhood collector files and pre-sweep tests byte-identical to 3103487.
+- Open before enabling: MEDIUM, preflight doesn't apply maxUnswappedValueUsdc, so a large USDC/declined leg is collected then held on the operator. L-1 ledger duplicates / swap outRaw not re-checked; L-2 delivered without Transfer-log check when block-tagged reads fail; L-3 voided broadcast collect should be unattributed. Info: freeze VAULT_IMPLEMENTATIONS; redundant transfer target check.
+- Enable steps (user): fix the Medium, deploy, `node tools/verify-base-sweep.js`, Rabby operator approval on both Aerodrome managers, `--init-state` for sweep-state.json, set wallets.main.collect + baseSweep.enabled, simulate, then a real run.
+- Cost (approx tokens): ~1.2M across 9 stages.
+
+---
+
+# Portfolio fee totals (branch worktree-agent-afe4e6be413177e2c, 3103487 → c10cce6)
+
+| Commit | What |
+|---|---|
+| e9cb989 | Spec: fee totals and earning rate (26 acceptance tests) |
+| b2f8357 | Totals row under the LP table (counted fees, counted rewards, uncounted fees), fee columns in By chain / By wallet, measured earning rate (main-wallet dailyUsd, watched earned.perHour × 24; "rate unknown" otherwise; per week labelled ×7 extrapolated) |
+| c10cce6 | Review fixes: unpriced rewards show "(unpriced)" not "$0.00"; down/loading chains listed as "rate unknown (chain down)" in rate sources |
+
+- Verdicts: reviewer APPROVE WITH FIXES → APPROVE; security PASS (no findings; info I1 tiny rate shows $0.00/day, I2 all-uncounted wallet shows fees $0.00, I3 chain-down placeholders drop out under a wallet filter).
+- Tests: aggregate-fees, aggregate, aggregate-view, aggregate-router, aggregate-fixtures, portfolio-partial pass; eslint clean. Full suite to be confirmed after merge into master.
+- Deploy: router-only (aggregate.js, aggregate-view.js, aggregate.css).
+- Left: optional full snapshot test for the old breakdown columns (the implementer's report claimed it, but it is not in the commit); "(chain down or loading)" wording; mixed priced/unpriced reward test; info notes I1-I3; spec test 26 (manual live check).
+
+- Merged into master as 3aac9e3 (SPEC sections kept side by side). Full suite on merged master: 137/138 (smoke.js only); eslint clean.

@@ -553,6 +553,7 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
       if (!(c.chain.key in feesByChain)) feesByChain[c.chain.key] = 0;
     }
     for (const r of c.rates || []) rates.push({ chain: c.chain.key, ...r });
+    if (noData && !(c.rates || []).length) rates.push({ chain: c.chain.key, wallet: null, kind: "chain", perDayUsd: null, windowH: null, measured: null, total: null, stale: false });
     if (c.status !== "ok") {
       if (!c.problems.length) incompleteList.push({ chain: c.chain.key, code: c.status });
       for (const p of c.problems) incompleteList.push({ chain: c.chain.key, ...(p.part ? { part: p.part } : { wallet: p.wallet }), code: p.code });

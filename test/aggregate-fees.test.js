@@ -133,6 +133,12 @@ const thin = () => lp(4, { valueUsd: 50, feesUsd: 3, thin: true });
     assert.strictEqual(k.totals.rewardsUsd, 4); assert.strictEqual(k.totals.rewardsUncountedUsd, 6);
     const kh = html(k);
     assert.ok(kh.includes("rewards $6.00 not counted (gauge killed)") && kh.includes("pending rewards $4.00") && kh.includes("rewards not counted: 1 ($6.00)"));
+    // an unpriced reward is an unknown amount, never "$0.00"
+    const unp = base1({ rhExt: [ext("aerodrome-cl2", 7, { staked: true, valueUsd: 90, feesUsd: 0, rewards: reward(null, { priceUsd: null }) })] });
+    const up = await payloadFor(unp);
+    const uph = html(up);
+    assert.strictEqual(up.totals.rewardsUncountedCount, 1);
+    assert.ok(uph.includes("rewards not counted: 1 (unpriced)") && !uph.includes("($0.00)"), "unpriced reward: no dollar figure");
   }
 
   // ---- 10, 11, 12 down chain, unavailable wallet, breakdown columns
@@ -209,6 +215,26 @@ const thin = () => lp(4, { valueUsd: 50, feesUsd: 3, thin: true });
     assert.ok(mh.includes("$3.00/day") && mh.includes("Arc Main: rate unknown") && mh.includes("1 of 2 sources"));
     const ah = V.ratesHtml(mx, sel(["arc"]));
     assert.ok(ah.includes("rate unknown") && !ah.includes("/day") && !ah.includes("$"));
+
+    // a down or loading chain is a source with an unknown rate, not a missing one
+    const dn = base1(); dn.base.watch = F.watch(); dn.arc = { positions: { __code: "unreachable" }, watch: { __code: "unreachable" }, portfolio: { __code: "unreachable" }, staking: { __code: "unreachable" } };
+    const dp = await payloadFor(dn);
+    const dr = dp.rates.find((r) => r.chain === "arc");
+    assert.ok(dr && dr.wallet === null && dr.kind === "chain" && dr.perDayUsd === null);
+    const dh2 = V.ratesHtml(dp, ALL());
+    assert.ok(dh2.includes("$3.00/day") && dh2.includes("Arc: rate unknown (chain down)") && dh2.includes("1 of 2 sources"), dh2);
+    assert.ok(!V.ratesHtml(dp, sel(null, M)).includes("chain down"), "wallet filter drops chain entries");
+    assert.ok(!V.ratesHtml(dp, sel(["robinhood"])).includes("chain down"), "chain filter applies");
+    assert.ok(V.ratesHtml(dp, sel(["arc"])).includes("Arc: rate unknown (chain down)"));
+    const slow = new Promise(() => {});
+    const lag = agg.createAggregator({ chains: CH, now: () => F.AT + 60000, waitMs: 20, fetchJson: async (chain, pth) => {
+      if (chain.key === "arc") return slow;
+      const v = base1()[chain.key][pth.split("/").pop()]; return { status: 200, data: v };
+    } });
+    const lp2 = JSON.parse(JSON.stringify(await lag.get()));
+    assert.strictEqual(lp2.chains.find((c) => c.key === "arc").status, "loading");
+    const lh = V.ratesHtml(lp2, ALL());
+    assert.ok(lh.includes("Arc: rate unknown (chain down)") && lh.includes("2 of 3 sources"), lh);
 
     // 19 stale, short window, a real zero
     const st = base1(); st.robinhood.positions.at = F.AT - 30 * 60000; st.robinhood.positions.positions[0].rateWindowH = 3;

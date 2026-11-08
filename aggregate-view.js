@@ -177,7 +177,12 @@ function totalsRowHtml(payload, t, sel) {
   if (unavailableWallet(payload, sel)) return '<tr class="total"><td colspan="5">Total (counted)</td><td class="num">unavailable</td><td class="num">unavailable</td></tr>';
   const linesHtml = [`<span>fees ${esc(usd(t.feesUsd))}</span>`, `<span>pending rewards ${esc(usd(t.rewardsUsd))}</span>`];
   if (t.feesUncountedCount > 0) linesHtml.push(`<span class="muted">fees not counted ${esc(usd(t.feesUncountedUsd))} (${esc(t.feesUncountedCount)} items)</span>`);
-  if (t.rewardsUncountedCount > 0) linesHtml.push(`<span class="muted">rewards not counted: ${esc(t.rewardsUncountedCount)} (${esc(usd(t.rewardsUncountedUsd))})</span>`);
+  if (t.rewardsUncountedCount > 0) {
+    // A dollar figure only when known: priced-but-uncounted rewards (killed gauge). Unpriced ones have no amount.
+    const unpriced = filterItems(payload, sel).filter(it => it.kind === 'lp' && !it.rewardsCounted && it.rewardsReason && !isNum(it.rewardsUsd)).length;
+    const note = t.rewardsUncountedUsd > 0 ? ` (${unpriced > 0 ? unpriced + ' unpriced, ' : ''}${usd(t.rewardsUncountedUsd)}${unpriced > 0 ? ' priced' : ''})` : ' (unpriced)';
+    linesHtml.push(`<span class="muted">rewards not counted: ${esc(t.rewardsUncountedCount)}${esc(note)}</span>`);
+  }
   return `<tr class="total"><td colspan="5">Total (counted)</td><td class="num">${esc(usd(t.lpUsd))}</td><td class="num">${linesHtml.join('<br>')}</td></tr>`;
 }
 
@@ -193,6 +198,7 @@ function ratesHtml(payload, sel) {
   const wname = k => { const w = (payload.wallets || []).find(x => x.key === k); return w ? (w.label || shortAddr(w.address)) : shortAddr(k); };
   const known = rs.filter(r => isNum(r.perDayUsd));
   const srcHtml = rs.map(r => {
+    if (r.wallet === null) return `<li>${esc(chainOf(payload, r.chain).label)}: rate unknown (chain down)</li>`;
     const whoHtml = `${esc(chainOf(payload, r.chain).label)} ${esc(wname(r.wallet))}`;
     if (!isNum(r.perDayUsd)) return `<li>${whoHtml}: rate unknown</li>`;
     const bitsHtml = [];

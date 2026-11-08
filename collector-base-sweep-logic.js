@@ -368,10 +368,13 @@ function readSweepState(file, fsm = fs) {
   if (j.version !== SWEEP_STATE_VERSION) return corrupt(`unknown version ${JSON.stringify(j.version)}`);
   if (!Array.isArray(j.jobs)) return corrupt("jobs is not an array");
   const collectTxs = new Set();
+  const jobIds = new Set();
   const swapHashes = new Set(); // every leg's swap.tx and swap.txs across ALL jobs: one swap receipt may back exactly one leg
   for (const [i, job] of j.jobs.entries()) {
     const m = jobProblem(job); if (m) return corrupt(`jobs[${i}].${m}`);
     // One collect transaction belongs to exactly one job: a duplicate would let one Collect receipt vouch for two jobs' amounts.
+    if (jobIds.has(job.id)) return corrupt(`jobs[${i}].id duplicates an earlier job`);
+    jobIds.add(job.id);
     const tx = typeof job.collect.tx === "string" ? job.collect.tx.toLowerCase() : null;
     if (tx) { if (collectTxs.has(tx)) return corrupt(`jobs[${i}].collect.tx ${job.collect.tx} duplicates the collect of an earlier job`); collectTxs.add(tx); }
     const seen = new Set();

@@ -151,7 +151,7 @@ function create(env) {
   const ownerConfigured = (a) => owners.some((o) => eq(o, a));
   const sideDecimals = new Map(); // same key -> [dec0, dec1] read at plan time, pinned on the job at newJob
   const sidePrices = new Map(); // `${manager}:${tokenId}` (lowercase) -> [usd0, usd1] seen at plan time, copied to the job at the collect intent
-  const collectChecks = new Map(); // job.id -> { amounts, tokens } read back from the chain this run
+  const collectChecks = new Map(); // manager:tokenId:collect.tx (lowercased) -> { amounts, tokens } read back from the chain this run
   let ledger = { jobs: [] };
   let ledgerBroken = false;
   const report = { positions: 0, deliveredUsdcRaw: 0n, unswapped: [], stuck: [], held: [], unattributed: [], vault: [], pending: 0, refused: null, txs: 0 };
@@ -377,11 +377,14 @@ function create(env) {
   /**
    * Proof that a mined transfer moved `amount` of `token` from the operator to `to`. When the receipt's logs are available (a non-empty
    * list: a successful ERC-20 transfer always emits one) the token's own Transfer(operator -> to, amount) log is REQUIRED, because another
-   * outflow of the operator in the same block could satisfy a balance fall. Only when the logs are unavailable is the balance fall at the
+   * outflow of the operator in the same block could satisfy a balance fall. Only when the logs are unavailable (and the token is not USDC or a route token, whose empty logs are never proof) is the balance fall at the
    * receipt's block (before = the block before) accepted. { ok:true } | { ok:false, reason, log }.
    */
   async function transferProof(receipt, token, to, amount) {
     const logs = receipt && receipt.logs;
+    // A known token (USDC or a route token) always emits a Transfer log on success: an empty list is not proof and never falls back to a balance fall.
+    const known = eq(token, S.USDC) || Object.values(S.ROUTES).some((x) => eq(x.token, token));
+    if (known && !(Array.isArray(logs) && logs.length > 0)) return { ok: false, reason: "mined but the receipt has no matching Transfer log", log: `the receipt of a ${symbolOf(token)} transfer has no logs; empty logs are not proof for this token` };
     if (Array.isArray(logs) && logs.length > 0) {
       if (hasTransferLog(receipt, token, to, amount)) return { ok: true };
       return { ok: false, reason: "mined but the receipt has no matching Transfer log", log: `the receipt has no matching ${symbolOf(token)} Transfer log` };
@@ -504,11 +507,15 @@ function create(env) {
         // The decimals pinned on the job at creation are used; the live read must agree (a token that changes decimals() is refused).
         const pinned = i >= 0 && Array.isArray(job.tokenDecimals) ? job.tokenDecimals[i] : null;
         const live = Number.isInteger(pinned) ? await tokenDecimals(leg.token) : null;
-        if (Number.isInteger(pinned) && live !== null && live !== pinned) return hold(job, leg, `decimals() of ${symbolOf(leg.token)} is ${live} now but ${pinned} was pinned on the job; refusing`);
+        if (Number.isInteger(pinned) && live !== pinned) return hold(job, leg, live === null ? `decimals() of ${symbolOf(leg.token)} cannot be read now (${pinned} was pinned on the job); refusing` : `decimals() of ${symbolOf(leg.token)} is ${live} now but ${pinned} was pinned on the job; refusing`);
         const dec = Number.isInteger(pinned) ? pinned : null;
-        value = i < 0 ? null : sideValue(amount, Array.isArray(job.priceUsd) ? job.priceUsd[i] : null, dec);
+        const px = i >= 0 && Array.isArray(job.priceUsd) ? job.priceUsd[i] : null;
+        value = i < 0 ? null : sideValue(amount, px, dec);
+        if (value === null) {
+          const why = i < 0 ? "the token is not token0/token1 of the job" : (dec === null ? "no pinned decimals" : "no per-side USD price");
+          return hold(job, leg, `${symbolOf(leg.token)} would be delivered unswapped (${d.reason}) but no value can be established (no pool mid price, ${why}), so maxUnswappedValueUsdc cannot be applied`);
+        }
       }
-      if (value === null) return hold(job, leg, `${symbolOf(leg.token)} would be delivered unswapped (${d.reason}) but no value can be established (no pool mid price, no per-side USD price), so maxUnswappedValueUsdc cannot be applied`);
       if (value > S.usdcRaw(sw.maxUnswappedValueUsdc)) return hold(job, leg, `unswapped value ${S.fmtUsdc(value)} USDC is above maxUnswappedValueUsdc ${sw.maxUnswappedValueUsdc}`);
     }
     if (!d.usdc) {
@@ -577,7 +584,8 @@ function create(env) {
    */
   async function verifyAgainstCollect(job, leg) {
     if (!ownerConfigured(job.owner)) return `the ledger owner ${job.owner} is not a configured owner address (tampered ledger)`;
-    let c = collectChecks.get(job.id);
+    const ckey = `${job.manager}:${job.tokenId}:${job.collect && job.collect.tx}`.toLowerCase();
+    let c = collectChecks.get(ckey);
     if (!c) {
       try {
         if (!job.collect || typeof job.collect.tx !== "string") throw new Error("the job has no collect transaction");
@@ -590,7 +598,7 @@ function create(env) {
         if (!amounts) throw new Error("the collect receipt has no Collect event for this position paying the operator");
         c = { amounts, tokens: await positionTokens(job.manager, job.tokenId) };
       } catch (err) { return `the ledger amounts cannot be checked against the collect receipt (${short(err)}); refusing`; }
-      collectChecks.set(job.id, c);
+      collectChecks.set(ckey, c);
     }
     if (!eq(job.token0, c.tokens[0]) || !eq(job.token1, c.tokens[1])) return `the ledger tokens ${job.token0}/${job.token1} are not the tokens of position #${job.tokenId}; tampered ledger, refusing`;
     const i = c.tokens.findIndex((t) => eq(t, leg.token));

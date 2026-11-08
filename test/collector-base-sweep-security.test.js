@@ -45,7 +45,7 @@ assert.strictEqual(SL.config({ vault: { registry: EVIL } }).vault.registry, EVIL
       const S = mk(); S.noBalanceMove = true;
       const cfg = withVault ? S.vault({}) : undefined;
       const sweep = withVault ? { vault: cfg } : undefined;
-      // the receipt logs are unavailable here, so the balance fall alone is the proof (with the Transfer log present it is the proof instead)
+      // the receipt logs are empty here: for USDC / route tokens that is never proof (the balance fall is not consulted), so the leg is unattributed
       const r1 = await S.run({ sweep, signer: S.signer({ receiptTweak: (rc, p) => (kindOf(p) === "transfer" ? { ...rc, logs: [] } : rc) }) });
       assert.strictEqual(transfers(S).length, 1, `one transfer in the first run (vault ${withVault})\n${r1.text}`);
       assert.strictEqual(leg0(S).unattributed, true); assert.strictEqual(leg0(S).phase, "held"); assert.strictEqual(exitCodeOf(r1.res), 1);

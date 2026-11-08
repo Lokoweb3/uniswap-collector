@@ -103,7 +103,7 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
       assert.strictEqual(l.doneRaw, "0", `${where}: nothing credited`); assert.ok(!l.swap.tx && (l.swap.outRaw === "0" || l.swap.outRaw === undefined), `${where}: ${JSON.stringify(l.swap)}`);
       assert.ok(/recovered swap 0x[0-9a-f]+ is already recorded for another leg or job/.test(r.text), r.text);
       assert.ok(!decodeSent(r.signer).some((t) => t.name === "transfer" || t.name === "exactInputSingle"), `${where}: nothing sent`);
-      assert.strictEqual(exitCodeOf(r.res), 1, where); assert.strictEqual(S.balance(USDC, OWNER), 0n); assert.ok(before >= 0n);
+      assert.strictEqual(exitCodeOf(r.res), 1, where); assert.strictEqual(S.balance(USDC, OWNER), 0n); assert.strictEqual(S.balance(USDC, OP), before, `${where}: operator balance unchanged`);
     }
   }
 
@@ -122,7 +122,8 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
     await R.run({ baseCollect: SHORT, signer: R.signer({ dropReceipt: (p) => kindOf(p) === "exactInputSingle" }) });
     const h = leg0(R).pending.tx; R.mined.set(h, { ...R.mined.get(h), logs: rm(R.mined.get(h).logs) });
     await R.run({ signer: R.signer() });
-    assert.strictEqual(leg0(R).unattributed, true); assert.strictEqual(leg0(R).doneRaw !== undefined, true);
+    const rl = leg0(R); assert.strictEqual(rl.unattributed, true); assert.strictEqual(rl.phase, "held");
+    assert.ok(!rl.swap.outRaw || rl.swap.outRaw === "0", `no proceeds credited: ${JSON.stringify(rl.swap)}`); assert.ok(!rl.outDone || rl.outDone === "0"); assert.strictEqual(R.balance(USDC, OWNER), 0n);
   }
 
   // ---- Info. tokenDecimals is pinned on the job: used for the value cap, and a live decimals() that differs is refused
@@ -141,7 +142,7 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
     await C.run({ sweep: { maxUnswappedValueUsdc: 1000 }, signer: C.signer({ maxSigns: 1 }) });
     const led = C.ledger(); led.jobs[0].tokenDecimals = [null, null]; fs.writeFileSync(C.file, JSON.stringify(led));
     const c = await C.run({ sweep: { maxUnswappedValueUsdc: 1000 }, signer: C.signer() });
-    assert.strictEqual(leg0(C).phase, "held", c.text); assert.ok(/no value can be established/.test(leg0(C).reason), leg0(C).reason); assert.strictEqual(C.balance(OTHER, OWNER), 0n);
+    assert.strictEqual(leg0(C).phase, "held", c.text); assert.ok(/no value can be established/.test(leg0(C).reason) && /no pinned decimals/.test(leg0(C).reason), leg0(C).reason); assert.strictEqual(C.balance(OTHER, OWNER), 0n);
   }
 
   // ---- Info. the Transfer-log proof is preferred; the balance fall alone proves a transfer only when the logs are unavailable
@@ -154,20 +155,35 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
       assert.strictEqual(leg0(S).unattributed, true, `${name}\n${r.text}`); assert.strictEqual(leg0(S).phase, "held", name); assert.ok(/matching Transfer log/.test(leg0(S).reason), leg0(S).reason);
       assert.ok(BigInt(leg0(S).outDone || "0") === 0n, `${name}: not credited`);
     }
-    // logs unavailable: the balance fall at the receipt block alone proves it
-    const S = mk(); const r = await S.run({ signer: S.signer({ receiptTweak: tweak(() => []) }) });
-    assert.deepStrictEqual(names(r.signer), ["collect", "approve", "exactInputSingle", "transfer"], r.text); assert.strictEqual(leg0(S).phase, "delivered"); assert.strictEqual(exitCodeOf(r.res), 0);
-    assert.ok(S.balance(USDC, OWNER) > 0n);
+    // logs unavailable, a NON-route token (OTHER, unswapped): the balance fall at the receipt block alone proves it
+    const O = { feesUsd: 50, usd1: 10 }, OS = { sweep: { maxUnswappedValueUsdc: 1000 } };
+    const S = mk(otherPos(), O); const r = await S.run({ ...OS, signer: S.signer({ receiptTweak: tweak(() => []) }) });
+    assert.deepStrictEqual(names(r.signer), ["collect", "transfer"], r.text); assert.strictEqual(leg0(S).phase, "delivered-unswapped"); assert.strictEqual(exitCodeOf(r.res), 0);
+    assert.strictEqual(S.balance(OTHER, OWNER), 5n * E18);
     // ...and no balance fall with the logs unavailable is not proof
-    const N = mk(); N.noBalanceMove = true; const n = await N.run({ signer: N.signer({ receiptTweak: tweak(() => []) }) });
+    const N = mk(otherPos(), O); N.noBalanceMove = true; const n = await N.run({ ...OS, signer: N.signer({ receiptTweak: tweak(() => []) }) });
     assert.strictEqual(leg0(N).unattributed, true, n.text);
-    // recovery: balance fall alone credits a recovered transfer whose receipt has no logs
-    const R = mk();
-    const r1 = await R.run({ baseCollect: SHORT, signer: R.signer({ dropReceipt: (p) => kindOf(p) === "transfer" }) });
+    // USDC (proceeds) and a route token (WETH, unswapped by a swap-off route): a status-1 receipt with empty logs is NOT proof, even though the balance fell
+    {
+      const U = mk(); const u = await U.run({ signer: U.signer({ receiptTweak: tweak(() => []) }) });
+      assert.strictEqual(leg0(U).unattributed, true, u.text); assert.strictEqual(leg0(U).phase, "held"); assert.ok(/matching Transfer log/.test(leg0(U).reason), leg0(U).reason);
+      assert.ok(BigInt(leg0(U).outDone || "0") === 0n, "USDC proceeds with empty logs are not credited"); assert.strictEqual(exitCodeOf(u.res), 1);
+      const W2 = mk(wethPos(), { feesUsd: 50, usd0: 2500 }); const w = await W2.run({ sweep: { maxUnswappedValueUsdc: 1000, routes: { WETH: { enabled: false } } }, signer: W2.signer({ receiptTweak: tweak(() => []) }) });
+      assert.deepStrictEqual(names(w.signer), ["collect", "transfer"], w.text); assert.strictEqual(leg0(W2).unattributed, true, w.text); assert.ok(BigInt(leg0(W2).doneRaw || "0") === 0n, "route token with empty logs is not credited");
+    }
+    // recovery: balance fall alone credits a recovered transfer (non-route token) whose receipt has no logs
+    const R = mk(otherPos(), O);
+    const r1 = await R.run({ ...OS, baseCollect: SHORT, signer: R.signer({ dropReceipt: (p) => kindOf(p) === "transfer" }) });
     assert.strictEqual(r1.res.aborted, true);
     const pend = leg0(R).pending; R.mined.set(pend.tx, { ...R.mined.get(pend.tx), logs: [] });
-    await R.run({ signer: R.signer() });
-    assert.notStrictEqual(leg0(R).unattributed, true); assert.strictEqual(leg0(R).outDone, pend.raw); assert.strictEqual(leg0(R).deliver.tx, pend.tx);
+    await R.run({ ...OS, signer: R.signer() });
+    assert.notStrictEqual(leg0(R).unattributed, true); assert.strictEqual(leg0(R).doneRaw, pend.raw); assert.strictEqual(leg0(R).deliver.tx, pend.tx);
+    // recovery: a USDC transfer with empty logs is not credited though the balance fell
+    const RU = mk();
+    await RU.run({ baseCollect: SHORT, signer: RU.signer({ dropReceipt: (p) => kindOf(p) === "transfer" }) });
+    const pu = leg0(RU).pending; RU.mined.set(pu.tx, { ...RU.mined.get(pu.tx), logs: [] });
+    await RU.run({ signer: RU.signer() });
+    assert.strictEqual(leg0(RU).unattributed, true); assert.ok(!leg0(RU).outDone || leg0(RU).outDone === "0");
     // recovery: logs available but not matching, balance fell: not credited
     const W = mk();
     await W.run({ baseCollect: SHORT, signer: W.signer({ dropReceipt: (p) => kindOf(p) === "transfer" }) });
@@ -175,6 +191,39 @@ const H1 = "0x" + "11".repeat(32), H2 = "0x" + "22".repeat(32);
     W.mined.set(wp.tx, { ...W.mined.get(wp.tx), logs: [{ ...wl, data: "0x" + (1n).toString(16).padStart(64, "0") }] });
     await W.run({ signer: W.signer() });
     assert.strictEqual(leg0(W).unattributed, true); assert.ok(leg0(W).outDone === undefined || leg0(W).outDone === "0");
+  }
+
+  // ---- M-1. a repeated job.id is corrupt, and the Collect-receipt check is keyed by manager:tokenId:collect.tx, not by id
+  {
+    const S = mk(); await S.run({});
+    const base = S.ledger();
+    const dup = clone(base); const j2 = clone(dup.jobs[0]); j2.collect.tx = H1; j2.legs[0].swap = { amountIn: null, quoteRaw: null, minOutRaw: null, outRaw: "0", tx: null }; dup.jobs.push(j2); // same id, different collect.tx
+    fs.writeFileSync(S.file, JSON.stringify(dup));
+    const r = SL.readSweepState(S.file); assert.ok(!r.ok && r.kind === "corrupt" && /jobs\[1\]\.id duplicates an earlier job/.test(r.reason), JSON.stringify(r));
+    // injected past the reader: the second job shares the id but has a bogus collect.tx; it must not reuse the first job's check
+    const T = mk(); await T.run({ baseCollect: SHORT, signer: T.signer({ maxSigns: 1 }) });
+    const led = T.ledger(); const first = led.jobs[0]; first.legs[0].phase = "collected";
+    const bad = clone(first); bad.collect.tx = H1; bad.legs[0].phase = "collected"; bad.legs[0].swap = { amountIn: null, quoteRaw: null, minOutRaw: null, outRaw: "0", tx: null };
+    led.jobs.push(bad); T.io.read = () => ({ ok: true, ledger: led });
+    const t = await T.run({ signer: T.signer() });
+    assert.ok(/collect receipt/.test(bad.legs[0].reason || "") && bad.legs[0].phase === "held", `${bad.legs[0].phase} ${bad.legs[0].reason}\n${t.text}`);
+    assert.notStrictEqual(first.legs[0].phase, "held", "the first job (its own receipt) proceeds"); assert.strictEqual(bad.legs[0].doneRaw, "0", "nothing credited to the second job"); assert.ok(!bad.legs[0].deliver || !bad.legs[0].deliver.tx, "nothing sent for the second job");
+  }
+
+  // ---- L-2. pinned decimals and an unreadable live decimals(): the leg is held, the pinned value is not trusted
+  {
+    const S = mk(otherPos(), { feesUsd: 50, usd1: 10 });
+    S.hooks.push((p) => { if (kindOf(p) === "collect") S.w.on(OTHER, "decimals", () => { throw new Error("decimals() reverted"); }); });
+    const r = await S.run({ sweep: { maxUnswappedValueUsdc: 1000 } });
+    assert.deepStrictEqual(names(r.signer), ["collect"], r.text); assert.strictEqual(leg0(S).phase, "held");
+    assert.ok(/decimals\(\) of .* cannot be read now \(18 was pinned on the job\)/.test(leg0(S).reason), leg0(S).reason); assert.strictEqual(S.balance(OTHER, OWNER), 0n);
+  }
+  // ---- R5. the hold reason names the real cause
+  {
+    const S = mk(otherPos(), { feesUsd: 50, usd1: 10 }); await S.run({ sweep: { maxUnswappedValueUsdc: 1000 }, signer: S.signer({ maxSigns: 1 }) });
+    const led = S.ledger(); led.jobs[0].priceUsd = [null, null]; fs.writeFileSync(S.file, JSON.stringify(led));
+    await S.run({ sweep: { maxUnswappedValueUsdc: 1000 }, signer: S.signer() });
+    assert.ok(/no per-side USD price/.test(leg0(S).reason) && !/no pinned decimals/.test(leg0(S).reason), leg0(S).reason);
   }
   console.log("collector-base-sweep-hardening tests passed");
 })().catch((e) => { console.error(e); process.exit(1); });

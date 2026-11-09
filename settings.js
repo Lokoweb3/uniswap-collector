@@ -28,14 +28,15 @@ const fs = require("fs");
 const path = require("path");
 const { DATA_DIR } = require("./data-dir");
 const endpoint = require("./endpoint");
+const elysium = require("./elysium-chains");
 
 // Chains whose instances are new and read-only fail closed on any configured URL
 // that is not a plain public https endpoint (H4: no SSRF, no credentials in a URL).
 // Other chains are not re-validated, so their behaviour is exactly what it was;
 // chain.strictEndpoints: true or LP_STRICT_ENDPOINTS=1 opts any chain in.
-const STRICT_CHAINS = new Set([8453, 369]);
+const STRICT_CHAINS = new Set([8453, 369, 99801]);
 // An RPC URL that may carry a provider key, from the environment only, never from a file.
-const ENV_RPC = { 8453: "LP_BASE_RPC_URL", 369: "LP_PULSE_RPC_URL" };
+const ENV_RPC = { 8453: "LP_BASE_RPC_URL", 369: "LP_PULSE_RPC_URL", 99801: "LP_ELYSIUM_TESTNET_RPC_URL" };
 
 /** The endpoint settings of `chain`, validated (strict chains) and with the env override applied. */
 function endpointsOf(chain) {
@@ -88,6 +89,8 @@ const strip = (o) => { // drop "_..." comment keys from a section copy
 /** The flat configuration the modules use, from the sectioned file. */
 function toLegacy(raw) {
   const s = strip(raw);
+  // The Elysium mainnet is prepared but disabled: refuse before anything else reads its settings.
+  if (elysium.isMainnetId((s.chain || {}).chainId)) throw new Error(elysium.MAINNET_DISABLED_MESSAGE);
   const chain = s.chain || {}, wallets = s.wallets || {}, tokens = s.tokens || {}, col = s.collector || {}, vault = s.vault || {}, risk = s.risk || {}, al = s.alerts || {};
   const main = wallets.main && typeof wallets.main === "object" ? wallets.main : { address: wallets.main, label: "Main" };
   const { fromEnv, listed } = endpointsOf(chain);
@@ -113,6 +116,8 @@ function toLegacy(raw) {
     ...(chain.nativeCurrency && Number.isInteger(chain.nativeCurrency.decimals) && chain.nativeCurrency.symbol
       ? { nativeCurrency: { symbol: String(chain.nativeCurrency.symbol), decimals: chain.nativeCurrency.decimals } }
       : {}),
+    // The gas symbol alone, for a chain whose decimals are not proven (Elysium testnet): label only, never a scale.
+    ...(chain.nativeCurrency && chain.nativeCurrency.symbol ? { nativeSymbol: String(chain.nativeCurrency.symbol) } : {}),
     // What to call this chain wherever a person or their wallet will read it. Any
     // chain can name itself here; without it the served pages fall back to a small
     // map of known ids, then to "Chain <id>".
@@ -129,6 +134,10 @@ function toLegacy(raw) {
     // it saves two RPC calls and pins the value for a chain with irregular blocks.
     ...(Number(chain.blockMs) > 0 ? { blockMs: Number(chain.blockMs) } : {}),
     chainId: chain.chainId,
+    // A test network: every page and API answer says so, and the portfolio never counts it. Carried only when true.
+    ...(chain.testnet === true ? { testnet: true } : {}),
+    // The chain this one settles to (Elysium: HyperEVM 998). Metadata only; never a wallet or provider chain.
+    ...(Number.isInteger(chain.settlementChainId) ? { settlementChainId: chain.settlementChainId } : {}),
     // Top-level "noTransactionData": true|false. Absent, server.js defaults it to true for Base/PulseChain.
     ...(typeof s.noTransactionData === "boolean" ? { noTransactionData: s.noTransactionData } : {}),
     // No fallback to a particular chain's explorer: an empty string means this

@@ -58,10 +58,12 @@ for (const f of ["server.js", "approve-serve.js"]) {
     "no hardcoded RPC or explorer in the wallet page");
   assert.ok(!/Robinhood Chain/.test(code), "no hardcoded chain name in the wallet page");
   assert.ok(/fetch\('\/api\/chain'/.test(code), "it asks the instance which chain it is on");
-  assert.ok(/nativeCurrency: NATIVE_CURRENCY/.test(code),
-    "wallet_addEthereumChain passes the instance's native currency");
-  assert.ok(/if \(!cfg\.nativeCurrency\)/.test(code) && /will not guess the chain's native currency/.test(code),
-    "and refuses to add a network when that currency is unverified");
+  // The switch/add flow lives in wallet-chain.js (tested with a mock wallet in elysium-testnet.test.js); the page
+  // hands it the instance's own native currency and nothing else.
+  assert.ok(/nativeCurrency: NATIVE_CURRENCY/.test(code) && /nativeCurrency: cfg\.nativeCurrency/.test(code),
+    "the add flow is given the instance's native currency");
+  assert.ok(/will not guess the chain's native decimals/.test(read("wallet-chain.js")) && /Number\.isInteger\(nc\.decimals\)\) return null/.test(read("wallet-chain.js")),
+    "and wallet-chain.js refuses to add a network when that currency is unverified");
   assert.ok(/new ethers\.JsonRpcProvider\(RPC_URL\)/.test(code),
     "the vault tab reads the chain it is served from");
   assert.ok(/ethers\.formatUnits\(ethBal, nat\.decimals\)/.test(code),

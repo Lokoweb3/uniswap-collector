@@ -39,10 +39,16 @@ const bs = require("./blockscout");        // one Blockscout client; PRO key whe
 const vaultMeta = require("./vault-metadata");
 const cl = require("./collector-logic");   // native-currency naming, shared with the collector
 const cfg = settings.load();
+const elysiumPages = require("./elysium-chains");
+const TESTNET = cfg.testnet === true;
+// A test network says so on every page it serves: a persistent banner naming the chain.
+// True while a test network's RPC has not yet answered eth_chainId (see the startup check at the bottom).
+let rpcUnverified = false;
+const markPage = (html) => (TESTNET ? elysiumPages.injectBanner(html.toString("utf8"), chainDisplayName(), cfg.chainId, rpcUnverified) : html);
 // The chain's name for anything a wallet will show a person. It was hardcoded to
 // "Robinhood Chain", which on the Arc instance told the user to switch to the wrong
 // network and would have added chain 5042 to their wallet under that name.
-const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc" };
+const KNOWN_CHAIN_NAMES = { 4663: "Robinhood Chain", 5042: "Arc", 99801: "Elysium Testnet" };
 // Token symbols reach innerHTML templates: strip markup characters, and fall back to a short address when nothing is left.
 function cleanSymbol(sym, address) {
   const c = String(sym || "").replace(/[^A-Za-z0-9 ._$+-]/g, "").slice(0, 16).trim();
@@ -79,9 +85,12 @@ const READONLY = process.env.LP_READONLY === "1";
 // absent, it is true for the strict, new chains (Base 8453, PulseChain 369) only.
 // LP_READONLY alone does NOT imply it: the Arc viewer and the Robinhood VM are read-only
 // but legitimately serve calldata for Sell/Mint and show the real collector operator.
-const NO_TX = typeof cfg.noTransactionData === "boolean"
-  ? cfg.noTransactionData
-  : settings.STRICT_CHAINS.has(Number(cfg.chainId));
+// A testnet (and chain 99801) is always no-tx: the setting cannot turn that off, and false is refused.
+let NO_TX;
+try { NO_TX = elysiumPages.resolveNoTx(cfg, settings.STRICT_CHAINS); } catch (err) {
+  console.error(`Refusing to start: ${err.message}.`);
+  process.exit(1);
+}
 // A no-transaction-data instance must also be read-only: it has no keystore, so nothing on it may
 // arm, unlock or collect. Refuse to start rather than run half-guarded.
 if (NO_TX && !READONLY) {
@@ -915,7 +924,7 @@ function registryClaim(e) {
     return { status: "unavailable", state: "unsupported", verifiedZero: false, scope,
       reason: "a token's decimals were not read from chain, so no amount can be stated" };
   }
-  const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] ?? null : currentPrice(t.address) ?? null);
+  const price = (t) => (t.address === ethers.ZeroAddress ? nativeUsd() ?? null : currentPrice(t.address) ?? null);
   return claimedSummary(`v4-${e.tokenId}`, e.token0.decimals, e.token1.decimals, price(e.token0), price(e.token1),
     e.token0.symbol, e.token1.symbol, null, { token0: e.token0.address, token1: e.token1.address, owner: e.wallet });
 }
@@ -1049,7 +1058,7 @@ async function claimTotal(sel, status, from, to) {
   // Today's prices, separately: only when every token has one.
   let current = null;
   if (tokenTotals.length) {
-    const prices = tokenTotals.map((t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] ?? null : currentPrice(t.address) ?? null));
+    const prices = tokenTotals.map((t) => (t.address === ethers.ZeroAddress ? nativeUsd() ?? null : currentPrice(t.address) ?? null));
     current = prices.every((p) => p != null)
       ? { usd: +tokenTotals.reduce((s, t, i) => s + t.amount * prices[i], 0).toPrecision(12), note: "the same token amounts at today's prices; not what they were worth when claimed" }
       : { usd: null, note: "a claimed token has no current price, so there is no current-price figure" };
@@ -1306,6 +1315,11 @@ async function priceEvents() {
 // Latest per-token USD prices and discovered ids, refreshed by build() and
 // used to value history events and drive the background scanner.
 let lastPrices = {};
+// The native token's USD price. A test network's native token has no market value, so it is never priced,
+// whatever the WETH slot holds.
+const nativeUsd = () => (TESTNET ? null : lastPrices[WETH]);
+// Test seam (read-only test network only): lets a test put a WETH price in place to prove the guard above holds.
+if (TESTNET && READONLY && process.env.LP_TEST_WETH_USD) lastPrices[WETH] = Number(process.env.LP_TEST_WETH_USD);
 let lastWethUsdSeen = null;
 let latestIds = [];
 let latestOpenIds = [];
@@ -2215,7 +2229,7 @@ async function handleRequest(req, res) {
       // what made a corrected vault page still read "493.293396 ETH".
       res.staticAsset = true;
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
-      return res.end(html);
+      return res.end(markPage(html));
     } catch {
       res.writeHead(404, { "Content-Type": "text/plain" });
       return res.end("wallet.html not found");
@@ -2364,6 +2378,10 @@ async function handleRequest(req, res) {
     return res.end(JSON.stringify({
       ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
       rpc: RPC_SHOWN, explorer: EXPLORER_URL, readOnly: READONLY, noTx: NO_TX,
+      ...(TESTNET ? { testnet: true } : {}),
+      ...(TESTNET && rpcUnverified ? { rpcUnverified: true } : {}),
+      ...(cfg.nativeSymbol ? { nativeSymbol: cfg.nativeSymbol } : {}),
+      ...(!cfg.nativeCurrency && cfg.nativeSymbol ? { nativeDecimalsUnverified: true } : {}),
       // Null unless settings verify it: a wallet told the wrong native asset keeps
       // showing gas under the wrong ticker.
       nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
@@ -2435,6 +2453,7 @@ async function handleRequest(req, res) {
         // asset is verified in settings: declaring the wrong one would register the
         // network in someone's wallet with gas labelled as a currency it is not.
         nativeCurrency: cfg.nativeCurrency ? { name: cfg.nativeCurrency.symbol, symbol: cfg.nativeCurrency.symbol, decimals: cfg.nativeCurrency.decimals } : null,
+        ...(cfg.nativeSymbol ? { nativeSymbol: cfg.nativeSymbol } : {}),
         explorer: EXPLORER_URL, approved, others, wallets,
       }));
     } catch (err) {
@@ -2556,7 +2575,7 @@ async function handleRequest(req, res) {
         const key = Number(p.version) === 3 ? String(p.tokenId) : `v4-${p.tokenId}`;
         try {
           const m = await positionMeta(key);
-          const price = (t) => (t.address === ethers.ZeroAddress ? lastPrices[WETH] : lastPrices[t.address.toLowerCase()]) ?? currentPrice(priceAddr(t));
+          const price = (t) => (t.address === ethers.ZeroAddress ? nativeUsd() : lastPrices[t.address.toLowerCase()]) ?? (t.address === ethers.ZeroAddress && TESTNET ? null : currentPrice(priceAddr(t)));
           p.collected = collectSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1));
           p.claimed = claimedSummary(key, m.t0.decimals, m.t1.decimals, price(m.t0), price(m.t1), m.t0.symbol, m.t1.symbol, p.openedBlock ?? null, { token0: m.t0.address, token1: m.t1.address, owner: riskClaimOwner(p) });
         } catch { p.collected = null; p.claimed = { status: "unavailable", reason: "this position's token metadata could not be read, so its claims cannot be valued" }; }
@@ -2680,7 +2699,7 @@ async function handleRequest(req, res) {
     res.setHeader("Content-Type", "application/json");
     try {
       const ts = treasuryLedger.settings(cfg);
-      const out = { ok: true, nft: cfg.treasuryNFT || null, tba: ts.tba, pct: ts.pct, max: ts.max, owner: null, admin: null, paused: null, balances: [], publicHost: publicHost() };
+      const out = { ok: true, ...(TESTNET ? { testnet: true } : {}), nft: cfg.treasuryNFT || null, tba: ts.tba, pct: ts.pct, max: ts.max, owner: null, admin: null, paused: null, balances: [], publicHost: publicHost() };
       if (cfg.treasuryNFT) {
         const nft = new ethers.Contract(cfg.treasuryNFT, ["function ownerOf(uint256) view returns (address)", "function owner() view returns (address)", "function feeSplitPct() view returns (uint256)", "function paused() view returns (bool)"], provider);
         const [o, a, p, pz] = await Promise.all([nft.ownerOf(1).catch(() => null), nft.owner().catch(() => null), nft.feeSplitPct().catch(() => null), nft.paused().catch(() => null)]);
@@ -2718,6 +2737,7 @@ async function handleRequest(req, res) {
         // token from the current contract takes its id from block.chainid and cannot
         // be wrong about that, but its name is chosen at deployment and can be.
         try {
+          if (TESTNET && !cfg.treasuryNFT) throw new Error("no vault on this chain");
           const uri = await new ethers.Contract(cfg.treasuryNFT, ["function tokenURI(uint256) view returns (string)"], provider).tokenURI(1);
           if (uri.startsWith("data:application/json;base64,")) {
             const meta = JSON.parse(Buffer.from(uri.split(",")[1], "base64").toString("utf8"));
@@ -2728,7 +2748,7 @@ async function handleRequest(req, res) {
               ...vaultMeta.chainClaim(meta, cfg.chainId, chainDisplayName()),
             };
           }
-        } catch (err) { out.artError = err.shortMessage || err.message; }
+        } catch (err) { if (!(TESTNET && !cfg.treasuryNFT)) out.artError = err.shortMessage || err.message; } // a test network with no vault has nothing to report
         out.chain = { id: Number(cfg.chainId), name: chainDisplayName() };
       res.writeHead(200);
       return res.end(JSON.stringify(out));
@@ -2737,7 +2757,7 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
     }
   }
-  if (url.pathname === "/claim-fees.js" || url.pathname === "/claim-fees-core.js") {
+  if (url.pathname === "/claim-fees.js" || url.pathname === "/claim-fees-core.js" || url.pathname === "/wallet-chain.js") {
     try {
       const file = url.pathname.slice(1);
       res.staticAsset = true;
@@ -3016,7 +3036,7 @@ async function handleRequest(req, res) {
       const usdOf = async (cur, amt) => {
         const c = String(cur).toLowerCase();
         if (c === stable) return Number(ethers.formatUnits(amt, 6));
-        if (cur === ethers.ZeroAddress || c === WETH) { const px = lastPrices[WETH]; return px != null ? Number(ethers.formatEther(amt)) * px : null; }
+        if (cur === ethers.ZeroAddress || c === WETH) { const px = cur === ethers.ZeroAddress ? nativeUsd() : lastPrices[WETH]; return px != null ? Number(ethers.formatEther(amt)) * px : null; }
         return null;
       };
       const keys = [];
@@ -3088,7 +3108,7 @@ async function handleRequest(req, res) {
         if (pool.version === 4 && pool.key && pool.key.hooks && pool.key.hooks !== ethers.ZeroAddress) throw new Error("hooked pools are not supported here yet");
         out = await mint.quote({ wallet: walletOf(q.get("wallet")).address, pool, tickLower: Number(q.get("tickLower")), tickUpper: Number(q.get("tickUpper")), amount0: BigInt(q.get("amount0") || "0"), amount1: BigInt(q.get("amount1") || "0"), slippageBps: Math.min(1000, Math.max(10, Number(q.get("slippageBps") || 100))), payEth: q.get("payEth") !== "0", fill: q.get("fill") === "0" ? 0 : q.get("fill") === "1" ? 1 : null });
         // USD of the deposit, from the collector's prices (null for tokens it does not price).
-        const px = (m) => (m.native || m.isWeth ? lastPrices[WETH] : lastPrices[String(m.address).toLowerCase()] ?? currentPrice(m.address));
+        const px = (m) => (m.native ? nativeUsd() : m.isWeth ? lastPrices[WETH] : lastPrices[String(m.address).toLowerCase()] ?? currentPrice(m.address));
         const p0 = px(pool.token0), p1 = px(pool.token1);
         out.human.usd = p0 != null && p1 != null ? +(out.human.amount0 * p0 + out.human.amount1 * p1).toFixed(2) : null;
         out.human.usd0 = p0 ?? null; out.human.usd1 = p1 ?? null;
@@ -3114,7 +3134,12 @@ async function handleRequest(req, res) {
       if (Date.now() - balCache.at > 5 * 60 * 1000) {
         const rows = [];
         const native = await provider.getBalance(cfg.ownerAddress);
-        rows.push({ symbol: "ETH", balance: Number(ethers.formatEther(native)), native: true });
+        if (cfg.testnet === true && !Number.isInteger(cfg.nativeCurrency && cfg.nativeCurrency.decimals)) {
+          // Testnet whose native decimals are not verified: never scale by a guessed 18; give the raw wei.
+          rows.push({ symbol: cfg.nativeSymbol || cl.nativeLabel(cfg), balance: null, balanceRaw: native.toString(), decimalsUnverified: true, native: true });
+        } else {
+          rows.push({ symbol: cl.nativeLabel(cfg), balance: Number(ethers.formatUnits(native, cl.nativeDecimals(cfg))), native: true });
+        }
         for (const t of tokenSet.values()) {
           const erc = new ethers.Contract(t.address, ["function balanceOf(address) view returns (uint256)"], provider);
           const raw = await erc.balanceOf(cfg.ownerAddress).catch(() => null);
@@ -3127,8 +3152,8 @@ async function handleRequest(req, res) {
       }
       // Price at read time, not cache time — prices arrive with the first build.
       const priced = balCache.data.map((r) => {
-        const price = r.native ? lastPrices[WETH] : lastPrices[r.address.toLowerCase()];
-        return { ...r, usd: price != null ? r.balance * price : null };
+        const price = r.native ? nativeUsd() : lastPrices[r.address.toLowerCase()];
+        return { ...r, usd: price != null && r.balance != null ? r.balance * price : null };
       });
       priced.sort((a, b) => (b.usd || 0) - (a.usd || 0));
       res.writeHead(200);
@@ -3427,7 +3452,7 @@ async function handleRequest(req, res) {
     res.staticAsset = true;
     // Nothing in this repo frames the dashboard; refuse framing by other origins (clickjacking over the Claim fees button).
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache", "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "DENY" });
-    return res.end(html);
+    return res.end(markPage(html));
   }
 
   res.writeHead(404, { "Content-Type": "text/plain" });
@@ -4049,7 +4074,7 @@ if (SERVICES) {
 if (process.env.LP_RESTARTED_BY === "watchdog" && LOOPS) {
   setTimeout(() => { alerts.send(`♻️ Dashboard restarted by the watchdog after it exited (${process.env.LP_RESTART_REASON || "process gone"}). Check server.log for the cause.`).catch(() => {}); }, 20000);
 }
-server.listen(PORT, HOST, () => {
+const onListening = () => {
   if (claimScanner) {
     // After the listener is up, so the first requests are never behind it.
     setTimeout(() => { claimScanner.start(); priceAllClaims().catch(() => {}); }, Number(process.env.LP_CLAIM_SCAN_DELAY_MS || 15000)).unref();
@@ -4064,4 +4089,21 @@ server.listen(PORT, HOST, () => {
   console.log(`Watching ${cfg.ownerAddress} on chain ${cfg.chainId}`);
   console.log("Reads are key-free. The Collect button runs run-collector.sh on this machine;");
   console.log("it needs a live unlock window (./unlock.sh) and no key ever reaches the browser.");
-});
+};
+// A testnet instance first checks that its primary RPC really is the chain it names; a mismatch refuses to start.
+const refuseChain = (err) => { console.error(`Refusing to start: ${endpoint.redactText(err.message)}.`); process.exit(1); };
+elysiumPages.assertRpcChain(cfg, require("./rpc").chainIdOf).then(
+  (seen) => {
+    if (TESTNET && seen == null) {
+      // Not a mismatch, but not proof either: say so, show it, and keep asking until the RPC answers.
+      console.error("primary RPC unreachable at startup; chain id not verified");
+      rpcUnverified = true;
+      elysiumPages.watchRpcChain(cfg, require("./rpc").chainIdOf, {
+        onVerified: () => { rpcUnverified = false; console.log("primary RPC answered; chain id verified"); },
+        onMismatch: (err) => { console.error(`Exiting: ${endpoint.redactText(err.message)}.`); process.exit(1); },
+      });
+    }
+    server.listen(PORT, HOST, onListening);
+  },
+  refuseChain,
+);

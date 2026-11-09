@@ -1,0 +1,27 @@
+{
+  "noTransactionData": true,
+  "_noTransactionDataComment": "true: this instance reads no operator key file and serves no unsigned calldata (/api/approval, /api/sell/quote, /api/mint/* answer 403). Set explicitly here as well as being the default for chain 99801.",
+  "_comment": "Elysium TESTNET (99801 / 0x185d9), READ-ONLY instance: native HYPE balances for the wallets below. Elysium is an Arbitrum Orbit chain that settles to HyperEVM testnet (998, metadata only). Copy to $HOME/elysium-testnet-data/settings.json (or LP_ELYSIUM_TESTNET_DATA_DIR). No DEX, NPM or other contract is known on this chain, so there is no contracts section and positions stay empty. Native decimals: 18 is NOT independently proven (the docs name the symbol HYPE but state no decimals), so nativeCurrency.decimals is left out: balances are shown raw, labelled 'decimals unverified', and the Wallet page asks you to add the network by hand instead of guessing. Secrets are NEVER written here: a keyed RPC goes in the environment as LP_ELYSIUM_TESTNET_RPC_URL. Mainnet (99901) is disabled, awaiting verification; there is no mainnet example. Verified by: node tools/verify-onchain.js elysium-testnet",
+  "chain": {
+    "name": "Elysium Testnet",
+    "testnet": true,
+    "rpcUrl": "https://testnet-rpc.elysium.kinetiq.xyz",
+    "_rpcUrlComment": "The public RPC from the Elysium docs (shared by every user). LP_ELYSIUM_TESTNET_RPC_URL in the environment overrides it in that process only and is never shown to a page or logged.",
+    "chainId": 99801,
+    "settlementChainId": 998,
+    "explorer": "https://elysium.kinetiq.xyz/testnet-explorer",
+    "_explorerComment": "No Blockscout API is configured: the explorer answers automated requests with a bot challenge, so a Blockscout API was not proven (VERIFICATION-elysium.md V4).",
+    "blockscout": "",
+    "nativeCurrency": { "symbol": "HYPE" },
+    "_nativeCurrencyComment": "decimals omitted on purpose: 18 NOT independently proven (VERIFICATION-elysium.md V3). Add \"decimals\": 18 only once a second source confirms it."
+  },
+  "wallets": {
+    "_comment": "Public addresses reused from the PulseChain example (the same EOA works on every EVM chain). Edit them to yours.",
+    "main": { "address": "0x698C3A3F06B7EdBD175169d1cfa219c8232F48d8", "label": "Main" },
+    "watched": [
+      { "address": "0xAAB445f2846476A31Aaed66112B0f3e2ad82c50A", "label": "Wallet 12" }
+    ]
+  },
+  "portfolio": {},
+  "dashboard": { "port": 8794 }
+}

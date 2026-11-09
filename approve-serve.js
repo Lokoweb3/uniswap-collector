@@ -9,8 +9,16 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 
-const cfg = require("./settings").load();
+const settings = require("./settings");
+const cfg = settings.load();
 const endpoint = require("./endpoint");
+endpoint.installConsoleRedaction(); // a provider key in a URL never reaches a log line
+// This server reads an operator keystore and answers approval state: never for a testnet or a strict
+// (noTransactionData) chain. Those run the read-only dashboard instead.
+if (cfg.testnet === true || settings.STRICT_CHAINS.has(Number(cfg.chainId)) || require("./elysium-chains").resolveNoTx(cfg, settings.STRICT_CHAINS)) {
+  console.error(`Refusing to start: approve-serve.js is not available for chain ${Number(cfg.chainId)} (testnet or no-transaction-data chain).`);
+  process.exit(1);
+}
 const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, Number(cfg.chainId));
 function operatorAddress() {
   try {
@@ -59,7 +67,8 @@ http
       res.setHeader("Content-Type", "application/json");
       res.writeHead(200);
       return res.end(JSON.stringify({ ok: true, chainId: Number(cfg.chainId), chainName: chainDisplayName(),
-        rpc: endpoint.publicRpc(cfg), explorer: cfg.explorer || "", nativeCurrency: nativeCurrencyOut() }));
+        rpc: endpoint.publicRpc(cfg), explorer: cfg.explorer || "", nativeCurrency: nativeCurrencyOut(),
+        ...(cfg.nativeSymbol ? { nativeSymbol: cfg.nativeSymbol } : {}), ...(!cfg.nativeCurrency && cfg.nativeSymbol ? { nativeDecimalsUnverified: true } : {}) }));
     }
     if (url.pathname === "/api/approval" || url.pathname === "/api/v4-approval") {
       res.setHeader("Content-Type", "application/json");
@@ -82,10 +91,10 @@ http
         const others = (await approvedOperators(provider, mgr, ownerEntry.address)).filter((o) => o.approved && (!op || o.address.toLowerCase() !== op.toLowerCase()));
         const wallets = [];
         for (const a of allowed) wallets.push({ ...a, approved: op ? await c.isApprovedForAll(a.address, op).catch(() => null) : null });
-        return res.end(JSON.stringify({ ok: true, version: v, owner: ownerEntry.address, ownerLabel: ownerEntry.label, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: chainDisplayName(), nativeCurrency: nativeCurrencyOut(), rpc: endpoint.publicRpc(cfg), explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets }));
+        return res.end(JSON.stringify({ ok: true, version: v, owner: ownerEntry.address, ownerLabel: ownerEntry.label, operator: op, posm: ethers.getAddress(mgr), chainId: Number(cfg.chainId), chainName: chainDisplayName(), nativeCurrency: nativeCurrencyOut(), ...(cfg.nativeSymbol ? { nativeSymbol: cfg.nativeSymbol } : {}), rpc: endpoint.publicRpc(cfg), explorer: "https://robinhoodchain.blockscout.com", approved, others, wallets }));
       } catch (err) {
         res.writeHead(500);
-        return res.end(JSON.stringify({ ok: false, error: err.shortMessage || err.message }));
+        return res.end(JSON.stringify({ ok: false, error: endpoint.redactText(String(err.shortMessage || err.message)) }));
       }
     }
     if (/^\/approve-v[34](\.html)?$/.test(url.pathname)) { res.writeHead(302, { Location: "/wallet#approvals" }); return res.end(); }
@@ -93,7 +102,7 @@ http
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(fs.readFileSync(path.join(__dirname, "wallet.html")));
     }
-    if (url.pathname === "/dashboard.css" || url.pathname === "/qr.js" || url.pathname === "/chat-widget.js") {
+    if (url.pathname === "/dashboard.css" || url.pathname === "/qr.js" || url.pathname === "/chat-widget.js" || url.pathname === "/wallet-chain.js") {
       try { res.writeHead(200, { "Content-Type": url.pathname.endsWith(".css") ? "text/css" : "application/javascript" }); return res.end(fs.readFileSync(path.join(__dirname, url.pathname.slice(1)))); } catch {}
     }
     res.writeHead(404);

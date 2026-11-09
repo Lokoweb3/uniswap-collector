@@ -53,12 +53,12 @@ function sortItems(items, key) {
 
 /** The visible items for a selection: chains is a Set of keys, wallet is '' (all) or a wallet key. */
 function filterItems(payload, sel) {
-  return (payload.items || []).filter(it => (!sel.chains || sel.chains.has(it.chain)) && (!sel.wallet || it.wallet.key === sel.wallet));
+  return (payload.items || []).filter(it => it.testnet !== true && (!sel.chains || sel.chains.has(it.chain)) && (!sel.wallet || it.wallet.key === sel.wallet));
 }
 
 /** Same rules as the server, applied to what is shown. Unfiltered, the server's own totals are used. */
 function isUnfiltered(payload, sel) {
-  return !!(!sel.wallet && sel.chains && (payload.chains || []).every(c => sel.chains.has(c.key)));
+  return !!(!sel.wallet && sel.chains && (payload.chains || []).every(c => c.testnet === true || sel.chains.has(c.key)));
 }
 function isFiltered(payload, sel) { return !isUnfiltered(payload, sel); }
 
@@ -239,10 +239,28 @@ function tableHtml(title, head, rows, notCounted, rowHtml, payload, cols, extra)
   return `<section class="agg-sec"><h2>${esc(title)}</h2><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}${groupHtml}</tbody>${footHtml}</table>${afterHtml}</section>`;
 }
 
+/** The test networks, on their own: never in a total, never with a USD figure. */
+function testnetHtml(payload, sel) {
+  const chains = (payload.chains || []).filter(c => c.testnet === true && (!sel.chains || sel.chains.has(c.key)));
+  if (!chains.length) return '';
+  const keys = new Set(chains.map(c => c.key));
+  const items = (payload.items || []).filter(it => it.testnet === true && keys.has(it.chain) && (!sel.wallet || it.wallet.key === sel.wallet));
+  const statusHtml = chains.map(c => `<span class="badge ${c.status === 'ok' ? 'good' : 'bad'}">${esc(c.label)}: ${esc(c.status)}</span>`).join(' ');
+  const amountHtml = it => (it.decimalsUnverified && it.amountRaw ? esc(it.amountRaw) + ' wei <span class="badge warn">decimals unverified</span>' : esc(qty(it.amount)));
+  const rowsHtml = items.map(it => `<tr><td>${esc(it.name || 'token')} <span class="badge warn">TESTNET</span></td><td>${esc(chainOf(payload, it.chain).label)}</td><td>${esc(it.wallet.label || shortAddr(it.wallet.address || it.wallet.key))}</td><td class="num">${amountHtml(it)}</td><td class="muted">no USD value, not counted</td></tr>`).join('');
+  const bodyHtml = rowsHtml || '<tr><td colspan="5" class="muted">Nothing to show.</td></tr>';
+  return `<section class="agg-sec agg-testnet"><h2>Testnets (not counted) <span class="badge warn">TESTNET</span></h2><p class="muted">Test tokens have no market value: nothing here is part of any total above.</p><p>${statusHtml}</p>`
+    + `<table><thead><tr><th>Token</th><th>Chain</th><th>Wallet</th><th>Amount</th><th></th></tr></thead><tbody>${bodyHtml}</tbody></table></section>`;
+}
+
 function bannersHtml(payload, sel) {
   const out = [];
   for (const c of payload.chains || []) {
     if (c.status === 'ok') continue;
+    if (c.testnet === true) {
+      out.push(`<div class="banner ${esc(c.status)}" role="status" style="--accent:${esc(accentOf(c))}"><b>${esc(c.label)} (testnet) is ${esc(c.status)}</b> - shown on its own below; it is never part of the total</div>`);
+      continue;
+    }
     const probsHtml = (c.problems || []).map(p => `${esc(p.part || p.wallet)}: ${esc(p.code)}`).join(', ');
     let textHtml = `${esc(c.label)} is ${esc(c.status)}`;
     if (c.status === 'stale') textHtml += ` - showing the last good data from ${esc(stamp(c.lastGoodAt))} (${esc(age(c.ageMs))} old), included in the total`;
@@ -281,7 +299,7 @@ function tileHtml(payload, t, items, filtered, sel) {
 function controlsHtml(payload, sel) {
   const chipsHtml = (payload.chains || []).map(c => {
     const on = !sel.chains || sel.chains.has(c.key);
-    return `<label class="chip" style="--accent:${esc(accentOf(c))}"><input type="checkbox" data-chip="${esc(c.key)}"${on ? ' checked' : ''}> ${esc(c.label)}</label>`;
+    return `<label class="chip" style="--accent:${esc(accentOf(c))}"><input type="checkbox" data-chip="${esc(c.key)}"${on ? ' checked' : ''}> ${esc(c.label)}${c.testnet === true ? ' <span class="badge warn">TESTNET</span>' : ''}</label>`;
   }).join('');
   const walletOptsHtml = (payload.wallets || []).map(w =>
     `<option value="${esc(w.key)}"${sel.wallet === w.key ? ' selected' : ''}>${esc(w.label || shortAddr(w.address))}${w.aliases && w.aliases.length ? ' (' + esc(w.aliases.join(', ')) + ')' : ''}</option>`).join('');
@@ -316,7 +334,7 @@ function breakdownHtml(payload, items, sel) {
     const emptyHtml = rowsHtml || extraRowsHtml ? '' : '<tr><td class="muted">none</td></tr>';
     return `<section class="agg-sec half"><h2>${esc(title)}</h2><table><tbody>${rowsHtml}${extraRowsHtml}${emptyHtml}</tbody></table></section>`;
   };
-  const downRowsHtml = (payload.chains || []).filter(c => c.status === 'down' || c.status === 'loading').map(c => `<tr><td>${esc(c.label)}</td><td class="num muted">${esc(c.status)}, no figure</td><td></td><td class="num">no figure</td></tr>`).join('');
+  const downRowsHtml = (payload.chains || []).filter(c => c.testnet !== true && (c.status === 'down' || c.status === 'loading')).map(c => `<tr><td>${esc(c.label)}</td><td class="num muted">${esc(c.status)}, no figure</td><td></td><td class="num">no figure</td></tr>`).join('');
   const walletLabel = k => { const w = (payload.wallets || []).find(x => x.key === k); return w ? (w.label || shortAddr(w.address)) : shortAddr(k); };
   const chainHtml = sectionHtml('By chain', by.chain, k => chainOf(payload, k).label, downRowsHtml, false, by.feesChain || {});
   const walletHtml = sectionHtml('By wallet', by.wallet, walletLabel, '', true, by.feesWallet || {});
@@ -348,6 +366,7 @@ function renderPage(payload, sel) {
     + tableHtml('Tokens', HEADS.token, tkOk, tkNo, tokenRowHtml, payload, 7)
     + tableHtml('Staking', HEADS.staking, stOk, stNo, stakingRowHtml, payload, 7)
     + breakdownHtml(payload, items, sel)
+    + testnetHtml(payload, sel)
     + `<p class="muted foot">As of ${esc(stamp(payload.at))}. ${(payload.chains || []).map(c => `${esc(c.label)} ${esc(stamp(c.dataAt || c.lastGoodAt))}`).join('; ')}</p>`;
 }
 
@@ -404,5 +423,5 @@ function boot() {
 
 if (typeof document !== 'undefined') boot();
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { esc, usd, qty, pct, renderPage, filterItems, totalsFor, clientTotals, breakdownFor, ratesFor, ratesHtml, totalsRowHtml, sortItems, initialSelection, bannersHtml, lpRowHtml, tokenRowHtml, stakingRowHtml };
+  module.exports = { esc, usd, qty, pct, renderPage, filterItems, totalsFor, clientTotals, breakdownFor, ratesFor, ratesHtml, totalsRowHtml, sortItems, initialSelection, bannersHtml, testnetHtml, lpRowHtml, tokenRowHtml, stakingRowHtml };
 }

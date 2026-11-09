@@ -46,3 +46,4 @@ body.agg tr.total .muted { font-weight: 400; font-size: 12px; }
 body.agg .agg-rate { margin: 8px 0 0; }
 body.agg .agg-rate p { margin: 0 0 4px; }
 body.agg .agg-rate ul { margin: 0; padding-left: 18px; color: var(--muted, #9aafca); font-size: 12.5px; }
+body.agg .agg-testnet { border: 1px dashed var(--warn, #ffb547); border-radius: var(--r-card, 12px); padding: 8px 12px; }

@@ -10,7 +10,7 @@ const { spawn } = require("child_process");
 const { hermeticEnv, hermeticCwd, PRELOAD } = require("./hermetic");
 
 const ROOT = path.join(__dirname, "..", "..");
-const LIVE_PORTS = [8787, 8788, 8790, 8791, 8796, 8797, 8800, 3847];
+const LIVE_PORTS = [8787, 8788, 8790, 8791, 8794, 8796, 8797, 8800, 3847];
 const freePort = () => new Promise((res) => { const s = http.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
 const request = (port, p) => new Promise((resolve) => {
   const h = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` };

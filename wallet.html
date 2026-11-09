@@ -1001,6 +1001,7 @@ body .wrap > :where(.subtitle,.tabs,.tab){max-width:1180px;margin-inline:auto}
 </div></div>
 </section>
 </div>
+<script src="/wallet-chain.js"></script>
 <script src="/qr.js"></script>
 <script>
 (() => {
@@ -1452,24 +1453,16 @@ const initApprove = ((root, VERSION) => {
   }
 
   async function switchChain() {
-    const hex = '0x' + Number(cfg.chainId).toString(16);
+    if (!window.WalletChain) { status('The wallet helper (wallet-chain.js) did not load, so this page cannot switch or add the network. Reload the page, or switch the wallet to the chain by hand.', 'bad'); return; }
     try {
-      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] });
-    } catch (e) {
-      if (e.code === 4902 || /unrecognized|not added/i.test(e.message || '')) {
-        // Only offer to add the network when the server states its native asset.
-        // Adding it with a guessed currency labels this chain's gas wrongly in the
-        // wallet from then on -- on Arc, gas is USDC, not ether.
-        if (!cfg.nativeCurrency) {
-          status(`${cfg.chainName} is not in your wallet. Add it by hand (chain id ${cfg.chainId}, RPC ${cfg.rpc}) — this page will not guess the chain's native currency.`, 'warn');
-          return;
-        }
-        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{
-          chainId: hex, chainName: cfg.chainName, rpcUrls: [cfg.rpc],
-          nativeCurrency: cfg.nativeCurrency, blockExplorerUrls: cfg.explorer ? [cfg.explorer] : [],
-        }] });
-      } else { status(`Could not switch network: ${e.message}`, 'bad'); return; }
-    }
+      // Switch first; add only for an unknown chain, and only when the server states the native asset.
+      // Adding with a guessed currency labels this chain's gas wrongly in the wallet from then on
+      // (on Arc, gas is USDC, not ether), so an unverified one gets a by-hand message instead.
+      await window.WalletChain.switchOrAdd(window.ethereum, {
+        chainId: cfg.chainId, chainName: cfg.chainName, rpc: cfg.rpc,
+        nativeCurrency: cfg.nativeCurrency, nativeSymbol: cfg.nativeSymbol, explorer: cfg.explorer,
+      });
+    } catch (e) { status(e && e.manual ? e.message : `Could not switch network: ${e.message}`, 'warn'); return; }
     await checkChain();
     status(chainOk ? `On ${cfg.chainName}.` : 'Still on the wrong network.', chainOk ? 'ok' : 'warn');
   }
@@ -1513,7 +1506,7 @@ const initApprove = ((root, VERSION) => {
 // CHAIN_NAME stays empty until an instance names itself. Every place that prints it
 // checks first, so a build that does not serve /api/chain leaves the chain out of the
 // page rather than printing a generic stand-in phrase, which looks like an answer.
-let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = '', RPC_URL = '', NATIVE_CURRENCY = null, UNIT_SYMBOL = '';
+let EXPLORER = '', CHAIN_ID = 0, CHAIN_NAME = '', RPC_URL = '', NATIVE_CURRENCY = null, NATIVE_SYMBOL = '', UNIT_SYMBOL = '';
 const chainReady = fetch('/api/chain', { cache: 'no-store' }).then(r => r.json()).then(c => {
   if (!c || !c.ok) throw new Error('the server did not state its chain');
   EXPLORER = c.explorer || ''; CHAIN_ID = Number(c.chainId); CHAIN_NAME = c.chainName || '';
@@ -1525,7 +1518,7 @@ const chainReady = fetch('/api/chain', { cache: 'no-store' }).then(r => r.json()
     for (const t of ['sell', 'mint']) { const a = document.querySelector(`#tabs [data-tab="${t}"]`); if (a) a.hidden = true; const p = document.getElementById('sec-' + t); if (p) p.dataset.noTx = '1'; }
     window.dispatchEvent(new Event('hashchange'));   // leave a Sell/Mint tab opened before the chain was known
   }
-  RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency; UNIT_SYMBOL = (c.nativeCurrency && c.nativeCurrency.symbol) || '';
+  RPC_URL = c.rpc; NATIVE_CURRENCY = c.nativeCurrency; NATIVE_SYMBOL = c.nativeSymbol || ''; UNIT_SYMBOL = (c.nativeCurrency && c.nativeCurrency.symbol) || '';
   paintChainIdentity();
   return c;
 }).catch(e => { console.warn('chain identity unavailable:', e.message); paintChainIdentity(); return null; });
@@ -1665,21 +1658,16 @@ async function connectWallet() {
     if (Number(network.chainId) !== CHAIN_ID) {
       await chainReady;
       if (!CHAIN_ID) throw new Error('This page could not read which chain it is serving; reload before signing.');
+      if (!window.WalletChain) { alert('The wallet helper (wallet-chain.js) did not load, so this page cannot switch or add the network. Reload the page, or switch the wallet to ' + (CHAIN_NAME || 'the chain') + ' (chain id ' + CHAIN_ID + ') by hand.'); throw new Error('wallet-chain.js missing'); }
       try {
-        await provider.send('wallet_switchEthereumChain', [{ chainId: '0x' + CHAIN_ID.toString(16) }]);
-      } catch(e) {
-        // Never hardcode another chain's identity here: this page is served by
-        // whichever instance is running, and adding a network under the wrong name
-        // or the wrong native currency misleads the wallet from then on.
-        if (!NATIVE_CURRENCY) throw new Error(`${CHAIN_NAME} is not in your wallet. Add it by hand: chain id ${CHAIN_ID}, RPC ${RPC_URL}.`);
-        await provider.send('wallet_addEthereumChain', [{
-          chainId: '0x' + CHAIN_ID.toString(16),
-          chainName: CHAIN_NAME,
-          rpcUrls: [RPC_URL],
-          nativeCurrency: NATIVE_CURRENCY,
-          blockExplorerUrls: EXPLORER ? [EXPLORER] : [],
-        }]);
-      }
+        // Switch, then add only for an unknown chain (a rejection, 4001, stops here, visibly).
+        // Nothing here names a chain: the identity comes from /api/chain, and an unverified
+        // native currency yields a by-hand message (name, id, RPC, symbol, explorer), not a guess.
+        await window.WalletChain.switchOrAdd(window.ethereum, {
+          chainId: CHAIN_ID, chainName: CHAIN_NAME, rpc: RPC_URL,
+          nativeCurrency: NATIVE_CURRENCY, nativeSymbol: NATIVE_SYMBOL, explorer: EXPLORER,
+        });
+      } catch(e) { alert(e && e.manual ? String(e.message) : 'Could not switch network: ' + (e.message || e)); throw e; }
     }
 
     signer = await provider.getSigner();

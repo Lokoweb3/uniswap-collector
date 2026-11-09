@@ -33,6 +33,10 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   assert.strictEqual(chainFor(req(), url("?chain=http://evil")).chain.key, "robinhood");
   assert.strictEqual(chainFor(req(`${COOKIE}=../../etc`), url()).chain.key, "robinhood");
   assert.strictEqual(chainFor(req(`${COOKIE}=ARC`), url()).chain.key, "robinhood", "keys are exact, not fuzzy");
+  // A malformed percent-escape is a bad cookie, not an exception (it used to crash the router).
+  for (const bad of ["%", "%E0%A4%A", "%zz", "a=1; %"]) {
+    assert.strictEqual(chainFor(req(`${COOKIE}=${bad}`), url()).chain.key, "robinhood", `${bad}: default chain`);
+  }
 }
 
 // ---- 1b. PulseChain is a known chain, but not in the default list --------------
@@ -120,6 +124,25 @@ const url = (q = "") => new URL(`http://x/page${q}`);
   const onArc = await get("/api/who", `${COOKIE}=arc`);
   assert.strictEqual(JSON.parse(onArc.body).chain, "arc", "the cookie routes to Arc");
 
+  // Malformed cookie escapes fall through to the default chain, and the router keeps serving.
+  for (const bad of ["%", "%E0%A4%A"]) {
+    const r = await get("/api/who", `${COOKIE}=${bad}`);
+    assert.strictEqual(r.status, 200, `lpchain=${bad} is served`);
+    assert.strictEqual(JSON.parse(r.body).chain, "robinhood", `lpchain=${bad} falls to the default chain`);
+    const after = await get("/api/who", `${COOKIE}=arc`);
+    assert.strictEqual(JSON.parse(after.body).chain, "arc", "still serving afterwards");
+  }
+  // An unexpected throw inside the handler answers 500 instead of crashing.
+  {
+    const written = [];
+    let boom = true; // the first writeHead (the ?chain= redirect) throws, as an unexpected fault would
+    const fakeRes = { headersSent: false, writeHead: (c) => { if (boom) { boom = false; throw new Error("boom"); } written.push(c); }, end: () => written.push("end") };
+    const origErr = console.error; console.error = () => {};
+    try { router.emit("request", { url: "/x?chain=arc", method: "GET", headers: {} }, fakeRes); } finally { console.error = origErr; }
+    assert.deepStrictEqual(written, [500, "end"], "a handler throw is a 500");
+    assert.strictEqual(JSON.parse((await get("/api/who")).body).chain, "robinhood", "and the router still serves");
+  }
+
   // The upstream cookie is namespaced on the way out...
   const page = await get("/", `${COOKIE}=arc`);
   const setC = [].concat(page.headers["set-cookie"] || []).join("|");
@@ -163,6 +186,23 @@ const url = (q = "") => new URL(`http://x/page${q}`);
     const get = await new Promise((res) => http.get({ host: "127.0.0.1", port, path: "/api/who",
       headers: { origin: "http://evil.example" } }, (r) => { let b = ""; r.on("data", (c) => (b += c)); r.on("end", () => res({ status: r.statusCode })); }));
     assert.strictEqual(get.status, 200, "a cross-site GET is still served");
+  }
+
+  // ---- the ?chain= redirect never leaves the origin ---------------------------
+  {
+    const rawGet = (path) => new Promise((res) => {
+      http.get({ host: "127.0.0.1", port, path }, (r) => { r.resume(); res({ status: r.statusCode, loc: r.headers.location }); });
+    });
+    for (const p of ["/.//evil.example?chain=robinhood", "//evil?chain=arc", "/\\evil?chain=arc", "/.//\\evil?chain=arc",
+      "/%2Fevil?chain=arc", "/%5Cevil?chain=arc", "/.//%2Fevil?chain=arc", "/%2F%5Cevil?chain=arc", "/./\\/evil.example?chain=arc&x=1"]) {
+      const r = await rawGet(p);
+      assert.strictEqual(r.status, 302, p);
+      assert.ok(typeof r.loc === "string" && r.loc.startsWith("/") && !/^\/[/\\]/.test(r.loc), `${p} -> ${r.loc}`);
+      assert.ok(!r.loc.includes("chain="), `${p} -> ${r.loc}`);
+    }
+    assert.strictEqual((await rawGet("/.//evil.example?chain=robinhood")).loc, "/evil.example");
+    assert.strictEqual((await rawGet("/.//evil.example?chain=arc&x=1")).loc, "/evil.example?x=1");
+    assert.strictEqual((await rawGet("/page?chain=arc&y=2")).loc, "/page?y=2", "ordinary redirects are unchanged");
   }
 
   // ---- every chain's vault, side by side, never summed ------------------------

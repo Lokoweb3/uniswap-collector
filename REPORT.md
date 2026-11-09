@@ -253,3 +253,30 @@ Not tracked precisely: about 33 agent runs, ~1.6M+ subagent tokens across both r
 3. Info: `assertRpcChain` checks fallbacks in sequence, which can add N x 8 s to startup. Use `Promise.all`. After the first match, the primary's chain id is not re-checked.
 4. Open decision, kept as is: token decimals and explorer link format are unverified. Raw wei is shown with a badge; no automatic wallet add.
 5. `test/smoke.js` needs a git-ignored `settings.json` in the worktree.
+
+---
+
+# Base LOKOVault preparation (aead6b8 → 3e0f6b0), nothing sent
+
+- Research (read-only RPC + local compiles, .swarm/base-vault-research.md): the vault is our own TreasuryNFT (LOKOVault/LKVAULT, token #1) + TreasuryAccount (minimal ERC-6551 account). mint() itself calls registry.createAccount. Robinhood and Arc bytecode reproduce from source (solc 0.8.36). The canonical registry 0x0000…5758 exists on Base; nothing else does.
+- Base plan (Main 0x698C…48d8 signs in Rabby; gas price ~0.006 gwei):
+  1. Deploy TreasuryAccount (~719k gas).
+  2. Deploy TreasuryNFT(impl, registry, "Base") (~2.55M gas).
+  3. mint(Main), which also creates the TBA (~197k gas).
+  4. Optional setFeeSplitPct(20) (~31k gas).
+  Total ~3.49M gas, about 0.00002 ETH; Main has 0 ETH on Base, so fund it with ≥0.0005 ETH. Predicted addresses (only valid while Main's Base nonce is 0): impl 0x9932…2DC7, NFT 0x0941…573C, TBA 0x86bb…54a5.
+- Tools:
+  - tools/base-vault-txs.js: unsigned txs, --predict, --raw.
+  - tools/base-vault-serve.js: GET-only page on 127.0.0.1:8745, chain pinned to 0x2105, Main only, one step at a time, each step checked on-chain.
+  - tools/verify-base-vault.js: proves the finished vault; prints the settings snippet and the VAULT_IMPLEMENTATIONS diff.
+  - Runbook in docs/base-vault-runbook.md.
+- Commits: 732217f research + spec; 3e0f6b0 builder, page, verifier, pinned artifact, tests, runbook.
+- Verdicts: reviewer APPROVE; security PASS WITH FIXES (no Critical/High; no key handling, no signing path outside Rabby).
+- Open, before the user signs:
+  - L1: no anti-framing header on the signing page.
+  - L2: HOST case, IPv6 and non-loopback handling.
+  - L3: the verifier trusts its RPC; the runbook needs a trusted-RPC note and a cross-check against the page and BaseScan.
+  - L4: test that flow.js has no fetch/URLs.
+  - L5: fail closed when the deploy is more than 8 nonces back.
+  - Reviewer nits: nonce warning; lowercase host.
+- After signing (user): verify; add vault.tba to ~/base-data/settings.json; Main must be among the Base sweep's configured owners; commit the VAULT_IMPLEMENTATIONS diff; add base to LP_ROUTER_CHAINS for /api/vaults.

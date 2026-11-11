@@ -160,15 +160,15 @@ function roiCellHtml(it) {
   if (!r) return '<span class="muted" title="No deposit record for this position on its chain dashboard">not tracked</span>';
   const since = isNum(r.since) ? ` since ${new Date(r.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : '';
   const tip = `${ROI_TIP}. Deposited ${usd(r.basisUsd)}${since}${r.approx ? '; approximate' : ''}`;
-  return `<span title="${esc(tip)}"><b class="${r.pct < 0 ? 'neg' : 'pos'}">${esc(signedPct(r.pct))}</b>${r.approx ? ' ≈' : ''}<br><span class="muted">${esc(signedUsd(r.usd))}</span></span>`;
+  return `<span class="roi" title="${esc(tip)}"><b class="${r.pct < 0 ? 'roi-down' : 'roi-up'}">${esc(signedPct(r.pct))}</b>${r.approx ? ' ≈' : ''} <span class="muted">${esc(signedUsd(r.usd))}</span></span>`;
 }
 function roiTotalHtml(payload, sel) {
   const lp = filterItems(payload, sel).filter(it => it.kind === 'lp');
   const m = lp.filter(it => it.roi);
   if (!m.length) return '<span class="muted">not tracked</span>';
   const gain = m.reduce((s, it) => s + it.roi.usd, 0), basis = m.reduce((s, it) => s + it.roi.basisUsd, 0);
-  return `<span title="${esc(ROI_TIP)}"><b class="${gain < 0 ? 'neg' : 'pos'}">${esc(signedPct(gain / basis * 100))}</b> ${esc(signedUsd(gain))}`
-    + `<br><span class="muted">${esc(m.length)} of ${esc(lp.length)} positions tracked</span></span>`;
+  return `<span class="roi" title="${esc(ROI_TIP)}"><b class="${gain < 0 ? 'roi-down' : 'roi-up'}">${esc(signedPct(gain / basis * 100))}</b> <span class="muted">${esc(signedUsd(gain))}</span></span>`
+    + `<br><span class="muted">${esc(m.length)} of ${esc(lp.length)} tracked</span>`;
 }
 function tokenRowHtml(payload, it) {
   return `<tr><td>${esc(it.name)}</td><td>${chainTagHtml(payload, it.chain)}</td><td>${esc(walletName(it.wallet))}</td>`

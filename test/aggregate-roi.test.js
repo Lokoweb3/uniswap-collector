@@ -58,7 +58,7 @@ const chainData = () => ({
 
   // ---- a tracked row: signed percent and dollars, approx marker
   const neg = V.lpRowHtml(pl, byName((r) => r.usd === -50));
-  assert.ok(neg.includes("-10.0%") && neg.includes("-$50.00") && neg.includes("≈") && neg.includes('class="neg"'));
+  assert.ok(neg.includes("-10.0%") && neg.includes("-$50.00") && neg.includes("≈") && neg.includes('class="roi-down"'));
   assert.ok(V.lpRowHtml(pl, up).includes("+5.0%"));
 
   // ---- total: summed gain / summed basis of tracked rows; coverage stated
@@ -67,7 +67,7 @@ const chainData = () => ({
   assert.ok(html.includes("<th data-sort=\"roi\" class=\"sortable\">ROI</th>"));
   const foot = V.totalsRowHtml(pl, pl.totals, sel);
   assert.ok(foot.includes("+2.0%") && foot.includes("+$50.00"), "50 / 2500 = +2.0%: " + foot);
-  assert.ok(foot.includes("2 of 4 positions tracked"));
+  assert.ok(foot.includes("2 of 4 tracked"));
   assert.ok(!html.includes("<img"), "escaped");
 
   // ---- sort: tracked by pct desc, untracked last

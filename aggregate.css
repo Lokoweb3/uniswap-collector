@@ -37,6 +37,8 @@ body.agg .badge { display: inline-block; font-size: 11px; border-radius: var(--r
 body.agg .badge.good { color: var(--pos, #35e6a1); border-color: var(--pos, #35e6a1); }
 body.agg .badge.warn { color: var(--warn, #ffb547); border-color: var(--warn, #ffb547); }
 body.agg .badge.bad { color: var(--neg, #ff667a); border-color: var(--neg, #ff667a); }
+body.agg td b.neg { color: var(--neg, #ff667a); }
+body.agg td b.pos { color: var(--pos, #34d399); }
 body.agg .badge.staked { color: var(--cyan, #29d9ff); border-color: var(--cyan, #29d9ff); }
 body.agg .agg-breakdown { display: flex; flex-wrap: wrap; gap: 18px; }
 body.agg .agg-sec.half { flex: 1 1 300px; }

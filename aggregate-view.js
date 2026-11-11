@@ -42,6 +42,7 @@ const reasonText = r => REASONS[r] || String(r || '');
 const SORTS = {
   value: (a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1),
   fees: (a, b) => (b.feesUsd ?? -1) - (a.feesUsd ?? -1),
+  roi: (a, b) => (b.roi ? b.roi.pct : -Infinity) - (a.roi ? a.roi.pct : -Infinity),
   chain: (a, b) => String(a.chain).localeCompare(String(b.chain)),
   wallet: (a, b) => String(a.wallet.label || a.wallet.key).localeCompare(String(b.wallet.label || b.wallet.key)),
   protocol: (a, b) => String(a.protocol).localeCompare(String(b.protocol)),
@@ -149,7 +150,25 @@ function lpRowHtml(payload, it) {
   return `<tr><td>${esc(it.protocol)}</td><td>${esc(it.name)}</td><td>${chainTagHtml(payload, it.chain)}</td>`
     + `<td>${esc(walletName(it.wallet))}</td><td>${badgesHtml(it)}</td>`
     + `<td class="num">${esc(usd(it.valueUsd))}${it.reason ? ` <span class="muted">${esc(reasonText(it.reason))}</span>` : ''}</td>`
-    + `<td class="num">${feesCellHtml(it)}</td></tr>`;
+    + `<td class="num">${feesCellHtml(it)}</td><td class="num">${roiCellHtml(it)}</td></tr>`;
+}
+const signedUsd = v => (v < 0 ? '-' : '+') + usd(Math.abs(v));
+const signedPct = v => (v < 0 ? '-' : '+') + Math.abs(v).toFixed(1) + '%';
+const ROI_TIP = 'Return on capital: value now + uncollected and collected fees + withdrawals, against the deposits priced when they went in';
+function roiCellHtml(it) {
+  const r = it.roi;
+  if (!r) return '<span class="muted" title="No deposit record for this position on its chain dashboard">not tracked</span>';
+  const since = isNum(r.since) ? ` since ${new Date(r.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : '';
+  const tip = `${ROI_TIP}. Deposited ${usd(r.basisUsd)}${since}${r.approx ? '; approximate' : ''}`;
+  return `<span title="${esc(tip)}"><b class="${r.pct < 0 ? 'neg' : 'pos'}">${esc(signedPct(r.pct))}</b>${r.approx ? ' ≈' : ''}<br><span class="muted">${esc(signedUsd(r.usd))}</span></span>`;
+}
+function roiTotalHtml(payload, sel) {
+  const lp = filterItems(payload, sel).filter(it => it.kind === 'lp');
+  const m = lp.filter(it => it.roi);
+  if (!m.length) return '<span class="muted">not tracked</span>';
+  const gain = m.reduce((s, it) => s + it.roi.usd, 0), basis = m.reduce((s, it) => s + it.roi.basisUsd, 0);
+  return `<span title="${esc(ROI_TIP)}"><b class="${gain < 0 ? 'neg' : 'pos'}">${esc(signedPct(gain / basis * 100))}</b> ${esc(signedUsd(gain))}`
+    + `<br><span class="muted">${esc(m.length)} of ${esc(lp.length)} positions tracked</span></span>`;
 }
 function tokenRowHtml(payload, it) {
   return `<tr><td>${esc(it.name)}</td><td>${chainTagHtml(payload, it.chain)}</td><td>${esc(walletName(it.wallet))}</td>`
@@ -174,7 +193,7 @@ function unavailableWallet(payload, sel) {
 }
 
 function totalsRowHtml(payload, t, sel) {
-  if (unavailableWallet(payload, sel)) return '<tr class="total"><td colspan="5">Total (counted)</td><td class="num">unavailable</td><td class="num">unavailable</td></tr>';
+  if (unavailableWallet(payload, sel)) return '<tr class="total"><td colspan="5">Total (counted)</td><td class="num">unavailable</td><td class="num">unavailable</td><td class="num">unavailable</td></tr>';
   const linesHtml = [`<span>fees ${esc(usd(t.feesUsd))}</span>`, `<span>pending rewards ${esc(usd(t.rewardsUsd))}</span>`];
   if (t.feesUncountedCount > 0) linesHtml.push(`<span class="muted">fees not counted ${esc(usd(t.feesUncountedUsd))} (${esc(t.feesUncountedCount)} items)</span>`);
   if (t.rewardsUncountedCount > 0) {
@@ -183,7 +202,7 @@ function totalsRowHtml(payload, t, sel) {
     const note = t.rewardsUncountedUsd > 0 ? ` (${unpriced > 0 ? unpriced + ' unpriced, ' : ''}${usd(t.rewardsUncountedUsd)}${unpriced > 0 ? ' priced' : ''})` : ' (unpriced)';
     linesHtml.push(`<span class="muted">rewards not counted: ${esc(t.rewardsUncountedCount)}${esc(note)}</span>`);
   }
-  return `<tr class="total"><td colspan="5">Total (counted)</td><td class="num">${esc(usd(t.lpUsd))}</td><td class="num">${linesHtml.join('<br>')}</td></tr>`;
+  return `<tr class="total"><td colspan="5">Total (counted)</td><td class="num">${esc(usd(t.lpUsd))}</td><td class="num">${linesHtml.join('<br>')}</td><td class="num">${roiTotalHtml(payload, sel)}</td></tr>`;
 }
 
 /** The rate entries in scope: same chain set and wallet rule as filterItems. */
@@ -343,7 +362,7 @@ function breakdownHtml(payload, items, sel) {
 }
 
 const HEADS = {
-  lp: [['Protocol', 'protocol'], ['Pair', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['', null], ['Value', 'value'], ['Fees / pending rewards', 'fees']],
+  lp: [['Protocol', 'protocol'], ['Pair', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['', null], ['Value', 'value'], ['Fees / pending rewards', 'fees'], ['ROI', 'roi']],
   token: [['Token', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['Amount', null], ['Price', null], ['Value', 'value'], ['', null]],
   staking: [['Token', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['Balance', null], ['Value', 'value'], ['APR', null], ['7d / 30d rewards (already received, not pending)', null]],
 };
@@ -362,7 +381,7 @@ function renderPage(payload, sel) {
   const [tkOk, tkNo] = split(tokens);
   const [stOk, stNo] = split(staking);
   return bannersHtml(payload, sel) + tileHtml(payload, t, items, isFiltered(payload, sel), sel) + controlsHtml(payload, sel)
-    + tableHtml('LP positions', HEADS.lp, lpOk, lpNo, lpRowHtml, payload, 7, { foot: totalsRowHtml(payload, t, sel), after: ratesHtml(payload, sel), always: unavailableWallet(payload, sel) !== null })
+    + tableHtml('LP positions', HEADS.lp, lpOk, lpNo, lpRowHtml, payload, 8, { foot: totalsRowHtml(payload, t, sel), after: ratesHtml(payload, sel), always: unavailableWallet(payload, sel) !== null })
     + tableHtml('Tokens', HEADS.token, tkOk, tkNo, tokenRowHtml, payload, 7)
     + tableHtml('Staking', HEADS.staking, stOk, stNo, stakingRowHtml, payload, 7)
     + breakdownHtml(payload, items, sel)

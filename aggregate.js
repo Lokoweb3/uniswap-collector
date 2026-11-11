@@ -41,6 +41,7 @@ const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const arr = (v) => (Array.isArray(v) ? v : []);
 /** A finite, non-negative number or null. Strings, NaN, Infinity and negatives are not numbers here. */
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
+const snum = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);   // signed: a loss is a value, not a gap
 const str = (v, n = STR_MAX) => (typeof v === "string" ? v.slice(0, n) : "");
 const addrOf = (v) => (typeof v === "string" && ADDR.test(v) ? v : null);
 const lc = (v) => (typeof v === "string" ? v.toLowerCase() : null);
@@ -131,6 +132,13 @@ function ingestEntry(e) {
     staked: e.staked === true,
     gaugeKilled: e.gaugeKilled === true,
     rewards: rw,
+    // Return on capital as the instance measured it: the gain against the capital priced
+    // when it went in. Only numbers and a timestamp pass; the instance's reason text does not.
+    roiUsd: snum(e.returnOnCapitalUsd),
+    roiPct: snum(e.returnOnCapitalPct),
+    roiBasisUsd: num(e.returnOnCapitalBasisUsd),
+    roiApprox: e.pnlApprox === true,
+    roiSince: num(e.pnlSince),
   };
 }
 const ingestEntries = (o) => [...arr(o && o.positions), ...arr(o && o.external)].map(ingestEntry).filter(Boolean);
@@ -321,6 +329,9 @@ function compose(state, now) {
         inRange: e.inRange, amount: null, price: null, asOf, source, link,
         _feesCounted: counted && e.feesOk && e.feesUsd !== null,
         _dailyUsd: e.dailyUsd, _rateWindowH: e.rateWindowH,
+        // null when the instance has no basis for this position: never shown as 0%.
+        roi: e.roiPct === null || e.roiUsd === null || !(e.roiBasisUsd > 0) ? null
+          : { usd: e.roiUsd, pct: e.roiPct, basisUsd: e.roiBasisUsd, approx: e.roiApprox, since: e.roiSince },
       });
     }
   };
@@ -523,6 +534,7 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
       for (const it of c.items) {
         it.testnet = true; it.counted = false; it.reason = "testnet";
         it.valueUsd = null; it.feesUsd = null; it.rewardsUsd = null; it.rewardsCounted = false; it.rewardsReason = null; it._feesCounted = false; it._contrib = 0;
+        if (it.roi !== undefined) it.roi = null;
         if (it.price !== undefined) it.price = null;
         testnetItems.push(it);
       }

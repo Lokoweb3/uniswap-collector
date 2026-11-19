@@ -62,6 +62,30 @@ const dayKey = (t) => daykey.dayKey(t);
 const monthKey = (t) => dayKey(t).slice(0, 7);
 const round = (n, d = 2) => (n == null ? null : +Number(n).toFixed(d));
 
+/**
+ * Positions on other DEXes (payload `external`: Slipstream forks such as "up", staked ones
+ * included) in the same shape as the Uniswap rows, plus where they live and what they earn.
+ * They were counted in the totals but missing from the lists, so a wallet could show
+ * "count 3, positions []".
+ */
+const externalRows = (list) => (list || []).map((p) => ({
+  tokenId: p.nftId || p.tokenId,
+  version: p.version,
+  dex: p.protocol || p.version,
+  staked: !!p.staked,
+  pair: p.pair,
+  feeTier: p.feeTierLabel,
+  inRange: p.inRange,
+  state: p.inRange ? (p.toUpperPct < 12 || p.toLowerPct < 12 ? "near the edge" : "in range") : p.rawPos > 1 ? "above range (idle)" : "below range (idle)",
+  pctToUpperEdge: round(p.toUpperPct, 1),
+  pctToLowerEdge: round(p.toLowerPct, 1),
+  price: { current: p.priceCurrent, lower: p.priceLower, upper: p.priceUpper, unit: `${p.symbol1} per ${p.symbol0}` },
+  holdings: { [p.symbol0]: p.amount0, [p.symbol1]: p.amount1 },
+  valueUsd: round(p.valueUsd),
+  uncollectedFees: { [p.symbol0]: p.fee0, [p.symbol1]: p.fee1, usd: round(p.feesUsd) },
+  rewards: p.rewards ? { symbol: p.rewards.symbol, amount: p.rewards.amount, usd: round(p.rewards.usd) } : null,
+}));
+
 /** Build a server with the tools: 25 read tools, plus record_strategy_proposal, approve_sale and run_tasks unless role is "read". Each transport gets its own instance. */
 /**
  * role: "write" (default — the local stdio server and the in-process agent, which gate writes by
@@ -77,7 +101,7 @@ server.registerTool(
   {
     title: "Open LP positions",
     description:
-      "Current state of every open Uniswap v3/v4 position in the Main (collector) wallet ONLY — not the LP Rewards or Trading wallets. For every wallet's positions use `health` (guardian.positions) or `watched_wallets`. Per position: pair, fee tier, in-range status and distance to each edge, USD value, uncollected fees, accrual rate per day, APR, PnL vs holding with its legs, and whether the collector will take its fees next run. Also totals and the list of closed positions. Prices are read from pool state; tokens not paired with WETH or the reference stable have no USD value.",
+      "Current state of every open LP position in the Main (collector) wallet ONLY — not the LP Rewards or Trading wallets: Uniswap v3/v4 plus positions on other DEXes (rows with `dex`, e.g. \"up\", staked ones included, with their pending `rewards`). For every wallet's positions use `watched_wallets`. Per position: pair, fee tier, in-range status and distance to each edge, USD value, uncollected fees, accrual rate per day, APR, PnL vs holding with its legs, and whether the collector will take its fees next run. Also totals and the list of closed positions. Prices are read from pool state; tokens not paired with WETH or the reference stable have no USD value.",
     inputSchema: {
       include_closed: z.boolean().optional().describe("Also list closed positions (default false)"),
     },
@@ -110,7 +134,7 @@ server.registerTool(
         wethUsd: round(d.wethUsd),
         totals: Object.fromEntries(Object.entries(d.totals).map(([k, v]) => [k, typeof v === "number" ? round(v) : v])),
         collector: d.ops,
-        positions,
+        positions: [...positions, ...externalRows(d.external)],
         closed: include_closed ? d.closed : `${d.closed.length} closed (pass include_closed to list)`,
       });
     } catch (err) {
@@ -124,7 +148,7 @@ server.registerTool(
   {
     title: "Watched wallets",
     description:
-      "Read-only view of the extra wallets listed under wallets in settings.json: each wallet's total value (tokens held in the wallet, valued like the portfolio, plus positions and fees; top tokens listed) and its open Uniswap v3/v4 positions (pair, fee tier, in-range status, distance to edges, price range, holdings, USD value, uncollected fees) and totals. These wallets are only observed; collection is performed only for wallets marked collect: true in settings. Empty when no wallet is configured.",
+      "Read-only view of the extra wallets listed under wallets in settings.json: each wallet's total value (tokens held in the wallet, valued like the portfolio, plus positions and fees; top tokens listed) and its open positions, Uniswap v3/v4 and other DEXes (rows with `dex`, e.g. \"up\", staked ones included, with pending `rewards`) (pair, fee tier, in-range status, distance to edges, price range, holdings, USD value, uncollected fees) and totals. These wallets are only observed; collection is performed only for wallets marked collect: true in settings. Empty when no wallet is configured.",
     inputSchema: {},
   },
   async () => {
@@ -144,7 +168,7 @@ server.registerTool(
             holdings: { [p.symbol0]: p.amount0, [p.symbol1]: p.amount1 },
             valueUsd: round(p.valueUsd),
             uncollectedFees: { [p.symbol0]: p.fee0, [p.symbol1]: p.fee1, usd: round(p.feesUsd) },
-          })),
+          })).concat(externalRows(w.external)),
         })),
       });
     } catch (err) {

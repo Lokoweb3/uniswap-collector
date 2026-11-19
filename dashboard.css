@@ -2029,3 +2029,182 @@ polyline.tline{stroke:#C9B8FF;filter:drop-shadow(0 0 6px rgba(167,139,250,.8))}
 .cfbox dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:8px 0}
 .cfbox dd{margin:0;word-break:break-all}
 .cfbtns{display:flex;gap:8px;margin-top:12px}
+
+/* ---- all positions at a glance (dashboard.js renderGlance) ---- */
+.glance .ehead{align-items:center}
+.glance .ehead .enote{margin:0 auto 0 4px}
+.glance .etable td:not(.l),.glance .etable th:nth-child(n+5){text-align:right}
+.glance .gst{font-weight:600}
+.glance .gst.in{color:var(--pos)}
+.glance .gst.near{color:var(--warn)}
+.glance .gst.out{color:var(--neg)}
+.glance tr.g0 td{background:var(--neg-dim)}
+.glance tr.g1 td{background:var(--warn-dim)}
+.glance .muted{color:var(--muted);font-weight:400}
+
+/* ============================================================================
+   Vice Coast (2026-11-19) — a top layer over everything above: an 80s coastal
+   crime-caper poster. Sunset sky over a neon grid, hot pink for what you can act
+   on, teal as the second series, money green / amber / red only for real status,
+   tall condensed capitals (Bebas Neue) for titles and big figures, and a neon-sign
+   script (Yellowtail) for the site name. Both come from the Google Fonts link in
+   dashboard.html / wallet.html; without them the stacks fall back to system fonts.
+   The look before this is saved in themes/2026-11-19-event-horizon; put it back
+   with ./themes/apply.sh 2026-11-19-event-horizon
+   `html:root` so the palette also wins over the Wallet page's own :root block.
+   ========================================================================= */
+html:root{
+  --bg:#12061F;
+  --card:rgba(27,10,44,.84);
+  --raised:#2B1246;
+  --rule:rgba(255,122,198,.22);
+  --rule-soft:rgba(255,122,198,.12);
+  --ink:#FFF5EA;
+  --muted:#D2B4DA;
+  --faint:#9B7FA8;
+  --bright:#FFFFFF;
+  --cyan:#FF5FB0;            /* what you can act on: hot pink */
+  --violet:#3FE0D8;          /* the second chart series: pool teal */
+  --pos:#5CFF8F;             /* money green */
+  --warn:#FFC53D;
+  --neg:#FF4B3E;
+  --cyan-dim:rgba(255,95,176,.14);
+  --violet-dim:rgba(63,224,216,.13);
+  --pos-dim:rgba(92,255,143,.11);
+  --warn-dim:rgba(255,197,61,.13);
+  --neg-dim:rgba(255,75,62,.14);
+  --glow-cyan:rgba(255,95,176,.6);
+  --glow-green:rgba(92,255,143,.55);
+  --glow-gold:rgba(255,197,61,.4);
+  --btn-ink:#22061A;
+  --shadow:rgba(8,0,14,.7);
+  --holo:linear-gradient(100deg,#FF4FA3 0%,#FF7A59 38%,#FFC53D 68%,#FF4FA3 100%);
+  --rim:conic-gradient(from var(--eh-angle),rgba(255,79,163,.7),rgba(255,197,61,.5),rgba(63,224,216,.5),rgba(255,79,163,.7));
+  --r-card:10px;
+  --r-ctl:6px;
+  --display:'Bebas Neue','Arial Narrow','Roboto Condensed',var(--sans);
+  --script:'Yellowtail','Segoe Script','Brush Script MT',cursive;
+}
+
+/* ---- the scene: dusk sky, a banded sun on the horizon, a city in front of it,
+   and the neon grid running from the viewer to that horizon (78% down the window) ---- */
+html{
+  background:
+    linear-gradient(180deg,transparent 0 78%,#0D0418 78%,#1B0731 100%),                              /* the ground */
+    repeating-linear-gradient(180deg,transparent 0 12px,#C5406B 12px 18px) center bottom 22vh/380px 92px no-repeat, /* bands cut from the sun */
+    radial-gradient(circle at 50% 78%,#FFE680 0 55px,#FFB347 100px,#FF6F61 150px,transparent 151px),  /* the sun */
+    radial-gradient(circle at 50% 78%,rgba(255,130,120,.5),transparent 420px),                        /* its glow */
+    linear-gradient(180deg,#0B041C 0%,#1C0A3C 26%,#4A1263 50%,#93206F 66%,#DC4A6A 78%);               /* the sky */
+  background-color:var(--bg);
+  background-attachment:fixed;
+}
+html::before{                                  /* the skyline, silhouetted on the horizon */
+  content:"";position:fixed;left:0;right:0;bottom:22vh;height:140px;z-index:-1;pointer-events:none;
+  background-image:linear-gradient(90deg,transparent 0px,#150626 0px 46px,transparent 46px),linear-gradient(90deg,transparent 46px,#1D0933 46px 76px,transparent 76px),linear-gradient(90deg,transparent 80px,#150626 80px 134px,transparent 134px),linear-gradient(90deg,transparent 140px,#1D0933 140px 166px,transparent 166px),linear-gradient(90deg,transparent 166px,#150626 166px 206px,transparent 206px),linear-gradient(90deg,transparent 214px,#1D0933 214px 274px,transparent 274px),linear-gradient(90deg,transparent 280px,#150626 280px 314px,transparent 314px),linear-gradient(90deg,transparent 314px,#1D0933 314px 336px,transparent 336px),linear-gradient(90deg,transparent 336px,#150626 336px 384px,transparent 384px),linear-gradient(90deg,transparent 392px,#1D0933 392px 462px,transparent 462px),linear-gradient(90deg,transparent 468px,#150626 468px 498px,transparent 498px),linear-gradient(90deg,transparent 498px,#1D0933 498px 542px,transparent 542px),linear-gradient(90deg,transparent 548px,#150626 548px 572px,transparent 572px),linear-gradient(90deg,transparent 572px,#1D0933 572px 622px,transparent 622px),linear-gradient(90deg,transparent 628px,#150626 628px 666px,transparent 666px),linear-gradient(90deg,transparent 668px,#1D0933 668px 720px,transparent 720px);
+  background-size:720px 58px,720px 92px,720px 40px,720px 118px,720px 74px,720px 34px,720px 100px,720px 138px,720px 66px,720px 30px,720px 88px,720px 52px,720px 124px,720px 70px,720px 44px,720px 84px;
+  background-position:left bottom;background-repeat:repeat-x;
+}
+html::after{                                   /* faint scanlines over everything, like a tube TV */
+  content:"";position:fixed;inset:0;z-index:2147483000;pointer-events:none;
+  background:repeating-linear-gradient(180deg,rgba(0,0,0,.09) 0 1px,transparent 1px 3px);
+}
+body::before{opacity:.3;-webkit-mask-image:linear-gradient(180deg,#000 0 55%,transparent 72%);mask-image:linear-gradient(180deg,#000 0 55%,transparent 72%)} /* stars only in the upper sky */
+body::after{                                   /* the shooting star becomes the grid */
+  content:"";position:fixed;left:-60%;right:-60%;top:auto;bottom:0;width:auto;height:22vh;z-index:-1;pointer-events:none;
+  border-radius:0;filter:none;opacity:.85;animation:vc-grid 2.4s linear infinite;
+  background:
+    repeating-linear-gradient(90deg,rgba(255,95,176,.7) 0 2px,transparent 2px 80px),
+    repeating-linear-gradient(0deg,rgba(255,95,176,.7) 0 2px,transparent 2px 40px);
+  transform:perspective(300px) rotateX(62deg);transform-origin:50% 0%;
+  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 45%);mask-image:linear-gradient(180deg,transparent 0,#000 45%);
+}
+@keyframes vc-grid{from{background-position:0 0,0 0}to{background-position:0 0,0 40px}}
+::selection{background:rgba(255,95,176,.45);color:#fff}
+
+/* ---- cards: smoked glass with a pink-to-gold edge ---------------------------- */
+.stat,.earnings,.col-side .panel,.pos,.pos.card2,.watchwallet .wh,.ctotbtn,.ctpanel,.insightcard{
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,0) 30%) padding-box,
+    linear-gradient(var(--card),var(--card)) padding-box,
+    linear-gradient(135deg,rgba(255,95,176,.55),rgba(255,197,61,.18) 45%,rgba(63,224,216,.4)) border-box;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 22px 50px -28px rgba(255,60,150,.55);
+}
+.stat:hover,.pos.card2:hover{
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 26px 60px -24px rgba(255,95,176,.6),0 0 0 1px rgba(255,197,61,.25);
+}
+.summary .stat:first-child{
+  background:
+    radial-gradient(120% 140% at 0% 0%,rgba(255,95,176,.18),transparent 55%) padding-box,
+    radial-gradient(120% 140% at 100% 100%,rgba(255,197,61,.14),transparent 55%) padding-box,
+    linear-gradient(var(--card),var(--card)) padding-box,
+    var(--rim) border-box;
+  box-shadow:0 0 46px -12px rgba(255,95,176,.6),inset 0 1px 0 rgba(255,255,255,.1);
+}
+
+/* ---- header and the title lettering ------------------------------------------ */
+header.topbar{background:rgba(16,4,28,.72)}
+.brand{font-family:var(--script);font-size:30px;font-weight:400;letter-spacing:0;line-height:1;
+  color:#FF7AC0;text-shadow:0 0 6px rgba(255,95,176,.9),0 0 22px rgba(255,95,176,.65),2px 2px 0 #1A0326}
+.brand::before{background:radial-gradient(circle at 35% 35%,#fff,#FFC53D 35%,#FF7A59 65%,#FF4FA3);
+  box-shadow:0 0 12px rgba(255,197,61,.9),0 0 26px rgba(255,95,176,.6)}
+/* The display face has one weight: a synthesized bold on top of it smears, so it is pinned. */
+h2,h3,.ehead h2,.ehead h3{font-family:var(--display);font-weight:400 !important;text-transform:uppercase;letter-spacing:.05em}
+.ehead h2{font-size:19px}
+.stat .n,.stat .n.sm{font-family:var(--display);font-weight:400 !important;letter-spacing:.03em}
+.stat .n.fees,.etotal{text-shadow:0 0 22px rgba(92,255,143,.35)}
+.stat .n.loss{text-shadow:0 0 22px rgba(255,75,62,.3)}
+
+/* ---- controls ---------------------------------------------------------------- */
+button.reload{border-radius:var(--r-ctl);text-transform:uppercase;letter-spacing:.05em;font-size:11.5px}
+button.reload:hover{border-color:rgba(255,95,176,.7);background:var(--cyan-dim);box-shadow:0 0 18px -4px rgba(255,95,176,.6)}
+button.collect,.pfopt[aria-checked="true"]{
+  box-shadow:0 10px 30px -10px rgba(255,95,176,.75),0 0 22px -6px rgba(255,197,61,.55),inset 0 1px 0 rgba(255,255,255,.4)}
+select.scope,.msel,#ltsort,.armform input,.armform select{background:rgba(24,8,40,.9)}
+.chip{border-radius:var(--r-ctl)}
+
+/* ---- range rails, charts, scrollbars ------------------------------------------ */
+.bar{background:linear-gradient(90deg,rgba(63,224,216,.55),rgba(255,95,176,.55),rgba(255,197,61,.6));box-shadow:0 0 14px -2px rgba(255,95,176,.5)}
+.pos.out .bar{background:var(--neg-dim);box-shadow:none}
+polyline.tline{stroke:#FFB3DA;filter:drop-shadow(0 0 6px rgba(255,95,176,.8))}
+*{scrollbar-color:rgba(255,95,176,.4) transparent}
+::-webkit-scrollbar-thumb{background:linear-gradient(180deg,rgba(255,95,176,.5),rgba(255,197,61,.45))}
+
+/* ---- out of range reads like a wanted level ------------------------------------ */
+.glance .gst.out::after{content:" ★★★";letter-spacing:.1em;color:var(--warn)}
+.glance .gst.near::after{content:" ★";color:var(--warn)}
+
+/* ---- the HUD: money in green with a hard outline, like a counter on screen ---- */
+.stat .n,.stat .n.sm{text-shadow:-1px -1px 0 #0A0212,1px -1px 0 #0A0212,-1px 1px 0 #0A0212,2px 2px 0 #0A0212}
+.summary .stat:first-child .n,#networth{
+  color:var(--pos) !important;background:none !important;-webkit-background-clip:border-box;background-clip:border-box;
+  animation:none;filter:none;font-weight:400 !important;font-size:clamp(34px,3.6vw,50px);line-height:1.05;
+  text-shadow:-2px -2px 0 #06140A,2px -2px 0 #06140A,-2px 2px 0 #06140A,3px 3px 0 #06140A,0 0 26px rgba(92,255,143,.45)}
+.stat .l:first-child{font-family:var(--display);font-weight:400;font-size:15px;letter-spacing:.09em;color:#FFB3DA}
+
+/* ---- section titles as slanted poster tags; page tabs in the same lettering ---- */
+.ehead h2{display:inline-block;padding:3px 12px 2px;transform:skewX(-9deg);
+  background:linear-gradient(90deg,#FF5FB0,#FF7A59) !important;color:#1A0326 !important;-webkit-text-fill-color:#1A0326;text-shadow:none;box-shadow:3px 3px 0 #3FE0D8}
+.pages a{font-family:var(--display);font-weight:400;font-size:18px;letter-spacing:.07em;text-transform:uppercase}
+.pages a.here{background:none !important;color:#FF5FB0 !important;-webkit-text-fill-color:#FF5FB0;text-shadow:0 0 14px rgba(255,95,176,.6)}
+.etable th{color:#FF9FD0;letter-spacing:.08em;text-transform:uppercase}
+button.collect{transform:skewX(-6deg);font-family:var(--display);font-weight:400;font-size:16px;letter-spacing:.08em}
+
+/* ---- wanted level: stars wherever a position is close to or outside its range ---- */
+.pos.near .pcid h3::after{content:" ★";color:var(--warn)}
+.pos.out .pcid h3::after{content:" ★★★";color:var(--neg);letter-spacing:.08em}
+.pos.out{box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 0 0 1px rgba(255,75,62,.45),0 22px 50px -28px rgba(255,75,62,.6)}
+
+@media (max-width:700px){
+  body::after{display:block;height:16vh;opacity:.5;animation:none}
+  html::before{bottom:16vh;height:90px}
+  html{background:
+    linear-gradient(180deg,transparent 0 84%,#0D0418 84%,#1B0731 100%),
+    radial-gradient(circle at 50% 84%,#FFE680 0 40px,#FFB347 75px,#FF6F61 110px,transparent 111px),
+    linear-gradient(180deg,#0B041C 0%,#1C0A3C 30%,#4A1263 56%,#93206F 72%,#DC4A6A 84%);
+    background-color:var(--bg);background-attachment:fixed}
+  html::after{display:none}
+  html:root{--card:rgba(27,10,44,.94)}
+  .brand{font-size:24px}
+  .ehead h2{transform:none;box-shadow:none}
+}
+@media (prefers-reduced-motion:reduce){ body::after{display:block;animation:none} }

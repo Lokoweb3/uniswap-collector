@@ -1576,6 +1576,31 @@ only what it shows. The public gate serves the page at the same path.
 
 ## Changelog
 
+### 2026-11-19
+
+- **Theme: Vice Coast** — sunset sky, neon grid, hot pink and teal, heavy poster capitals; a
+  layer at the end of `dashboard.css`. The previous look is `themes/2026-11-19-event-horizon`
+  (`./themes/apply.sh 2026-11-19-event-horizon` puts it back, `2026-11-19-vice-coast` returns).
+- **All positions at a glance**: a table under the summary tiles with one row per open position
+  across every wallet, Uniswap and other DEXes (staked included): status, wallet, pair, pool,
+  room to the nearest edge, value, fees or rewards waiting. Out of range first, then near an
+  edge, then by value. **Rescan now** (and the header's Refresh) also rebuilds the watched
+  wallets and waits for the result; the watched-wallet data is polled every minute.
+- **Mint watcher** (`mint-watch.js`, 60 s): a wallet whose transaction count moved has its
+  positions rescanned at once, and again a minute later, instead of waiting for the 10-minute
+  tick. Shown in the loop health as "mint watcher". A position transferred in by someone else
+  is still found by the regular tick.
+- **Position alerts** (`alerts.js` `checkPositions`): a Telegram message when a position is
+  seen for the first time (a wallet's first sight is silent), and the out-of-range /
+  back-in-range rules now cover positions on other DEXes too (`external` rows, e.g. staked
+  `up` positions). They run after every mint-watcher rescan as well as on the tick.
+- MCP `positions` and `watched_wallets` list other-DEX positions (rows with `dex`, `staked`,
+  `rewards`); before, they were in the totals but missing from the lists.
+- `backup-ledgers.sh`: the archive is read back before it counts; a run that reaches the VPS
+  uploads every archive it does not have yet (`backups/.uploaded`), not only tonight's; local
+  pruning keeps archives that were never uploaded (up to 60); the failure line carries the
+  real ssh error.
+
 ### 2026-09-23
 
 - Claimed fees are split by how they left the pool: **explicit collects** (a zero liquidity

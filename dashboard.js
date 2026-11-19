@@ -3064,6 +3064,7 @@ async function load(fresh){
     if (!d.ok) throw new Error(d.error || 'request failed');
     fetchedAt.set(d, Date.now());
     render(d);
+    renderGlance();
   }catch(e){
     $('#list').innerHTML = `<div class="err">Could not reach the chain. ${esc(String(e.message))}
       <br>Check chain.rpcUrl in settings.json and that the server is still running.</div>`;
@@ -3848,6 +3849,7 @@ async function loadWatch(){
   loadOk('Watched wallets');
   const n = $('#watchstale'); if (n) { n.hidden = true; n.textContent = ''; }
   lastWatchForPf = d;
+  renderGlance();
   if (lastPortfolio) renderPortfolio();
 }
 function watchFailed(msg){
@@ -3858,7 +3860,83 @@ function watchFailed(msg){
   n.className = 'loadfail';
   n.innerHTML = staleNote(lastWatchForPf && lastWatchForPf.at, msg);
 }
-if (PAGE !== 'analytics') { loadWatch(); setInterval(loadWatch, 120000); }
+if (PAGE !== 'analytics') { loadWatch(); setInterval(loadWatch, 60000); }
+
+/* ---- all positions at a glance ----
+ * One row per open position across every wallet, Uniswap and other DEXes alike, from the
+ * two answers the page already holds (/api/positions and /api/watch). Sorted by what
+ * needs a look first: out of range, then near an edge (the cards' NEAR threshold), then the
+ * rest by value. */
+function glanceRows(){
+  const rows = [];
+  const add = (wallet, list) => { for (const p of list || []) rows.push({ wallet, p }); };
+  if (lastMain) { add(lastMain.ownerLabel || 'Main', lastMain.positions); add(lastMain.ownerLabel || 'Main', lastMain.external); }
+  for (const w of (lastWatchForPf && lastWatchForPf.wallets) || []) {
+    if (!w.ok) continue;
+    add(w.label || shortA(w.address), w.positions); add(w.label || shortA(w.address), w.external);
+  }
+  for (const r of rows) {
+    const p = r.p;
+    const edge = Math.min(Number.isFinite(p.toUpperPct) ? p.toUpperPct : Infinity, Number.isFinite(p.toLowerPct) ? p.toLowerPct : Infinity);
+    r.edge = edge;
+    r.rank = !p.inRange ? 0 : edge < NEAR ? 1 : 2;
+  }
+  return rows.sort((a, b) => a.rank - b.rank || (a.rank === 1 ? a.edge - b.edge : (b.p.valueUsd || 0) - (a.p.valueUsd || 0)));
+}
+// Never throws: it is called from inside the loaders, where an exception would be reported as
+// "could not reach the chain" over perfectly good data.
+function renderGlance(){
+  try { drawGlance(); } catch(e){ console.error('glance:', e); }
+}
+function drawGlance(){
+  const sec = $('#glancesec');
+  if (!sec || (!lastMain && !lastWatchForPf)) return;
+  const rows = glanceRows();
+  sec.hidden = false;
+  const out = rows.filter(r => r.rank === 0).length, near = rows.filter(r => r.rank === 1).length;
+  const status = r => r.rank === 0 ? `<span class="gst out">● Out of range</span> <span class="muted">${r.p.rawPos > 1 ? 'price above' : 'price below'}</span>`
+    : r.rank === 1 ? '<span class="gst near">● Near the edge</span>' : '<span class="gst in">● In range</span>';
+  const room = r => {
+    const p = r.p;
+    if (!p.inRange) return '—';
+    if (!Number.isFinite(r.edge)) return 'full range';
+    return `${r.edge.toFixed(1)}% to ${p.toUpperPct <= p.toLowerPct ? 'upper' : 'lower'}`;
+  };
+  const pool = p => `${typeof p.version === 'number' ? 'v' + p.version : esc(String(p.protocol || p.version || ''))} ${esc(String(p.feeTierLabel || ''))}${p.staked ? ' · staked' : ''}`;
+  const waiting = p => p.staked && p.rewards ? `${usd(p.rewards.usd)} <span class="muted">${esc(String(p.rewards.symbol || 'rewards'))}</span>` : `${usd(p.feesUsd)} <span class="muted">fees</span>`;
+  $('#glancetable tbody').innerHTML = rows.length ? rows.map(r => `<tr class="g${r.rank}">
+      <td class="l">${status(r)}</td><td class="l">${esc(String(r.wallet))}</td>
+      <td class="l"><b>${esc(String(r.p.pair || '?'))}</b> <span class="muted">#${esc(String(r.p.nftId || r.p.tokenId))}</span></td>
+      <td class="l">${pool(r.p)}</td><td>${room(r)}</td><td>${usd(r.p.valueUsd)}</td><td>${waiting(r.p)}</td></tr>`).join('')
+    : '<tr><td class="l" colspan="7">No open positions in any wallet.</td></tr>';
+  const total = rows.reduce((s, r) => s + (r.p.valueUsd || 0), 0);
+  const waitingOn = !lastWatchForPf ? ' · other wallets still loading' : '';
+  $('#glancenote').textContent = watchRescan ? 'Rescanning every wallet…'
+    : `${rows.length} open · ${usd(total)}${out ? ` · ${out} out of range` : ''}${near ? ` · ${near} near the edge` : ''}${waitingOn}`;
+  $('#glancerescan').disabled = !!watchRescan;
+}
+// "Rescan now" (and the header's Refresh): the main wallet's build waits for the chain, the
+// other wallets rebuild in the background, so the page polls until that rebuild has landed.
+let watchRescan = null;
+function rescanWatch(){
+  if (watchRescan || PAGE === 'analytics') return watchRescan;
+  watchRescan = (async () => {
+    try {
+      await fetch('/api/watch?fresh=1');
+      for (let i = 0; i < 36; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const d = await (await fetch('/api/watch')).json();
+        if (!d.refreshing) break;
+      }
+    } catch(e){ /* loadWatch below reports a failure in its own place */ }
+    watchRescan = null;
+    await loadWatch();
+    renderGlance();
+  })();
+  renderGlance();
+  return watchRescan;
+}
+{ const b = $('#glancerescan'); if (b) b.addEventListener('click', () => $('#reload').click()); }
 
 fetch('/api/collect').then(r => r.json()).then(d => {
   if (d.run && !d.run.done) watchRun();
@@ -3885,7 +3963,7 @@ function tick(fresh){
   if (ANALYTICS) { loadHistory(); loadDaily(); loadStaking(); loadWatchForAnalytics(); loadTreasury(); loadLots(); loadTrack(); }
   else { loadRewards(); loadBalances(); loadAllSeries(); loadStakingForHeaders(); }
 }
-$('#reload').addEventListener('click', () => tick(true));
+$('#reload').addEventListener('click', () => { tick(true); rescanWatch(); });
 tick(false);
 setInterval(() => tick(false), 60000);
 

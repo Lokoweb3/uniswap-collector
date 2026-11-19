@@ -251,7 +251,47 @@ const run = (t, result, mode = "full") => ({ lastRun: { t, mode, result } });
   assert.ok(errs.some((m) => /deliver error/.test(m)));
   global.fetch = realFetch;
 
+  // 11. new positions and other-DEX (external) rows: a wallet's first sight is silent, a later
+  // position is announced once, an external row gets the range rules, and a list that goes
+  // empty for a tick (failed read) does not make its positions "new" again.
+  const got = [];
+  const k = create({ transport: async (t) => { got.push(t); return true; }, stateFile: stateFile + ".k", now: () => clock, log: { error() {} } });
+  const up = (inRange, rawPos = 0.5) => ({ tokenId: "up-9", nftId: "9", version: "up", protocol: "up", staked: true, feeTierLabel: "tick 200", pair: "WETH / UP", inRange, rawPos, valueUsd: 500, feesUsd: 0, rewards: { symbol: "UP", usd: 3 } });
+  const v3 = { tokenId: "5", nftId: "5", version: 3, feeTierLabel: "0.05%", pair: "USDG / ANT", inRange: true, rawPos: 0.5, valueUsd: 285.5, feesUsd: 0 };
+  const tw = (positions, external, ok = true) => ({ address: "0xaDf94A20558E1E6d64c429F8F9f017169BF3d743", label: "Trading", ok, positions, external });
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(true)] }, watched: [tw([], [])] });
+  assert.deepStrictEqual(out, [], "first sight of a wallet announces nothing");
+  // still inside the 30-minute grace after first sight: a position that surfaces late is not news
+  clock += 10 * 60 * 1000;
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(true)] }, watched: [tw([{ ...v3, tokenId: "4", nftId: "4" }], [])] });
+  assert.deepStrictEqual(out, [], "late discovery inside the grace window is silent");
+  clock += 31 * 60 * 1000;
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(true)] }, watched: [tw([v3], [])] });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /New position: Trading · USDG \/ ANT #5 \(v3 0\.05%\) — in range, value \$285\.50/);
+  clock += 60 * 1000;
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(true)] }, watched: [tw([v3], [])] });
+  assert.deepStrictEqual(out, [], "announced once");
+  // the external list fails for a tick, then returns out of range
+  clock += 60 * 1000;
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [] }, watched: [tw([v3], [])] });
+  assert.deepStrictEqual(out, []);
+  clock += 60 * 1000;
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(false, -0.2)] }, watched: [tw([v3], [])] });
+  assert.strictEqual(out.length, 1, "no 'new' for a returning position; one range alert"); assert.match(out[0], /WETH \/ UP #9 is out of range \(price below.*rewards \$3\.00/);
+  clock += 60 * 1000;
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(true)] }, watched: [tw([v3], [])] });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /#9 is back in range/);
+  // a wallet added later is taken as it stands; a failed wallet load announces nothing
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(true)] }, watched: [tw([], [], false), { address: "0xA9b614f3Bc599D684c44D97d8486ECAad9AC1A51", label: "LP Rewards", ok: true, positions: [{ ...v3, tokenId: "6", nftId: "6" }] }] });
+  assert.deepStrictEqual(out, []);
+  // gone for more than a day, then back: new again
+  clock += 25 * 3600 * 1000;
+  await k.checkPositions({ payload: { positions: [pos(true)], external: [] }, watched: [] });
+  out = await k.checkPositions({ payload: { positions: [pos(true)], external: [up(true)] }, watched: [] });
+  assert.strictEqual(out.length, 1); assert.match(out[0], /New position: WETH \/ UP #9 \(up tick 200, staked\)/);
+  try { fs.unlinkSync(stateFile + ".k"); } catch {}
+
   for (const f of [stateFile, stateFile + ".b", stateFile + ".c", stateFile + ".n"]) { try { fs.unlinkSync(f); } catch {} }
-  console.log(`alerts: ${sent.length} messages produced across 10 scenarios, all assertions passed`);
+  console.log(`alerts: ${sent.length} messages produced across 11 scenarios, all assertions passed`);
   for (const m of sent) console.log("  -", m.slice(0, 90));
 })().catch((e) => { console.error("FAIL", e.message); process.exit(1); });

@@ -33,6 +33,8 @@ const STATE_FILE = dataPath("alerts-state.json");
 const ALERT_REPEAT_MS = 6 * 3600 * 1000; // re-remind about a standing problem
 const POOL_COOLDOWN_MS = 30 * 60 * 1000; // one message per pool per window, across every source
 const DOWN_GAP_MS = 25 * 60 * 1000; // ticks are 10 min apart; a larger gap = outage
+const KNOWN_FORGET_MS = 24 * 3600 * 1000; // a position unseen this long is forgotten (and would be "new" if it came back)
+const SEED_GRACE_MS = 30 * 60 * 1000; // after a wallet's first sight, positions still surfacing (staked ones come from a resumable log scan) are not news
 const COLLECT_HOUR = 9; // local time of the scheduled run (windows-task.ps1)
 const WARN_HOUR = 8; // remind about a locked collector from this hour
 
@@ -165,6 +167,93 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
   }
 
   /**
+   * Every open position row of one wallet: the Uniswap rows plus the ones on other DEXes
+   * (`external`: Slipstream forks, staked included). The external rows carry the same
+   * fields (tokenId "up-<id>", inRange, rawPos, valueUsd), so one set of rules covers both;
+   * they used to be skipped, which left most staked positions without a range alert.
+   */
+  const openRows = (w) => [...(Array.isArray(w.positions) ? w.positions : []), ...(Array.isArray(w.external) ? w.external : [])];
+  /** "v3 0.05%", "v4 3%", "up tick 200, staked". */
+  const kindOf = (p) => `${typeof p.version === "number" ? "v" + p.version : p.protocol || p.version || "v3"}${p.feeTierLabel ? " " + p.feeTierLabel : ""}${p.staked ? ", staked" : ""}`;
+  /** What the position has waiting: fees, or for a staked one its gauge rewards. */
+  const waiting = (p) => (p.staked && p.rewards ? `rewards ${usd(p.rewards.usd)}` : `uncollected ${usd(p.feesUsd)}`);
+
+  /**
+   * The position rules, callable on their own (the mint watcher runs them right after a
+   * rescan, without waiting for the 10-minute tick): a position seen for the first time,
+   * a position leaving its range, a position back in range. The main wallet's state keys
+   * are the bare tokenId; a watched wallet's are prefixed by its address so two wallets'
+   * ids never collide. Returns the messages sent.
+   */
+  // One pass at a time: the 10-minute tick and the mint watcher both call this, and two
+  // interleaved passes would each find the same position unknown and announce it twice.
+  let positionsQueue = Promise.resolve();
+  function checkPositions(args) {
+    const run = positionsQueue.then(() => checkPositionsNow(args));
+    positionsQueue = run.catch(() => {});
+    return run;
+  }
+  async function checkPositionsNow({ payload, watched } = {}) {
+    const sent = [];
+    const t = now();
+    for (const k of ["known", "knownWallets"]) if (!state[k] || typeof state[k] !== "object" || Array.isArray(state[k])) state[k] = {};
+    const walletSets = [];
+    if (payload && Array.isArray(payload.positions)) walletSets.push({ prefix: "", label: payload.ownerLabel || null, positions: openRows(payload) });
+    for (const w of Array.isArray(watched) ? watched : []) {
+      if (!w || !w.ok || !Array.isArray(w.positions) || !w.address) continue;
+      walletSets.push({ prefix: `${w.address.toLowerCase()}:`, label: w.label || short(w.address), positions: openRows(w) });
+    }
+    if (!walletSets.length) return sent;
+    const seen = new Set();
+    for (const ws of walletSets) {
+      // A wallet seen for the first time (first run of this rule, or just added to settings)
+      // is taken as it stands: its existing positions are not news. The value is the time of
+      // that first sight; discovery of what it already holds may take a few passes to finish.
+      const wk = ws.prefix || "main";
+      if (typeof state.knownWallets[wk] !== "number") state.knownWallets[wk] = t;
+      const seed = t - state.knownWallets[wk] < SEED_GRACE_MS;
+      for (const p of ws.positions) {
+        const id = `${ws.prefix}${p.tokenId}`;
+        seen.add(id);
+        const name = `${ws.label ? ws.label + " · " : ""}${p.pair || "?"} #${p.nftId || p.tokenId}`;
+        if (seed || state.known[id]) state.known[id] = t;
+        else {
+          const text = `🆕 New position: ${name} (${kindOf(p)}) — ${p.inRange ? "in range" : "out of range"}, value ${usd(p.valueUsd)}.`;
+          // Unsent (Telegram down) stays unknown, so the next pass announces it.
+          if (await sendGroup(text)) { state.known[id] = t; sent.push(text); }
+        }
+        const viaPool = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", deliver: sendGroup });
+        const viaPoolUrgent = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", urgent: true, deliver: sendGroup });
+        if (!p.inRange) {
+          if (!state.outSince[id]) { state.outSince[id] = t; save(); }
+          // Held by the pool cool-down? The key carries the episode start, so the next tick tries again.
+          const dir = p.rawPos > 1 ? "above" : "below";
+          const text = `🔴 ${name} is out of range (price ${dir} the range) — not earning. Value ${usd(p.valueUsd)}, ${waiting(p)}.`;
+          if (await once(`out:${id}:${state.outSince[id]}`, text, 0, viaPool)) sent.push(text);
+        } else if (state.outSince[id]) {
+          const since = state.outSince[id];
+          const hrs = ((t - since) / 3600000).toFixed(1);
+          if (await once(`in:${id}:${since}`, `🟢 ${name} is back in range after ${hrs} h.`, 0, viaPoolUrgent)) { sent.push(`🟢 ${name} is back in range after ${hrs} h.`); delete state.outSince[id]; save(); }
+        }
+      }
+    }
+    // Forget positions that closed while out. A watched wallet that failed to
+    // load this tick keeps its entries so a transient error does not reset them.
+    const loadedPrefixes = new Set(walletSets.map((ws) => ws.prefix));
+    const prefixOf = (id) => (id.includes(":") ? id.slice(0, id.indexOf(":") + 1) : "");
+    for (const id of Object.keys(state.outSince)) {
+      if (loadedPrefixes.has(prefixOf(id)) && !seen.has(id)) delete state.outSince[id];
+    }
+    // A known position is forgotten only after a day unseen: one failed read of another
+    // DEX empties that list for a tick, and its positions must not come back as "new".
+    for (const id of Object.keys(state.known)) {
+      if (!seen.has(id) && t - state.known[id] > KNOWN_FORGET_MS) delete state.known[id];
+    }
+    save();
+    return sent;
+  }
+
+  /**
    * Evaluate every condition. `payload` is the dashboard's position payload,
    * `ops` is opsInfo() (last run + gas), `unlock` is unlockState().
    * `keepalive` overrides the pgrep check (tests). Returns the messages sent.
@@ -190,44 +279,7 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
     if (!alive) await say("keepalive", "⚠️ The Windows keepalive session is not running. WSL will stop (and the dashboard with it) when the last terminal closes. Re-register 'LP Dashboard Keepalive' from PowerShell.");
     else if (state.sent.keepalive) { delete state.sent.keepalive; save(); } // persisted, or a restart would re-suppress the next alert
 
-    // Positions leaving / re-entering range: the main wallet (state keys are
-    // the bare tokenId, as before) and every watched wallet (keys prefixed by
-    // the wallet address so two wallets' ids never collide).
-    const walletSets = [];
-    if (payload && Array.isArray(payload.positions)) walletSets.push({ prefix: "", label: payload.ownerLabel || null, positions: payload.positions });
-    for (const w of Array.isArray(watched) ? watched : []) {
-      if (!w || !w.ok || !Array.isArray(w.positions) || !w.address) continue;
-      walletSets.push({ prefix: `${w.address.toLowerCase()}:`, label: w.label || short(w.address), positions: w.positions });
-    }
-    if (walletSets.length) {
-      const seen = new Set();
-      for (const ws of walletSets) {
-        for (const p of ws.positions) {
-          const id = `${ws.prefix}${p.tokenId}`;
-          seen.add(id);
-          const name = `${ws.label ? ws.label + " · " : ""}${p.pair || "?"} #${p.nftId || p.tokenId}`;
-          const viaPool = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", deliver: sendGroup });
-          const viaPoolUrgent = (text) => sendPool(poolKeyOf(p, ws.prefix), text, { source: "range", urgent: true, deliver: sendGroup });
-          if (!p.inRange) {
-            if (!state.outSince[id]) { state.outSince[id] = t; save(); }
-            // Held by the pool cool-down? The key carries the episode start, so the next tick tries again.
-            const dir = p.rawPos > 1 ? "above" : "below";
-            await say(`out:${id}:${state.outSince[id]}`, `🔴 ${name} is out of range (price ${dir} the range) — not earning. Value ${usd(p.valueUsd)}, uncollected ${usd(p.feesUsd)}.`, 0, viaPool);
-          } else if (state.outSince[id]) {
-            const since = state.outSince[id];
-            const hrs = ((t - since) / 3600000).toFixed(1);
-            if (await once(`in:${id}:${since}`, `🟢 ${name} is back in range after ${hrs} h.`, 0, viaPoolUrgent)) { sent.push(`🟢 ${name} is back in range after ${hrs} h.`); delete state.outSince[id]; save(); }
-          }
-        }
-      }
-      // Forget positions that closed while out. A watched wallet that failed to
-      // load this tick keeps its entries so a transient error does not reset them.
-      const loadedPrefixes = new Set(walletSets.map((ws) => ws.prefix));
-      for (const id of Object.keys(state.outSince)) {
-        const prefix = id.includes(":") ? id.slice(0, id.indexOf(":") + 1) : "";
-        if (loadedPrefixes.has(prefix) && !seen.has(id)) delete state.outSince[id];
-      }
-    }
+    sent.push(...(await checkPositions({ payload, watched })));
 
     // Scheduled collect: failed, skipped as locked, or missing.
     const run = ops && ops.lastRun;
@@ -294,7 +346,7 @@ function create({ token, chatId, treasuryChatId = TREASURY_CHAT, transport, stat
     return sent;
   }
 
-  return { enabled, send, sendGroup, sendTreasury, sendPool, poolKeyOf, check, poolWindow, get state() { return state; } };
+  return { enabled, send, sendGroup, sendTreasury, sendPool, poolKeyOf, check, checkPositions, poolWindow, get state() { return state; } };
 }
 
 /**

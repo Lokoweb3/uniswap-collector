@@ -106,12 +106,27 @@ const LOOPS = PORT === MAIN_PORT && !READONLY && !process.argv.includes("--no-lo
 const SERVICES = LOOPS && !process.argv.includes("--no-services");
 const STARTED_AT = Date.now();
 const timers = { guardian: { lastAt: 0 }, autoCollect: { lastAt: 0 }, backup: { lastAt: 0, lastResult: null }, launch: { lastAt: 0 } };
-let guardian = null, autoCollect = null, telegramAgent = null, launchScanner = null;
+let guardian = null, autoCollect = null, telegramAgent = null, launchScanner = null, mintWatch = null;
 
 const CACHE_MS = 60_000;
 let cache = { at: 0, payload: null };
 let claimTargetCached = null;
 let buildInFlight = null;
+/** One position build at a time, shared by every caller; its result becomes the cache. */
+function rebuild() {
+  if (!buildInFlight) {
+    buildInFlight = build()
+      .then((payload) => {
+        cache = { at: Date.now(), payload };
+        return payload;
+      })
+      .finally(() => {
+        buildInFlight = null;
+      });
+    buildInFlight.catch(() => {}); // each caller that awaits it reports the failure itself
+  }
+  return buildInFlight;
+}
 
 const endpoint = require("./endpoint");
 endpoint.installConsoleRedaction();         // a provider key in a URL never reaches a log line
@@ -2399,11 +2414,7 @@ async function handleRequest(req, res) {
       let payload = cache.payload;
       const wanted = typeof protocol === "string" && typeof id === "string" && /^\d{1,78}$/.test(id);
       if (wanted && !payload) {
-        if (!buildInFlight) {
-          buildInFlight = build().then((pl) => { cache = { at: Date.now(), payload: pl }; return pl; }).finally(() => { buildInFlight = null; });
-          buildInFlight.catch(() => {});
-        }
-        payload = await buildInFlight;
+        payload = await rebuild();
       }
       const positions = [...((payload && payload.external) || [])];
       for (const w of (watch.latest && watch.latest.wallets) || []) for (const p of w.positions || []) if (p && p.protocol) positions.push(p);
@@ -3390,17 +3401,7 @@ async function handleRequest(req, res) {
     }
 
     // Stale (or fresh=1): kick off one rebuild, shared by all callers.
-    if (!buildInFlight) {
-      buildInFlight = build()
-        .then((payload) => {
-          cache = { at: Date.now(), payload };
-          return payload;
-        })
-        .finally(() => {
-          buildInFlight = null;
-        });
-      buildInFlight.catch(() => {}); // logged via the response path that awaits it
-    }
+    const building = rebuild();
 
     // Stale-while-revalidate: anything cached goes out immediately rather than
     // holding the page hostage for a full chain read. Only the explicit
@@ -3410,7 +3411,7 @@ async function handleRequest(req, res) {
       return res.end(JSON.stringify({ ...freshClaims(cache.payload), cached: true, refreshing: true, loops: loopHealth(), pricing: PRICING }));
     }
     try {
-      const payload = await buildInFlight;
+      const payload = await building;
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ ...freshClaims(payload), pricing: PRICING }));
     } catch (err) {
@@ -3490,6 +3491,7 @@ function loopHealth() {
   loops.backup = { ageMin: ageOf(timers.backup.lastAt), staleAfterMin: 26 * 60, label: "nightly backup", lastResult: timers.backup.lastResult || null };
   // The position build itself: everything above reads its cache, so a build that keeps failing must show here.
   loops.build = { ageMin: ageOf(cache.at), staleAfterMin: 30, label: "position build", lastError: lastBuildError };
+  if (mintWatch) loops.mintWatch = { ageMin: ageOf(mintWatch.status.lastAt), staleAfterMin: 10, label: "mint watcher", lastChangeAt: mintWatch.status.lastChangeAt || null, lastChanged: mintWatch.status.lastChanged };
   if (cfg.launchScanner && cfg.launchScanner.enabled !== false) loops.launch = { ageMin: ageOf(timers.launch.lastAt), staleAfterMin: 20, label: "launch scanner" };
   for (const l of Object.values(loops)) l.stale = l.ageMin > l.staleAfterMin;
   return loops;
@@ -3652,17 +3654,7 @@ let auditRunning = false;
 let lastBuildError = null; // one log line per distinct failure, not one per tick
 async function backgroundTick() {
   try {
-    if (!buildInFlight) {
-      buildInFlight = build()
-        .then((payload) => {
-          cache = { at: Date.now(), payload };
-          return payload;
-        })
-        .finally(() => {
-          buildInFlight = null;
-        });
-    }
-    await buildInFlight;
+    await rebuild();
     if (lastBuildError) { console.log("build: recovered"); lastBuildError = null; }
   } catch (err) {
     // A failing build used to be silent unless a browser happened to be waiting on it;
@@ -3865,6 +3857,23 @@ if (LOOPS) {
   }
   setTimeout(guardianTick, 90 * 1000); // after the first build
   setInterval(guardianTick, 60 * 1000);
+
+  // === mint watcher === (mint-watch.js) every 60 s: a wallet that sent a transaction has its
+  // positions rescanned at once instead of at the next 10-minute tick, and the position
+  // alerts (new position, out of range, back in range) run straight after the rescan.
+  mintWatch = require("./mint-watch").create({
+    provider,
+    log: stamp("mint-watch"),
+    wallets: () => [{ address: cfg.ownerAddress, label: watch.ownerLabel() || "Main", main: true }, ...watch.readWallets().map((w) => ({ address: w.address, label: w.label || w.address }))],
+    onChange: async (job) => {
+      // Each side on its own: a failed main build must not skip the other wallets' rescan.
+      if (job.main) await rebuild().catch((err) => console.error("mint-watch: build:", err.shortMessage || err.message));
+      if (job.watched) await watch.refresh().catch((err) => console.error("mint-watch: watch:", err.shortMessage || err.message));
+      const sent = await alerts.checkPositions({ payload: cache.payload, watched: watch.latest && watch.latest.wallets });
+      for (const m of sent) console.log("alert sent:", m.split("\n")[0].slice(0, 80));
+    },
+  });
+  setTimeout(() => { mintWatch.tick(); setInterval(() => mintWatch.tick(), 60 * 1000); }, 2 * 60 * 1000); // after the first build and watch refresh
 
   autoCollect = require("./memecoin-collect").create({ dir: DATA_DIR, alerts, log: stamp("auto-collect"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets,
     treasury: () => treasuryView().catch(() => null), armUrl: `http://127.0.0.1:${PORT}/arm` });

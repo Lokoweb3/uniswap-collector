@@ -6,7 +6,7 @@
 <title>Liquidity positions</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Bebas+Neue&family=Yellowtail&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
@@ -102,6 +102,13 @@
     <div class="n sm" id="idle">—</div>
     <div class="l scope" id="idlelabel">Positions sitting outside their range</div>
   </div>
+</section>
+
+<section class="earnings glance" id="glancesec" aria-labelledby="glancetitle" hidden>
+  <div class="ehead"><h2 id="glancetitle">All positions at a glance</h2>
+    <span class="enote" id="glancenote" role="status"></span>
+    <button class="reload" id="glancerescan" title="Read every wallet's positions from the chain now">Rescan now</button></div>
+  <div class="etablewrap"><table class="etable" id="glancetable"><thead><tr><th>Status</th><th>Wallet</th><th>Pair</th><th>Pool</th><th>Room to edge</th><th>Value</th><th>Waiting</th></tr></thead><tbody></tbody></table></div>
 </section>
 
 <section class="earnings attention" id="decisionsec" aria-labelledby="decisiontitle">

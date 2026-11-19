@@ -63,3 +63,15 @@ rim and colour slowly turn through aqua, violet, rose and gold. Sora for heading
 figures. Status colours keep their meaning. Phones keep the sky but drop the motion and the
 blur; reduced motion stops every animation. The chain picker sits at the bottom-left on
 phones. Deleting that final block returns Midnight Neon.
+- **2026-11-19-event-horizon** — the look in place until 2026-11-19: black-hole sky with a
+  drifting starfield, smoked glass cards with an iridescent rim, aqua `#7DF9FF` accent, Sora
+  titles. Includes the "All positions at a glance" table rules.
+- **2026-11-19-vice-coast** — the current look: an 80s coastal crime-caper poster. Dusk sky
+  with a low sun and a neon grid, hot pink `#FF5FB0` for what you can act on, teal `#3FE0D8`
+  second series, tall condensed capitals (Bebas Neue) for titles and big figures, a neon script
+  (Yellowtail) for the site name, both from the Google Fonts link in the two HTML pages; for titles and big
+  figures; a banded sun on the horizon behind a skyline, a moving grid floor, faint
+  scanlines, the portfolio total as a green outlined money counter, section titles as slanted
+  tags, and "wanted" stars on positions near the edge or out of range. It is a layer
+  appended to `dashboard.css` (`html:root`, so the Wallet page follows without its own
+  `<style>` block changing; both folders carry the same `wallet-style.html`).

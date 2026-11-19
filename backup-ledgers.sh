@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Nightly backup of the JSON ledgers: a dated tar.gz kept locally under backups/
-# (last 14 kept) and uploaded to the VPS at /home/openclaw/ledger-backups/.
+# (last 14 kept, plus any not yet uploaded) and uploaded to the VPS at
+# /home/openclaw/ledger-backups/; a run that gets through also uploads missed nights.
 #
 # Ledgers are the only copy of the collector's history (fee snapshots, daily
 # accrual, collects, liquidity ledger, backfill, portfolio series, range log,
@@ -55,26 +56,58 @@ for d in "${DIRS[@]}"; do
   COUNT=$((COUNT + found))
   log "$d: $found file(s)"
 done
-FILES=("${ARGS[@]}")
+FILES=("${ARGS[@]}")   # unused by the script; test/hygiene-paths.test.js cuts the loop above out at this line
 [ "$COUNT" -gt 0 ] || { log "nothing to back up"; exit 1; }
 
 tar -czf "$OUT" "${ARGS[@]}"
+# A truncated archive is worse than none: read it back before calling it a backup.
+tar -tzf "$OUT" >/dev/null || { log "ARCHIVE UNREADABLE: $OUT"; exit 1; }
 SIZE=$(du -h "$OUT" | cut -f1)
 log "archived $COUNT file(s) from ${DATA_DIRS} to $OUT ($SIZE)"
 
-# Keep the newest 14 local archives.
-ls -1t backups/ledgers-*.tar.gz 2>/dev/null | tail -n +15 | xargs -r rm -f
+# backups/.uploaded lists the archives the VPS already has. Local pruning keeps the newest 14
+# and, beyond those, any archive not uploaded yet (up to 60), so an outage longer than two
+# weeks no longer deletes nights that never left this machine.
+SENT="backups/.uploaded"
+touch "$SENT"
+prune_local() {
+  local n=0 f
+  for f in $(ls -1 backups/ledgers-*.tar.gz 2>/dev/null | sort -r); do
+    n=$((n + 1))
+    [ "$n" -le 14 ] && continue
+    if [ "$n" -gt 60 ] || grep -qxF "$(basename "$f")" "$SENT"; then rm -f "$f"; fi
+  done
+}
 
-[ "${1:-}" = "--local" ] && exit 0
+if [ "${1:-}" = "--local" ]; then prune_local; exit 0; fi
 
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new)
 [ -n "$KEY" ] && SSH_OPTS+=(-i "$KEY" -o IdentitiesOnly=yes)
-if ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p '$DIR'" 2>>"$LOG" \
-   && scp -q "${SSH_OPTS[@]}" "$OUT" "$HOST:$DIR/" 2>>"$LOG"; then
-  # Keep the newest 30 on the VPS.
-  ssh "${SSH_OPTS[@]}" "$HOST" "ls -1t '$DIR'/ledgers-*.tar.gz 2>/dev/null | tail -n +31 | xargs -r rm -f" 2>>"$LOG" || true
-  log "uploaded to $HOST:$DIR/"
-else
-  log "UPLOAD FAILED to $HOST (local archive kept); check ssh key authorization"
+ERR=$(mktemp); trap 'rm -f "$ERR"' EXIT
+
+# Catch-up: every local archive the VPS does not have goes up, oldest first, so the first run
+# that gets through also delivers the nights missed while the VPS was unreachable.
+PENDING=()
+DONE=0
+for f in $(ls -1 backups/ledgers-*.tar.gz | sort); do
+  grep -qxF "$(basename "$f")" "$SENT" || PENDING+=("$f")
+done
+fail() {  # the real ssh/scp error goes into the log line (and so into the alert)
+  cat "$ERR" >>"$LOG"
+  local why; why=$(tail -n1 "$ERR" | tr -d '\r')
+  prune_local
+  log "UPLOAD FAILED to $HOST (local archive kept; $(( ${#PENDING[@]} - DONE )) waiting): ${why:-no error text}"
   exit 2
-fi
+}
+ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p '$DIR'" 2>"$ERR" || fail
+for f in "${PENDING[@]}"; do
+  scp -q "${SSH_OPTS[@]}" "$f" "$HOST:$DIR/" 2>"$ERR" || fail
+  basename "$f" >>"$SENT"
+  DONE=$((DONE + 1))
+done
+# Keep the newest 30 on the VPS, by name (the name carries the date; a caught-up archive has a fresh mtime).
+ssh "${SSH_OPTS[@]}" "$HOST" "ls -1 '$DIR'/ledgers-*.tar.gz 2>/dev/null | sort -r | tail -n +31 | xargs -r rm -f" 2>>"$LOG" || true
+prune_local
+# Forget names that no longer exist locally.
+for n in $(cat "$SENT"); do [ -f "backups/$n" ] && echo "$n"; done >"$SENT.tmp" && mv "$SENT.tmp" "$SENT"
+log "uploaded $DONE archive(s) to $HOST:$DIR/"

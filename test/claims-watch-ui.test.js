@@ -43,6 +43,7 @@ function page() {
     let EXPLORER = null;
     let lastWatchForPf = null, lastPortfolio = null;
     const fetchedAt = new WeakMap();
+    const renderGlance = () => {}; // the at-a-glance table, drawn from the same answer; not under test here
     ${claimHelpers()}
     ${lift("apiOutcome")}${lift("noteOutcome")}${lift("staleNote")}${lift("loadWatch")}${lift("watchFailed")}
     ${lift("claimKindLabel")}${lift("claimPriceLabel")}${lift("claimPanelHtml")}

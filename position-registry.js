@@ -93,6 +93,9 @@ function create({ provider, cfg, posm, v4, getToken, wallets, discoveryFor, reme
    * when they are refused.
    */
   const seq = new ethers.Contract(posmAddr, ["function nextTokenId() view returns (uint256)"], provider);
+  // An RPC without archive state refuses these reads on every refresh; say so once per id,
+  // not once per id per refresh (hundreds of identical lines a day in server.log).
+  const mintLookupLogged = new Set();
   async function mintBlockOf(id) {
     try {
       const head = await provider.getBlockNumber();
@@ -106,7 +109,10 @@ function create({ provider, cfg, posm, v4, getToken, wallets, discoveryFor, reme
       }
       return hi;
     } catch (err) {
-      log.error(`position registry: mint block of #${id} not found: ${err.shortMessage || err.message}`);
+      if (!mintLookupLogged.has(String(id))) {
+        mintLookupLogged.add(String(id));
+        log.error(`position registry: mint block of #${id} not found: ${err.shortMessage || err.message} (not repeated until restart)`);
+      }
       return null;
     }
   }

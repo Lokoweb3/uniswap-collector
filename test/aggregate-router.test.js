@@ -192,8 +192,9 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     // server.js, portfolio.js, wallet.html and dashboard.js left this list when the Elysium testnet was added
     // (SPEC-elysium-testnet.md changes them on purpose: the testnet flag, the raw-wei native row, the wallet
     // add/switch flow, the "decimals unverified" rendering). They are pinned separately below.
-    const untouched = ["watch", "slipstream", "v2lp", "staking", "dashboard", "dashboard", "lp-gate"]
-      .map((n, i) => `${n}${[".js", ".js", ".js", ".js", ".html", ".css", ".mjs"][i]}`);
+    // dashboard.html and dashboard.css left it on 2026-11-19 (the "All positions at a glance" table) and are pinned below too.
+    const untouched = ["watch", "slipstream", "v2lp", "staking", "lp-gate"]
+      .map((n, i) => `${n}${[".js", ".js", ".js", ".js", ".mjs"][i]}`);
     try {
       diff = execFileSync("git", ["diff", "e2b5ac0", "--stat", "--", ...untouched], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     } catch { diff = ""; /* no git here: nothing to compare */ }
@@ -204,7 +205,7 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     // so any edit after the reviewed commit, committed or not, trips it. To change one of these files on
     // purpose: update PINNED with `git hash-object <file>` in the same commit. Skipped when the
     // baseline commit is absent (no git, shallow clone).
-    const PINNED = { "server.js": "0140d6be738691ad5b124510c1333818475e9916", "portfolio.js": "a887d6636928f1340eaf4d9656ae4c458a03583e", "wallet.html": "33f3ea0f0f8e6d83af5ff56af47368f53dbd60ce", "dashboard.js": "1d7105a7dfeaf43239207c885197fe7a0845992e" };
+    const PINNED = { "server.js": "a89e34fce26818ac4d3977aa3092386968f6c997", "portfolio.js": "a887d6636928f1340eaf4d9656ae4c458a03583e", "wallet.html": "ed4ebe0d4310357c00a216d8e3a7ff2014e64d20", "dashboard.js": "fd78e4aefab0bc7b06097be5c7a7d740965739eb", "dashboard.html": "6a3a80d166ad797c74926714c03de921206d1d80", "dashboard.css": "92ceb086c5b6b77a8a374842dad9aa434aab65db" };
     let have = true;
     try { execFileSync("git", ["cat-file", "-e", "4f3fd88^{commit}"], { cwd: ROOT, stdio: "ignore" }); } catch { have = false; }
     if (have) {

@@ -64,7 +64,7 @@ const chainData = () => ({
   // ---- total: summed gain / summed basis of tracked rows; coverage stated
   const sel = { chains: new Set(["a"]), wallet: "", sort: "value" };
   const html = V.renderPage(pl, sel);
-  assert.ok(html.includes("<th data-sort=\"roi\" class=\"sortable\">ROI</th>"));
+  assert.ok(html.includes("<th data-sort=\"roi\" class=\"sortable\">Profit</th>"));
   const foot = V.totalsRowHtml(pl, pl.totals, sel);
   assert.ok(foot.includes("+2.0%") && foot.includes("+$50.00"), "50 / 2500 = +2.0%: " + foot);
   assert.ok(foot.includes("2 of 4 tracked"));

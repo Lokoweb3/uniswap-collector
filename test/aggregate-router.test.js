@@ -80,7 +80,7 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     const r = await call(rport, "/portfolio");
     assert.strictEqual(r.status, 200);
     assert.ok(/^text\/html; charset=utf-8$/.test(r.headers["content-type"]));
-    assert.strictEqual(r.headers["content-security-policy"], "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    assert.strictEqual(r.headers["content-security-policy"], "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     assert.ok(!/url\(|@import|@font-face|data:/.test(fs.readFileSync(path.join(ROOT, "aggregate.css"), "utf8") + fs.readFileSync(path.join(ROOT, "dashboard.css"), "utf8")), "the CSP allows no fonts or data: images because the css uses none");
     assert.strictEqual(r.headers["x-frame-options"], "DENY"); assert.strictEqual(r.headers["cache-control"], "no-cache");
     assert.strictEqual(r.headers["x-content-type-options"], "nosniff"); assert.strictEqual(r.headers["referrer-policy"], "no-referrer");
@@ -205,7 +205,7 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
     // so any edit after the reviewed commit, committed or not, trips it. To change one of these files on
     // purpose: update PINNED with `git hash-object <file>` in the same commit. Skipped when the
     // baseline commit is absent (no git, shallow clone).
-    const PINNED = { "server.js": "a89e34fce26818ac4d3977aa3092386968f6c997", "portfolio.js": "a887d6636928f1340eaf4d9656ae4c458a03583e", "wallet.html": "ed4ebe0d4310357c00a216d8e3a7ff2014e64d20", "dashboard.js": "fd78e4aefab0bc7b06097be5c7a7d740965739eb", "dashboard.html": "6a3a80d166ad797c74926714c03de921206d1d80", "dashboard.css": "92ceb086c5b6b77a8a374842dad9aa434aab65db" };
+    const PINNED = { "server.js": "fab15a1c009036e9571d55e75b3c33e5fc67c627", "portfolio.js": "a887d6636928f1340eaf4d9656ae4c458a03583e", "wallet.html": "ed4ebe0d4310357c00a216d8e3a7ff2014e64d20", "dashboard.js": "15d741a9446b56ef5df1af8bbe4aec0e92196493", "dashboard.html": "bd4ddf26475f6c6e0776aeb844efce2f470e0771", "dashboard.css": "a478bc88004c7b08102e639818fb5c673e05dfc3" };
     let have = true;
     try { execFileSync("git", ["cat-file", "-e", "4f3fd88^{commit}"], { cwd: ROOT, stdio: "ignore" }); } catch { have = false; }
     if (have) {

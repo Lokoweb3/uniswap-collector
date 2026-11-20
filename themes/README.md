@@ -66,7 +66,7 @@ phones. Deleting that final block returns Midnight Neon.
 - **2026-11-19-event-horizon** — the look in place until 2026-11-19: black-hole sky with a
   drifting starfield, smoked glass cards with an iridescent rim, aqua `#7DF9FF` accent, Sora
   titles. Includes the "All positions at a glance" table rules.
-- **2026-11-19-vice-coast** — the current look: an 80s coastal crime-caper poster. Dusk sky
+- **2026-11-19-vice-coast** — in place for part of 2026-11-19: an 80s coastal crime-caper poster. Dusk sky
   with a low sun and a neon grid, hot pink `#FF5FB0` for what you can act on, teal `#3FE0D8`
   second series, tall condensed capitals (Bebas Neue) for titles and big figures, a neon script
   (Yellowtail) for the site name, both from the Google Fonts link in the two HTML pages; for titles and big
@@ -75,3 +75,11 @@ phones. Deleting that final block returns Midnight Neon.
   tags, and "wanted" stars on positions near the edge or out of range. It is a layer
   appended to `dashboard.css` (`html:root`, so the Wallet page follows without its own
   `<style>` block changing; both folders carry the same `wallet-style.html`).
+- **2026-11-19-ledger** — in place briefly on 2026-11-19: a plain portfolio tracker. Flat slate surfaces
+  (`#0B0E14` ground, `#121722` cards), no scenery or motion, one blue accent `#4C8DFF`, green
+  `#2EBD85` / red `#F6465D` only for gains, losses and status, figures in the mono face. A layer
+  appended to the event-horizon stylesheet, in place of the Vice Coast layer.
+- **2026-11-19-market-maker** — the current look: a trading terminal. Black ground with a faint
+  chart grid, hairline panels with square corners, the mono face everywhere, amber `#FFA028` for
+  what you can act on and for section-title bars, bid green `#00D395` / ask red `#FF4D4F` for
+  status and P&L, range rails drawn bid-to-ask. A layer appended to the event-horizon stylesheet.

@@ -3938,6 +3938,81 @@ function rescanWatch(){
 }
 { const b = $('#glancerescan'); if (b) b.addEventListener('click', () => $('#reload').click()); }
 
+/* ---- profit tracker ----
+ * /api/earnlog (earn-log.js): what each open position earns per calendar day, what it was
+ * worth when tracking began, and when it was last claimed. Net = value change + earned. */
+const signUsd = n => n == null ? '—' : (n >= 0 ? '+' : '−') + usd(Math.abs(n));
+const signCls = n => n == null || Math.abs(n) < 0.005 ? '' : n > 0 ? 'up' : 'down';
+const agoText = t => {
+  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (m < 2) return 'just now';
+  if (m < 60) return m + ' min ago';
+  if (m < 48 * 60) return Math.round(m / 60) + ' h ago';
+  return Math.round(m / 1440) + ' days ago';
+};
+const shortDay = k => { const [y, mo, d] = String(k).split('-').map(Number); return new Date(y, mo - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+const dateOf = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+function earnCard(p){
+  const cls = p.open ? signCls(p.netUsd) : 'closed';
+  const pill = !p.open ? '<span class="tkpill closed">Closed</span>'
+    : p.inRange ? '<span class="tkpill in">● In range</span>' : '<span class="tkpill out">● Out of range</span>';
+  const max = Math.max(...p.spark, 0);
+  const spark = p.spark.map(v => `<i class="${v > 0 ? '' : 'z'}" style="height:${max > 0 ? Math.max(3, Math.round(v / max * 100)) : 3}%"></i>`).join('');
+  const what = p.staked ? esc(String(p.rewardSymbol || 'rewards')) : 'fees';
+  const claim = p.lastClaimT
+    ? `<span>Last claim <b>${agoText(p.lastClaimT)}</b>${p.lastClaimUsd != null ? ` · ${usd(p.lastClaimUsd)}` : ''}</span><span>${new Date(p.lastClaimT).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>`
+    : `<span>No claim seen since ${dateOf(p.startT)}</span>`;
+  return `<article class="tkcard ${cls}">
+    <div class="tkhead"><span class="tkpair">${esc(String(p.pair))} <small>#${esc(String(p.nftId))}</small></span>${pill}</div>
+    <div class="tksub">${esc(String(p.wallet))} · ${esc(String(p.pool))}${p.staked ? ' · staked' : ''}</div>
+    <div class="tknet"><span class="k">${p.open ? 'Net' : 'Earned'}</span><span class="v">${p.open ? signUsd(p.netUsd) : usd(p.earnedUsd)}</span>${p.open && p.netPct != null ? `<span class="p">${p.netPct >= 0 ? '+' : '−'}${Math.abs(p.netPct).toFixed(2)}%</span>` : ''}</div>
+    <div class="tkflow" title="Value when tracking began on ${dateOf(p.startT)}${p.capitalMoves ? ', adjusted for liquidity added or removed since' : ''}, and the value now">
+      <div><span class="k">Start · ${dateOf(p.startT)}</span><span class="v">${usd(p.startUsd)}</span></div><span class="arrow">→</span>
+      <div><span class="k">${p.open ? 'Now' : 'Closed ' + dateOf(p.closedT)}</span><span class="v">${p.open ? usd(p.valueUsd) : '—'}</span></div></div>
+    <div class="tkrows">
+      <div class="tkrow"><span class="k">Earned</span><span class="v up">${usd(p.earnedUsd)}</span> <span class="s">${usd(p.perDayUsd)}/day</span></div>
+      <div class="tkrow"><span class="k">Today</span><span class="v">${usd(p.todayUsd)}</span> <span class="s">7d ${usd(p.d7Usd)}</span></div>
+      <div class="tkrow"><span class="k">Value change</span><span class="v ${signCls(p.changeUsd)}">${signUsd(p.changeUsd)}</span></div>
+      <div class="tkrow"><span class="k">Waiting to claim</span><span class="v">${p.open ? usd(p.pendingUsd) : '—'}</span> <span class="s">${what}</span></div>
+    </div>
+    <div class="tkspark" title="Earned per day, last ${p.spark.length} days">${spark}</div>
+    <div class="tkclaim">${claim}</div>
+  </article>`;
+}
+function renderEarn(d){
+  const sec = $('#earnsec');
+  if (!sec || !d || !d.ok) return;
+  sec.hidden = false;
+  const t = d.totals;
+  const stat = (k, v, s, cls) => `<div class="tkstat ${cls || ''}"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s || ''}</div></div>`;
+  $('#earnstats').innerHTML =
+    stat('Earned today', usd(t.todayUsd), t.yesterdayUsd != null ? `yesterday ${usd(t.yesterdayUsd)}` : 'first day tracked')
+    + stat('Daily average', t.avgDayUsd != null ? usd(t.avgDayUsd) : '—', `over ${t.avgDays} day${t.avgDays === 1 ? '' : 's'}`)
+    + stat('Started with', usd(t.startUsd), `${t.open} open position${t.open === 1 ? '' : 's'}`)
+    + stat('Worth now', usd(t.valueUsd), `<span class="${signCls(t.changeUsd)}">${signUsd(t.changeUsd)}</span> value change`)
+    + stat('Earned so far', usd(t.earnedUsd), `${usd(t.pendingUsd)} waiting to claim`)
+    + stat('Net result', `<span class="${signCls(t.netUsd)}">${signUsd(t.netUsd)}</span>`, t.netPct != null ? `${t.netPct >= 0 ? '+' : '−'}${Math.abs(t.netPct).toFixed(2)}% on the start value` : '', 'net ' + signCls(t.netUsd));
+  const max = Math.max(...d.days.map(x => x.usd), 0);
+  const sparse = d.days.length > 16, every = Math.ceil(d.days.length / 8);
+  $('#earnchart').innerHTML = d.days.map((x, i) => {
+    const last = i === d.days.length - 1;
+    const lab = last || (d.days.length - 1 - i) % every === 0;
+    return `<div class="tkbar${last ? ' today' : ''}${sparse ? ' sparse' : ''}${lab ? ' lab' : ''}" title="${shortDay(x.day)}: ${usd(x.usd)}">
+      ${!sparse || last ? `<b>${usd(x.usd)}</b>` : ''}<i style="height:calc((100% - 16px) * ${max > 0 ? (x.usd / max).toFixed(4) : 0})"></i><span>${last ? 'Today' : shortDay(x.day)}</span></div>`;
+  }).join('');
+  $('#earnchartnote').textContent = d.days.length ? `${d.days.length} day${d.days.length === 1 ? '' : 's'} · 7d ${usd(t.d7Usd)}` : '';
+  $('#earncards').innerHTML = d.positions.length ? d.positions.map(earnCard).join('')
+    : '<p class="enote">No positions recorded yet. The first sample lands a couple of minutes after the dashboard starts.</p>';
+  $('#earnnote').textContent = d.since
+    ? `Tracking since ${new Date(d.since).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}${d.lastSampleAt ? ' · updated ' + agoText(d.lastSampleAt) : ''}`
+    : 'Waiting for the first sample…';
+}
+async function loadEarn(){
+  try { renderEarn(await (await fetch('/api/earnlog?days=30')).json()); }
+  catch(e){ console.error('earnlog:', e); }
+}
+if (PAGE !== 'analytics') { loadEarn(); setInterval(loadEarn, 60000); }
+
 fetch('/api/collect').then(r => r.json()).then(d => {
   if (d.run && !d.run.done) watchRun();
   else if (d.run) showRun(d.run);

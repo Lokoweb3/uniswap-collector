@@ -42,7 +42,7 @@ const reasonText = r => REASONS[r] || String(r || '');
 const SORTS = {
   value: (a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1),
   fees: (a, b) => (b.feesUsd ?? -1) - (a.feesUsd ?? -1),
-  roi: (a, b) => (b.roi ? b.roi.pct : -Infinity) - (a.roi ? a.roi.pct : -Infinity),
+  roi: (a, b) => (profitOf(b) ? profitOf(b).pct : -Infinity) - (profitOf(a) ? profitOf(a).pct : -Infinity),
   chain: (a, b) => String(a.chain).localeCompare(String(b.chain)),
   wallet: (a, b) => String(a.wallet.label || a.wallet.key).localeCompare(String(b.wallet.label || b.wallet.key)),
   protocol: (a, b) => String(a.protocol).localeCompare(String(b.protocol)),
@@ -155,8 +155,17 @@ function lpRowHtml(payload, it) {
 const signedUsd = v => (v < 0 ? '-' : '+') + usd(Math.abs(v));
 const signedPct = v => (v < 0 ? '-' : '+') + Math.abs(v).toFixed(1) + '%';
 const ROI_TIP = 'Return on capital: value now + uncollected and collected fees + withdrawals, against the deposits priced when they went in';
+const TRACKED_TIP = 'Value change plus fees and rewards earned, since the dashboard began tracking this position';
+/** The profit figure to show for a position: return on capital when the chain dashboard has the deposits, else its earnings log. */
+function profitOf(it) { return it.roi || it.tracked || null; }
 function roiCellHtml(it) {
   const r = it.roi;
+  if (!r && it.tracked) {
+    const k = it.tracked;
+    const sinceText = isNum(k.since) ? new Date(k.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+    const tip = `${TRACKED_TIP}. Started at ${usd(k.basisUsd)}${isNum(k.earnedUsd) ? '; earned ' + usd(k.earnedUsd) : ''}`;
+    return `<span class="roi" title="${esc(tip)}"><b class="${k.usd < 0 ? 'roi-down' : 'roi-up'}">${esc(signedUsd(k.usd))}</b> <span class="muted">${esc(signedPct(k.pct))}${sinceText ? ' since ' + esc(sinceText) : ''}</span></span>`;
+  }
   if (!r) return '<span class="muted" title="No deposit record for this position on its chain dashboard">not tracked</span>';
   const since = isNum(r.since) ? ` since ${new Date(r.since).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : '';
   const tip = `${ROI_TIP}. Deposited ${usd(r.basisUsd)}${since}${r.approx ? '; approximate' : ''}`;
@@ -164,9 +173,9 @@ function roiCellHtml(it) {
 }
 function roiTotalHtml(payload, sel) {
   const lp = filterItems(payload, sel).filter(it => it.kind === 'lp');
-  const m = lp.filter(it => it.roi);
+  const m = lp.filter(it => profitOf(it));
   if (!m.length) return '<span class="muted">not tracked</span>';
-  const gain = m.reduce((s, it) => s + it.roi.usd, 0), basis = m.reduce((s, it) => s + it.roi.basisUsd, 0);
+  const gain = m.reduce((s, it) => s + profitOf(it).usd, 0), basis = m.reduce((s, it) => s + profitOf(it).basisUsd, 0);
   return `<span class="roi" title="${esc(ROI_TIP)}"><b class="${gain < 0 ? 'roi-down' : 'roi-up'}">${esc(signedPct(gain / basis * 100))}</b> <span class="muted">${esc(signedUsd(gain))}</span></span>`
     + `<br><span class="muted">${esc(m.length)} of ${esc(lp.length)} tracked</span>`;
 }
@@ -247,7 +256,7 @@ function ratesHtml(payload, sel) {
 }
 
 function tableHtml(title, head, rows, notCounted, rowHtml, payload, cols, extra) {
-  if (!rows.length && !notCounted.length && !(extra && extra.always)) return `<section class="agg-sec"><h2>${esc(title)}</h2><p class="muted">Nothing to show.</p></section>`;
+  if (!rows.length && !notCounted.length && !(extra && extra.always)) return `<section class="agg-sec earnings"><div class="ehead"><h2>${esc(title)}</h2></div><p class="muted">Nothing to show.</p></section>`;
   const headHtml = head.map(([label, key]) => (key ? `<th data-sort="${esc(key)}" class="sortable">${esc(label)}</th>` : `<th>${esc(label)}</th>`)).join('');
   const bodyHtml = rows.map(it => rowHtml(payload, it)).join('');
   const countedRowsHtml = notCounted.map(it => rowHtml(payload, it)).join('');
@@ -255,7 +264,7 @@ function tableHtml(title, head, rows, notCounted, rowHtml, payload, cols, extra)
   const footRowHtml = extra && extra.foot ? extra.foot : '';
   const afterHtml = extra && extra.after ? extra.after : '';
   const footHtml = footRowHtml ? `<tfoot>${footRowHtml}</tfoot>` : '';
-  return `<section class="agg-sec"><h2>${esc(title)}</h2><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}${groupHtml}</tbody>${footHtml}</table>${afterHtml}</section>`;
+  return `<section class="agg-sec earnings"><div class="ehead"><h2>${esc(title)}</h2></div><div class="etablewrap"><table class="etable"><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}${groupHtml}</tbody>${footHtml}</table></div>${afterHtml}</section>`;
 }
 
 /** The test networks, on their own: never in a total, never with a USD figure. */
@@ -303,11 +312,13 @@ function tileHtml(payload, t, items, filtered, sel) {
     ? '<span class="badge warn">list truncated: the totals shown cover only the listed items</span>'
     : '<span class="badge warn">list truncated, totals cover everything</span>');
   if (selWallet) {
-    return `<div class="tile"><div class="label">Total, counted</div><div class="grand">unavailable</div>`
+    return `<div class="tile"><div class="summary cards"><div class="stat"><div class="l">Total, counted</div><div class="grand">unavailable</div></div></div>`
       + `<div class="sub">${esc(selWallet.label || shortAddr(selWallet.address))} could not be read on any chain: no figure, not zero</div>`
       + `<div class="notes">${notesHtml.join(' ')}</div><div class="muted">${esc(items.length)} items shown</div></div>`;
   }
-  return `<div class="tile"><div class="label">Total, counted</div><div class="grand">${esc(usd(t.grandUsd))}</div>`
+  const statHtml = (label, value, cls) => `<div class="stat"><div class="l">${esc(label)}</div><div class="n sm ${esc(cls || '')}">${esc(usd(value))}</div></div>`;
+  return `<div class="tile"><div class="summary cards"><div class="stat"><div class="l">Total, counted</div><div class="grand">${esc(usd(t.grandUsd))}</div></div>`
+    + statHtml('Value in LP positions', t.lpUsd) + statHtml('Uncollected fees', t.feesUsd, 'fees') + statHtml('Pending rewards', t.rewardsUsd, 'fees') + statHtml('Tokens in wallets', t.tokensUsd) + '</div>'
     + `<div class="sub">LP ${esc(usd(t.lpUsd))} + fees ${esc(usd(t.feesUsd))} + pending rewards ${esc(usd(t.rewardsUsd))} + tokens ${esc(usd(t.tokensUsd))}</div>`
     + `<div class="sub">uncounted ${esc(usd(t.uncountedUsd))} (${esc(t.uncountedCount)} items)</div>`
     + `<div class="sub">pending rewards (included) ${esc(usd(t.rewardsUsd))}; rewards not counted: ${esc(t.rewardsUncountedCount)}</div>`
@@ -351,7 +362,7 @@ function breakdownHtml(payload, items, sel) {
       return `<tr><td>${esc(label(k))}${badgeHtml}</td><td class="num">${atLeastHtml}${esc(usd(v))}</td><td class="num">${esc(pct(v, total))}</td>${feeCellHtml(fmap, k)}</tr>`;
     }).join('');
     const emptyHtml = rowsHtml || extraRowsHtml ? '' : '<tr><td class="muted">none</td></tr>';
-    return `<section class="agg-sec half"><h2>${esc(title)}</h2><table><tbody>${rowsHtml}${extraRowsHtml}${emptyHtml}</tbody></table></section>`;
+    return `<section class="agg-sec half earnings"><div class="ehead"><h2>${esc(title)}</h2></div><div class="etablewrap"><table class="etable"><tbody>${rowsHtml}${extraRowsHtml}${emptyHtml}</tbody></table></div></section>`;
   };
   const downRowsHtml = (payload.chains || []).filter(c => c.testnet !== true && (c.status === 'down' || c.status === 'loading')).map(c => `<tr><td>${esc(c.label)}</td><td class="num muted">${esc(c.status)}, no figure</td><td></td><td class="num">no figure</td></tr>`).join('');
   const walletLabel = k => { const w = (payload.wallets || []).find(x => x.key === k); return w ? (w.label || shortAddr(w.address)) : shortAddr(k); };
@@ -361,8 +372,40 @@ function breakdownHtml(payload, items, sel) {
   return `<div class="agg-breakdown">${chainHtml}${walletHtml}${protocolHtml}</div>`;
 }
 
+/**
+ * Every wallet, whether or not it holds anything: the dashboard's "Wallet overview" for all
+ * chains. Follows the chain filter; the wallet filter only marks the chosen row.
+ */
+function walletsHtml(payload, sel) {
+  const wallets = payload.wallets || [];
+  if (!wallets.length) return '';
+  const items = (payload.items || []).filter(it => it.testnet !== true && (!sel.chains || sel.chains.has(it.chain)));
+  const rows = wallets.map(w => {
+    const mine = items.filter(it => it.wallet.key === w.key);
+    const lp = mine.filter(it => it.kind === 'lp');
+    const t = clientTotals(mine);
+    const tracked = lp.filter(it => profitOf(it));
+    return { w, t, open: lp.length, tracked: tracked.length, gain: tracked.reduce((s, it) => s + profitOf(it).usd, 0), basis: tracked.reduce((s, it) => s + profitOf(it).basisUsd, 0) };
+  }).sort((a, b) => b.t.grandUsd - a.t.grandUsd);
+  const grand = rows.reduce((s, r) => s + r.t.grandUsd, 0);
+  const profitHtml = r => (r.w.unavailable === true ? '<span class="muted">no figure</span>'
+    : !r.tracked ? '<span class="muted">' + (r.open ? 'not tracked' : '-') + '</span>'
+      : `<span class="roi"><b class="${r.gain < 0 ? 'roi-down' : 'roi-up'}">${esc(signedUsd(r.gain))}</b>${r.basis > 0 ? ` <span class="muted">${esc(signedPct(r.gain / r.basis * 100))}</span>` : ''}</span>`);
+  const rowsHtml = rows.map(r => {
+    const nameHtml = `${esc(r.w.label || shortAddr(r.w.address))} <span class="muted">${esc(shortAddr(r.w.address))}</span>`
+      + (r.w.unavailable === true ? ' <span class="badge bad">could not be read</span>' : '')
+      + (r.w.holdingsUnknown ? ' <span class="badge warn">tokens unknown</span>' : '');
+    const cellHtml = v => (r.w.unavailable === true ? '<td class="num muted">no figure</td>' : `<td class="num">${esc(usd(v))}</td>`);
+    return `<tr${sel.wallet === r.w.key ? ' class="on"' : ''}><td>${nameHtml}</td>${cellHtml(r.t.grandUsd)}<td class="num">${esc(pct(r.t.grandUsd, grand))}</td>`
+      + `<td class="num">${esc(r.open)}</td>${cellHtml(r.t.lpUsd)}${cellHtml(r.t.feesUsd + r.t.rewardsUsd)}${cellHtml(r.t.tokensUsd)}<td class="num">${profitHtml(r)}</td></tr>`;
+  }).join('');
+  return `<section class="agg-sec earnings"><div class="ehead"><h2>Wallet overview</h2><span class="enote">${esc(wallets.length)} wallets</span></div><div class="etablewrap"><table class="etable">`
+    + `<thead><tr><th>Wallet</th><th class="num">Value</th><th class="num">Share</th><th class="num">Open LPs</th><th class="num">In LP</th><th class="num">Fees + rewards waiting</th><th class="num">Tokens</th><th class="num">Profit</th></tr></thead>`
+    + `<tbody>${rowsHtml}</tbody></table></div></section>`;
+}
+
 const HEADS = {
-  lp: [['Protocol', 'protocol'], ['Pair', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['', null], ['Value', 'value'], ['Fees / pending rewards', 'fees'], ['ROI', 'roi']],
+  lp: [['Protocol', 'protocol'], ['Pair', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['', null], ['Value', 'value'], ['Fees / pending rewards', 'fees'], ['Profit', 'roi']],
   token: [['Token', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['Amount', null], ['Price', null], ['Value', 'value'], ['', null]],
   staking: [['Token', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['Balance', null], ['Value', 'value'], ['APR', null], ['7d / 30d rewards (already received, not pending)', null]],
 };
@@ -381,6 +424,7 @@ function renderPage(payload, sel) {
   const [tkOk, tkNo] = split(tokens);
   const [stOk, stNo] = split(staking);
   return bannersHtml(payload, sel) + tileHtml(payload, t, items, isFiltered(payload, sel), sel) + controlsHtml(payload, sel)
+    + walletsHtml(payload, sel)
     + tableHtml('LP positions', HEADS.lp, lpOk, lpNo, lpRowHtml, payload, 8, { foot: totalsRowHtml(payload, t, sel), after: ratesHtml(payload, sel), always: unavailableWallet(payload, sel) !== null })
     + tableHtml('Tokens', HEADS.token, tkOk, tkNo, tokenRowHtml, payload, 7)
     + tableHtml('Staking', HEADS.staking, stOk, stNo, stakingRowHtml, payload, 7)

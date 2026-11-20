@@ -44,6 +44,9 @@ fi
 start_arc() {
   local dir="${LP_ARC_DATA_DIR:-$HOME/arc-data}" port="${LP_ARC_PORT:-8797}"
   [ -f "$dir/settings.json" ] || return 0
+  # Retired chain: a file named .disabled in its data directory keeps the viewer off and
+  # the chain out of the picker and the Portfolio page. Delete the file to bring it back.
+  [ -f "$dir/.disabled" ] && { echo "arc viewer: disabled ($dir/.disabled)"; return 0; }
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then
     echo "arc viewer: already running on :${port}"
     return 0
@@ -120,6 +123,9 @@ start_router() {
   [ -f "${LP_ELYSIUM_TESTNET_DATA_DIR:-$HOME/elysium-testnet-data}/settings.json" ] && elysium_on=1
   [ "$arc_on" = 1 ] || [ "$base_on" = 1 ] || [ "$pulse_on" = 1 ] || [ "$elysium_on" = 1 ] || return 0
   [ "$base_on" = 1 ] && chains="robinhood,arc,base"
+  if [ -f "${LP_ARC_DATA_DIR:-$HOME/arc-data}/.disabled" ]; then # see start_arc
+    arc_on=0; chains="${chains/,arc/}"
+  fi
   [ "$pulse_on" = 1 ] && chains="${chains},pulsechain"
   [ "$elysium_on" = 1 ] && chains="${chains},elysium-testnet"
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${port}\$"; then

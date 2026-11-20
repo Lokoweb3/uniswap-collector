@@ -157,11 +157,12 @@ function pickerHtml(current) {
       style="display:flex;align-items:center;text-decoration:none;border-radius:7px;padding:6px 11px;margin-left:4px;
       font-weight:500;white-space:nowrap;color:#e2e8f0;
       background:transparent;border:1px dashed rgba(226,232,240,.55)">Portfolio</a>`;
+  // Bottom left: at the top right it sat on the page's own Refresh / Collect buttons.
   // Fixed, always visible, and it names the chain in the page's own words: a picker
   // you cannot see is how someone reads Arc's numbers believing they are Robinhood's.
   return `
 <div id="${PICKER_ID}" role="navigation" aria-label="Chain"
-  style="position:fixed;top:10px;right:12px;z-index:99999;display:flex;gap:8px;align-items:center;
+  style="position:fixed;bottom:12px;left:12px;z-index:99999;display:flex;gap:8px;align-items:center;
   background:rgba(15,23,42,.96);border:1px solid ${current.accent}66;border-radius:11px;padding:7px 9px;
   font:13px/1.2 system-ui,-apple-system,Segoe UI,sans-serif;color:#e2e8f0;
   box-shadow:0 6px 22px rgba(0,0,0,.45),0 0 0 3px ${current.accent}1f">
@@ -249,7 +250,7 @@ const AGG_NOSNIFF = { "X-Content-Type-Options": "nosniff" };
 // Portfolio page only (not the proxy path). dashboard.css/aggregate.css use no url(), @import, fonts or
 // data: images, and the page has no inline script; the chain tabs and chips carry inline style="--accent"
 // attributes, which is the one reason style-src keeps 'unsafe-inline'.
-const AGG_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const AGG_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /** Static files read again only when their mtime changes (the theme can be edited under a running router). */
 const fileCache = new Map();
@@ -289,13 +290,19 @@ function portfolioHtml() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Portfolio - all chains</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Bebas+Neue&family=Yellowtail&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/aggregate.css">
 </head>
 <body class="agg">
 <div class="wrap">
 <header class="topbar">
-  <h1 class="agg-title">Portfolio <span class="agg-sub">all chains</span></h1>
-  <nav class="pages" aria-label="Pages"><a href="/">Dashboard</a><a href="/analytics">Analytics</a><a href="/wallet">Wallet</a><a href="/portfolio" class="here" aria-current="page">Portfolio</a></nav>
+  <div class="topbar-left">
+    <h1 class="brand">LP Dashboard</h1>
+    <nav class="pages" aria-label="Pages"><a href="/">Dashboard</a><a href="/analytics">Analytics</a><a href="/wallet">Wallet</a><a href="/portfolio" class="here" aria-current="page">Portfolio</a></nav>
+  </div>
+  <div class="topbar-right"><span class="agg-sub">Portfolio${CHAINS.length > 1 ? " · all chains" : ""}</span></div>
 </header>
 <div class="agg-chainbar" role="navigation" aria-label="Chain"><span class="agg-chainbar-label">Open a chain</span>${tabs}<a class="chain-tab all" href="/">Dashboard</a></div>
 <main id="agg-root" aria-live="polite"><p class="agg-loading">Loading the portfolio...</p></main>

@@ -2107,6 +2107,27 @@ const strategy = require("./strategy").create({ cfg, dir: DATA_DIR, port: PORT, 
 let lastDisposalScan = 0;
 // === strategy track record (strategy-track.js): score agent proposals against what happened ===
 const strategyTrack = require("./strategy-track").create({ cfg, dir: DATA_DIR, port: PORT });
+// Earnings log (earn-log.js): per-day earnings, start value and last claim of every open
+// position in every wallet. Read by /api/earnlog on any instance; written only by the one
+// that runs the loops, so two processes never write the same file.
+const earnLog = require("./earn-log").create({ file: dataFile("earn-log.json"), log: (m) => console.warn(`earn-log: ${m}`) });
+function earnLogSample() {
+  // Each row also carries its running result (`tracker`), which the Portfolio page shows as profit.
+  const tag = (address, rows) => { for (const r of rows) r.tracker = earnLog.figures(address, r.tokenId); };
+  const p = cache.payload;
+  if (p && p.ok && cfg.ownerAddress) {
+    const rows = [...(p.positions || []), ...(p.external || [])];
+    earnLog.record({ source: "main", at: p.at, wallets: [{ address: cfg.ownerAddress, label: p.ownerLabel || "Main", rows }] });
+    tag(cfg.ownerAddress, rows);
+  }
+  const w = watch.latest;
+  if (w && w.ok) {
+    // A wallet whose read failed is left out: its positions are not gone, only unread.
+    const good = (w.wallets || []).filter((x) => x.ok && !x.stale);
+    earnLog.record({ source: "watch", at: w.at, wallets: good.map((x) => ({ address: x.address, label: x.label || x.address, rows: [...(x.positions || []), ...(x.external || [])] })) });
+    for (const x of good) tag(x.address, [...(x.positions || []), ...(x.external || [])]);
+  }
+}
 
 // One portfolio refresh at a time, fed from the latest position build.
 let portfolioInFlight = null;
@@ -3367,6 +3388,18 @@ async function handleRequest(req, res) {
     }
   }
 
+  if (url.pathname === "/api/earnlog") {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const days = Math.min(Math.max(Number(url.searchParams.get("days")) || 30, 1), 365);
+      res.writeHead(200);
+      return res.end(JSON.stringify(earnLog.view({ days })));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+  }
+
   if (url.pathname === "/api/daily") {
     res.setHeader("Content-Type", "application/json");
     try {
@@ -3874,6 +3907,12 @@ if (LOOPS) {
     },
   });
   setTimeout(() => { mintWatch.tick(); setInterval(() => mintWatch.tick(), 60 * 1000); }, 2 * 60 * 1000); // after the first build and watch refresh
+
+  // === earnings log === a sample whenever a build or a watch refresh has produced new data
+  // (record() ignores data it has already seen), checked every minute.
+  const earnLogTick = () => { try { earnLogSample(); } catch (err) { console.error("earn-log:", err.message); } };
+  setTimeout(earnLogTick, 100 * 1000);
+  setInterval(earnLogTick, 60 * 1000);
 
   autoCollect = require("./memecoin-collect").create({ dir: DATA_DIR, alerts, log: stamp("auto-collect"), positions: () => cache.payload, watched: () => watch.latest && watch.latest.wallets,
     treasury: () => treasuryView().catch(() => null), armUrl: `http://127.0.0.1:${PORT}/arm` });

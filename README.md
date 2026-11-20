@@ -1578,6 +1578,17 @@ only what it shows. The public gate serves the page at the same path.
 
 ### 2026-11-19
 
+- **Portfolio: every wallet, and profit**: `/portfolio` opens with a "Wallet overview" table of all wallets (value, share, open LPs, in LP, fees + rewards waiting, tokens, profit), including the ones holding nothing. The LP table's last column is now "Profit": return on capital where the chain dashboard has the deposits, otherwise the earnings log's net result (`tracker` on each row of `/api/positions` and `/api/watch`, passed through `aggregate.js` as `tracked`). The chain picker on the dashboards moved to the bottom left, off the Refresh / Collect buttons.
+
+- **Portfolio page looks like the Dashboard**: `/portfolio` (served by `chain-router.js`) now uses the dashboard's own top bar, stat tiles, panels and tables (`.topbar`, `.stat`, `.earnings`, `.etable`), so it follows whatever theme `dashboard.css` carries. Its CSP gained `https://fonts.googleapis.com` (styles) and `https://fonts.gstatic.com` (fonts), the same fonts the other pages load.
+- **Arc retired from the site**: a file named `.disabled` in the Arc data directory (`~/arc-data/.disabled`) makes `start-all.sh` skip the Arc viewer and leave Arc out of the router's `--chains`, so it is gone from the chain picker and the Portfolio page. Data and code are untouched; delete the file to bring it back.
+
+- **Profit tracker** (Dashboard, under the glance table): `earn-log.js` keeps one ledger (`earn-log.json`) for every wallet and DEX. Per position it records the value when tracking began, the USD earned each calendar day (growth of uncollected fees and pending gauge rewards between samples) and when the waiting amount was last claimed. The page shows stat tiles (today, daily average, started with, worth now, earned, net), a bar per day, and one card per position. Net = value change + earned. Liquidity added or removed moves the start value instead of counting as profit. `/api/earnlog?days=30`. Tracking starts when the server first runs with it; nothing earlier is backfilled.
+
+- **Theme: Market Maker** — a trading-terminal look (black ground, square hairline panels, mono
+  type, amber accent, bid green / ask red); the layer at the end of `dashboard.css`. Tried the
+  same day and saved in `themes/`: `2026-11-19-ledger` (plain portfolio tracker) and
+  `2026-11-19-vice-coast`; `./themes/apply.sh <name>` switches.
 - **Theme: Vice Coast** — sunset sky, neon grid, hot pink and teal, heavy poster capitals; a
   layer at the end of `dashboard.css`. The previous look is `themes/2026-11-19-event-horizon`
   (`./themes/apply.sh 2026-11-19-event-horizon` puts it back, `2026-11-19-vice-coast` returns).

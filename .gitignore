@@ -38,6 +38,7 @@ token-sales.jsonl
 token-meta.json
 sales-pending.json
 token-disposals.json
+earn-log.json
 ledger-audit.json
 strategy-proposals.json
 portfolio.json

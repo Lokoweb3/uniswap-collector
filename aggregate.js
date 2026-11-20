@@ -139,6 +139,10 @@ function ingestEntry(e) {
     roiBasisUsd: num(e.returnOnCapitalBasisUsd),
     roiApprox: e.pnlApprox === true,
     roiSince: num(e.pnlSince),
+    // The instance's earnings log (earn-log.js): value change plus earnings since it first saw the position.
+    tracked: isObj(e.tracker) && snum(e.tracker.netUsd) !== null && snum(e.tracker.netPct) !== null && num(e.tracker.startUsd) > 0
+      ? { usd: e.tracker.netUsd, pct: e.tracker.netPct, basisUsd: e.tracker.startUsd, earnedUsd: num(e.tracker.earnedUsd), since: num(e.tracker.since) }
+      : null,
   };
 }
 const ingestEntries = (o) => [...arr(o && o.positions), ...arr(o && o.external)].map(ingestEntry).filter(Boolean);
@@ -332,6 +336,7 @@ function compose(state, now) {
         // null when the instance has no basis for this position: never shown as 0%.
         roi: e.roiPct === null || e.roiUsd === null || !(e.roiBasisUsd > 0) ? null
           : { usd: e.roiUsd, pct: e.roiPct, basisUsd: e.roiBasisUsd, approx: e.roiApprox, since: e.roiSince },
+        tracked: e.tracked,
       });
     }
   };
@@ -535,6 +540,7 @@ function build(composed, { now = Date.now(), ttlMs = 30000 } = {}) {
         it.testnet = true; it.counted = false; it.reason = "testnet";
         it.valueUsd = null; it.feesUsd = null; it.rewardsUsd = null; it.rewardsCounted = false; it.rewardsReason = null; it._feesCounted = false; it._contrib = 0;
         if (it.roi !== undefined) it.roi = null;
+        if (it.tracked !== undefined) it.tracked = null;
         if (it.price !== undefined) it.price = null;
         testnetItems.push(it);
       }

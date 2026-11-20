@@ -233,7 +233,8 @@ function vaultOf(chain, timeoutMs = 15000) {
 // /portfolio, /api/aggregate, /aggregate-view.js and /aggregate.css are answered here, ahead
 // of the ?chain= redirect and the proxy: they belong to no single chain. They accept GET and
 // HEAD only, check the Host header (these four routes only; the proxy path is unchanged) and
-// reach only the fixed ports in CHAINS, over the four fixed GET paths in aggregate.js.
+// reach only the fixed ports in CHAINS, over the four fixed GET paths in aggregate.js and
+// /api/earnlog (the Earned today figure, below).
 const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
 const aggregator = aggregate.createAggregator({
   chains: CHAINS,
@@ -244,6 +245,44 @@ const aggregator = aggregate.createAggregator({
   maxBytes: envMs("LP_AGG_MAX_BYTES", 8 * 1024 * 1024),
 });
 const AGG_ROUTES = new Set(["/portfolio", "/portfolio/", "/api/aggregate", "/aggregate-view.js", "/aggregate.css"]);
+
+// What the positions earned today, read from each chain's own earnings log (/api/earnlog,
+// earn-log.js), added up and attached to the /api/aggregate answer as `earn`. Kept out of
+// aggregate.js on purpose: a chain without a log leaves this figure smaller, it never makes
+// the portfolio incomplete, and it is in no total.
+const EARN_TTL_MS = 30000;
+const earnNum = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
+let earnCache = { at: 0, body: null, pending: null };
+function earningsJson() {
+  if (earnCache.body && Date.now() - earnCache.at < EARN_TTL_MS) return Promise.resolve(earnCache.body);
+  if (earnCache.pending) return earnCache.pending;
+  const chains = CHAINS.filter((c) => !c.testnet);
+  earnCache.pending = Promise.all(chains.map((c) => aggregate.defaultFetchJson(c.port, "/api/earnlog", { timeoutMs: 6000, maxBytes: 2 * 1024 * 1024 })))
+    .then((answers) => {
+      const out = { ok: false, at: Date.now(), since: null, todayUsd: 0, yesterdayUsd: 0, d7Usd: 0, wallets: {} };
+      for (const a of answers) {
+        const d = a && a.status === 200 && a.data && a.data.ok === true ? a.data : null;
+        if (!d || !d.totals || !(d.since > 0)) continue;   // no log on this chain
+        out.ok = true;
+        if (!out.since || d.since < out.since) out.since = d.since;
+        const days = Array.isArray(d.days) ? d.days : [];
+        out.todayUsd += earnNum(days.length ? days[days.length - 1].usd : 0);
+        out.yesterdayUsd += earnNum(days.length > 1 ? days[days.length - 2].usd : 0);
+        out.d7Usd += days.slice(-7).reduce((s, x) => s + earnNum(x && x.usd), 0);
+        for (const p of Array.isArray(d.positions) ? d.positions : []) {
+          const addr = p && typeof p.key === "string" ? p.key.slice(0, 42) : "";   // key is "<wallet address>:<position id>"
+          if (!/^0x[0-9a-f]{40}$/.test(addr)) continue;
+          const w = out.wallets[addr] || (out.wallets[addr] = { todayUsd: 0, d7Usd: 0 });
+          w.todayUsd += earnNum(p.todayUsd);
+          w.d7Usd += earnNum(p.d7Usd);
+        }
+      }
+      earnCache = { at: Date.now(), body: JSON.stringify(out), pending: null };
+      return earnCache.body;
+    })
+    .catch(() => { earnCache.pending = null; return JSON.stringify({ ok: false }); });
+  return earnCache.pending;
+}
 const AGG_EXTRA_HOSTS = String(process.env.LP_ALLOWED_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 const AGG_THEME_DIR = process.env.LP_AGG_THEME_DIR || __dirname;
 const AGG_NOSNIFF = { "X-Content-Type-Options": "nosniff" };
@@ -345,8 +384,10 @@ function handleAggregate(req, res, url) {
   } else {
     const json = { "Content-Type": "application/json", "Cache-Control": "no-store", ...AGG_NOSNIFF };
     if (req.method === "HEAD") { send(200, json); return true; }
-    aggregator.getJson({ refresh: url.searchParams.get("refresh") === "1" })
-      .then((body) => send(200, json, body))
+    // The earnings read never holds the answer back: past a second, the last known figure (or none) is sent.
+    const earnSoon = Promise.race([earningsJson(), new Promise((r) => setTimeout(() => r(earnCache.body), 1000))]);
+    Promise.all([aggregator.getJson({ refresh: url.searchParams.get("refresh") === "1" }), earnSoon])
+      .then(([body, earn]) => send(200, json, earn && typeof body === "string" && body.endsWith("}") && body.length > 2 ? `${body.slice(0, -1)},"earn":${earn}}` : body))
       .catch(() => send(500, json, JSON.stringify({ ok: false, error: "aggregate failed" })));
   }
   return true;

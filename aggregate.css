@@ -45,3 +45,6 @@ body.agg .agg-rate { margin: 8px 0 0; }
 body.agg .agg-rate p { margin: 0 0 4px; }
 body.agg .agg-rate ul { margin: 0; padding-left: 18px; color: var(--muted, #9aafca); font-size: 12.5px; }
 body.agg .agg-testnet { border: 1px dashed var(--warn, #ffb547); border-radius: var(--r-card, 12px); padding: 8px 12px; }
+body.agg .stat .s { font-size: 12px; color: var(--muted, #9aafca); order: 3; }
+body.agg .tile details.how { font-size: 12px; color: var(--muted, #9aafca); margin-top: 8px; }
+body.agg .tile details.how summary { cursor: pointer; }

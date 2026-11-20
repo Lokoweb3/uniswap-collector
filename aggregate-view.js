@@ -302,6 +302,20 @@ function bannersHtml(payload, sel) {
   return out.join('');
 }
 
+/** "Earned today": fees and rewards that built up since midnight, whether taken out or not (payload.earn). */
+function earnedTodayHtml(payload, sel) {
+  const e = payload.earn;
+  if (!e || e.ok !== true) return '';
+  let today = e.todayUsd, subText = `yesterday ${usd(e.yesterdayUsd)}`;
+  if (sel && sel.wallet) {
+    const w = (payload.wallets || []).find(x => x.key === sel.wallet);
+    const mine = w && e.wallets ? e.wallets[String(w.address || '').toLowerCase()] : null;
+    today = mine ? mine.todayUsd : 0;
+    subText = `last 7 days ${usd(mine ? mine.d7Usd : 0)}`;
+  }
+  return `<div class="stat"><div class="l">Earned today</div><div class="n sm fees">${esc(usd(today))}</div><div class="s">${esc(subText)}</div></div>`;
+}
+
 function tileHtml(payload, t, items, filtered, sel) {
   // A wallet the chains could not read at all has no figure, not a zero one.
   const selWallet = sel && sel.wallet ? (payload.wallets || []).find(w => w.key === sel.wallet && w.unavailable === true) : null;
@@ -316,13 +330,19 @@ function tileHtml(payload, t, items, filtered, sel) {
       + `<div class="sub">${esc(selWallet.label || shortAddr(selWallet.address))} could not be read on any chain: no figure, not zero</div>`
       + `<div class="notes">${notesHtml.join(' ')}</div><div class="muted">${esc(items.length)} items shown</div></div>`;
   }
-  const statHtml = (label, value, cls) => `<div class="stat"><div class="l">${esc(label)}</div><div class="n sm ${esc(cls || '')}">${esc(usd(value))}</div></div>`;
+  const statHtml = (label, value, cls, subText) => {
+    const subHtml = subText ? `<div class="s">${esc(subText)}</div>` : '';
+    return `<div class="stat"><div class="l">${esc(label)}</div><div class="n sm ${esc(cls || '')}">${esc(usd(value))}</div>${subHtml}</div>`;
+  };
+  const waitingUsd = (isNum(t.feesUsd) ? t.feesUsd : 0) + (isNum(t.rewardsUsd) ? t.rewardsUsd : 0);
   return `<div class="tile"><div class="summary cards"><div class="stat"><div class="l">Total, counted</div><div class="grand">${esc(usd(t.grandUsd))}</div></div>`
-    + statHtml('Value in LP positions', t.lpUsd) + statHtml('Uncollected fees', t.feesUsd, 'fees') + statHtml('Pending rewards', t.rewardsUsd, 'fees') + statHtml('Tokens in wallets', t.tokensUsd) + '</div>'
-    + `<div class="sub">LP ${esc(usd(t.lpUsd))} + fees ${esc(usd(t.feesUsd))} + pending rewards ${esc(usd(t.rewardsUsd))} + tokens ${esc(usd(t.tokensUsd))}</div>`
+    + earnedTodayHtml(payload, sel)
+    + statHtml('Waiting to claim', waitingUsd, 'fees', `trading fees ${usd(t.feesUsd)} + rewards ${usd(t.rewardsUsd)}`)
+    + statHtml('Value in LP positions', t.lpUsd) + statHtml('Tokens in wallets', t.tokensUsd) + '</div>'
+    + `<details class="how"><summary>How this total is counted</summary><div class="sub">LP ${esc(usd(t.lpUsd))} + waiting to claim ${esc(usd(waitingUsd))} + tokens ${esc(usd(t.tokensUsd))}</div>`
     + `<div class="sub">uncounted ${esc(usd(t.uncountedUsd))} (${esc(t.uncountedCount)} items)</div>`
     + `<div class="sub">pending rewards (included) ${esc(usd(t.rewardsUsd))}; rewards not counted: ${esc(t.rewardsUncountedCount)}</div>`
-    + `<div class="sub">priced by assumption ${esc(usd(t.assumedUsd))}</div>`
+    + `<div class="sub">priced by assumption ${esc(usd(t.assumedUsd))}</div></details>`
     + `<div class="notes">${notesHtml.join(' ')}</div><div class="muted">${esc(items.length)} items shown</div></div>`;
 }
 
@@ -400,12 +420,12 @@ function walletsHtml(payload, sel) {
       + `<td class="num">${esc(r.open)}</td>${cellHtml(r.t.lpUsd)}${cellHtml(r.t.feesUsd + r.t.rewardsUsd)}${cellHtml(r.t.tokensUsd)}<td class="num">${profitHtml(r)}</td></tr>`;
   }).join('');
   return `<section class="agg-sec earnings"><div class="ehead"><h2>Wallet overview</h2><span class="enote">${esc(wallets.length)} wallets</span></div><div class="etablewrap"><table class="etable">`
-    + `<thead><tr><th>Wallet</th><th class="num">Value</th><th class="num">Share</th><th class="num">Open LPs</th><th class="num">In LP</th><th class="num">Fees + rewards waiting</th><th class="num">Tokens</th><th class="num">Profit</th></tr></thead>`
+    + `<thead><tr><th>Wallet</th><th class="num">Value</th><th class="num">Share</th><th class="num">Open LPs</th><th class="num">In LP</th><th class="num">Waiting to claim</th><th class="num">Tokens</th><th class="num">Profit</th></tr></thead>`
     + `<tbody>${rowsHtml}</tbody></table></div></section>`;
 }
 
 const HEADS = {
-  lp: [['Protocol', 'protocol'], ['Pair', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['', null], ['Value', 'value'], ['Fees / pending rewards', 'fees'], ['Profit', 'roi']],
+  lp: [['Protocol', 'protocol'], ['Pair', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['', null], ['Value', 'value'], ['Waiting to claim', 'fees'], ['Profit', 'roi']],
   token: [['Token', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['Amount', null], ['Price', null], ['Value', 'value'], ['', null]],
   staking: [['Token', 'name'], ['Chain', 'chain'], ['Wallet', 'wallet'], ['Balance', null], ['Value', 'value'], ['APR', null], ['7d / 30d rewards (already received, not pending)', null]],
 };

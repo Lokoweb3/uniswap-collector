@@ -227,7 +227,7 @@ const strip = (j) => { const o = JSON.parse(j); delete o.at; for (const c of o.c
       }
     }
     assert.strictEqual(totalHits(), n, "no new upstream request");
-    assert.ok(all.every((s) => s.hits.every((h) => ["/api/positions", "/api/watch", "/api/portfolio", "/api/staking", "/", "/api/who", "/api/aggregate"].includes(h.url) || h.url === "/")));
+    assert.ok(all.every((s) => s.hits.every((h) => ["/api/positions", "/api/watch", "/api/portfolio", "/api/staking", "/api/earnlog", "/", "/api/who", "/api/aggregate"].includes(h.url) || h.url === "/")));
   }
 
   // ---- 29/31. nothing internal in the output; the page is read-only
